@@ -21,8 +21,16 @@ export function createWorld(width: number, height: number): World {
     units: new Map(),
     buildings: new Map(),
     factions: {
-      blue: { scrap: ECONOMY.startingScrap, pending: null },
-      red: { scrap: ECONOMY.startingScrap, pending: null }
+      blue: {
+        scrap: ECONOMY.startingScrap,
+        pending: null,
+        stats: { unitsBuilt: 0, unitsLost: 0, scrapHarvested: 0 }
+      },
+      red: {
+        scrap: ECONOMY.startingScrap,
+        pending: null,
+        stats: { unitsBuilt: 0, unitsLost: 0, scrapHarvested: 0 }
+      }
     },
     winner: null,
     fx: [],

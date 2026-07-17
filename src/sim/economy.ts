@@ -115,6 +115,7 @@ export function tickProduction(w: World): void {
     b.queue.shift();
     const spot = findSpawnSpot(w, b, UNITS[head.kind].domain === "air");
     const u = spawnUnit(w, head.kind, b.faction, spot.x, spot.y);
+    w.factions[b.faction].stats.unitsBuilt++;
     applyRally(w, u, b);
   }
 }
@@ -210,6 +211,7 @@ export function tickHarvest(w: World): void {
       const transfer = Math.min(perTick(ECONOMY.unloadRate), u.cargo);
       u.cargo -= transfer;
       w.factions[u.faction].scrap += transfer;
+      w.factions[u.faction].stats.scrapHarvested += transfer;
       if (u.cargo <= 1e-6) {
         u.cargo = 0;
         o.phase = "toField";

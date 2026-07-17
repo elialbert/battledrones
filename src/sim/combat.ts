@@ -148,6 +148,7 @@ export function cleanupDeaths(w: World): void {
   for (const [id, u] of w.units) {
     if (u.hp > 0) continue;
     w.units.delete(id);
+    w.factions[u.faction].stats.unitsLost++;
     w.fx.push({ type: "explosion", x: u.x, y: u.y, air: unitDomain(u) === "air" });
   }
   for (const [id, b] of w.buildings) {

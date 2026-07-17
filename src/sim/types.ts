@@ -83,6 +83,7 @@ export interface FactionState {
   scrap: number;
   /** At most one building under construction at a time (C&C rule). */
   pending: PendingBuilding | null;
+  stats: { unitsBuilt: number; unitsLost: number; scrapHarvested: number };
 }
 
 export interface FxEvent {
