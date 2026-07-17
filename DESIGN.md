@@ -26,7 +26,7 @@ playable in a mobile browser.
 | Win condition | Destroy the enemy HQ (~10 min matches) |
 | Roster size | 6 units, 4 buildings |
 | Art | Pixel-art sprites, supplied by the project owner (placeholders until then) |
-| Controls | Tap-select / drag-box, tap-to-move/attack, two-finger camera |
+| Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
 
 ## Tech stack
 
@@ -141,26 +141,86 @@ not cheating.
 4. Victory/defeat screen with match stats (duration, units built/lost,
    scrap harvested) → "Play again".
 
-## Controls & UI (mobile-first)
+## Controls & UI (mobile-first, full-screen)
 
-- **Select:** tap a unit; drag on empty ground for box-select; double-tap a
-  unit to select all visible units of that type.
-- **Command:** with units selected, tap ground = attack-move, tap enemy =
-  attack, tap scrap field with Harvesters = harvest. A small floating
-  "stop" button appears when units are selected.
-- **Camera:** one-finger drag on empty space pans (box-select requires
-  starting the drag on a selected-empty area with a short hold —
-  playtest and tune), pinch to zoom (two zoom levels is enough), edge
-  minimap tap to jump.
-- **Build bar:** persistent bottom bar with building/unit buttons and
-  costs, C&C sidebar style but horizontal for portrait/landscape phones.
-  Buttons ≥ 56 px touch targets.
-- **Minimap:** top corner, shows explored terrain, radar blips, and combat
-  pings. Tap to move camera.
-- Landscape is the primary orientation; portrait should be playable but is
-  not tuned in MVP.
-- Desktop niceties (mouse box-select, edge scroll, hotkeys) come free from
-  pointer events but are not an MVP goal.
+### Full-screen behavior
+
+The game owns the entire screen — no page chrome, no scrolling, no
+accidental browser gestures:
+
+- **Installed as PWA:** `display: "fullscreen"` in the manifest — no
+  browser UI at all.
+- **In-browser play:** a "Play" tap on the splash screen requests the
+  Fullscreen API where available (Android); on iOS Safari (no Fullscreen
+  API for canvas) we rely on `100dvh` layout plus a one-time "Add to Home
+  Screen for the best experience" hint.
+- **Viewport hygiene:** `100dvh`/`100dvw` sizing so browser-bar
+  show/hide never clips the HUD; `viewport-fit=cover` +
+  `env(safe-area-inset-*)` padding so HUD elements clear notches, punch
+  holes, and the home-indicator strip; `touch-action: none` and
+  `overscroll-behavior: none` on the canvas so pinch/pan/pull-to-refresh
+  never leak to the browser; `user-select: none` and context-menu
+  suppression to kill long-press text/image popups.
+- Canvas resizes live on orientation change and window resize (Phaser
+  `Scale.RESIZE`); the sim never pauses, only the HUD re-flows.
+
+### Touch gesture spec
+
+All input via Pointer Events, so mouse and touch share one code path.
+Exact, non-overlapping gestures:
+
+| Gesture | On | Action |
+|---|---|---|
+| Tap | Own unit | Select it (replaces selection) |
+| Tap | Own building | Select it (shows its build options) |
+| Tap | Enemy / ground / scrap | With selection: attack / attack-move / harvest. Without: ping-select whatever's there |
+| Double-tap | Own unit | Select all on-screen units of that type |
+| Drag (one finger) | Empty ground | Pan the camera |
+| Long-press (~250 ms) then drag | Anywhere | Box-select (haptic tick + visual rectangle on trigger) |
+| Two-finger drag | Anywhere | Pan (always works, even over units) |
+| Pinch | Anywhere | Zoom between min/max (two useful levels) |
+| Tap | Minimap | Jump camera there |
+
+Disambiguation rules: a touch is a *tap* if it moves < 8 px and lasts
+< 250 ms; movement beyond the slop radius before the long-press timer
+fires commits to *pan*; after the timer fires it commits to *box-select*.
+Commands from taps are forgiving — target hit-testing uses an enlarged
+(≥ 44 px) radius around units, nearest-match wins.
+
+A compact **command chip row** appears above the build bar when units are
+selected: Stop, and Rally (for buildings). Everything else is
+context-from-tap — no mode buttons to fiddle with mid-fight.
+
+### Mouse & keyboard (comes along for free, still supported properly)
+
+Left-click select / left-drag box-select (no long-press needed — pointer
+type is detected), right-click = move/attack command, wheel = zoom,
+middle-drag or arrow keys = pan. No hotkey system in MVP beyond Esc =
+deselect.
+
+### HUD layout — portrait and landscape both first-class
+
+The HUD is DOM overlaid on the canvas (crisper text, free layout engine,
+easy safe-area handling) and re-flows by orientation via CSS:
+
+- **Landscape:** build bar as a vertical column on the right edge
+  (C&C-style sidebar, thumb-reachable), minimap top-right above it,
+  scrap counter top-center.
+- **Portrait:** build bar as a horizontal strip along the bottom,
+  minimap bottom-right above the bar, scrap counter top-center. Portrait
+  shows a taller slice of the map — good for the vertical
+  bottom-left/top-right base layout of the MVP map.
+- All buttons ≥ 56 px touch targets with visible cost labels; disabled
+  (can't afford / prerequisite missing) states are dimmed with the reason
+  on tap.
+- The camera never hides under the HUD: the sim viewport is inset by the
+  occupied HUD edges, so "tap ground" near the build bar can't misfire.
+
+### Minimap
+
+Top/bottom corner per orientation (see above); shows explored terrain,
+friendly/enemy blips (fog-respecting), and combat pings. Tap to jump the
+camera; drag on it to scrub.
 
 ## Sprite spec (for the artist)
 
@@ -225,8 +285,10 @@ src/
 
 ## Milestones
 
-1. **M1 — Moving dots:** Vite+Phaser skeleton, map renders, tap/drag
-   selection, ground pathing, camera controls. *Playable toy.*
+1. **M1 — Moving dots:** Vite+Phaser skeleton, full-screen/viewport
+   scaffold with portrait & landscape HUD shells, map renders, the full
+   gesture spec (tap select, long-press box-select, pan, pinch), ground
+   pathing. *Playable toy on a real phone.*
 2. **M2 — Economy:** HQ, Harvesters, scrap loop, build bar, building
    placement, unit production. *You can build an army.*
 3. **M3 — Combat:** all 6 units with the counter-triangle, turrets, HQ
