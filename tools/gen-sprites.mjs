@@ -11,7 +11,12 @@ const OUT = new URL("../public/", import.meta.url).pathname;
 const REAL_ART = new Set([
   "assets/sprites/fx/explosion.png",
   "assets/sprites/buildings/blue/hq.png",
-  "assets/sprites/buildings/red/hq.png"
+  "assets/sprites/buildings/red/hq.png",
+  ...["blue", "red"].flatMap((f) =>
+    ["harvester", "stinger", "flak-crawler", "wasp", "raptor"].map(
+      (u) => `assets/sprites/units/${f}/${u}.png`
+    )
+  )
 ]);
 
 // ---------------------------------------------------------------- raster ---

@@ -101,8 +101,16 @@ listed in `REAL_ART` in `tools/gen-sprites.mjs` are skipped — **add every
 real sprite to that list when you drop it in** so the generator can never
 clobber finished art.
 
-Real art so far (from the imagegen experiments):
+Real art so far (from the imagegen experiments; red faction variants are
+generated from the blue originals with `node tools/recolor-red.mjs`):
 
 - `fx/explosion.png`
-- `buildings/blue/hq.png`
-- `buildings/red/hq.png` (blue original, accents hue-shifted to red)
+- `buildings/{blue,red}/hq.png`
+- `units/{blue,red}/harvester.png`
+- `units/{blue,red}/stinger.png`
+- `units/{blue,red}/flak-crawler.png`
+- `units/{blue,red}/wasp.png`
+- `units/{blue,red}/raptor.png`
+
+Still placeholder: scout, fab-plant, airpad, turret base/head, terrain,
+muzzle/bolt fx, shadow, icons.
