@@ -20,6 +20,8 @@ export class Controller {
   selectedBuilding: number | null = null;
   /** When set, taps place this building instead of commanding. */
   placing: BuildingKind | null = null;
+  /** Debug: render fog of war (display-only — the sim always keeps fog). */
+  showFog = true;
   private queue: Command[] = [];
 
   constructor(public world: World) {}

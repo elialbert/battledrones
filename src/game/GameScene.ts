@@ -113,6 +113,7 @@ export class GameScene extends Phaser.Scene {
       this.afterTick();
     }
     this.ctrl.prune();
+    this.fogImg.setVisible(this.ctrl.showFog);
     const alpha = this.acc / TICK_MS;
     this.syncSprites(alpha);
     this.drawOverlay(alpha);
@@ -160,10 +161,12 @@ export class GameScene extends Phaser.Scene {
 
   // ---------------------------------------------------------------- fog ---
 
+  private fogImg!: Phaser.GameObjects.Image;
+
   private createFog(): void {
     const w = this.world;
     this.fogTex = this.textures.createCanvas("fog", w.width, w.height)!;
-    this.add
+    this.fogImg = this.add
       .image(0, 0, "fog")
       .setOrigin(0)
       .setScale(TILE)
@@ -301,6 +304,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private tileVisible(x: number, y: number): boolean {
+    if (!this.ctrl.showFog) return true; // debug: reveal everything
     const w = this.world;
     const tx = Math.floor(x);
     const ty = Math.floor(y);

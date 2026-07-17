@@ -42,6 +42,7 @@ export function createHud(api: HudApi): Hud {
     <div class="topbar">
       <div id="scrap" class="scrap">⚙ 0</div>
     </div>
+    <button id="fog-toggle" class="dbg" title="Debug: toggle fog of war">FOG ON</button>
     <canvas id="minimap"></canvas>
     <div class="chips">
       <button id="chip-stop" class="chip" hidden>■ Stop</button>
@@ -104,6 +105,15 @@ export function createHud(api: HudApi): Hud {
       if (target)
         api.ctrl.enqueue({ type: "produce", faction: PLAYER, buildingId: target.id, unit: kind });
     });
+
+  const fogToggle = root.querySelector<HTMLButtonElement>("#fog-toggle")!;
+  fogToggle.addEventListener("pointerdown", (e) => e.stopPropagation());
+  fogToggle.addEventListener("click", () => {
+    api.ctrl.showFog = !api.ctrl.showFog;
+    fogToggle.textContent = api.ctrl.showFog ? "FOG ON" : "FOG OFF";
+    fogToggle.classList.toggle("off", !api.ctrl.showFog);
+    lastMinimapAt = 0; // redraw the minimap immediately
+  });
 
   stopChip.addEventListener("click", () => api.ctrl.stopSelected());
   cancelChip.addEventListener("click", () => {
@@ -190,10 +200,11 @@ export function createHud(api: HudApi): Hud {
     const ctx = minimap.getContext("2d")!;
     const s = MINIMAP_TILE;
     const vis = w.fog[PLAYER].vis;
+    const fogOn = api.ctrl.showFog;
     for (let ty = 0; ty < w.height; ty++)
       for (let tx = 0; tx < w.width; tx++) {
         const i = ty * w.width + tx;
-        const v = vis[i];
+        const v = fogOn ? vis[i] : Vis.Visible;
         if (v === Vis.Unexplored) ctx.fillStyle = "#05070c";
         else {
           const t = w.terrain[i];
@@ -205,8 +216,11 @@ export function createHud(api: HudApi): Hud {
         }
         ctx.fillRect(tx * s, ty * s, s, s);
       }
-    // known enemy buildings + own buildings
-    for (const kb of w.fog[PLAYER].known.values()) {
+    // known enemy buildings (all of them with fog off) + own buildings
+    const enemyBuildings = fogOn
+      ? [...w.fog[PLAYER].known.values()]
+      : [...w.buildings.values()].filter((b) => b.faction !== PLAYER);
+    for (const kb of enemyBuildings) {
       ctx.fillStyle = "#e25555";
       const size = BUILDINGS[kb.kind].size;
       ctx.fillRect(kb.tx * s, kb.ty * s, size * s, size * s);
@@ -222,7 +236,7 @@ export function createHud(api: HudApi): Hud {
       const ty = Math.floor(u.y);
       if (u.faction === PLAYER) ctx.fillStyle = "#7ec1ff";
       else {
-        if (vis[ty * w.width + tx] !== Vis.Visible) continue;
+        if (fogOn && vis[ty * w.width + tx] !== Vis.Visible) continue;
         ctx.fillStyle = "#ff8a7a";
       }
       ctx.fillRect(u.x * s - 1, u.y * s - 1, 2.5, 2.5);
