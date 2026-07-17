@@ -25,7 +25,7 @@ import { gameMode } from "./mode";
 import { createHud, type Hud } from "../ui/hud";
 
 const TICK_MS = 1000 / TICK_RATE;
-const AIR_LIFT_PX = 8;
+const AIR_LIFT_PX = 16;
 
 interface EntityView {
   body: Phaser.GameObjects.Sprite;
@@ -93,6 +93,7 @@ export class GameScene extends Phaser.Scene {
     cam.setBounds(0, 0, this.world.width * TILE, this.world.height * TILE);
     const hq = hqOf(this.world, PLAYER)!;
     const c = buildingCenter(hq);
+    cam.setZoom(0.5); // art is 64px/tile; 0.5 shows the classic framing
     cam.centerOn(c.x * TILE, c.y * TILE);
     this.clampZoom();
     this.targetZoom = cam.zoom;
@@ -389,7 +390,7 @@ export class GameScene extends Phaser.Scene {
       const p = this.prev.get(id) ?? u;
       const x = (p.x + (u.x - p.x) * alpha) * TILE;
       const y = (p.y + (u.y - p.y) * alpha) * TILE;
-      g.lineStyle(2, 0x7ef29b, 0.9).strokeCircle(x, y, 13);
+      g.lineStyle(2, 0x7ef29b, 0.9).strokeCircle(x, y, 26);
     }
     if (this.ctrl.selectedBuilding !== null) {
       const b = w.buildings.get(this.ctrl.selectedBuilding);
@@ -400,7 +401,7 @@ export class GameScene extends Phaser.Scene {
         );
         if (b.rally)
           g.lineStyle(2, 0xffe066, 0.9)
-            .strokeCircle(b.rally.x * TILE, b.rally.y * TILE, 6)
+            .strokeCircle(b.rally.x * TILE, b.rally.y * TILE, 12)
             .lineBetween(
               (b.tx + size / 2) * TILE, (b.ty + size / 2) * TILE,
               b.rally.x * TILE, b.rally.y * TILE
@@ -416,7 +417,7 @@ export class GameScene extends Phaser.Scene {
       const p = this.prev.get(u.id) ?? u;
       const x = (p.x + (u.x - p.x) * alpha) * TILE;
       const y = (p.y + (u.y - p.y) * alpha) * TILE;
-      this.healthBar(g, x - 12, y - 22, 24, u.hp / max, u.faction === PLAYER);
+      this.healthBar(g, x - 24, y - 42, 48, u.hp / max, u.faction === PLAYER);
     }
     for (const b of w.buildings.values()) {
       const max = BUILDINGS[b.kind].hp;
@@ -476,9 +477,9 @@ export class GameScene extends Phaser.Scene {
     ratio: number,
     friendly: boolean
   ): void {
-    g.fillStyle(0x10141c, 0.8).fillRect(x, y, width, 4);
+    g.fillStyle(0x10141c, 0.8).fillRect(x, y, width, 6);
     g.fillStyle(friendly ? 0x53d769 : 0xe25555, 1).fillRect(
-      x + 1, y + 1, Math.max(0, (width - 2) * ratio), 2
+      x + 1, y + 1, Math.max(0, (width - 2) * ratio), 4
     );
   }
 
@@ -622,7 +623,7 @@ export class GameScene extends Phaser.Scene {
       cam.width / (this.world.width * TILE),
       cam.height / (this.world.height * TILE)
     );
-    return Phaser.Math.Clamp(z, Math.max(minZoom, 0.5), 3);
+    return Phaser.Math.Clamp(z, Math.max(minZoom, 0.25), 1.5);
   }
 
   private clampZoom(): void {

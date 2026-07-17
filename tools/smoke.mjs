@@ -79,8 +79,8 @@ const harvScreen = await page.evaluate(() => {
   const u = [...world.units.values()].find(
     (v) => v.faction === "blue" && v.kind === "harvester"
   );
-  u.x = (cam.scrollX + 200) / 32;
-  u.y = (cam.scrollY + 200) / 32;
+  u.x = (cam.worldView.x + 200 / cam.zoom) / 64;
+  u.y = (cam.worldView.y + 200 / cam.zoom) / 64;
   return { x: 200, y: 200, id: u.id };
 });
 await page.touchscreen.tap(harvScreen.x, harvScreen.y);

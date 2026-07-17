@@ -238,8 +238,8 @@ function paintRaptor(r, team) {
 }
 
 function paintShadow(r) {
-  r.circle(16, 16, 9, [0, 0, 0, 70]);
-  r.circle(16, 16, 6, [0, 0, 0, 60]);
+  r.circle(32, 32, 18, [0, 0, 0, 70]);
+  r.circle(32, 32, 12, [0, 0, 0, 60]);
 }
 
 // ------------------------------------------------------ building painters --
@@ -495,10 +495,10 @@ for (const [faction, team] of Object.entries(TEAM)) {
 }
 
 save("assets/sprites/units/shadow.png", sheet([(() => {
-  const r = new Raster(32, 32);
+  const r = new Raster(64, 64);
   paintShadow(r);
   return r;
-})()], 32, 32, 1));
+})()], 64, 64, 1));
 
 save(
   "assets/sprites/terrain/tiles.png",

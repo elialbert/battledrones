@@ -2,6 +2,7 @@ import type Phaser from "phaser";
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { Vis } from "../sim/fog";
 import { Terrain, type BuildingKind, type Faction, type UnitKind, type World } from "../sim/types";
+import { TILE } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 
@@ -274,10 +275,10 @@ export function createHud(api: HudApi): Hud {
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1;
     ctx.strokeRect(
-      (cam.worldView.x / 32) * s,
-      (cam.worldView.y / 32) * s,
-      (cam.worldView.width / 32) * s,
-      (cam.worldView.height / 32) * s
+      (cam.worldView.x / TILE) * s,
+      (cam.worldView.y / TILE) * s,
+      (cam.worldView.width / TILE) * s,
+      (cam.worldView.height / TILE) * s
     );
   }
 

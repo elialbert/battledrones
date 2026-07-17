@@ -8,7 +8,9 @@ layout** described below — no code changes needed.
 
 ## Global conventions
 
-- Pixel-art, 1 game pixel = 1 texture pixel, transparent backgrounds.
+- Art is authored at **64 px per world tile** ("HD"); the engine renders
+  tiles at 64 px and defaults the camera to 0.5× zoom, so full detail
+  shows when zoomed in. Pixel-art, transparent backgrounds.
 - The game renders with `pixelArt: true` (nearest-neighbour scaling) — no
   anti-aliased edges needed; crisp pixels look best.
 - Frame grids are strict: frame *n* sits at
@@ -31,14 +33,14 @@ layout** described below — no code changes needed.
 
 | File | Sheet size | Frame | Layout |
 |---|---|---|---|
-| `harvester.png` | 256×64 | 32×32 | 8 dirs per row; **row 0 = empty, row 1 = loaded with scrap** |
-| `scout.png` | 256×32 | 32×32 | 8 dirs |
-| `stinger.png` | 256×32 | 32×32 | 8 dirs |
-| `flak-crawler.png` | 256×32 | 32×32 | 8 dirs |
-| `wasp.png` | 256×32 | 32×32 | 8 dirs |
-| `raptor.png` | 256×32 | 32×32 | 8 dirs |
+| `harvester.png` | 512×128 | 64×64 | 8 dirs per row; **row 0 = empty, row 1 = loaded with scrap** |
+| `scout.png` | 512×64 | 64×64 | 8 dirs |
+| `stinger.png` | 512×64 | 64×64 | 8 dirs |
+| `flak-crawler.png` | 512×64 | 64×64 | 8 dirs |
+| `wasp.png` | 512×64 | 64×64 | 8 dirs |
+| `raptor.png` | 512×64 | 64×64 | 8 dirs |
 
-`units/shadow.png` (32×32, single frame, shared): soft dark ellipse drawn
+`units/shadow.png` (64×64, single frame, shared): soft dark ellipse drawn
 under air units at ground level so altitude reads. Keep it a translucent
 blob — it's tinted/faded in engine.
 
@@ -56,18 +58,18 @@ Unit personality cheat-sheet (see DESIGN.md for stats):
 
 | File | Sheet size | Frame | Frames (cols) |
 |---|---|---|---|
-| `hq.png` | 288×96 | 96×96 | idle, damaged, rubble |
-| `fab-plant.png` | 192×64 | 64×64 | idle, damaged, rubble |
-| `airpad.png` | 192×64 | 64×64 | idle, damaged, rubble |
-| `turret-base.png` | 32×32 | 32×32 | single static frame |
-| `turret-head.png` | 256×32 | 32×32 | 8 dirs (rotates in engine on the base) |
+| `hq.png` | 576×192 | 192×192 | idle, damaged, rubble |
+| `fab-plant.png` | 384×128 | 128×128 | idle, damaged, rubble |
+| `airpad.png` | 384×128 | 128×128 | idle, damaged, rubble |
+| `turret-base.png` | 64×64 | 64×64 | single static frame |
+| `turret-head.png` | 512×64 | 64×64 | 8 dirs (rotates in engine on the base) |
 
 Footprints: HQ 3×3 tiles, Fab Plant / Airpad 2×2, Turret 1×1. Buildings
-should visually fill their frame minus a ~3 px margin.
+should visually fill their frame minus a ~6 px margin.
 
 ### Terrain — `assets/sprites/terrain/tiles.png`
 
-Single row of 8 tiles, 32×32 each, sheet 256×32:
+Single row of 8 tiles, 64×64 each, sheet 512×64:
 
 | index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 |---|---|---|---|---|---|---|---|---|
@@ -81,9 +83,9 @@ Tiles butt against each other — keep edges tileable (no baked borders).
 
 | File | Sheet size | Frame | Notes |
 |---|---|---|---|
-| `muzzle.png` | 32×32 | 32×32 | single flash frame, shown ~1 tick |
-| `bolt.png` | 32×32 | 32×32 | projectile/beam drawn **pointing North**; rotated in engine |
-| `explosion.png` | 192×32 | 32×32 | 6 frames: fireball (0–3) → smoke (4–5) |
+| `muzzle.png` | 64×64 | 64×64 | single flash frame, shown ~1 tick |
+| `bolt.png` | 64×64 | 64×64 | projectile/beam drawn **pointing North**; rotated in engine |
+| `explosion.png` | 384×64 | 64×64 | 6 frames: fireball (0–3) → smoke (4–5) |
 
 Selection rings, health bars, fog of war, and rally markers are drawn
 programmatically in engine — no art needed.

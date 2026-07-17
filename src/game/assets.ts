@@ -1,7 +1,8 @@
 import type Phaser from "phaser";
 import type { BuildingKind, Faction, UnitKind } from "../sim/types";
 
-export const TILE = 32;
+/** World pixels per sim tile. Art is authored at 64px/tile ("HD"). */
+export const TILE = 64;
 
 export const UNIT_KINDS: UnitKind[] = [
   "harvester",
@@ -31,16 +32,16 @@ export function loadAssets(load: Phaser.Loader.LoaderPlugin): void {
         frameHeight: TILE
       });
     load.spritesheet(buildingTex(f, "hq"), `${base}/buildings/${f}/hq.png`, {
-      frameWidth: 96,
-      frameHeight: 96
+      frameWidth: 3 * TILE,
+      frameHeight: 3 * TILE
     });
     load.spritesheet(buildingTex(f, "fab-plant"), `${base}/buildings/${f}/fab-plant.png`, {
-      frameWidth: 64,
-      frameHeight: 64
+      frameWidth: 2 * TILE,
+      frameHeight: 2 * TILE
     });
     load.spritesheet(buildingTex(f, "airpad"), `${base}/buildings/${f}/airpad.png`, {
-      frameWidth: 64,
-      frameHeight: 64
+      frameWidth: 2 * TILE,
+      frameHeight: 2 * TILE
     });
     load.image(`b-${f}-turret-base`, `${base}/buildings/${f}/turret-base.png`);
     load.spritesheet(`b-${f}-turret-head`, `${base}/buildings/${f}/turret-head.png`, {
