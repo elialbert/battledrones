@@ -50,6 +50,45 @@ await page.waitForTimeout(2000);
 const t2 = await page.evaluate(() => window.__bd.world.tick);
 if (t2 - t1 < 10) fail(`sim too slow: ${t2 - t1} ticks in 2s`);
 
+// REAL input path: tap the Harv button — the HQ queue must grow. This
+// catches anything invisible swallowing pointer events over the HUD.
+const harvBtn = [...(await page.$$("#grp-units .bb"))][0];
+await harvBtn.tap();
+// the command drains into the sim on the next tick — allow a moment
+const queuedOk = await page
+  .waitForFunction(
+    () => {
+      const w = window.__bd.world;
+      const hq = [...w.buildings.values()].find(
+        (b) => b.faction === "blue" && b.kind === "hq"
+      );
+      return hq.queue.length === 1;
+    },
+    null,
+    { timeout: 3000 }
+  )
+  .then(() => true, () => false);
+if (!queuedOk) fail("HUD tap did not queue a harvester");
+
+// REAL input path: tap the harvester on the canvas — it must get selected.
+// The starting spot sits at the map edge where HUD widgets overlap the
+// camera-clamped view, so teleport it somewhere clear first (sim-legal:
+// this tests the input path, not pathfinding).
+const harvScreen = await page.evaluate(() => {
+  const { world, cam } = window.__bd;
+  const u = [...world.units.values()].find(
+    (v) => v.faction === "blue" && v.kind === "harvester"
+  );
+  u.x = (cam.scrollX + 200) / 32;
+  u.y = (cam.scrollY + 200) / 32;
+  return { x: 200, y: 200, id: u.id };
+});
+await page.touchscreen.tap(harvScreen.x, harvScreen.y);
+await page.waitForTimeout(300);
+const selected = await page.evaluate(() => [...window.__bd.ctrl.selectedUnits]);
+if (!selected.includes(harvScreen.id))
+  fail(`canvas tap did not select the harvester (selected=${JSON.stringify(selected)})`);
+
 // order the starting harvester to the home scrap field; scrap must rise
 await page.evaluate(() => {
   const { world, ctrl } = window.__bd;

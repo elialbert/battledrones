@@ -194,9 +194,11 @@ body {
   .sep {
     width: 1px;
   }
+  /* top-right: the bottom of the screen is prime battlefield (the camera
+     clamps there at the player's base) and must stay tappable */
   #minimap {
     right: max(8px, env(safe-area-inset-right));
-    bottom: calc(84px + env(safe-area-inset-bottom));
+    top: max(8px, env(safe-area-inset-top));
   }
   .chips {
     left: max(8px, env(safe-area-inset-left));
@@ -232,6 +234,10 @@ body {
 }
 
 /* -------------------------------------------------------------- screens --- */
+/* .screen's display:flex would beat the UA stylesheet's [hidden] rule */
+[hidden] {
+  display: none !important;
+}
 .screen {
   position: absolute;
   inset: 0;

@@ -96,7 +96,8 @@ export class GameScene extends Phaser.Scene {
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
       world: this.world,
-      ctrl: this.ctrl
+      ctrl: this.ctrl,
+      cam
     };
   }
 
