@@ -22,6 +22,8 @@ export class Controller {
   placing: BuildingKind | null = null;
   /** Debug: render fog of war (display-only — the sim always keeps fog). */
   showFog = true;
+  /** Spectator (AI vs AI): taps may inspect but never command. */
+  spectator = false;
   private queue: Command[] = [];
 
   constructor(public world: World) {}
@@ -59,6 +61,12 @@ export class Controller {
   /** Player tapped world position (wx, wy in tile units). */
   tapWorld(wx: number, wy: number, hit: TapHit): void {
     const w = this.world;
+    if (this.spectator) {
+      // inspection only: selecting shows rings/health, orders are forbidden
+      if (hit.kind === "ownUnit") this.selectUnits([hit.id]);
+      else this.clearSelection();
+      return;
+    }
     if (this.placing) {
       const size = BUILDINGS[this.placing].size;
       const tx = Math.round(wx - size / 2);

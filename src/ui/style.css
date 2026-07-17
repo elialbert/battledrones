@@ -75,6 +75,33 @@ body {
   image-rendering: pixelated;
 }
 
+/* ---------------------------------------------------------- spectator ----- */
+#hud.spectator .buildbar,
+#hud.spectator .chips,
+#hud.spectator .scrap {
+  display: none;
+}
+.versus {
+  position: absolute;
+  top: max(6px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 14, 22, 0.82);
+  border: 1px solid #2a3446;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #8b98ad;
+  pointer-events: none;
+}
+.vs-blue {
+  color: #6eb0ff;
+}
+.vs-red {
+  color: #ff8a7a;
+}
+
 /* ------------------------------------------------------- debug controls --- */
 .dbg {
   position: absolute;
@@ -317,6 +344,13 @@ body {
 }
 .cta:active {
   background: #6eb0ff;
+}
+.cta.alt {
+  display: block;
+  margin: 10px auto 0;
+  background: #223048;
+  color: #d8e0ee;
+  font-size: 14px;
 }
 #splash .panel h1 {
   color: #6ec1ff;

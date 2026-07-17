@@ -21,6 +21,7 @@ import {
 } from "./assets";
 import { Controller, PLAYER, hitTest } from "./controller";
 import { GestureRecognizer } from "./gestures";
+import { gameMode } from "./mode";
 import { createHud, type Hud } from "../ui/hud";
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -36,6 +37,7 @@ export class GameScene extends Phaser.Scene {
   world!: World;
   ctrl!: Controller;
   private ai!: AiState;
+  private blueAi: AiState | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private views = new Map<number, EntityView>();
@@ -61,6 +63,11 @@ export class GameScene extends Phaser.Scene {
     this.world = createSkirmishWorld();
     this.ctrl = new Controller(this.world);
     this.ai = createAiState();
+    if (gameMode.spectator) {
+      this.blueAi = createAiState();
+      this.ctrl.spectator = true;
+      this.ctrl.showFog = false; // watch the whole battle by default
+    }
     this.startedAt = this.time.now;
 
     this.createTerrain();
@@ -88,7 +95,10 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       camera: cam,
       centerCamera: (wx, wy) => cam.centerOn(wx * TILE, wy * TILE),
-      matchSeconds: () => (this.time.now - this.startedAt) / 1000
+      matchSeconds: () => (this.time.now - this.startedAt) / 1000,
+      strategies: this.blueAi
+        ? { blue: this.blueAi.strategy.name, red: this.ai.strategy.name }
+        : null
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
@@ -108,7 +118,9 @@ export class GameScene extends Phaser.Scene {
     while (this.acc >= TICK_MS) {
       this.acc -= TICK_MS;
       this.snapshotPrev();
-      const cmds = [...this.ctrl.drainCommands(), ...tickAi(this.world, "red", this.ai)];
+      const cmds = this.blueAi
+        ? [...tickAi(this.world, "blue", this.blueAi), ...tickAi(this.world, "red", this.ai)]
+        : [...this.ctrl.drainCommands(), ...tickAi(this.world, "red", this.ai)];
       step(this.world, cmds);
       this.afterTick();
     }

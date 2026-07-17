@@ -11,6 +11,8 @@ export interface HudApi {
   camera: Phaser.Cameras.Scene2D.Camera;
   centerCamera(wx: number, wy: number): void;
   matchSeconds(): number;
+  /** Spectator mode: the two AI strategy names, else null. */
+  strategies: { blue: string; red: string } | null;
 }
 
 export interface Hud {
@@ -42,6 +44,7 @@ export function createHud(api: HudApi): Hud {
     <div class="topbar">
       <div id="scrap" class="scrap">⚙ 0</div>
     </div>
+    <div id="versus" class="versus" hidden></div>
     <button id="fog-toggle" class="dbg" title="Debug: toggle fog of war">FOG ON</button>
     <canvas id="minimap"></canvas>
     <div class="chips">
@@ -106,7 +109,18 @@ export function createHud(api: HudApi): Hud {
         api.ctrl.enqueue({ type: "produce", faction: PLAYER, buildingId: target.id, unit: kind });
     });
 
+  if (api.ctrl.spectator) {
+    root.classList.add("spectator");
+    const versus = root.querySelector<HTMLElement>("#versus")!;
+    versus.hidden = false;
+    versus.innerHTML = `<span class="vs-blue">${api.strategies?.blue}</span> vs <span class="vs-red">${api.strategies?.red}</span>`;
+  }
+
   const fogToggle = root.querySelector<HTMLButtonElement>("#fog-toggle")!;
+  if (!api.ctrl.showFog) {
+    fogToggle.textContent = "FOG OFF";
+    fogToggle.classList.add("off");
+  }
   fogToggle.addEventListener("pointerdown", (e) => e.stopPropagation());
   fogToggle.addEventListener("click", () => {
     api.ctrl.showFog = !api.ctrl.showFog;
@@ -255,7 +269,10 @@ export function createHud(api: HudApi): Hud {
 
   function showEnd(winner: Faction): void {
     const w = api.world;
+    const spec = api.ctrl.spectator;
     const won = winner === PLAYER;
+    const title = spec ? `${winner.toUpperCase()} WINS` : won ? "VICTORY" : "DEFEAT";
+    const titleClass = spec ? (winner === "blue" ? "win" : "lose") : won ? "win" : "lose";
     const secs = Math.round(api.matchSeconds());
     const mm = Math.floor(secs / 60);
     const ss = String(secs % 60).padStart(2, "0");
@@ -263,10 +280,11 @@ export function createHud(api: HudApi): Hud {
     endEl.hidden = false;
     endEl.innerHTML = `
       <div class="panel">
-        <h1 class="${won ? "win" : "lose"}">${won ? "VICTORY" : "DEFEAT"}</h1>
+        <h1 class="${titleClass}">${title}</h1>
+        ${spec ? `<p class="time">${api.strategies?.blue} vs ${api.strategies?.red}</p>` : ""}
         <p class="time">Match time ${mm}:${ss}</p>
         <table>
-          <tr><th></th><th>You</th><th>Enemy</th></tr>
+          <tr><th></th><th>${spec ? "Blue" : "You"}</th><th>${spec ? "Red" : "Enemy"}</th></tr>
           <tr><td>Units built</td><td>${st("blue").unitsBuilt}</td><td>${st("red").unitsBuilt}</td></tr>
           <tr><td>Units lost</td><td>${st("blue").unitsLost}</td><td>${st("red").unitsLost}</td></tr>
           <tr><td>Scrap harvested</td><td>${Math.floor(st("blue").scrapHarvested)}</td><td>${Math.floor(st("red").scrapHarvested)}</td></tr>
