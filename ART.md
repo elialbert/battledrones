@@ -96,6 +96,13 @@ center ~80%).
 
 ## Regenerating placeholders
 
-`npm run sprites` rewrites every file above deterministically (safe to run;
-it only produces the placeholder versions — don't run it after real art has
-been dropped in, or commit carefully).
+`npm run sprites` rewrites the placeholder files deterministically. Files
+listed in `REAL_ART` in `tools/gen-sprites.mjs` are skipped — **add every
+real sprite to that list when you drop it in** so the generator can never
+clobber finished art.
+
+Real art so far (from the imagegen experiments):
+
+- `fx/explosion.png`
+- `buildings/blue/hq.png`
+- `buildings/red/hq.png` (blue original, accents hue-shifted to red)

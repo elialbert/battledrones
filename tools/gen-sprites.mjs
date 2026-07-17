@@ -7,6 +7,13 @@ import { dirname, join } from "node:path";
 
 const OUT = new URL("../public/", import.meta.url).pathname;
 
+// Real (non-placeholder) art now lives at these paths — never overwrite it.
+const REAL_ART = new Set([
+  "assets/sprites/fx/explosion.png",
+  "assets/sprites/buildings/blue/hq.png",
+  "assets/sprites/buildings/red/hq.png"
+]);
+
 // ---------------------------------------------------------------- raster ---
 class Raster {
   constructor(w, h) {
@@ -117,6 +124,10 @@ function sheet(frames, frameW, frameH, cols) {
 }
 
 function save(relPath, raster) {
+  if (REAL_ART.has(relPath)) {
+    console.log(`skip ${relPath} (real art)`);
+    return;
+  }
   const png = new PNG({ width: raster.w, height: raster.h });
   png.data = Buffer.from(raster.d);
   const full = join(OUT, relPath);
