@@ -15,8 +15,58 @@ import { buildingCenter, hqOf, terrainAt } from "../world";
 
 export type AiMode = "buildup" | "harass" | "assault";
 
+/** A commander personality: opening, economy size, and aggression timing. */
+export interface Strategy {
+  name: StrategyName;
+  /** Buildings wanted, in order (duplicates = build that many). */
+  buildOrder: BuildingKind[];
+  harvesters: number;
+  /** Army value (scrap cost) that triggers the all-in assault. */
+  assaultValue: number;
+  /** Idle wasps required before a harass raid launches. */
+  harassGroup: number;
+}
+
+export type StrategyName = "balanced" | "rush" | "airswarm" | "boom";
+
+export const STRATEGIES: Record<StrategyName, Strategy> = {
+  /** Steady macro: factory then airpad, standard timing. */
+  balanced: {
+    name: "balanced",
+    buildOrder: ["fab-plant", "airpad", "turret", "turret"],
+    harvesters: 2,
+    assaultValue: 1100,
+    harassGroup: 2
+  },
+  /** Early ground pressure: attacks at half the usual army size. */
+  rush: {
+    name: "rush",
+    buildOrder: ["fab-plant", "turret", "airpad"],
+    harvesters: 2,
+    assaultValue: 650,
+    harassGroup: 3
+  },
+  /** Airpad first: relentless wasp raids, weak if flak shows up early. */
+  airswarm: {
+    name: "airswarm",
+    buildOrder: ["airpad", "fab-plant", "turret"],
+    harvesters: 2,
+    assaultValue: 1000,
+    harassGroup: 2
+  },
+  /** Greedy economy: extra harvester and turtling, then a huge late push. */
+  boom: {
+    name: "boom",
+    buildOrder: ["fab-plant", "turret", "airpad", "turret"],
+    harvesters: 3,
+    assaultValue: 1600,
+    harassGroup: 3
+  }
+};
+
 export interface AiState {
   mode: AiMode;
+  strategy: Strategy;
   lastDecisionTick: number;
   /** Rolling estimate of enemy force composition, from what we've seen. */
   seenAir: number;
@@ -24,12 +74,21 @@ export interface AiState {
   scoutLeg: number;
 }
 
-export function createAiState(): AiState {
-  return { mode: "buildup", lastDecisionTick: -1000, seenAir: 0, seenGround: 0, scoutLeg: 0 };
+/** Pass a strategy for deterministic behaviour (tests); omit for random. */
+export function createAiState(strategy?: StrategyName): AiState {
+  const names = Object.keys(STRATEGIES) as StrategyName[];
+  const picked = strategy ?? names[Math.floor(Math.random() * names.length)]!;
+  return {
+    mode: "buildup",
+    strategy: STRATEGIES[picked],
+    lastDecisionTick: -1000,
+    seenAir: 0,
+    seenGround: 0,
+    scoutLeg: 0
+  };
 }
 
 const DECISION_INTERVAL = 2 * TICK_RATE;
-const ASSAULT_ARMY_VALUE = 1100;
 const RETREAT_ARMY_VALUE = 300;
 const COMBAT_KINDS: UnitKind[] = ["stinger", "flak-crawler", "wasp", "raptor"];
 
@@ -63,13 +122,17 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const spot = findPlacementSpot(w, faction, f.pending.kind, hq);
     if (spot) cmds.push({ type: "placeBuilding", faction, tx: spot.tx, ty: spot.ty });
   } else if (!f.pending) {
-    const next = nextBuilding(myBuildings, s);
+    const next = nextBuilding(myBuildings, s.strategy);
     if (next && f.scrap >= BUILDINGS[next].cost)
       cmds.push({ type: "startBuilding", faction, building: next });
   }
 
-  // --- economy: keep 2 harvesters mining ---------------------------------
-  if (harvesters.length < 2 && hq.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
+  // --- economy: keep the strategy's harvester count mining ----------------
+  if (
+    harvesters.length < s.strategy.harvesters &&
+    hq.queue.length === 0 &&
+    f.scrap >= UNITS.harvester.cost
+  )
     cmds.push({ type: "produce", faction, buildingId: hq.id, unit: "harvester" });
   for (const h of harvesters)
     if (h.order.type === "idle") {
@@ -81,8 +144,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- production ---------------------------------------------------------
   const fab = get("fab-plant");
   const pad = get("airpad");
-  // keep a scrap reserve while the base is incomplete so buildings can start
-  const reserve = f.pending || (has("fab-plant") && has("airpad")) ? 0 : 300;
+  // reserve scrap while a production building (fab/airpad) is still needed —
+  // turrets are cheap and shouldn't starve unit production
+  const nextWanted = nextBuilding(myBuildings, s.strategy);
+  const reserve =
+    f.pending || nextWanted === null || nextWanted === "turret" ? 0 : 300;
   const spendable = f.scrap - reserve;
   if (fab && fab.queue.length === 0) {
     const wantFlak = count("flak-crawler") < Math.ceil(s.seenAir / 1.5);
@@ -107,8 +173,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     }
 
   // --- mode transitions ----------------------------------------------------
-  if (s.mode === "buildup" && has("airpad") && count("wasp") >= 2) s.mode = "harass";
-  if (armyValue >= ASSAULT_ARMY_VALUE) s.mode = "assault";
+  if (s.mode === "buildup" && has("airpad") && count("wasp") >= s.strategy.harassGroup)
+    s.mode = "harass";
+  if (armyValue >= s.strategy.assaultValue) s.mode = "assault";
   if (s.mode === "assault" && armyValue < RETREAT_ARMY_VALUE) s.mode = "buildup";
 
   // --- combat behaviour by mode -------------------------------------------
@@ -119,7 +186,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   if (s.mode === "harass") {
     const wasps = mine.filter((u) => u.kind === "wasp" && u.order.type === "idle");
-    if (wasps.length >= 2) {
+    if (wasps.length >= s.strategy.harassGroup) {
       const raidTarget = enemyHarvestArea(w, faction, hq);
       cmds.push({
         type: "attackMove", faction,
@@ -155,12 +222,15 @@ function observeEnemy(w: World, faction: Faction, s: AiState): void {
   s.seenGround = Math.max(ground, s.seenGround * 0.9);
 }
 
-function nextBuilding(myBuildings: Building[], s: AiState): BuildingKind | null {
-  const have = (k: BuildingKind) => myBuildings.some((b) => b.kind === k);
-  if (!have("fab-plant")) return "fab-plant";
-  if (!have("airpad")) return "airpad";
-  const turrets = myBuildings.filter((b) => b.kind === "turret").length;
-  if (turrets < 2 && s.mode !== "assault") return "turret";
+/** First entry of the strategy's build order not yet satisfied. */
+function nextBuilding(myBuildings: Building[], strategy: Strategy): BuildingKind | null {
+  const have = new Map<BuildingKind, number>();
+  for (const b of myBuildings) have.set(b.kind, (have.get(b.kind) ?? 0) + 1);
+  const wanted = new Map<BuildingKind, number>();
+  for (const kind of strategy.buildOrder) {
+    wanted.set(kind, (wanted.get(kind) ?? 0) + 1);
+    if ((have.get(kind) ?? 0) < wanted.get(kind)!) return kind;
+  }
   return null;
 }
 

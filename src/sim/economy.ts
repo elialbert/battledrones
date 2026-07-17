@@ -170,6 +170,18 @@ export function tickHarvest(w: World): void {
     const perTick = (rate: number) => rate / TICK_RATE;
 
     if (o.phase === "toField") {
+      // already standing on minable scrap? dig in right here — this also
+      // resolves the jam where several harvesters contest one tile centre
+      // and separation steering keeps all but one from ever "arriving"
+      const curTx = Math.floor(u.x);
+      const curTy = Math.floor(u.y);
+      const curI = tileIndex(w, curTx, curTy);
+      if (w.terrain[curI] === Terrain.Scrap && w.scrap[curI]! > 0) {
+        o.fieldX = curTx;
+        o.fieldY = curTy;
+        o.phase = "harvesting";
+        continue;
+      }
       const i = tileIndex(w, o.fieldX, o.fieldY);
       if (w.terrain[i] !== Terrain.Scrap || w.scrap[i]! <= 0) {
         const next = nearestScrapTile(w, u.x, u.y);

@@ -137,6 +137,21 @@ describe("harvesting cycle", () => {
     expect(w.scrap[3 * 24 + 10]).toBeLessThan(1500); // moved on to the second tile
   });
 
+  it("three harvesters on one field all keep income flowing (no jam)", () => {
+    const w = createWorld(24, 24);
+    spawnBuilding(w, "hq", "blue", 2, 2);
+    for (let tx = 8; tx <= 10; tx++)
+      for (let ty = 3; ty <= 5; ty++) setTerrain(w, tx, ty, Terrain.Scrap);
+    const ids = [1, 2, 3].map(
+      (i) => spawnUnit(w, "harvester", "blue", 6.5 + i * 0.3, 3.5).id
+    );
+    w.factions.blue.scrap = 0;
+    step(w, [{ type: "harvest", faction: "blue", unitIds: ids, x: 9.5, y: 4.5 }]);
+    runTicks(w, 90 * TICK_RATE);
+    // three harvesters over 90s must clearly out-earn a single stuck one
+    expect(w.factions.blue.scrap).toBeGreaterThan(500);
+  });
+
   it("goes idle when all scrap in the world is gone", () => {
     const w = createWorld(24, 24);
     spawnBuilding(w, "hq", "blue", 2, 2);

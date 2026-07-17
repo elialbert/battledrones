@@ -3,6 +3,22 @@ import type { Unit, World } from "./types";
 import { groundPassable, inBounds } from "./world";
 
 const ARRIVE_DIST = 0.25;
+/** Consume en-route waypoints loosely — tight radii livelock grouped units. */
+const WAYPOINT_DIST = 0.7;
+
+/**
+ * Arrival radius at a final destination, growing with the crowd already
+ * parked there: N units can't all touch the same point (separation keeps
+ * them ~0.7 apart), so each neighbour near the goal widens "arrived".
+ */
+function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
+  let crowd = 0;
+  for (const o of w.units.values()) {
+    if (o.id === u.id || UNITS[o.kind].domain !== UNITS[u.kind].domain) continue;
+    if (Math.hypot(o.x - gx, o.y - gy) < 0.9) crowd++;
+  }
+  return Math.min(2, ARRIVE_DIST + 0.4 * crowd);
+}
 
 /** 8-directional A* over the tile grid. Returns tile-centre waypoints. */
 export function findPath(
@@ -140,9 +156,7 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
   const speed = stats.speed / TICK_RATE;
   if (stats.domain === "air") {
     const d = Math.hypot(x - u.x, y - u.y);
-    if (d <= Math.max(ARRIVE_DIST, speed)) {
-      u.x = x;
-      u.y = y;
+    if (d <= Math.max(arrivalRadius(w, u, x, y), speed)) {
       return true;
     }
     u.facing = Math.atan2(x - u.x, -(y - u.y));
@@ -162,7 +176,9 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
     if (!u.path) return true; // unreachable: give up (caller goes idle)
   }
   let wp = u.path[0];
-  while (wp && Math.hypot(wp.x - u.x, wp.y - u.y) <= ARRIVE_DIST) {
+  while (wp) {
+    const consume = u.path.length > 1 ? WAYPOINT_DIST : arrivalRadius(w, u, wp.x, wp.y);
+    if (Math.hypot(wp.x - u.x, wp.y - u.y) > consume) break;
     u.path.shift();
     wp = u.path[0];
   }
