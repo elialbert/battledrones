@@ -90,6 +90,11 @@ export class GameScene extends Phaser.Scene {
     });
 
     const cam = this.cameras.main;
+    // pixelArt:true turns on camera roundPixels, which floors scrollX/Y
+    // every frame — that truncation eats the fractional scroll compensation
+    // of smooth anchored zooming and accumulates into visible drift.
+    // (At fractional zoom Phaser disables per-object rounding anyway.)
+    cam.roundPixels = false;
     cam.setBounds(0, 0, this.world.width * TILE, this.world.height * TILE);
     const hq = hqOf(this.world, PLAYER)!;
     const c = buildingCenter(hq);
@@ -608,13 +613,23 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Zoom keeping the world point under screen (sx, sy) fixed. Computed
+   * analytically — getWorldPoint reads a camera matrix that only updates at
+   * render time, so read-back compensation drifts within a frame. Phaser
+   * zooms about the viewport centre, so:
+   *   world(s) = midPoint + (s - centre)/zoom
+   *   scroll' = scroll + (s - centre) * (1/z1 - 1/z2)
+   */
   private zoomAround(zoom: number, sx: number, sy: number): void {
     const cam = this.cameras.main;
-    const before = cam.getWorldPoint(sx, sy);
-    cam.setZoom(this.clampedZoom(zoom));
-    const after = cam.getWorldPoint(sx, sy);
-    cam.scrollX += before.x - after.x;
-    cam.scrollY += before.y - after.y;
+    const z1 = cam.zoom;
+    const z2 = this.clampedZoom(zoom);
+    if (z2 === z1) return;
+    const k = 1 / z1 - 1 / z2;
+    cam.setZoom(z2);
+    cam.scrollX += (sx - cam.width / 2) * k;
+    cam.scrollY += (sy - cam.height / 2) * k;
   }
 
   private clampedZoom(z: number): number {
