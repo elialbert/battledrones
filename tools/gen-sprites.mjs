@@ -10,13 +10,19 @@ const OUT = new URL("../public/", import.meta.url).pathname;
 // Real (non-placeholder) art now lives at these paths — never overwrite it.
 const REAL_ART = new Set([
   "assets/sprites/fx/explosion.png",
-  "assets/sprites/buildings/blue/hq.png",
-  "assets/sprites/buildings/red/hq.png",
-  ...["blue", "red"].flatMap((f) =>
-    ["harvester", "stinger", "flak-crawler", "wasp", "raptor"].map(
+  "assets/sprites/fx/bolt.png",
+  "assets/sprites/fx/muzzle.png",
+  "assets/sprites/terrain/tiles.png",
+  "icons/icon-192.png",
+  "icons/icon-512.png",
+  ...["blue", "red"].flatMap((f) => [
+    ...["harvester", "scout", "stinger", "flak-crawler", "wasp", "raptor"].map(
       (u) => `assets/sprites/units/${f}/${u}.png`
+    ),
+    ...["hq", "fab-plant", "airpad", "turret-base", "turret-head"].map(
+      (b) => `assets/sprites/buildings/${f}/${b}.png`
     )
-  )
+  ])
 ]);
 
 // ---------------------------------------------------------------- raster ---

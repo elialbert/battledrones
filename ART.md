@@ -102,15 +102,7 @@ real sprite to that list when you drop it in** so the generator can never
 clobber finished art.
 
 Real art so far (from the imagegen experiments; red faction variants are
-generated from the blue originals with `node tools/recolor-red.mjs`):
+generated from the blue originals with `node tools/recolor-red.mjs`): all
+units, all buildings, terrain tiles, all fx, and the PWA icons.
 
-- `fx/explosion.png`
-- `buildings/{blue,red}/hq.png`
-- `units/{blue,red}/harvester.png`
-- `units/{blue,red}/stinger.png`
-- `units/{blue,red}/flak-crawler.png`
-- `units/{blue,red}/wasp.png`
-- `units/{blue,red}/raptor.png`
-
-Still placeholder: scout, fab-plant, airpad, turret base/head, terrain,
-muzzle/bolt fx, shadow, icons.
+Still placeholder: `units/shadow.png` only.
