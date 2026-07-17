@@ -4,6 +4,20 @@ import { gameMode } from "./game/mode";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
+// iOS Safari ignores user-scalable=no: pinch zooms the PAGE (scaling the
+// HUD with it) and offers no way back. Kill browser zoom at the source —
+// the game camera handles all zooming.
+for (const type of ["gesturestart", "gesturechange", "gestureend"])
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if ((e as TouchEvent & { scale?: number }).scale !== 1) e.preventDefault();
+  },
+  { passive: false }
+);
+document.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+
 function startGame(): void {
   new Phaser.Game({
     type: Phaser.AUTO,

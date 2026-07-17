@@ -10,6 +10,7 @@ export interface HudApi {
   ctrl: Controller;
   camera: Phaser.Cameras.Scene2D.Camera;
   centerCamera(wx: number, wy: number): void;
+  zoomBy(factor: number): void;
   matchSeconds(): number;
   /** Spectator mode: the two AI strategy names, else null. */
   strategies: { blue: string; red: string } | null;
@@ -50,6 +51,10 @@ export function createHud(api: HudApi): Hud {
     <div class="chips">
       <button id="chip-stop" class="chip" hidden>■ Stop</button>
       <button id="chip-cancel" class="chip warn" hidden>✕ Cancel</button>
+    </div>
+    <div class="zoombtns">
+      <button id="zoom-in" class="zb" title="Zoom in (+)">＋</button>
+      <button id="zoom-out" class="zb" title="Zoom out (−)">−</button>
     </div>
     <div class="buildbar">
       <div class="group" id="grp-buildings"></div>
@@ -128,6 +133,15 @@ export function createHud(api: HudApi): Hud {
     fogToggle.classList.toggle("off", !api.ctrl.showFog);
     lastMinimapAt = 0; // redraw the minimap immediately
   });
+
+  for (const [id, factor] of [
+    ["zoom-in", 1.45],
+    ["zoom-out", 1 / 1.45]
+  ] as const) {
+    const b = root.querySelector<HTMLButtonElement>(`#${id}`)!;
+    b.addEventListener("pointerdown", (e) => e.stopPropagation());
+    b.addEventListener("click", () => api.zoomBy(factor));
+  }
 
   stopChip.addEventListener("click", () => api.ctrl.stopSelected());
   cancelChip.addEventListener("click", () => {

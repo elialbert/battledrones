@@ -50,6 +50,14 @@ export class GameScene extends Phaser.Scene {
   private hud!: Hud;
   private ended = false;
   private startedAt = 0;
+  /** Smooth-zoom target and its screen anchor point. */
+  private targetZoom = 1;
+  private zoomAnchor: { x: number; y: number } | null = null;
+  /** Pan momentum: screen-px/frame velocity that decays after release. */
+  private glide: { x: number; y: number } | null = null;
+  private lastPan = { x: 0, y: 0 };
+  private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
+  private wasd?: Record<"W" | "A" | "S" | "D", Phaser.Input.Keyboard.Key>;
 
   constructor() {
     super("game");
@@ -87,6 +95,7 @@ export class GameScene extends Phaser.Scene {
     const c = buildingCenter(hq);
     cam.centerOn(c.x * TILE, c.y * TILE);
     this.clampZoom();
+    this.targetZoom = cam.zoom;
     this.scale.on("resize", () => this.clampZoom());
 
     this.setupInput();
@@ -95,6 +104,7 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       camera: cam,
       centerCamera: (wx, wy) => cam.centerOn(wx * TILE, wy * TILE),
+      zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => (this.time.now - this.startedAt) / 1000,
       strategies: this.blueAi
         ? { blue: this.blueAi.strategy.name, red: this.ai.strategy.name }
@@ -111,8 +121,51 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
+  /** Nudge the smooth-zoom target (zoom buttons, +/- keys, wheel). */
+  zoomBy(factor: number, anchorX?: number, anchorY?: number): void {
+    this.targetZoom = this.clampedZoom(this.targetZoom * factor);
+    this.zoomAnchor =
+      anchorX !== undefined && anchorY !== undefined
+        ? { x: anchorX, y: anchorY }
+        : null; // null = anchor at screen centre
+  }
+
+  private updateCamera(delta: number): void {
+    const cam = this.cameras.main;
+    // smooth zoom toward the target, anchored so the anchor point stays put
+    if (Math.abs(cam.zoom - this.targetZoom) > 0.001) {
+      const t = 1 - Math.pow(0.0025, delta / 1000); // ~90%/frame-at-60fps feel
+      const next = cam.zoom + (this.targetZoom - cam.zoom) * t;
+      const a = this.zoomAnchor ?? { x: cam.width / 2, y: cam.height / 2 };
+      this.zoomAround(next, a.x, a.y);
+    }
+    // keyboard panning (arrows / WASD), speed in screen px/s
+    const panSpeed = (600 * delta) / 1000 / cam.zoom;
+    let kx = 0;
+    let ky = 0;
+    if (this.cursors?.left.isDown || this.wasd?.A.isDown) kx -= 1;
+    if (this.cursors?.right.isDown || this.wasd?.D.isDown) kx += 1;
+    if (this.cursors?.up.isDown || this.wasd?.W.isDown) ky -= 1;
+    if (this.cursors?.down.isDown || this.wasd?.S.isDown) ky += 1;
+    if (kx !== 0 || ky !== 0) {
+      cam.scrollX += kx * panSpeed;
+      cam.scrollY += ky * panSpeed;
+      this.glide = null;
+    }
+    // pan momentum: keep gliding after the finger lifts, with friction
+    if (this.glide) {
+      cam.scrollX -= this.glide.x / cam.zoom;
+      cam.scrollY -= this.glide.y / cam.zoom;
+      const friction = Math.pow(0.9, delta / (1000 / 60));
+      this.glide.x *= friction;
+      this.glide.y *= friction;
+      if (Math.hypot(this.glide.x, this.glide.y) < 0.4) this.glide = null;
+    }
+  }
+
   override update(_time: number, delta: number): void {
     this.gest.tick(performance.now());
+    this.updateCamera(delta);
 
     this.acc += Math.min(delta, 250);
     while (this.acc >= TICK_MS) {
@@ -491,8 +544,18 @@ export class GameScene extends Phaser.Scene {
       onPan: (dx, dy) => {
         cam.scrollX -= dx / cam.zoom;
         cam.scrollY -= dy / cam.zoom;
+        this.lastPan = { x: dx, y: dy };
+        this.glide = null;
       },
-      onPinch: (scale, cx, cy) => this.zoomAround(cam.zoom * scale, cx, cy),
+      onPanEnd: () => {
+        if (Math.hypot(this.lastPan.x, this.lastPan.y) > 3)
+          this.glide = { ...this.lastPan };
+        this.lastPan = { x: 0, y: 0 };
+      },
+      onPinch: (scale, cx, cy) => {
+        this.zoomAround(cam.zoom * scale, cx, cy);
+        this.targetZoom = cam.zoom; // pinch is immediate; keep target in sync
+      },
       onRightClick: (sx, sy) => {
         const wp = cam.getWorldPoint(sx, sy);
         const wx = wp.x / TILE;
@@ -503,8 +566,7 @@ export class GameScene extends Phaser.Scene {
         if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
         this.ctrl.tapWorld(wx, wy, hit);
       },
-      onWheel: (deltaY, sx, sy) =>
-        this.zoomAround(cam.zoom * (deltaY > 0 ? 0.87 : 1.15), sx, sy)
+      onWheel: (deltaY, sx, sy) => this.zoomBy(deltaY > 0 ? 0.85 : 1.18, sx, sy)
     });
 
     const toPointer = (p: Phaser.Input.Pointer) => ({
@@ -517,9 +579,10 @@ export class GameScene extends Phaser.Scene {
         | "pen",
       button: (p.event as PointerEvent)?.button ?? 0
     });
-    this.input.on("pointerdown", (p: Phaser.Input.Pointer) =>
-      this.gest.down(toPointer(p), performance.now())
-    );
+    this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      this.glide = null; // touching the map stops any glide
+      this.gest.down(toPointer(p), performance.now());
+    });
     this.input.on("pointermove", (p: Phaser.Input.Pointer) =>
       this.gest.move(toPointer(p), performance.now())
     );
@@ -534,6 +597,12 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown-ESC", () => {
       this.ctrl.placing = null;
       this.ctrl.clearSelection();
+    });
+    this.cursors = this.input.keyboard?.createCursorKeys();
+    this.wasd = this.input.keyboard?.addKeys("W,A,S,D") as typeof this.wasd;
+    this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
+      if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
+      else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);
     });
   }
 

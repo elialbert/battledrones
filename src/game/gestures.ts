@@ -22,6 +22,8 @@ export interface GestureCallbacks {
   onBoxEnd(x: number, y: number): void;
   /** Screen-space camera pan delta. */
   onPan(dx: number, dy: number): void;
+  /** A pan gesture ended (finger/button lifted) — for momentum. */
+  onPanEnd?(): void;
   /** Relative zoom factor since the previous pinch event, centred on (cx, cy). */
   onPinch(scale: number, cx: number, cy: number): void;
   onRightClick(x: number, y: number): void;
@@ -166,10 +168,14 @@ export class GestureRecognizer {
         break;
       case "pan":
       case "mousepan":
+        this.cb.onPanEnd?.();
         this.mode = "idle";
         break;
       case "multi":
-        if (this.pointers.size < 2) this.mode = "idle";
+        if (this.pointers.size < 2) {
+          this.cb.onPanEnd?.();
+          this.mode = "idle";
+        }
         break;
       case "idle":
         break;

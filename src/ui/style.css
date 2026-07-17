@@ -123,6 +123,33 @@ body {
   border-color: #ffd66e;
 }
 
+/* ---------------------------------------------------------- zoom buttons -- */
+.zoombtns {
+  position: absolute;
+  left: max(8px, env(safe-area-inset-left));
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.zb {
+  pointer-events: auto;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid #2a3446;
+  background: rgba(10, 14, 22, 0.85);
+  color: #d8e0ee;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+.zb:active {
+  background: #223048;
+}
+
 /* --------------------------------------------------------------- chips --- */
 .chips {
   position: absolute;
