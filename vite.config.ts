@@ -2,8 +2,11 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  // Relative base + committed docs/ output so GitHub Pages can serve the
+  // built game from the repo with no build step.
+  base: "./",
   server: { host: true },
-  build: { target: "es2022" },
+  build: { target: "es2022", outDir: "docs" },
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
