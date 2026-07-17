@@ -1,4 +1,5 @@
 import { BUILDINGS, ECONOMY, UNITS } from "./balance";
+import { createFog } from "./fog";
 import {
   Terrain,
   type Building,
@@ -24,7 +25,8 @@ export function createWorld(width: number, height: number): World {
       red: { scrap: ECONOMY.startingScrap, pending: null }
     },
     winner: null,
-    fx: []
+    fx: [],
+    fog: createFog(width, height)
   };
 }
 

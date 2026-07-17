@@ -95,6 +95,8 @@ export interface FxEvent {
   air?: boolean;
 }
 
+import type { FactionFog } from "./fog";
+
 export interface World {
   tick: number;
   width: number;
@@ -110,6 +112,7 @@ export interface World {
   winner: Faction | null;
   /** Transient render events emitted this tick (cleared each step). */
   fx: FxEvent[];
+  fog: Record<Faction, FactionFog>;
 }
 
 export type Command =

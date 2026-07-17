@@ -5,6 +5,8 @@ import {
   tickHarvest,
   tickProduction
 } from "./economy";
+import { FOG } from "./balance";
+import { tickFog } from "./fog";
 import { tickMovement } from "./movement";
 import { Terrain, type Command, type World } from "./types";
 import { terrainAt } from "./world";
@@ -20,6 +22,7 @@ export function step(w: World, commands: Command[]): void {
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
+  if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;
 }
 
