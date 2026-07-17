@@ -234,10 +234,20 @@ function separate(w: World): void {
       const dy = b.y - a.y;
       const d = Math.hypot(dx, dy);
       const minD = 0.7;
-      if (d >= minD || d === 0) continue;
+      if (d >= minD) continue;
       const push = (minD - d) / 2;
-      const ux = dx / d;
-      const uy = dy / d;
+      let ux: number;
+      let uy: number;
+      if (d < 1e-3) {
+        // perfectly coincident (e.g. spawned at the same tile centre): no
+        // direction to push along, so derive one deterministically from ids
+        const angle = ((a.id * 7 + b.id * 13) % 16) * (Math.PI / 8);
+        ux = Math.sin(angle);
+        uy = -Math.cos(angle);
+      } else {
+        ux = dx / d;
+        uy = dy / d;
+      }
       nudge(w, a, -ux * push, -uy * push);
       nudge(w, b, ux * push, uy * push);
     }

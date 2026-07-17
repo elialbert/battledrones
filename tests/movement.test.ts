@@ -86,6 +86,38 @@ describe("unit movement", () => {
     expect(Math.hypot(u.x - 20.5, u.y - 12.5)).toBeLessThan(0.5);
   });
 
+  it("separates PERFECTLY stacked units (identical coordinates)", () => {
+    const w = createWorld(24, 24);
+    const units = [1, 2, 3].map(() => spawnUnit(w, "stinger", "blue", 5.5, 5.5));
+    runTicks(w, 20);
+    for (let i = 0; i < units.length; i++)
+      for (let j = i + 1; j < units.length; j++)
+        expect(
+          Math.hypot(units[i]!.x - units[j]!.x, units[i]!.y - units[j]!.y)
+        ).toBeGreaterThan(0.3);
+  });
+
+  it("a group moving on one shared path never fuses into a single point", () => {
+    const w = createWorld(32, 32);
+    const units = [0, 1, 2, 3].map((i) =>
+      spawnUnit(w, "stinger", "blue", 3.5 + i * 0.05, 3.5)
+    );
+    step(w, [
+      { type: "move", faction: "blue", unitIds: units.map((u) => u.id), x: 28.5, y: 3.5 }
+    ]);
+    let minSeen = Infinity;
+    for (let t = 0; t < 12 * TICK_RATE; t++) {
+      step(w, []);
+      for (let i = 0; i < units.length; i++)
+        for (let j = i + 1; j < units.length; j++)
+          minSeen = Math.min(
+            minSeen,
+            Math.hypot(units[i]!.x - units[j]!.x, units[i]!.y - units[j]!.y)
+          );
+    }
+    expect(minSeen).toBeGreaterThan(0.15);
+  });
+
   it("separates stacked units of the same domain", () => {
     const w = createWorld(24, 24);
     const a = spawnUnit(w, "stinger", "blue", 5.5, 5.5);
