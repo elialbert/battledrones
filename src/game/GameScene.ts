@@ -573,10 +573,11 @@ export class GameScene extends Phaser.Scene {
       id: p.id,
       x: p.x,
       y: p.y,
-      pointerType: ((p.event as PointerEvent)?.pointerType ?? "mouse") as
-        | "touch"
-        | "mouse"
-        | "pen",
+      // Phaser attaches TouchEvents (no pointerType field) for touch input,
+      // so fall back to wasTouch — defaulting to "mouse" misclassified all
+      // touches and made one-finger drags box-select instead of pan
+      pointerType: (((p.event as PointerEvent)?.pointerType ??
+        (p.wasTouch ? "touch" : "mouse")) as "touch" | "mouse" | "pen"),
       button: (p.event as PointerEvent)?.button ?? 0
     });
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
