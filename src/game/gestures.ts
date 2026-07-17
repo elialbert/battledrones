@@ -34,6 +34,9 @@ export const TAP_SLOP_PX = 8;
 export const HOLD_DELAY_MS = 250;
 export const DOUBLE_TAP_MS = 300;
 export const DOUBLE_TAP_SLOP_PX = 24;
+/** Finger distance must change this much before a pinch starts zooming —
+ * otherwise two-finger pans wobble the zoom from natural finger jitter. */
+export const PINCH_ACTIVATE_PX = 16;
 
 type Mode = "idle" | "pending" | "pan" | "box" | "multi" | "mousepan";
 
@@ -56,6 +59,8 @@ export class GestureRecognizer {
   private lastTapX = 0;
   private lastTapY = 0;
   private pinchDist = 0;
+  private pinchStartDist = 0;
+  private pinchActive = false;
 
   constructor(private cb: GestureCallbacks) {}
 
@@ -125,7 +130,9 @@ export class GestureRecognizer {
         const cy = (a.y + b.y) / 2;
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         this.cb.onPan(cx - this.lastX, cy - this.lastY);
-        if (this.pinchDist > 0 && dist > 0 && Math.abs(dist - this.pinchDist) > 0.5)
+        if (!this.pinchActive && Math.abs(dist - this.pinchStartDist) > PINCH_ACTIVATE_PX)
+          this.pinchActive = true;
+        if (this.pinchActive && this.pinchDist > 0 && dist > 0)
           this.cb.onPinch(dist / this.pinchDist, cx, cy);
         this.lastX = cx;
         this.lastY = cy;
@@ -210,6 +217,8 @@ export class GestureRecognizer {
       this.lastX = (a.x + b.x) / 2;
       this.lastY = (a.y + b.y) / 2;
       this.pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+      this.pinchStartDist = this.pinchDist;
+      this.pinchActive = false;
     }
   }
 }

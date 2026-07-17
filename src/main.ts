@@ -18,6 +18,48 @@ document.addEventListener(
 );
 document.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
 
+// Safety net: if browser page-zoom happens anyway (iOS finds ways), show a
+// rescue button pinned inside the VISUAL viewport (fixed-position elements
+// live in the layout viewport and can be off-screen while zoomed).
+function setupPageZoomRescue(): void {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const btn = document.createElement("button");
+  btn.id = "unzoom";
+  btn.textContent = "⤺ Zoom back out";
+  btn.hidden = true;
+  document.body.appendChild(btn);
+
+  const place = () => {
+    const zoomed = vv.scale > 1.05;
+    btn.hidden = !zoomed;
+    if (!zoomed) return;
+    // pin across the bottom of the visible area, in layout coordinates
+    const s = 1 / vv.scale;
+    btn.style.left = `${vv.offsetLeft}px`;
+    btn.style.top = `${vv.offsetTop + vv.height - 56 * s}px`;
+    btn.style.width = `${vv.width}px`;
+    btn.style.height = `${56 * s}px`;
+    btn.style.fontSize = `${17 * s}px`;
+  };
+  vv.addEventListener("resize", place);
+  vv.addEventListener("scroll", place);
+  place();
+
+  btn.addEventListener("click", () => {
+    // rewriting the viewport meta forces Safari to re-clamp scale to 1
+    const meta = document.querySelector<HTMLMetaElement>("meta[name=viewport]");
+    if (!meta) return;
+    const content = meta.content;
+    meta.content = "width=device-width, initial-scale=1.0, maximum-scale=1.0";
+    requestAnimationFrame(() => {
+      meta.content = content;
+      place();
+    });
+  });
+}
+setupPageZoomRescue();
+
 function startGame(): void {
   new Phaser.Game({
     type: Phaser.AUTO,

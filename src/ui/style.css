@@ -123,6 +123,17 @@ body {
   border-color: #ffd66e;
 }
 
+/* ----------------------------------------------- page-zoom rescue banner -- */
+#unzoom {
+  position: absolute;
+  z-index: 1000;
+  border: none;
+  background: #ffd66e;
+  color: #10141c;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
 /* ---------------------------------------------------------- zoom buttons -- */
 .zoombtns {
   position: absolute;

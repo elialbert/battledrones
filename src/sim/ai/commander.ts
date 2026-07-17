@@ -25,9 +25,11 @@ export interface Strategy {
   assaultValue: number;
   /** Idle wasps required before a harass raid launches. */
   harassGroup: number;
+  /** Never build ground combat units; answer enemy air with raptors. */
+  airOnly?: boolean;
 }
 
-export type StrategyName = "balanced" | "rush" | "airswarm" | "boom";
+export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce";
 
 export const STRATEGIES: Record<StrategyName, Strategy> = {
   /** Steady macro: factory then airpad, standard timing. */
@@ -61,6 +63,16 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     harvesters: 3,
     assaultValue: 1600,
     harassGroup: 3
+  },
+  /** Pure air force: no Fab Plant, no ground combat units at all — wasps
+   * and raptors backed by turrets for base defence. */
+  skyforce: {
+    name: "skyforce",
+    buildOrder: ["airpad", "turret", "turret", "turret"],
+    harvesters: 2,
+    assaultValue: 1200,
+    harassGroup: 2,
+    airOnly: true
   }
 };
 
@@ -150,16 +162,18 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const reserve =
     f.pending || nextWanted === null || nextWanted === "turret" ? 0 : 300;
   const spendable = f.scrap - reserve;
-  if (fab && fab.queue.length === 0) {
+  if (fab && !s.strategy.airOnly && fab.queue.length === 0) {
     const wantFlak = count("flak-crawler") < Math.ceil(s.seenAir / 1.5);
     const kind: UnitKind = wantFlak ? "flak-crawler" : "stinger";
     if (spendable >= UNITS[kind].cost)
       cmds.push({ type: "produce", faction, buildingId: fab.id, unit: kind });
   }
   if (pad && pad.queue.length === 0) {
+    // air-only strategies can't lean on flak, so they field more raptors
+    const raptorCap = s.strategy.airOnly ? 6 : 3;
     let kind: UnitKind | null = null;
     if (count("scout") < 1) kind = "scout";
-    else if (s.seenAir > count("raptor") * 2 && count("raptor") < 3) kind = "raptor";
+    else if (s.seenAir > count("raptor") * 2 && count("raptor") < raptorCap) kind = "raptor";
     else kind = "wasp";
     if (kind && spendable >= UNITS[kind].cost)
       cmds.push({ type: "produce", faction, buildingId: pad.id, unit: kind });

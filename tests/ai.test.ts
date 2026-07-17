@@ -86,6 +86,26 @@ describe("AI commander", () => {
     }
   }, 120000);
 
+  it("skyforce fields air units and turrets only — zero ground combat units", () => {
+    const w = createSkirmishWorld();
+    const state = createAiState("skyforce");
+    for (let i = 0; i < 6 * 60 * TICK_RATE && !w.winner; i++) {
+      step(w, tickAi(w, "red", state));
+      for (const u of w.units.values())
+        if (u.faction === "red")
+          expect(["harvester", "scout", "wasp", "raptor"]).toContain(u.kind);
+    }
+    const redBuildings = [...w.buildings.values()].filter((b) => b.faction === "red");
+    expect(redBuildings.some((b) => b.kind === "airpad")).toBe(true);
+    expect(redBuildings.some((b) => b.kind === "fab-plant")).toBe(false);
+    expect(redBuildings.some((b) => b.kind === "turret")).toBe(true);
+    // it actually fields an air force
+    const air = [...w.units.values()].filter(
+      (u) => u.faction === "red" && (u.kind === "wasp" || u.kind === "raptor")
+    );
+    expect(air.length).toBeGreaterThan(0);
+  }, 60000);
+
   it("AI vs AI reaches a decisive result inside 25 minutes", () => {
     const w = createSkirmishWorld();
     const red = createAiState("rush");
