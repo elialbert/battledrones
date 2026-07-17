@@ -49,6 +49,8 @@ export interface Unit {
   cooldown: number;
   /** Current auto-acquired target while attack-moving/idling. */
   autoTargetId: number | null;
+  /** Tick this unit last took damage (drives harvester flee behaviour). */
+  damagedTick: number;
 }
 
 export interface QueueItem {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
 import { Terrain } from "../src/sim/types";
@@ -182,6 +182,24 @@ describe("harvesting cycle", () => {
     runTicks(w, 90 * TICK_RATE);
     // three harvesters over 90s must clearly out-earn a single stuck one
     expect(w.factions.blue.scrap).toBeGreaterThan(500);
+  });
+
+  it("a harvester under fire flees toward the HQ instead of mining on", () => {
+    const w = createWorld(32, 32);
+    spawnBuilding(w, "hq", "blue", 2, 2);
+    setTerrain(w, 20, 20, Terrain.Scrap);
+    const h = spawnUnit(w, "harvester", "blue", 20.5, 20.5);
+    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 20.5, y: 20.5 }]);
+    runTicks(w, 5);
+    const distBefore = Math.hypot(h.x - 3.5, h.y - 3.5);
+    h.hp -= 20;
+    h.damagedTick = w.tick; // shot!
+    runTicks(w, 3 * TICK_RATE);
+    const distAfter = Math.hypot(h.x - 3.5, h.y - 3.5);
+    expect(distAfter).toBeLessThan(distBefore - 2); // clearly running home
+    // once safe it goes back to mining
+    runTicks(w, 30 * TICK_RATE);
+    expect(w.factions.blue.scrap).toBeGreaterThan(ECONOMY.startingScrap);
   });
 
   it("goes idle when all scrap in the world is gone", () => {

@@ -106,6 +106,45 @@ describe("AI commander", () => {
     expect(air.length).toBeGreaterThan(0);
   }, 60000);
 
+  it("dispatches capable defenders at an unengaged intruder (threat response)", () => {
+    const w = createSkirmishWorld();
+    const state = createAiState("balanced");
+    runWithAi(w, 150, state); // build up an army with an airpad + fab
+    // give red an idle interceptor at base, then park a blue wasp on the
+    // red harvester line, plainly visible and engaging nobody
+    const raptor = spawnUnit(w, "raptor", "red", 40.5, 7.5);
+    void raptor;
+    const intruder = spawnUnit(w, "wasp", "blue", 36.5, 10.5);
+    let answered = false;
+    for (let i = 0; i < 30 * TICK_RATE && !answered; i++) {
+      step(w, tickAi(w, "red", state));
+      for (const u of w.units.values())
+        if (
+          u.faction === "red" &&
+          u.order.type === "attack" &&
+          u.order.targetId === intruder.id
+        )
+          answered = true;
+      if (!w.units.has(intruder.id)) answered = true; // or they just killed it
+    }
+    expect(answered).toBe(true);
+  }, 30000);
+
+  it("places turrets covering the mining line, not a random ring tile", () => {
+    const w = createSkirmishWorld();
+    const state = createAiState("skyforce"); // three turrets in its build order
+    runWithAi(w, 240, state);
+    const turrets = [...w.buildings.values()].filter(
+      (b) => b.faction === "red" && b.kind === "turret"
+    );
+    expect(turrets.length).toBeGreaterThanOrEqual(1);
+    // red home field centres around (34, 10); turrets should lean that way
+    const nearField = turrets.some(
+      (t) => Math.hypot(t.tx + 0.5 - 34, t.ty + 0.5 - 10) < 8
+    );
+    expect(nearField).toBe(true);
+  }, 30000);
+
   it("AI vs AI reaches a decisive result inside 25 minutes", () => {
     const w = createSkirmishWorld();
     const red = createAiState("rush");

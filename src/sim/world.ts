@@ -90,7 +90,8 @@ export function spawnUnit(
     pathGoal: null,
     cargo: 0,
     cooldown: 0,
-    autoTargetId: null
+    autoTargetId: null,
+    damagedTick: -1000
   };
   w.units.set(unit.id, unit);
   return unit;

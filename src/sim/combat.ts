@@ -62,6 +62,7 @@ function applyDamage(w: World, id: number, damage: number): void {
   const u = w.units.get(id);
   if (u) {
     u.hp -= damage;
+    u.damagedTick = w.tick;
     return;
   }
   const b = w.buildings.get(id);

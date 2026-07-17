@@ -163,11 +163,29 @@ export function nearestScrapTile(w: World, x: number, y: number): { x: number; y
   return best;
 }
 
+/** Ticks a harvester keeps running for home after being shot. */
+const FLEE_TICKS = 4 * TICK_RATE;
+
 export function tickHarvest(w: World): void {
   for (const u of w.units.values()) {
     if (u.order.type !== "harvest") continue;
     const o = u.order;
     const perTick = (rate: number) => rate / TICK_RATE;
+
+    // under fire: abandon mining and run for the HQ until the heat is off
+    // (toBase/unloading already head home, so only interrupt field phases)
+    if (
+      w.tick - u.damagedTick < FLEE_TICKS &&
+      (o.phase === "toField" || o.phase === "harvesting")
+    ) {
+      const hq = hqOf(w, u.faction);
+      if (hq) {
+        const size = BUILDINGS.hq.size;
+        moveUnitToward(w, u, hq.tx + size / 2, hq.ty + size + 0.5);
+        o.phase = "toField"; // resume mining from scratch once safe
+        continue;
+      }
+    }
 
     if (o.phase === "toField") {
       // already standing on minable scrap? dig in right here — this also
