@@ -1,4 +1,4 @@
-# Battle Dromes — MVP Design
+# Battle Drones — MVP Design
 
 A mobile-friendly real-time strategy game in the Command & Conquer tradition.
 Two armies of drones — flying and ground-based — battle for territory and
@@ -13,7 +13,7 @@ playable in a mobile browser.
 2. **A full match in a coffee break.** Target match length ~10 minutes.
    Fast build times, small maps, decisive combat.
 3. **Air vs ground is the core tension.** The rock-paper-scissors between
-   flying and ground drones is what makes this game *Battle Dromes* and not
+   flying and ground drones is what makes this game *Battle Drones* and not
    a generic RTS. Every roster and map decision should feed it.
 
 ## Locked-in decisions
