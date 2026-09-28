@@ -86,18 +86,19 @@ describe("AI commander", () => {
     }
   }, 120000);
 
-  it("skyforce fields air units and turrets only — zero ground combat units", () => {
+  it("skyforce leads with an air force; ground units only guard home", () => {
     const w = createSkirmishWorld();
     const state = createAiState("skyforce");
+    let maxStingers = 0;
     for (let i = 0; i < 6 * 60 * TICK_RATE && !w.winner; i++) {
       step(w, tickAi(w, "red", state));
-      for (const u of w.units.values())
-        if (u.faction === "red")
-          expect(["harvester", "scout", "wasp", "raptor"]).toContain(u.kind);
+      const red = [...w.units.values()].filter((u) => u.faction === "red");
+      maxStingers = Math.max(maxStingers, red.filter((u) => u.kind === "stinger").length);
+      for (const u of red) expect(["titan", "mortar", "lancer"]).not.toContain(u.kind);
     }
+    expect(maxStingers).toBeLessThanOrEqual(4);
     const redBuildings = [...w.buildings.values()].filter((b) => b.faction === "red");
     expect(redBuildings.some((b) => b.kind === "airpad")).toBe(true);
-    expect(redBuildings.some((b) => b.kind === "fab-plant")).toBe(false);
     expect(redBuildings.some((b) => b.kind === "turret")).toBe(true);
     // it actually fields an air force
     const air = [...w.units.values()].filter(

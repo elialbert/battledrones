@@ -1,10 +1,12 @@
-import { TICK_RATE, UNITS } from "./balance";
-import type { Unit, World } from "./types";
-import { groundPassable, inBounds } from "./world";
+import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
+import { Terrain, type Unit, type World } from "./types";
+import { inBounds, moveClassOf, passable, terrainSpeed, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
+/** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
+const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed)));
 
 /**
  * Arrival radius at a final destination, growing with the crowd already
@@ -20,14 +22,26 @@ function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
   return Math.min(2, ARRIVE_DIST + 0.4 * crowd);
 }
 
-/** 8-directional A* over the tile grid. Returns tile-centre waypoints. */
+/** Per-step cost multiplier of entering a tile (slow terrain costs more). */
+function stepCost(w: World, idx: number, mc: MoveClass): number {
+  const info = TERRAIN[w.terrain[idx] as Terrain];
+  const s = mc === "hover" ? info.hoverSpeed : info.speed;
+  return 1 / (s || 1);
+}
+
+/**
+ * 8-directional A* over the tile grid, weighted by terrain speed (roads are
+ * preferred, mud and woods avoided). Returns tile-centre waypoints.
+ */
 export function findPath(
   w: World,
   fromX: number,
   fromY: number,
   toX: number,
-  toY: number
+  toY: number,
+  mc: MoveClass = "ground"
 ): { x: number; y: number }[] | null {
+  const pass = (x: number, y: number) => passable(w, x, y, mc);
   const sx = Math.floor(fromX);
   const sy = Math.floor(fromY);
   let gx = Math.floor(toX);
@@ -37,21 +51,25 @@ export function findPath(
     gy = Math.max(0, Math.min(w.height - 1, gy));
   }
   // If the goal tile itself is blocked, walk to the nearest passable tile
-  // around it (spiral search, small radius).
-  if (!groundPassable(w, gx, gy)) {
-    let found = false;
-    outer: for (let r = 1; r <= 6 && !found; r++)
+  // around it (spiral search, small radius), preferring ones nearer to us.
+  if (!pass(gx, gy)) {
+    let found: { x: number; y: number } | null = null;
+    for (let r = 1; r <= 6 && !found; r++) {
+      let bestD = Infinity;
       for (let dy = -r; dy <= r; dy++)
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          if (groundPassable(w, gx + dx, gy + dy)) {
-            gx += dx;
-            gy += dy;
-            found = true;
-            break outer;
+          if (!pass(gx + dx, gy + dy)) continue;
+          const d = Math.hypot(gx + dx - sx, gy + dy - sy);
+          if (d < bestD) {
+            bestD = d;
+            found = { x: gx + dx, y: gy + dy };
           }
         }
+    }
     if (!found) return null;
+    gx = found.x;
+    gy = found.y;
   }
   if (sx === gx && sy === gy) return [{ x: gx + 0.5, y: gy + 0.5 }];
 
@@ -107,7 +125,7 @@ export function findPath(
   const h = (idx: number) => {
     const dx = Math.abs((idx % W) - gx);
     const dy = Math.abs(Math.floor(idx / W) - gy);
-    return Math.max(dx, dy) + 0.4142 * Math.min(dx, dy);
+    return (Math.max(dx, dy) + 0.4142 * Math.min(dx, dy)) / MAX_TERRAIN_SPEED;
   };
   push(h(startIdx), startIdx);
 
@@ -129,13 +147,12 @@ export function findPath(
         if (dx === 0 && dy === 0) continue;
         const nx = cx + dx;
         const ny = cy + dy;
-        if (!groundPassable(w, nx, ny)) continue;
+        if (!pass(nx, ny)) continue;
         // no diagonal corner-cutting past blocked orthogonals
-        if (dx !== 0 && dy !== 0 && (!groundPassable(w, cx + dx, cy) || !groundPassable(w, cx, cy + dy)))
-          continue;
+        if (dx !== 0 && dy !== 0 && (!pass(cx + dx, cy) || !pass(cx, cy + dy))) continue;
         const nIdx = ny * W + nx;
         if (closed[nIdx]) continue;
-        const cost = dx !== 0 && dy !== 0 ? 1.4142 : 1;
+        const cost = (dx !== 0 && dy !== 0 ? 1.4142 : 1) * stepCost(w, nIdx, mc);
         const g = gScore[cur]! + cost;
         if (g < gScore[nIdx]!) {
           gScore[nIdx] = g;
@@ -147,14 +164,19 @@ export function findPath(
   return null; // unreachable
 }
 
+/** Tiles per tick this unit moves at its current position. */
+export function unitStepSpeed(w: World, u: Unit): number {
+  return (UNITS[u.kind].speed / TICK_RATE) * terrainSpeed(w, u.x, u.y, moveClassOf(u.kind));
+}
+
 /**
  * Advance a unit one tick toward (x, y). Ground units follow an A* path
  * (computed/cached here); air units fly straight. Returns true on arrival.
  */
 export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean {
-  const stats = UNITS[u.kind];
-  const speed = stats.speed / TICK_RATE;
-  if (stats.domain === "air") {
+  const mc = moveClassOf(u.kind);
+  const speed = unitStepSpeed(w, u);
+  if (mc === "air") {
     const d = Math.hypot(x - u.x, y - u.y);
     if (d <= Math.max(arrivalRadius(w, u, x, y), speed)) {
       return true;
@@ -171,7 +193,7 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
     !u.pathGoal ||
     Math.hypot(u.pathGoal.x - x, u.pathGoal.y - y) > 0.6
   ) {
-    u.path = findPath(w, u.x, u.y, x, y);
+    u.path = findPath(w, u.x, u.y, x, y, mc);
     u.pathGoal = { x, y };
     if (!u.path) return true; // unreachable: give up (caller goes idle)
   }
@@ -187,7 +209,7 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
     u.pathGoal = null;
     return true;
   }
-  if (!groundPassable(w, Math.floor(wp.x), Math.floor(wp.y))) {
+  if (!passable(w, Math.floor(wp.x), Math.floor(wp.y), mc)) {
     // world changed under the path (new building etc.) — replan next tick
     u.path = null;
     return false;
@@ -200,6 +222,23 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
   return false;
 }
 
+/** Where to drive to reach a building: the nearest point of its footprint. */
+export function approachPoint(
+  w: World,
+  u: Unit,
+  targetId: number
+): { x: number; y: number } | null {
+  const t = w.units.get(targetId);
+  if (t) return { x: t.x, y: t.y };
+  const b = w.buildings.get(targetId);
+  if (!b) return null;
+  const size = BUILDINGS[b.kind].size;
+  return {
+    x: Math.max(b.tx + 0.5, Math.min(b.tx + size - 0.5, u.x)),
+    y: Math.max(b.ty + 0.5, Math.min(b.ty + size - 0.5, u.y))
+  };
+}
+
 /** Per-tick movement for move / attack-move orders (combat may pause it). */
 export function tickMovement(w: World, pausedIds: Set<number>): void {
   for (const u of w.units.values()) {
@@ -208,15 +247,20 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
     if (o.type === "move" || o.type === "attackMove") {
       if (moveUnitToward(w, u, o.x, o.y)) u.order = { type: "idle" };
     } else if (o.type === "attack") {
-      const target = w.units.get(o.targetId) ?? null;
-      const b = target ? null : w.buildings.get(o.targetId) ?? null;
-      if (!target && !b) {
+      const p = approachPoint(w, u, o.targetId);
+      if (!p) {
         u.order = { type: "idle" };
         continue;
       }
-      const tx = target ? target.x : b!.tx + 0.5;
-      const ty = target ? target.y : b!.ty + 0.5;
-      moveUnitToward(w, u, tx, ty); // combat pauses it once in range
+      const minRange = UNITS[u.kind].minRange ?? 0;
+      const d = Math.hypot(p.x - u.x, p.y - u.y);
+      if (minRange > 0 && d < minRange) {
+        // artillery: back off out of minimum range instead of closing in
+        const k = (minRange + 0.8) / Math.max(d, 0.01);
+        moveUnitToward(w, u, p.x + (u.x - p.x) * k, p.y + (u.y - p.y) * k);
+      } else {
+        moveUnitToward(w, u, p.x, p.y); // combat pauses it once in range
+      }
     }
   }
   separate(w);
@@ -225,15 +269,17 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
 /** Gentle separation so same-domain units don't stack. */
 function separate(w: World): void {
   const units = [...w.units.values()];
-  for (let i = 0; i < units.length; i++)
+  for (let i = 0; i < units.length; i++) {
+    const a = units[i]!;
+    const da = UNITS[a.kind].domain;
     for (let j = i + 1; j < units.length; j++) {
-      const a = units[i]!;
       const b = units[j]!;
-      if (UNITS[a.kind].domain !== UNITS[b.kind].domain) continue;
+      if (UNITS[b.kind].domain !== da) continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
+      if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) continue;
       const d = Math.hypot(dx, dy);
-      const minD = 0.7;
+      const minD = Math.max(0.7, UNITS[a.kind].radius + UNITS[b.kind].radius);
       if (d >= minD) continue;
       const push = (minD - d) / 2;
       let ux: number;
@@ -251,12 +297,13 @@ function separate(w: World): void {
       nudge(w, a, -ux * push, -uy * push);
       nudge(w, b, ux * push, uy * push);
     }
+  }
 }
 
 function nudge(w: World, u: Unit, dx: number, dy: number): void {
   const nx = Math.min(w.width - 0.05, Math.max(0.05, u.x + dx));
   const ny = Math.min(w.height - 0.05, Math.max(0.05, u.y + dy));
-  if (UNITS[u.kind].domain === "air" || groundPassable(w, Math.floor(nx), Math.floor(ny))) {
+  if (passable(w, Math.floor(nx), Math.floor(ny), moveClassOf(u.kind))) {
     u.x = nx;
     u.y = ny;
   }

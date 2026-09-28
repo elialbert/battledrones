@@ -3,13 +3,14 @@ import {
   applyEconomyCommand,
   tickConstruction,
   tickHarvest,
-  tickProduction
+  tickProduction,
+  tickTrickle
 } from "./economy";
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { tickMovement } from "./movement";
-import { Terrain, type Command, type World } from "./types";
-import { terrainAt } from "./world";
+import type { Command, World } from "./types";
+import { isResource, tileIndex } from "./world";
 
 /** Advance the world exactly one tick, applying this tick's commands first. */
 export function step(w: World, commands: Command[]): void {
@@ -19,6 +20,7 @@ export function step(w: World, commands: Command[]): void {
   tickConstruction(w);
   tickProduction(w);
   tickHarvest(w);
+  tickTrickle(w);
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
@@ -49,7 +51,8 @@ function applyCommand(w: World, c: Command): void {
     case "harvest": {
       const tx = Math.floor(c.x);
       const ty = Math.floor(c.y);
-      if (terrainAt(w, tx, ty) !== Terrain.Scrap) break;
+      if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height) break;
+      if (!isResource(w, tileIndex(w, tx, ty))) break;
       for (const id of c.unitIds) {
         const u = w.units.get(id);
         if (!u || u.faction !== c.faction || u.kind !== "harvester") continue;

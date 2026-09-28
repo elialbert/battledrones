@@ -1,0 +1,391 @@
+"""Every generated asset in Battle Drones: prompt, canvas size, transparency.
+
+Sprites are generated for the BLUE faction only; `process.py` derives the
+red faction by hue-shifting the team-color panels, so every prompt keeps
+blue strictly confined to team markings.
+"""
+
+# ------------------------------------------------------------ style contracts
+
+STYLE = (
+    "Game art for a modern top-down real-time strategy game about autonomous battle drones. "
+    "Strictly top-down orthographic view, camera looking straight down from directly above "
+    "(no perspective, no isometric angle, no side view, no tilt). Semi-realistic hand-painted "
+    "sci-fi military style with crisp hard edges, a bold readable silhouette and rich detail "
+    "that still reads when shown small on a phone. Soft studio lighting from the upper left. "
+    "Materials: weathered gunmetal and dark graphite armor plates with vivid royal-blue "
+    "team-color panels and stripes. Blue appears ONLY on the team-color panels: all glass, "
+    "lenses and indicator lights are warm amber or smoked dark glass. "
+    "No text, letters, numbers, logos, emblems or symbols anywhere."
+)
+
+ISOLATED = (
+    "Isolated on a fully transparent background with generous empty margin on every side "
+    "(nothing touches the image edges). No ground plane, no cast shadow, no drop shadow, "
+    "no outer glow, no halo, no scenery, no border, no frame."
+)
+
+FACING = (
+    "The machine faces straight up toward the top of the image: its nose, front and "
+    "main gun point north."
+)
+
+PAIR = (
+    "Show TWO separate parts side by side at exactly the same scale and in the same style, "
+    "with a wide empty gap between them so they do not touch or overlap: "
+)
+
+UNIT = f"{STYLE} {FACING} {ISOLATED}"
+BUILDING = (
+    f"{STYLE} The structure is seen from directly above and fills a square footprint; "
+    f"its outer edge is a clean square foundation slab. {ISOLATED}"
+)
+
+TEXTURE = (
+    "Seamless tileable top-down ground texture for a real-time strategy game map, "
+    "viewed from directly above, filling the entire square image edge to edge. "
+    "Semi-realistic hand-painted style with natural detail at a scale where the whole image "
+    "covers roughly 20 by 20 meters. Even, flat, diffuse lighting with no strong directional "
+    "shadows, no vignette, no large distinct objects, no horizon, no text. "
+)
+
+DOODADS = (
+    "Top-down game decoration sprite sheet, viewed from directly above, semi-realistic "
+    "hand-painted style matching a real-time strategy map. Nine separate objects arranged "
+    "in a loose 3 by 3 grid with wide transparent gaps between them so none touch or overlap. "
+    "Each object is complete and uncut. Fully transparent background, no ground under the "
+    "objects, no cast shadows, no text. Objects: "
+)
+
+# -------------------------------------------------------------------- assets
+# name -> dict(prompt, size, quality, transparent)
+
+A: dict[str, dict] = {}
+
+
+def unit(name: str, desc: str, size: str = "1024x1024") -> None:
+    A[name] = dict(prompt=f"{desc} {UNIT}", size=size, quality="high", transparent=True)
+
+
+def pair(name: str, what: str, left: str, right: str, kind: str = "unit") -> None:
+    base = UNIT if kind == "unit" else BUILDING
+    A[name] = dict(
+        prompt=f"{what} {PAIR} LEFT: {left} RIGHT: {right} {base}",
+        size="1536x1024",
+        quality="high",
+        transparent=True,
+    )
+
+
+# --- units -------------------------------------------------------------------
+
+pair(
+    "harvester",
+    "An unmanned industrial scrap-harvester vehicle: a chunky, wide six-wheeled armored "
+    "hauler with a heavy front grinder intake scoop and a large open-topped cargo bin "
+    "taking up the rear half of the vehicle.",
+    "the harvester with its cargo bin EMPTY (the bare metal bin floor is visible).",
+    "the identical harvester with its cargo bin heaped FULL of rusty scrap metal chunks, "
+    "gears and broken drone parts.",
+)
+unit(
+    "scout",
+    "A tiny, fragile reconnaissance quadcopter drone: a small teardrop central pod with one "
+    "large amber camera eye at the front, four thin carbon arms in an X, and four rotors "
+    "drawn as faint translucent spinning blur discs.",
+)
+pair(
+    "stinger",
+    "A small, fast unmanned light tank drone called the Stinger.",
+    "the low tracked hull/chassis ALONE with an empty circular turret ring on top (no turret).",
+    "the matching small turret ALONE: a compact armored dome with one long slender cannon "
+    "barrel pointing straight up.",
+)
+pair(
+    "flak-crawler",
+    "A squat, low anti-aircraft tracked drone vehicle called the Flak Crawler.",
+    "the wide low tracked hull ALONE with an empty circular turret ring on top (no turret).",
+    "the matching anti-aircraft turret ALONE: a boxy mount with four short rapid-fire "
+    "barrels pointing straight up and a small radar dish on the back.",
+)
+pair(
+    "mortar",
+    "A mobile artillery drone vehicle called the Mortar: long six-wheeled armored carrier "
+    "with stabilizer legs folded along its sides.",
+    "the six-wheeled carrier hull ALONE with an empty circular turret mount at its rear "
+    "(no weapon).",
+    "the matching artillery turret ALONE: a heavy squat mount with one very thick short "
+    "mortar tube pointing straight up.",
+)
+pair(
+    "titan",
+    "A massive unmanned super-heavy battle tank called the Titan, broad and brutal.",
+    "the huge hull ALONE: wide twin tracks on each side, thick sloped armor, an empty large "
+    "circular turret ring in the middle (no turret).",
+    "the matching huge turret ALONE: heavily armored wedge-shaped turret with TWO thick "
+    "long cannon barrels side by side pointing straight up.",
+)
+pair(
+    "lancer",
+    "A sleek unmanned hover tank called the Lancer that floats on anti-gravity pads (no "
+    "tracks, no wheels).",
+    "the smooth angular hover hull ALONE with four round glowing amber thruster pads "
+    "underneath the corners and an empty circular turret ring on top (no turret).",
+    "the matching slim turret ALONE: a sleek mount with one long laser lance emitter "
+    "pointing straight up, ending in an amber crystal focusing lens.",
+)
+unit(
+    "wasp",
+    "An aggressive dart-shaped strike drone called the Wasp: narrow arrowhead fuselage with "
+    "a sharp nose, two small forward wings carrying rocket pods, and two ducted fans at the "
+    "tail.",
+)
+unit(
+    "raptor",
+    "A sleek air-superiority interceptor drone called the Raptor: like a small unmanned "
+    "stealth fighter jet with swept delta wings, twin tail fins, twin engine nozzles at the "
+    "back and a pointed nose.",
+)
+unit(
+    "hornet",
+    "A heavy bomber drone called the Hornet: a big broad armored flying-wing body with four "
+    "large ducted fans, one at each corner, and an open central bomb bay holding a rack of "
+    "bombs. Bulky, heavy and menacing.",
+)
+unit(
+    "mender",
+    "A support repair drone called the Mender: a rounded hovering drone with a central "
+    "repair module, two small articulated manipulator arms with welding tools at the front, "
+    "a few small green status lights, and three small rotors drawn as faint translucent "
+    "blur discs.",
+)
+
+# --- buildings -----------------------------------------------------------------
+
+def building(name: str, desc: str) -> None:
+    A[name] = dict(prompt=f"{desc} {BUILDING}", size="1024x1024", quality="high", transparent=True)
+
+
+building(
+    "hq",
+    "Command headquarters of a drone army: a large fortified armored command center with a "
+    "central domed command module, antenna and sensor arrays, heavy armored corner bastions, "
+    "landing lights, and a wide vehicle bay door on the bottom edge.",
+)
+building(
+    "fab-plant",
+    "Ground vehicle factory: an industrial assembly plant with a large vehicle bay door on "
+    "the bottom edge, overhead gantry crane rails, roof vents and exhaust stacks, and "
+    "stacked parts containers.",
+)
+building(
+    "airpad",
+    "Drone airfield launch pad: a raised square landing platform with a large circular pad "
+    "marking ring (no letters), corner service towers, refuelling hoses, and rows of small "
+    "amber landing lights.",
+)
+building(
+    "tech-lab",
+    "High-tech research laboratory: an advanced sci-fi facility with a glass-domed amber "
+    "reactor core in the middle, coolant pipes, server racks, a small satellite dish and "
+    "sleek white-and-graphite modules.",
+)
+building(
+    "depot",
+    "Scrap refinery drop-off depot: an industrial building with a large open receiving "
+    "hopper, crushers, conveyor belts and neat stacks of processed metal ingots.",
+)
+pair(
+    "turret",
+    "A defensive autocannon gun turret emplacement.",
+    "the square armored foundation base ALONE with an empty circular mount in the middle "
+    "(no gun).",
+    "the rotating gun head ALONE: an armored round head with twin autocannon barrels "
+    "pointing straight up.",
+    kind="building",
+)
+pair(
+    "sam-site",
+    "A surface-to-air missile defense site.",
+    "the square armored foundation base ALONE with an empty circular mount in the middle "
+    "(no launcher).",
+    "the rotating launcher head ALONE: a boxy launcher holding a pack of six missiles, their "
+    "white-tipped noses pointing straight up.",
+    kind="building",
+)
+pair(
+    "radar",
+    "A radar sensor station.",
+    "the square armored foundation base ALONE with equipment cabinets and an empty circular "
+    "mount in the middle (no dish).",
+    "the rotating radar antenna ALONE: a wide curved rectangular radar dish on a small hub, "
+    "seen from above.",
+    kind="building",
+)
+A["rubble"] = dict(
+    prompt=(
+        "Top-down game sprite sheet of FOUR separate destroyed-building rubble piles arranged "
+        "in a 2 by 2 grid with wide transparent gaps between them: broken concrete slabs, "
+        "twisted steel girders, scorched armor plates, burned debris and black scorch marks, "
+        "each pile roughly square. Viewed from directly above, semi-realistic hand-painted "
+        "style, dark grey and charred. Fully transparent background, no ground, no text."
+    ),
+    size="1024x1024",
+    quality="high",
+    transparent=True,
+)
+A["decals"] = dict(
+    prompt=(
+        "Top-down game decal sprite sheet of SIX separate ground decals arranged in a 3 by 2 "
+        "grid with wide transparent gaps: a small blast crater, a large blast crater with "
+        "scattered debris, a black scorch burn mark, a dark oil stain splatter, a pair of "
+        "tank track marks, a small scorched crater with embers. Viewed from directly above, "
+        "semi-realistic hand-painted style, soft natural edges that fade out. Fully "
+        "transparent background, no text."
+    ),
+    size="1536x1024",
+    quality="high",
+    transparent=True,
+)
+A["scrap"] = dict(
+    prompt=(
+        "Top-down game sprite sheet of SIX separate piles of salvageable scrap metal arranged "
+        "in a 3 by 2 grid with wide transparent gaps between them: rusty broken machine "
+        "parts, gears, pipes, bent plates, wires and wrecked drone pieces, each pile a "
+        "compact roughly round heap of a different shape. Viewed from directly above, "
+        "semi-realistic hand-painted style, rusty orange-brown and grey metal. No blue. "
+        "Fully transparent background, no ground, no shadows, no text."
+    ),
+    size="1536x1024",
+    quality="high",
+    transparent=True,
+)
+A["crystal"] = dict(
+    prompt=(
+        "Top-down game sprite sheet of SIX separate clusters of large glowing emerald-green "
+        "energy crystals growing out of small rocks, arranged in a 3 by 2 grid with wide "
+        "transparent gaps between them. Each cluster is compact and roughly round with sharp "
+        "faceted shards pointing outward. Viewed from directly above, semi-realistic "
+        "hand-painted style, vivid green and teal-green, luminous. No blue. Fully transparent "
+        "background, no ground, no text."
+    ),
+    size="1536x1024",
+    quality="high",
+    transparent=True,
+)
+A["explosion"] = dict(
+    prompt=(
+        "Game VFX sprite sheet: EIGHT frames of one explosion animation arranged in a 4 by 2 "
+        "grid (read left to right, top row then bottom row), all frames the same scale and "
+        "centered in equal cells with transparent gaps: 1 a small white-hot flash, 2 a bright "
+        "yellow-orange expanding fireball, 3 a large billowing orange fireball with sparks, "
+        "4 the biggest fireball starting to darken, 5 fire breaking up into dark smoke, "
+        "6 mostly dark grey smoke with glowing embers, 7 thinning grey smoke puffs, 8 faint "
+        "dissipating wisps. Viewed from directly above, semi-realistic painted style. Fully "
+        "transparent background, no text, no numbers."
+    ),
+    size="1536x1024",
+    quality="high",
+    transparent=True,
+)
+
+# --- terrain materials per biome ----------------------------------------------------
+
+BIOMES: dict[str, dict[str, str]] = {
+    "temperate": {
+        "ground": "lush short green meadow grass with tiny wildflowers and subtle clumps",
+        "ground2": "bare brown earth and packed dirt with small pebbles and sparse grass tufts",
+        "rough": "churned muddy ground with tyre ruts, shallow brown puddles and trampled grass",
+        "rock": "grey granite bedrock surface with cracks, lichen and loose stones",
+        "liquid": "deep blue-green lake water surface with gentle ripples and small reflections",
+        "road": "old cracked grey asphalt road surface with patches and fine gravel",
+        "forest": "dense forest canopy seen from directly above: tightly packed round crowns of "
+        "deciduous trees in varied greens, with dark shade between the crowns",
+    },
+    "desert": {
+        "ground": "fine golden desert sand with soft wind ripples",
+        "ground2": "cracked dry clay hardpan, pale tan, with a network of polygonal cracks",
+        "rough": "rocky desert scree of loose broken stones and gravel",
+        "rock": "red-orange sandstone bedrock surface with layered strata, cracks and wind erosion",
+        "liquid": "clear turquoise oasis water surface with gentle ripples",
+        "road": "packed dusty dirt track surface with faint tyre tracks and small stones",
+        "forest": "dense thicket of desert palms and dry scrub bushes seen from directly above, "
+        "packed palm fronds and olive-green shrubs with dark shade between",
+    },
+    "arctic": {
+        "ground": "fresh white snow with soft wind-sculpted ripples and a faint cool tint",
+        "ground2": "wind-scoured blue-white ice and hard packed snow with fine cracks",
+        "rough": "churned grey slushy snow with deep ruts and footprints",
+        "rock": "dark grey basalt rock surface with frost and small patches of snow in cracks",
+        "liquid": "dark cold arctic sea water surface with small floating ice floes",
+        "road": "plowed icy gravel road surface with frozen tyre tracks",
+        "forest": "dense snowy pine forest canopy seen from directly above: tightly packed "
+        "conifer tree tops dusted with snow, dark shade between them",
+    },
+    "volcanic": {
+        "ground": "grey volcanic ash plain with fine dust and scattered small dark pebbles",
+        "ground2": "dark cracked basalt plates with thin dusty seams",
+        "rough": "loose black and rust-red volcanic cinders and scoria gravel",
+        "rock": "jagged black obsidian and dark volcanic rock surface with sharp facets",
+        "liquid": "molten glowing orange-yellow lava with dark cooling crust plates",
+        "road": "rusted riveted steel deck plating, industrial and worn",
+        "forest": "dense field of dead charred black tree trunks and broken branches seen from "
+        "directly above, ash-covered, with dark gaps between",
+    },
+}
+
+for biome, mats in BIOMES.items():
+    for mat, desc in mats.items():
+        A[f"tex-{biome}-{mat}"] = dict(
+            prompt=f"{TEXTURE}Material: {desc}.",
+            size="1024x1024",
+            quality="medium",
+            transparent=False,
+        )
+
+DOODAD_SETS = {
+    "temperate": "three different round leafy deciduous tree crowns (varied sizes and greens), "
+    "a mossy grey boulder, a cluster of small rocks, a leafy green bush, a fallen log, a "
+    "rusted burned-out car wreck, a small patch of wildflowers",
+    "desert": "three different palm tree tops (radiating fronds), a large sandstone boulder, "
+    "a cluster of small red rocks, a dry tumbleweed bush, a round barrel cactus, a sun-bleached "
+    "animal skull, a half-buried rusted vehicle wreck",
+    "arctic": "three different snow-covered pine tree tops (varied sizes), a snowy dark "
+    "boulder, a cluster of ice chunks, a frozen shrub, a snow drift mound, a frozen rusted "
+    "vehicle wreck, a broken wooden crate half in snow",
+    "volcanic": "three different dead charred tree tops (bare black branches), a black "
+    "obsidian boulder, a cluster of small glowing-cracked lava rocks, a steaming fumarole "
+    "vent, a pile of ash-covered debris, a rusted burned-out vehicle wreck, a cluster of "
+    "sulfur-yellow crystals",
+}
+for biome, objs in DOODAD_SETS.items():
+    A[f"doodads-{biome}"] = dict(
+        prompt=f"{DOODADS}{objs}.", size="1024x1024", quality="high", transparent=True
+    )
+
+# --- menu art ------------------------------------------------------------------------
+
+KEY_ART = (
+    "Epic cinematic key art for a mobile real-time strategy game called Battle Drones: a "
+    "dramatic high-angle view over a war-torn battlefield at golden dusk. A blue-marked army "
+    "of tracked tank drones, hover tanks and flying strike drones clashes with a red-marked "
+    "army across a river valley; missile trails, tracer fire, explosions and smoke, a "
+    "fortified blue command base in the foreground. Painterly semi-realistic concept-art "
+    "style, rich warm light against cool shadows, strong depth. Leave the upper third as "
+    "calmer sky suitable for a title overlay. Absolutely no text, letters, logos or UI."
+)
+A["keyart-portrait"] = dict(prompt=KEY_ART, size="1024x1536", quality="high", transparent=False)
+A["keyart-landscape"] = dict(prompt=KEY_ART, size="1536x1024", quality="high", transparent=False)
+A["icon"] = dict(
+    prompt=(
+        "Mobile game app icon for Battle Drones: a menacing sleek blue-marked combat drone "
+        "with glowing amber sensor eye, seen at a dynamic three-quarter angle, bursting "
+        "toward the viewer over a dark navy background with a subtle orange explosion glow "
+        "behind it. Bold, simple, high contrast, readable at small sizes, subject centered "
+        "inside the middle 75 percent. Painterly semi-realistic style. No text, no letters, "
+        "no border."
+    ),
+    size="1024x1024",
+    quality="high",
+    transparent=False,
+)
