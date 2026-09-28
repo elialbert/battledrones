@@ -3,5 +3,3 @@ dev-dist/
 *.log
 .DS_Store
 __pycache__/
-# regenerable QA contact sheets (python3 art/process.py / art/terrain.py)
-art/previews/
