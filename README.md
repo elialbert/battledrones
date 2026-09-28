@@ -39,6 +39,7 @@ npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
+node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
 
 The built site in `docs/` is committed so GitHub Pages serves it directly

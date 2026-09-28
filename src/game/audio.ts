@@ -44,7 +44,7 @@ class Sfx {
     comp.threshold.value = -18;
     comp.ratio.value = 4;
     this.master.connect(comp).connect(this.ctx.destination);
-    const len = this.ctx.sampleRate;
+    const len = this.ctx.sampleRate * 2; // 2 s: longer than any sound + its random offset
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
@@ -102,7 +102,7 @@ function noiseBurst(
   g.gain.setValueAtTime(gain, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   src.connect(f).connect(g).connect(out);
-  src.start(t, Math.random() * 0.5, dur + 0.05);
+  src.start(t, Math.random() * 0.4, dur + 0.05);
 }
 
 function tone(

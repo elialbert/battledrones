@@ -125,6 +125,26 @@ export function createFxTextures(scene: Phaser.Scene): void {
     ctx.arc(64, 64, 54, 0, Math.PI * 2);
     ctx.stroke();
   });
+  // drifting cloud shadows: soft blobs wrapped around the edges so the
+  // texture tiles seamlessly (power-of-two, so WebGL repeats it)
+  make("fx-clouds", 512, 512, (ctx) => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let i = 0; i < 26; i++) {
+      const x = rnd() * 512;
+      const y = rnd() * 512;
+      const r = 40 + rnd() * 110;
+      for (const ox of [-512, 0, 512])
+        for (const oy of [-512, 0, 512]) {
+          const g = ctx.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+          g.addColorStop(0, "rgba(0,0,0,0.5)");
+          g.addColorStop(0.6, "rgba(0,0,0,0.22)");
+          g.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = g;
+          ctx.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+        }
+    }
+  });
   // rank chevron
   make("fx-chevron", 20, 14, (ctx) => {
     ctx.fillStyle = "#ffd66e";

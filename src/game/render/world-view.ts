@@ -170,8 +170,26 @@ export class WorldView {
       }
       if (p.glow && ratio > 0) p.glow.setAlpha(0.18 + 0.1 * Math.sin(this.time / 500 + i));
     }
+    if (this.clouds) {
+      this.clouds.tilePositionX -= dtMs * 0.004;
+      this.clouds.tilePositionY -= dtMs * 0.0016;
+    }
     this.fogImg.setVisible(showFog);
     if (showFog) this.updateFog(dtMs);
+  }
+
+  private clouds: Phaser.GameObjects.TileSprite | null = null;
+
+  /** Slow cloud shadows drifting over the ground (under aircraft). */
+  createClouds(): void {
+    const W = this.world.width * TILE;
+    const H = this.world.height * TILE;
+    this.clouds = this.scene.add
+      .tileSprite(0, 0, W, H, "fx-clouds")
+      .setOrigin(0)
+      .setTileScale(3.2)
+      .setAlpha(this.world.biome === "volcanic" ? 0.55 : 0.4)
+      .setDepth(5);
   }
 
   private fogAcc = 0;

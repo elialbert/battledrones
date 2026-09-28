@@ -123,19 +123,19 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   },
   wasp: {
     name: "Wasp", role: "Strike drone. Rockets ground targets. Dies to Flak.",
-    cost: 200, hp: 125, speed: 3.6, sight: 6, domain: "air", armor: "light",
-    targets: "ground", dps: 26, range: 3, shotInterval: 1, dmgType: "missile", fx: "rockets",
+    cost: 200, hp: 135, speed: 3.6, sight: 6, domain: "air", armor: "light",
+    targets: "ground", dps: 28, range: 3, shotInterval: 1, dmgType: "missile", fx: "rockets",
     buildTime: 8, builtAt: "airpad", radius: 0.35
   },
   raptor: {
     name: "Raptor", role: "Interceptor. Hunts air units. Can't hit ground.",
-    cost: 250, hp: 160, speed: 4.1, sight: 7, domain: "air", armor: "medium",
+    cost: 250, hp: 175, speed: 4.1, sight: 7, domain: "air", armor: "medium",
     targets: "air", dps: 32, range: 4, shotInterval: 0.8, dmgType: "missile", fx: "missile",
     buildTime: 9, builtAt: "airpad", radius: 0.38
   },
   hornet: {
     name: "Hornet", role: "Heavy bomber. Carpet-bombs ground and bases. Needs escort.",
-    cost: 375, hp: 360, speed: 2.1, sight: 6, domain: "air", armor: "heavy",
+    cost: 375, hp: 390, speed: 2.1, sight: 6, domain: "air", armor: "heavy",
     targets: "ground", dps: 36, range: 1.6, shotInterval: 2, splash: 1.1,
     projectileSpeed: 5, dmgType: "explosive", fx: "bomb",
     buildTime: 14, builtAt: "airpad", requires: "tech-lab", radius: 0.5
@@ -143,7 +143,7 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   mender: {
     name: "Mender", role: "Repair drone. Heals nearby units and buildings.",
     cost: 150, hp: 120, speed: 3.2, sight: 6, domain: "air", armor: "light",
-    targets: "none", dps: 0, range: 3, heal: 14,
+    targets: "none", dps: 0, range: 3, heal: 10,
     buildTime: 7, builtAt: "airpad", radius: 0.32
   }
 };
@@ -153,7 +153,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
     name: "HQ", role: "Command centre. Builds Harvesters, takes scrap. Lose it, lose the game.",
     cost: 0, hp: 3200, sight: 7, size: 3, buildTime: 0, dropOff: true,
     // point defence: swats early drone raids, leaves ground assaults to real defences
-    targets: "air", dps: 12, range: 4.5, shotInterval: 0.5, dmgType: "kinetic", fx: "mg"
+    targets: "air", dps: 9, range: 4.5, shotInterval: 0.5, dmgType: "kinetic", fx: "mg"
   },
   "fab-plant": {
     name: "Fab Plant", role: "Builds ground vehicles.",
@@ -183,7 +183,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
   "sam-site": {
     name: "SAM Site", role: "Long-range anti-air missiles.",
     cost: 275, hp: 560, sight: 7, size: 1, buildTime: 9,
-    targets: "air", dps: 34, range: 7, shotInterval: 1.2, dmgType: "missile", fx: "missile"
+    targets: "air", dps: 32, range: 6.5, shotInterval: 1.2, dmgType: "missile", fx: "missile"
   },
   radar: {
     name: "Radar", role: "Reveals a wide area through the fog.",

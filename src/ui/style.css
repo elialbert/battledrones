@@ -873,6 +873,13 @@ button {
   box-shadow: none;
   border: 1px solid var(--line);
 }
+.panel .cta {
+  width: min(280px, 100%);
+}
+.panel .cta.alt {
+  margin-left: auto;
+  margin-right: auto;
+}
 .cta.small {
   min-height: 36px;
   padding: 6px 14px;
@@ -951,50 +958,6 @@ button {
   .menu-inner {
     margin-left: auto !important;
     margin-right: max(4vw, env(safe-area-inset-right)) !important;
-  }
-}
-/* short landscape phones: everything must fit above the fold */
-@media (orientation: landscape) and (max-height: 500px) {
-  .menu-inner {
-    justify-content: center;
-    gap: 7px;
-    max-width: 440px;
-    padding-top: max(10px, env(safe-area-inset-top));
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
-  }
-  .logo {
-    font-size: 30px;
-    letter-spacing: 4px;
-  }
-  .logo br {
-    display: none;
-  }
-  .logo span {
-    letter-spacing: 4px;
-    margin-left: 10px;
-  }
-  .sub,
-  .credits {
-    display: none;
-  }
-  .mapcard {
-    flex-basis: 80px;
-  }
-  .mapcard .mb {
-    display: none;
-  }
-  .blurb {
-    font-size: 13px;
-  }
-  .seg button {
-    min-height: 34px;
-  }
-  .cta.big {
-    min-height: 46px;
-    font-size: 19px;
-  }
-  .menu .row .cta.alt {
-    min-height: 40px;
   }
 }
 @keyframes drift {
@@ -1126,4 +1089,49 @@ button {
 .credits {
   font-size: 11px;
   color: #5d6a80;
+}
+
+/* short landscape phones: everything must fit above the fold */
+@media (orientation: landscape) and (max-height: 500px) {
+  .menu-inner {
+    justify-content: center;
+    gap: 7px;
+    max-width: 440px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .logo {
+    font-size: 30px;
+    letter-spacing: 4px;
+  }
+  .logo br {
+    display: none;
+  }
+  .logo span {
+    letter-spacing: 4px;
+    margin-left: 10px;
+  }
+  .sub,
+  .credits {
+    display: none;
+  }
+  .mapcard {
+    flex-basis: 80px;
+  }
+  .mapcard .mb {
+    display: none;
+  }
+  .blurb {
+    font-size: 13px;
+  }
+  .seg button {
+    min-height: 34px;
+  }
+  .cta.big {
+    min-height: 46px;
+    font-size: 19px;
+  }
+  .menu .row .cta.alt {
+    min-height: 40px;
+  }
 }

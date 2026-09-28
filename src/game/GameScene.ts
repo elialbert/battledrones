@@ -91,7 +91,8 @@ export class GameScene extends Phaser.Scene {
 
     this.world = createMapWorld(gameMode.mapId);
     this.ctrl = new Controller(this.world);
-    this.ai = createAiState(undefined, gameMode.difficulty, (Math.random() * 1e9) | 0);
+    // spectating pits two Normal commanders against each other
+    this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
     if (gameMode.spectator) {
       this.blueAi = createAiState(undefined, "normal", (Math.random() * 1e9) | 0);
       this.ctrl.spectator = true;
@@ -107,6 +108,7 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.worldView = new WorldView(this, this.world, PLAYER);
+    this.worldView.createClouds();
     this.fx = new Fx(this, this.world.biome, (x, y) => this.earshot(x, y));
     this.entities = new EntityRenderer(
       this,
@@ -369,7 +371,8 @@ export class GameScene extends Phaser.Scene {
       if (!u || !p) continue;
       const r = UNITS[u.kind].radius * TILE + 8;
       const col = u.faction === PLAYER ? 0x7ef29b : 0xff7a6a;
-      g.lineStyle(lw, col, 0.95).strokeEllipse(p.gx, p.gy + 2, r * 2.1, r * 1.8);
+      // aircraft: ring the craft itself, not its shadow
+      g.lineStyle(lw, col, 0.95).strokeEllipse(p.x, p.y + 2, r * 2.1, r * 1.8);
       if (u.faction !== PLAYER) continue;
       const o = u.order;
       let tx: number | null = null;

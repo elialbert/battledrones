@@ -130,6 +130,8 @@ export function createHud(api: HudApi): Hud {
   // ---------------------------------------------------------- build bar ---
   let tab: Tab = "build";
   const buttons = new Map<string, HTMLButtonElement>();
+  /** Cached child elements of each build button (no per-frame DOM queries). */
+  const parts = new Map<string, { prog: HTMLElement; lock: HTMLElement; badge: HTMLElement }>();
 
   for (const t of TABS) {
     const b = document.createElement("button");
@@ -181,6 +183,11 @@ export function createHud(api: HudApi): Hud {
       onTap();
     });
     buttons.set(key, b);
+    parts.set(key, {
+      prog: b.querySelector<HTMLElement>(".prog")!,
+      lock: b.querySelector<HTMLElement>(".lock")!,
+      badge: b.querySelector<HTMLElement>(".badge")!
+    });
     return b;
   };
 
@@ -535,7 +542,7 @@ export function createHud(api: HudApi): Hud {
     if (!p) lastReady = null;
     for (const kind of BUILDABLE) {
       const el = buttons.get(`b:${kind}`)!;
-      const prog = el.querySelector<HTMLElement>(".prog")!;
+      const { prog, lock } = parts.get(`b:${kind}`)!;
       const pendingThis = p?.kind === kind;
       const blocked = buildingBlocker(w, PLAYER, kind);
       el.classList.toggle("locked", !!blocked);
@@ -543,7 +550,7 @@ export function createHud(api: HudApi): Hud {
       el.classList.toggle("busy", !!p && !pendingThis);
       el.classList.toggle("ready", !!(pendingThis && p.ready));
       el.classList.toggle("placing", ctrl.placing === kind);
-      el.querySelector<HTMLElement>(".lock")!.hidden = !blocked;
+      lock.hidden = !blocked;
       if (pendingThis && !p.ready) {
         prog.hidden = false;
         const total = BUILDINGS[kind].buildTime * TICK_RATE;
@@ -555,6 +562,7 @@ export function createHud(api: HudApi): Hud {
     let airQ = 0;
     for (const kind of [...GROUND, ...AIR]) {
       const el = buttons.get(`u:${kind}`)!;
+      const { prog, lock, badge } = parts.get(`u:${kind}`)!;
       const producers = unitProducers(kind);
       let queued = 0;
       let headProg = -1;
@@ -569,11 +577,9 @@ export function createHud(api: HudApi): Hud {
       const blocked = unitBlocker(w, PLAYER, kind);
       el.classList.toggle("locked", !!blocked);
       el.classList.toggle("poor", fs.scrap < UNITS[kind].cost);
-      el.querySelector<HTMLElement>(".lock")!.hidden = !blocked;
-      const badge = el.querySelector<HTMLElement>(".badge")!;
+      lock.hidden = !blocked;
       badge.hidden = queued === 0;
-      badge.textContent = String(queued);
-      const prog = el.querySelector<HTMLElement>(".prog")!;
+      if (badge.textContent !== String(queued)) badge.textContent = String(queued);
       prog.hidden = headProg < 0;
       if (headProg >= 0) prog.style.height = `${headProg * 100}%`;
     }

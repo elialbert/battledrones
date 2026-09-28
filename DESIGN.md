@@ -117,7 +117,7 @@ time. Buildings can be **sold** for 50% (scaled by health).
 | **Flak Crawler** | Fab | Ground | Air | The anti-air answer |
 | **Mortar** ⚗ | Fab | Ground | Ground | Long-range splash artillery with a minimum range; shells are real projectiles and can be dodged |
 | **Titan** ⚗ | Fab | Ground | Ground | Super-heavy twin-cannon tank |
-| **Lancer** ⚗ | Fab | Hover | Both | Laser generalist that crosses water (weaker vs air) |
+| **Lancer** ⚗ | Fab | Hover | Both | Anti-armour laser that also hits air (at reduced effect) and crosses water |
 | **Wasp** | Airpad | Air | Ground | Rocket strike drone |
 | **Raptor** | Airpad | Air | Air | Interceptor |
 | **Hornet** ⚗ | Airpad | Air | Ground | Heavy bomber: splash vs ground and bases |
@@ -126,11 +126,12 @@ time. Buildings can be **sold** for 50% (scaled by health).
 ⚗ = needs a Tech Lab.
 
 The counter web (verified by the cost-equal duel matrix in
-`tools/balance.ts duels`): **Stingers** beat Flak and Mortars · **Flak**
-beats all aircraft · **Wasps** beat tanks and artillery · **Raptors** beat
-aircraft · **Titans** beat every ground unit but fall to Wasps and Hornets
-· **Hornets** smash bases and armour but die to Flak/Raptors/SAMs ·
-**Lancers** are the flexible middle.
+`tools/balance.ts duels`): **Stingers** beat Flak, Mortars and Lancers ·
+**Lancers** burn through Titans · **Titans** crush Stingers, Flak and
+Mortars · **Flak** beats all aircraft · **Wasps** beat tanks and artillery ·
+**Raptors** beat aircraft · **Hornets** smash bases and armour but die to
+Flak/Raptors/SAMs. Stinger › Lancer › Titan › Stinger is the ground
+triangle; air vs anti-air sits across it.
 
 ### Combat
 
@@ -180,7 +181,11 @@ menders escorting the army.
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
-menu, never hidden).
+menu, never hidden). Each difficulty also picks from its own pool of
+personalities: AI-vs-AI tournaments (`tools/balance.ts matches`) show
+Ironclad, Boom and Balanced are the strongest, so Easy draws from Balanced,
+Rush, Air Swarm and Skyforce, and Hard from Balanced, Air Swarm, Boom and
+Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
