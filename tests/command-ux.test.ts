@@ -9,6 +9,7 @@ import { buildingCenter, createWorld, hqOf, setTerrain, spawnBuilding, spawnUnit
 import { Controller } from "../src/game/controller";
 import { SQUAD, Squads } from "../src/game/squads";
 import { ADVISOR, COUNTERS, EnemyIntel, IdleWatch, adviceNote, counterAdvice } from "../src/game/advisor";
+import { applyMutators, rulesOf } from "../src/sim/rules";
 
 const BUILDABLE: BuildingKind[] = ["fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar"];
 
@@ -343,6 +344,33 @@ describe("build advisor", () => {
     expect(counterAdvice(w, "blue", intel, "flak-crawler", 1).active).toBe(false); // 380 ≥ 300
     // the info card still explains it
     expect(adviceNote(counterAdvice(w, "blue", intel, "flak-crawler", 1))).toBe("Counters Wasps (seen ×2)");
+  });
+
+  it("never suggests an option the match rules ban (Air War: no Flak, no SAM Sites)", () => {
+    const w = scene();
+    applyMutators(w, ["airwar"]);
+    const intel = new EnemyIntel(w, "blue");
+    spawnUnit(w, "wasp", "red", 8, 9);
+    spawnUnit(w, "wasp", "red", 9, 9);
+    tickFog(w);
+    intel.update(0);
+    for (const k of ["flak-crawler", "sam-site"] as const) {
+      expect(counterAdvice(w, "blue", intel, k, 0).active, k).toBe(false);
+      expect(adviceNote(counterAdvice(w, "blue", intel, k, 0)), k).toBeNull();
+    }
+    // the allowed answer still lights up
+    expect(counterAdvice(w, "blue", intel, "raptor", 0).active).toBe(true);
+    expect(adviceNote(counterAdvice(w, "blue", intel, "raptor", 0))).toBe("Counters Wasps (seen ×2)");
+    // an op's one-sided ban counts too
+    const op = scene();
+    op.rules = { ...rulesOf(op), sideBans: { blue: { units: ["raptor"] } } };
+    const intel2 = new EnemyIntel(op, "blue");
+    spawnUnit(op, "wasp", "red", 8, 9);
+    spawnUnit(op, "wasp", "red", 9, 9);
+    tickFog(op);
+    intel2.update(0);
+    expect(counterAdvice(op, "blue", intel2, "raptor", 0).active).toBe(false);
+    expect(counterAdvice(op, "blue", intel2, "flak-crawler", 0).active).toBe(true);
   });
 
   it("lists several threats, most seen first", () => {

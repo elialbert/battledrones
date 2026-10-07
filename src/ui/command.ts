@@ -13,7 +13,7 @@
  * Rules live in ../game/squads.ts and ../game/advisor.ts (tested).
  */
 import { UNITS } from "../sim/balance";
-import { unitBlocker } from "../sim/economy";
+import { buildingBlocker, unitBlocker } from "../sim/economy";
 import type { BuildingKind, Faction, FxEvent, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { PLAYER, type Controller } from "../game/controller";
@@ -337,7 +337,11 @@ export class CommandUi {
       if (tabCtr[tab] || this.h.root.querySelector(`.bb[data-key="u:${kind}"]`)) continue;
       if (counterAdvice(w, PLAYER, this.intel, kind, this.simT).active && !unitBlocker(w, PLAYER, kind)) tabCtr[tab] = true;
     }
-    if (!this.h.root.querySelector('.bb[data-key^="b:"]') && counterAdvice(w, PLAYER, this.intel, "sam-site", this.simT).active)
+    if (
+      !this.h.root.querySelector('.bb[data-key^="b:"]') &&
+      counterAdvice(w, PLAYER, this.intel, "sam-site", this.simT).active &&
+      !buildingBlocker(w, PLAYER, "sam-site")
+    )
       tabCtr.build = true;
     for (const [t, n] of this.tabNotes) {
       const tab = n.idle.closest<HTMLElement>(".tab");

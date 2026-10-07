@@ -108,6 +108,15 @@ export class Finale {
   }
 }
 
+/**
+ * How the score resolves at the flash: a fanfare for a win (or a new Last
+ * Stand record), a lament for a loss. A spectator hears the winner's fanfare,
+ * except in Last Stand, where the watched base is always overrun in the end.
+ */
+export function finaleOutcome(o: { won: boolean; newRecord: boolean; spectator: boolean; survival: boolean }): "victory" | "defeat" {
+  return o.won || o.newRecord || (o.spectator && !o.survival) ? "victory" : "defeat";
+}
+
 /** Zoom the finale settles at: a push-in, but never further out than `atLeast`. */
 export function finaleZoom(current: number, atLeast: number): number {
   return Math.max(current * 1.3, atLeast);

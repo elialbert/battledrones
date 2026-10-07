@@ -42,6 +42,8 @@ export interface AwarenessHooks {
   sees(x: number, y: number): boolean;
   /** A marker flash where the camera lands (tiles). */
   pulse?(x: number, y: number, color: number): void;
+  /** The HQ-kill cinematic owns the camera: no glides, jumps or edge arrows meanwhile. */
+  cinematic?(): boolean;
 }
 
 /** Camera glide time for arrow / jump taps, ms. */
@@ -225,6 +227,7 @@ export class Awareness {
 
   /** Glide the camera so (x, y) sits in the middle of the visible battlefield. */
   glideTo(x: number, y: number): void {
+    if (this.h.cinematic?.()) return;
     const p = this.ui.layout().play;
     const to = this.scrollFor(x, y, (p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
     const cam = this.h.scene.cameras.main;
@@ -232,6 +235,7 @@ export class Awareness {
   }
 
   private goTo(s: Hotspot): void {
+    if (this.h.cinematic?.()) return;
     this.glideTo(s.x, s.y);
     sfx.play("click", 0.5);
     const col = s.kind === "attack" || s.kind === "fight" ? 0xffc04a : 0xff5a4a;
@@ -240,6 +244,7 @@ export class Awareness {
 
   /** ⚡: cycle through the hotspots, most urgent first. */
   jump(): void {
+    if (this.h.cinematic?.()) return;
     const list = this.spots;
     if (list.length === 0) {
       this.ui.jumpNothing();
@@ -266,6 +271,8 @@ export class Awareness {
   /** Every frame, after the HUD update. */
   update(deltaMs: number, paused: boolean): void {
     const cam = this.h.scene.cameras.main;
+    const cinematic = !!this.h.cinematic?.();
+    if (cinematic) this.glide = null; // (one already running lets go of the camera)
     if (this.glide) {
       const g = this.glide;
       g.t = Math.min(GLIDE_MS, g.t + deltaMs);
@@ -276,9 +283,10 @@ export class Awareness {
     }
     const L = this.ui.layout();
     this.spotClock += deltaMs;
-    if (this.spotClock >= SPOT_MS) {
+    if (this.spotClock >= SPOT_MS || cinematic) {
       this.spotClock = 0;
-      this.spots = mergeHotspots(this.heat.hotspots(), this.h.spectator ? [] : this.inbound.hotspots(this.simT));
+      // (the cinematic clears the edge arrows and idles ⚡)
+      this.spots = cinematic ? [] : mergeHotspots(this.heat.hotspots(), this.h.spectator ? [] : this.inbound.hotspots(this.simT));
       this.ui.setJump(this.spots.length, this.spots.some((s) => s.kind === "defend" || s.kind === "inbound"));
     }
     this.ui.setArrows(this.arrows(L));
