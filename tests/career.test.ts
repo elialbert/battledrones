@@ -25,7 +25,7 @@ import { chronicleOf } from "../src/game/chronicle";
 import { dailyCompatible, dailyOp, dayIndexOf, dayLabel } from "../src/game/daily";
 
 const stats = (o: Partial<FactionStats> = {}): FactionStats => ({
-  unitsBuilt: 10, unitsLost: 10, unitsKilled: 10, buildingsLost: 1, buildingsKilled: 2, scrapHarvested: 4000, ...o
+  unitsBuilt: 10, unitsLost: 10, unitsKilled: 10, buildingsLost: 1, buildingsKilled: 2, scrapHarvested: 4000, scrapSalvaged: 0, ...o
 });
 
 const recap = (o: Partial<MatchRecap> = {}): MatchRecap => ({

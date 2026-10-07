@@ -76,6 +76,11 @@ export interface BuildingStats extends ArmedStats {
   dropOff?: boolean;
 }
 
+/**
+ * Combat units carry 1.5× their original HP (Hornets 1.3×, so Flak still
+ * answers them; Harvesters and Scouts unchanged): half an army now takes
+ * ~7–9 s to die instead of 5–7, long enough to react on a phone.
+ */
 export const UNITS: Record<UnitKind, UnitStats> = {
   harvester: {
     name: "Harvester", role: "Mines scrap and crystal. Keep it safe.",
@@ -91,58 +96,58 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   },
   stinger: {
     name: "Stinger", role: "Fast light tank. Beats Flak and Mortars. Can't hit air.",
-    cost: 150, hp: 170, speed: 2.3, sight: 5, domain: "ground", armor: "medium",
+    cost: 150, hp: 255, speed: 2.3, sight: 5, domain: "ground", armor: "medium",
     targets: "ground", dps: 22, range: 3.2, shotInterval: 0.6, dmgType: "kinetic", fx: "cannon",
     buildTime: 7, builtAt: "fab-plant", turret: true, radius: 0.38
   },
   "flak-crawler": {
     name: "Flak Crawler", role: "Anti-air. Shreds drones. Helpless vs ground.",
-    cost: 190, hp: 190, speed: 1.9, sight: 6, domain: "ground", armor: "medium",
+    cost: 190, hp: 285, speed: 1.9, sight: 6, domain: "ground", armor: "medium",
     targets: "air", dps: 31, range: 5, shotInterval: 0.3, dmgType: "flak", fx: "flak",
     buildTime: 8, builtAt: "fab-plant", turret: true, radius: 0.4
   },
   mortar: {
     name: "Mortar", role: "Long-range splash artillery. Razes bases. Fragile up close.",
-    cost: 275, hp: 130, speed: 1.5, sight: 6, domain: "ground", armor: "light",
+    cost: 275, hp: 195, speed: 1.5, sight: 6, domain: "ground", armor: "light",
     targets: "ground", dps: 18, range: 8, minRange: 2.5, shotInterval: 3,
     splash: 1.1, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell",
     buildTime: 10, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
   titan: {
     name: "Titan", role: "Super-heavy tank. Crushes light armies. Can't hit air.",
-    cost: 475, hp: 700, speed: 1.2, sight: 6, domain: "ground", armor: "heavy",
+    cost: 475, hp: 1050, speed: 1.2, sight: 6, domain: "ground", armor: "heavy",
     targets: "ground", dps: 46, range: 4, shotInterval: 1.2, dmgType: "cannon", fx: "heavy-cannon",
     buildTime: 15, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.55
   },
   lancer: {
     name: "Lancer", role: "Hover laser tank. Burns through armour, hits air too. Crosses water.",
-    cost: 275, hp: 270, speed: 2.5, sight: 6, domain: "ground", armor: "medium",
+    cost: 275, hp: 405, speed: 2.5, sight: 6, domain: "ground", armor: "medium",
     hover: true,
     targets: "both", dps: 28, range: 4.5, shotInterval: 0.8, dmgType: "laser", fx: "laser", airMult: 0.65,
     buildTime: 11, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
   wasp: {
     name: "Wasp", role: "Strike drone. Rockets ground targets. Dies to Flak.",
-    cost: 200, hp: 135, speed: 3.6, sight: 6, domain: "air", armor: "light",
+    cost: 200, hp: 205, speed: 3.6, sight: 6, domain: "air", armor: "light",
     targets: "ground", dps: 28, range: 3, shotInterval: 1, dmgType: "missile", fx: "rockets",
     buildTime: 8, builtAt: "airpad", radius: 0.35
   },
   raptor: {
     name: "Raptor", role: "Interceptor. Hunts air units. Can't hit ground.",
-    cost: 250, hp: 175, speed: 4.1, sight: 7, domain: "air", armor: "medium",
+    cost: 250, hp: 265, speed: 4.1, sight: 7, domain: "air", armor: "medium",
     targets: "air", dps: 32, range: 4, shotInterval: 0.8, dmgType: "missile", fx: "missile",
     buildTime: 9, builtAt: "airpad", radius: 0.38
   },
   hornet: {
     name: "Hornet", role: "Heavy bomber. Carpet-bombs ground and bases. Needs escort.",
-    cost: 375, hp: 390, speed: 2.1, sight: 6, domain: "air", armor: "heavy",
+    cost: 375, hp: 505, speed: 2.1, sight: 6, domain: "air", armor: "heavy",
     targets: "ground", dps: 36, range: 1.6, shotInterval: 2, splash: 1.1,
     projectileSpeed: 5, dmgType: "explosive", fx: "bomb",
     buildTime: 14, builtAt: "airpad", requires: "tech-lab", radius: 0.5
   },
   mender: {
     name: "Mender", role: "Repair drone. Heals nearby units and buildings.",
-    cost: 150, hp: 120, speed: 3.2, sight: 6, domain: "air", armor: "light",
+    cost: 150, hp: 180, speed: 3.2, sight: 6, domain: "air", armor: "light",
     targets: "none", dps: 0, range: 3, heal: 10,
     buildTime: 7, builtAt: "airpad", radius: 0.32
   }
@@ -279,3 +284,74 @@ export const FOG = {
 /** Damage per shot for a weapon, before armor/veterancy. */
 export const shotDamage = (s: ArmedStats): number =>
   s.dps * (s.shotInterval ?? COMBAT.shotInterval);
+
+/**
+ * Battlefield salvage (salvage.ts): a destroyed combat unit leaves a
+ * burning wreck worth a share of its cost, scooped up by the first ground
+ * unit of either side to drive over it. Fights leave loot worth holding.
+ */
+export const SALVAGE = {
+  /** Wreck value as a share of the dead unit's cost (harvesters leave none). */
+  share: 0.3,
+  /** Seconds a wreck lies on the field before it burns out. */
+  ttl: 60,
+  /** Seconds a fresh wreck burns before it can be salvaged (not mid-brawl). */
+  hot: 2.5,
+  /** A ground unit whose centre comes this close (tiles) collects the wreck. */
+  pickupRadius: 0.9,
+  /** A death spot no tank could reach (water, rock, a building) shifts to a passable tile this close, else no wreck. */
+  shiftRadius: 2,
+  /** Most wrecks on the field at once; past that the oldest burns out. */
+  maxWrecks: 60
+};
+
+/**
+ * Commander calldowns (powers.ts). A Command meter per side (0–100) fills
+ * slowly on its own and mostly from losses, and pays for three telegraphed,
+ * map-targeted powers; the Sky Hammer is a separate late-game strike that
+ * comes online for both sides at 6:00. Every telegraph is public (both
+ * sides see it through the fog), so landing one and dodging one are both
+ * skill moments. Damage stays modest and cooldowns long: burst powers fed
+ * the snowball in the design panel's prototypes.
+ */
+export const POWERS = {
+  meterMax: 100,
+  /** Meter per second, always. */
+  passive: 0.1,
+  /** Meter per scrap of your own units and buildings destroyed (comeback-weighted). */
+  perScrapLost: 0.02,
+  /** Meter per scrap of enemy units and buildings you destroy. */
+  perScrapKilled: 0.007,
+  barrage: {
+    cost: 60, cooldown: 45, telegraph: 2.5,
+    /** Shells, the seconds between them, and their scatter (tiles) around the aim point. */
+    shells: 3, shellGap: 0.3, scatter: 0.9,
+    damage: 170, splash: 2,
+    /** Reticle size: the area any shell can reach. */
+    radius: 2.9
+  },
+  emp: {
+    cost: 40, cooldown: 40, telegraph: 0.8,
+    radius: 3,
+    /** Seconds stunned units can't move or fire and buildings can't fire or produce. */
+    stun: 4
+  },
+  droppod: {
+    cost: 70, cooldown: 60, telegraph: 2,
+    radius: 1.2,
+    /** Light impact on enemy ground units right under the pod. */
+    damage: 60,
+    units: ["stinger", "stinger", "flak-crawler"] as UnitKind[],
+    /** With a Tech Lab standing. */
+    techUnits: ["lancer", "lancer", "flak-crawler"] as UnitKind[]
+  },
+  hammer: {
+    /** Comes online for both sides at this match time (seconds), then recharges. */
+    unlock: 6 * 60, cooldown: 120, telegraph: 3,
+    radius: 2.5,
+    /** Units: this × (1 − 0.5·d/r), any armour, ground or air. */
+    unitDamage: 260,
+    /** Buildings whose footprint is in the radius: flat (an HQ loses ~22%). */
+    buildingDamage: 700
+  }
+};

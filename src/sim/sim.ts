@@ -11,6 +11,8 @@ import { tickFog } from "./fog";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement } from "./movement";
 import { tickOps } from "./ops";
+import { applyCalldown, chargePowers, tickPowers } from "./powers";
+import { tickSalvage } from "./salvage";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
@@ -23,9 +25,12 @@ export function step(w: World, commands: Command[]): void {
   tickProduction(w);
   tickHarvest(w);
   tickTrickle(w);
+  tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
+  tickSalvage(w);
+  chargePowers(w); // Command meters fill from this tick's losses
   if (w.survival) tickSurvival(w);
   if (w.ops) tickOps(w);
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
@@ -76,6 +81,9 @@ function applyCommand(w: World, c: Command): void {
       break;
     case "callWave":
       callWaveEarly(w, c.faction);
+      break;
+    case "calldown":
+      applyCalldown(w, c);
       break;
     default:
       applyEconomyCommand(w, c);

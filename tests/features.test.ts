@@ -194,7 +194,8 @@ describe("new weapons", () => {
     b.hp = 100;
     runTicks(w, 8 * TICK_RATE);
     expect(hurt.hp).toBeGreaterThan(120);
-    runTicks(w, 30 * TICK_RATE);
+    // the Stinger (1.5× HP since the longer-fights pass) is topped up first
+    runTicks(w, 40 * TICK_RATE);
     expect(b.hp).toBeGreaterThan(300);
   });
 

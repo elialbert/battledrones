@@ -63,7 +63,7 @@ equal, painted procedurally from a seed in `src/sim/maps.ts`:
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
-| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges and one contested field |
+| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges, one contested field, an expansion field out on each flank |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 
@@ -89,7 +89,70 @@ and skirt mud. Air units fly straight over everything.
   Harvesters flee home when shot and auto-mine when built.
 - Each HQ also salvages a trickle of 2 scrap/second, so no side can be left
   permanently broke.
-- Starting stockpile: 600 scrap and one harvester.
+- Starting stockpile: 600 scrap and one harvester, plus the side's opener
+  (below) — so in practice two or three harvesters and a factory.
+- **Battlefield salvage** (below): wrecks are the second income stream,
+  ~18% of all scrap earned in AI-vs-AI play.
+
+### Battlefield salvage
+
+Every destroyed combat unit leaves a burning wreck worth **30% of its
+cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none) for
+**60 s**. After 2.5 s it has cooled enough to touch, and the first ground
+unit of *either* side — harvesters included — whose centre comes within
+0.9 tiles scoops it up (income multipliers apply). Fights leave loot worth
+holding the field for, a defender who breaks a wave gets paid for it, and
+the losing side has a way back in.
+
+- Aircraft wrecks land where they fall; a death spot no tank could reach
+  (rock, water, lava, a building) slides to the nearest passable point
+  within 2 tiles, else the wreck is lost. Wrecks never block movement or
+  placement (a building placed on one clears it for its owner).
+- At most 60 wrecks at once (the oldest burns out first).
+- Looks: the dead unit's own sprite, charred, turret blown off its ring;
+  embers and smoke while hot, then a gold glint and a faint warm glow that
+  say "loot"; it fades over its last 10 s. Downed aircraft tumble from
+  flying height first. Pickups pop a gold "+52" (merged when several land
+  together) with a coin blip; the enemy's pickups show in muted red.
+  A sweep of 400+ in a few seconds calls out a "SALVAGE HAUL" banner.
+  Wrecks show only where you have vision and are remembered like buildings
+  until you see they're gone; gold minimap dots. The income rate (+N/m)
+  includes salvage, and the end screen has a Salvaged row.
+- Measured (AI-vs-AI round robin with openers, all 5 maps, 300 games
+  per setting): about 6,100 scrap salvaged per match (18% of income);
+  stalemate draws 30 → 17; the side ahead by 200+ value at 2:00 / 3:00
+  went on to win 88% / 92% → 84% / 88%; median length 5.5 → 5.7 min, mean
+  8.8 → 7.8. Shares of 25% and 35% were tried too: 35% removes more draws
+  but hands the leader its edge back (87% / 88%); 25% was within noise
+  of 30%.
+
+### Openers (quick start)
+
+Every skirmish opens on three cards and the clock waits for the pick, so
+there is no dead "wait for the first factory" stretch (the old opening had
+a 14 s idle gap and the first combat unit at 0:51):
+
+| Opener | You get | Plays like |
+|---|---|---|
+| **Blitz** | Fab Plant + 3 Stingers + 2 harvesters, −100 scrap | Army on the field at 0:00; raid early |
+| **Industry** | Fab Plant + 3 harvesters + 200 scrap | Out-mine now, out-build later |
+| **Air Wing** | Airpad + 3 Wasps + 2 harvesters | Fast strike drones; dies to Flak |
+
+Blitz and Industry are worth 650 scrap; the Airpad is a side-grade (you
+still want a Fab for anti-air), so Air Wing carries a third Wasp (950). A
+720-game AI-vs-AI opener matrix (every opener pair, both sides, six
+personality pairings, five maps) has them winning 53% / 55% / 42% of
+decided games — Air Wing rewards a human's micro more than the AI's.
+
+`src/sim/openers.ts` places the factory deterministically ~4.5 tiles from
+the HQ toward the map centre (legal, off the roads and the harvest route,
+never walling anything in), with every search done in the side's own
+frame so both sides get mirror-image setups. `createMapWorld(id, { openers: { blue, red } })` applies them for
+tests and the balance harness; without the option the classic start is
+unchanged. The AI picks by personality (Rush → Blitz, Boom → Industry,
+Air Swarm / Skyforce → Air Wing, Balanced → any, Ironclad → Blitz or
+Industry, seeded) and holds its raiders home for the first 45 s. The
+cards name the enemy personality, so the pick can be a counter-pick.
 
 ### Buildings (8)
 
@@ -148,6 +211,11 @@ triangle; air vs anti-air sits across it.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
   each +15% damage, rank 3 self-repairs. Shown as gold chevrons. Ranked
   units become heroes (see *Veteran heroes* below).
+- **Fights you can play.** Combat units carry 1.5× their original HP
+  (Hornets 1.3×, so Flak still beats them; Harvesters, Scouts and
+  buildings unchanged): half of an 8-v-8 Stinger brawl now dies in 7.5 s
+  instead of 5, Wasps vs Flak 4.7 s instead of 2.4 — time to select, retreat
+  or focus-fire on a phone. The duel matrix keeps the counter web below.
 - **Retaliation.** Idle units hit by something out of reach go after the
   attacker, and nearby idle allies join in.
 - Auto-acquire targets in range; attack-move is the default command, with
@@ -408,6 +476,69 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   "Cannot build there". The ghost draws above the fog. A mouse keeps
   one-click placement.
 
+### Commander calldowns
+
+Once an army is sent, the commander still has moves: a **Command meter**
+(⚡, 0–100) fills slowly on its own and mostly from *losses* (0.1/s; 0.02
+per scrap of your own units and buildings destroyed, 0.007 per scrap you
+destroy), and pays for three map-targeted calldowns, each on its own
+cooldown. Numbers live in `POWERS` in `balance.ts`.
+
+| Power | Charge / cooldown | Warning | Effect |
+|---|---|---|---|
+| **Barrage** | 60 / 45 s | 2.5 s | 3 shells over 0.6 s, seeded scatter ±0.9 tiles, 170 explosive splash r 2 each (ground units and buildings) |
+| **EMP** | 40 / 40 s | 0.8 s | Enemy units and buildings within 3 tiles freeze for 4 s: no moving, firing, healing or production |
+| **Drop Pod** | 70 / 60 s | 2 s | 2 Stingers + a Flak Crawler (2 Lancers + Flak with a Tech Lab) land on open ground you can *see*; a light 60-damage thump under the pod |
+| **Sky Hammer** | — / 120 s | 3 s | Online for both sides at 6:00. Units within 2.5 tiles take 260 × (1 − 0.5·d/r), air included; buildings a flat 700 (an HQ loses 22%) |
+
+- **Same rules for both sides.** One `calldown` command, validated by
+  `calldownBlocker` (charge, cooldown, the HQ alive, an *explored* target —
+  a *visible*, ground-passable one for the pod) for the player and the AI
+  alike. Calldowns only hurt the enemy; kills are credited to the firing
+  side (its HQ is the killer, so faction stats count them; no unit XP).
+- **Every calldown is telegraphed, publicly.** `World.powers.active` and the
+  `calldown` FxEvent are visible to both sides through the fog: a reticle
+  shrinks to the moment of impact, so landing one and dodging one are both
+  skill moments. EMP + Barrage is a real combo (frozen units can't dodge).
+- **Looks and sounds:** red reticles and an air-raid siren for the enemy's
+  (loud when it threatens your stuff, with a tap-to-jump toast and a
+  minimap ping if it's off-screen); gold / cyan / blue for yours, with a
+  radio chirp. Shells streak in, the EMP throws a blue-white shockwave and
+  leaves frozen things crackling, pods fall in a flame trail and burst open
+  in a ring of dust, and the Sky Hammer charges a lance from orbit (rising
+  hum) before a beam, a white-out flash and a rolling boom. The camera
+  shakes when it lands on screen. Banners: "Sky Hammer online" at 6:00,
+  "Enemy Sky Hammer inbound!" (tap to jump), "Direct hit!" when one of
+  yours kills 3+ units or 700+ scrap.
+- **HUD:** four round 52 px buttons on the right edge (a 2×2 block beside
+  the sidebar on landscape phones) under the ⚡ meter, each with a conic
+  ring — charge in the power's colour, cooldown in white — and its cost,
+  cooldown seconds or the Sky Hammer's unlock countdown. Tap a ready one to
+  arm it ("Tap map: Barrage ✕" chip, radius preview under the pointer /
+  finger, grey with ✕ where it can't go), tap the map to fire; an illegal
+  tap explains why. Long-press for details. Reticles show on the minimap;
+  the end screen counts calldowns.
+- **AI:** a per-tick dodge reflex (before the decision gate) moves every
+  unit inside an enemy reticle ~4 tiles out after 1.1 / 0.6 / 0.4 s
+  (Easy / Normal / Hard) — if there's still time. It Barrages the best
+  visible ground clump worth ≥ 450 (Easy never), answers a superior force
+  at its base or mining line with a Drop Pod (else an EMP), EMPs turrets in
+  front of an assault from surplus charge, pods in reinforcements only when
+  a fight away from home hangs in the balance, and aims the Sky Hammer at a
+  clump worth ≥ 700, else the best production-building hit, else the HQ.
+- **Measured** (AI-vs-AI round robin with openers, 5 maps × 30 pairings ×
+  2 seeds, 300 games, before → after): 25-minute draws 17 → 1; median
+  length 5.7 → 6.0 min, mean 7.8 → 7.3, p90 15.9 → 12.1; the side ahead by
+  200+ value at 2:00 / 3:00 / 4:00 went on to win 84 / 88 / 90% → 80 / 84 /
+  86%; games where a clear leader lost the lead 11 → 15. About 8.7
+  calldowns per AI per match (median 7: Barrage 4.1, EMP 2.7, Sky Hammer
+  1.3, Drop Pod 0.7), 56% fired by the side that was behind. The design
+  panel's prototypes had burst powers *feeding* the snowball; here the
+  meter is loss-weighted and damage telegraphed, and one rule mattered:
+  free Drop Pod units for a wave that is already winning pushed the
+  2:00–4:00 leader's win rate *up* 2–3 points, so the AI only reinforces a
+  contested fight.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -433,11 +564,17 @@ Behaviours: build orders with reactive SAM sites and extra factories when
 scrap piles up; forward depots at distant fields; adaptive production
 (flak/raptors vs air it has seen, mortars vs defences, air vs heavy
 armour); defend-the-economy guard squads; threat response against
-intruders; wasp raids that avoid remembered anti-air; staged assault waves
+intruders; home defence (a force at the HQ that outguns the home guard
+recalls the army from raids and waves — openers make 1:00 pushes real);
+wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
 menders escorting the army; wounded veterans (rank ≥ 2 under 35% HP) falling
 back to a Mender behind them or to the HQ, with an idle Mender sent to patch
-them up (`ai/veterans.ts`).
+them up (`ai/veterans.ts`); commander calldowns and a reflex for
+dodging the enemy's (see Commander calldowns); salvage sweeps once a fight near home is
+over (idle ground units within 8 tiles go for visible, cooled wrecks that
+no visible enemy or known turret covers, and harvesters with a light load
+detour to a wreck within 3 tiles — never into the enemy for loot).
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -452,13 +589,21 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 1. Menu: pick a mode (Skirmish | Last Stand | Ops), a map, a difficulty and
    any mutators → Play (or watch the AI play), or play today's Daily Op; in
    Ops, pick an op card → briefing → Start op.
-2. Both HQs pre-placed, one harvester each (it starts mining at once).
-3. Real-time play until one HQ is destroyed. Pause any time.
+2. Skirmish (and the Daily Op): opener cards over the frozen battlefield
+   (Blitz / Industry / Air Wing; tap, or keys 1–3; cards a mutator bans are
+   greyed out). The camera already frames the HQ, its home field and the
+   factory site, clear of the HUD. Spectated AIs pick instantly. Last Stand
+   and Ops have their own set-ups and no cards.
+3. The pick rolls out (factory, units, harvesters already mining) and the
+   clock starts. Real-time play until one HQ is destroyed (or an op's goal
+   is met). Pause any time. Calldowns charge from the first losses; at 6:00
+   the Sky Hammer comes online for both sides, so a stalemate can't last.
 4. The HQ kill plays as a short cinematic, then the after-action report
-   → Rematch or Menu.
+   → Rematch (back to the cards) or Menu.
 
-First-time players get four contextual hints (build a Fab, move units,
-counters, tech), plus one-time hints for squads and touch placement.
+First-time players get contextual hints (command your opener units — or
+build a Fab on a classic start — then counters, tech), plus one-time hints
+for squads, touch placement, calldowns and salvage.
 
 ### Veteran heroes, the finale and the after-action report
 
@@ -735,6 +880,9 @@ DOM overlaid on the canvas, re-flowing by orientation:
   income rate and clock top-left.
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
+- **Calldown buttons:** the ⚡ meter and four round power buttons, right
+  edge and vertically centred in portrait; a 2×2 block under the minimap,
+  beside the sidebar, on landscape phones.
 - A ticker of short toasts top-left for "building ready", attacks (tap to
   jump there) and hints; minimap pings where you're being hit (amber double
   rings for an inbound raid). The clock row carries the game-speed chip, a
@@ -750,8 +898,10 @@ DOM overlaid on the canvas, re-flowing by orientation:
 
 ### Minimap
 
-Painted-map thumbnail under the fog, resource fields, buildings and unit
-blips (fog-respecting), attack pings and the camera frame.
+Painted-map thumbnail under the fog, resource fields, salvageable wrecks
+(gold dots), buildings and unit blips (fog-respecting), calldown reticles
+(red = enemy, gold = yours, shown through the fog), attack pings and the
+camera frame.
 
 ## Art
 
@@ -780,10 +930,16 @@ src/
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
     placement.ts    # why a spot can't be built on, and a suggested spot
+
+    salvage.ts      # battlefield wrecks: spawn, cool, pick-up, burn-out
+    powers.ts       # command meter, calldowns (Barrage/EMP/Drop Pod), Sky Hammer, EMP stuns
     ai/commander.ts # the enemy commander: strategies, difficulty
     ai/veterans.ts  # wounded veterans fall back to a Mender or the HQ
+
+    ai/salvage.ts   # the commander's wreck sweeps
+    ai/powers.ts    # the commander's calldowns and its dodge reflex
   game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx, juice-view
+    render/         # world-view (terrain, piles, fog), entities, fx, juice-view, wrecks, powers (reticles, strikes)
     juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
     audio.ts        # AudioContext, sfx/music/voice buses, settings, procedural SFX
     score.ts        # music rules: harmony, patterns, stingers, battle mood (tested)
@@ -802,7 +958,7 @@ src/
     finale.ts       # the cinematic HQ kill
     career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
     ops.ts          # Ops narration: briefing banner, countdowns, star notices
-  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
+  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges; powers.ts: calldown buttons), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```
@@ -820,4 +976,5 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 - Online multiplayer (the deterministic command-driven sim keeps the door
   open), a story campaign (Ops are standalone missions), map editor,
   replays, saves mid-match.
-- Upgrades research, walls.
+- Upgrades research, buildable superweapons (the Sky Hammer is a timed
+  HQ power), walls.

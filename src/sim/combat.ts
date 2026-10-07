@@ -1,5 +1,7 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
 import { moveUnitToward } from "./movement";
+import { isStunned } from "./powers";
+import { leaveWreck } from "./salvage";
 import type { ArmorClass, Building, Domain, Faction, TargetDomain, Unit, World } from "./types";
 import { rulesOf } from "./rules";
 import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
@@ -154,6 +156,35 @@ function splash(
     }
 }
 
+/**
+ * Splash damage from outside the weapon loop (commander calldowns): the same
+ * falloff, armour and kill credit as a shell from `attackerId`. Returns how
+ * many enemies it hit.
+ */
+export function areaBlast(
+  w: World,
+  faction: Faction,
+  x: number,
+  y: number,
+  radius: number,
+  damage: number,
+  dmgType: keyof typeof DAMAGE_VS,
+  targets: TargetDomain,
+  attackerId: number
+): number {
+  const incidents: Incident[] = [];
+  splash(w, faction, x, y, radius, damage, dmgType, targets, attackerId, incidents);
+  retaliate(w, incidents);
+  return incidents.length;
+}
+
+/** Raw damage to listed entities (the Sky Hammer), with the usual hit events and kill credit. */
+export function strikeDamage(w: World, hits: { id: number; damage: number }[], attackerId: number): void {
+  const incidents: Incident[] = [];
+  for (const h of hits) applyDamage(w, h.id, h.damage, attackerId, incidents);
+  retaliate(w, incidents);
+}
+
 function fire(w: World, attacker: Attacker, targetId: number, incidents: Incident[]): void {
   const isUnit = "unit" in attacker;
   const holder = isUnit ? attacker.unit : attacker.building;
@@ -277,6 +308,10 @@ export function tickCombat(w: World): Set<number> {
 
   for (const u of w.units.values()) {
     if (u.cooldown > 0) u.cooldown--;
+    if (isStunned(w, u.id)) {
+      engaged.add(u.id); // EMP'd (powers.ts): no firing, healing or moving
+      continue;
+    }
     const stats = UNITS[u.kind];
     if (u.rank >= 3 && u.hp < stats.hp && w.tick % TICK_RATE === 0)
       u.hp = Math.min(stats.hp, u.hp + stats.hp * COMBAT.eliteRegen);
@@ -324,6 +359,7 @@ export function tickCombat(w: World): Set<number> {
 
   for (const b of w.buildings.values()) {
     if (b.cooldown > 0) b.cooldown--;
+    if (isStunned(w, b.id)) continue; // EMP'd: guns offline
     const stats = BUILDINGS[b.kind];
     if (stats.targets === "none") continue;
     const c = buildingCenter(b);
@@ -416,6 +452,7 @@ export function cleanupDeaths(w: World): void {
       type: "death", id, faction: u.faction, unitKind: u.kind, buildingKind: null,
       x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
     });
+    leaveWreck(w, u); // combat units leave salvage (salvage.ts)
   }
   for (const b of [...w.buildings.values()]) {
     if (b.hp > 0) continue;

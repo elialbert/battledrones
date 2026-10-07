@@ -1,5 +1,6 @@
 import { BUILDINGS, ECONOMY, TERRAIN, UNITS } from "./balance";
 import { createFog } from "./fog";
+import { createPowerState } from "./powers";
 import {
   Terrain,
   type Building,
@@ -14,7 +15,7 @@ import {
 const newFaction = (): FactionState => ({
   scrap: ECONOMY.startingScrap,
   pending: null,
-  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, buildingsKilled: 0, scrapHarvested: 0 },
+  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, buildingsKilled: 0, scrapHarvested: 0, scrapSalvaged: 0 },
   incomeMult: 1
 });
 
@@ -30,6 +31,8 @@ export function createWorld(width: number, height: number): World {
     units: new Map(),
     buildings: new Map(),
     projectiles: [],
+    wrecks: [],
+    powers: createPowerState(),
     factions: { blue: newFaction(), red: newFaction() },
     winner: null,
     fx: [],

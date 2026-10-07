@@ -149,6 +149,8 @@ export interface FactionStats {
   /** Enemy buildings destroyed (by anything this faction owns). */
   buildingsKilled: number;
   scrapHarvested: number;
+  /** Scrap collected from battlefield wrecks (salvage.ts). */
+  scrapSalvaged: number;
 }
 
 export interface FactionState {
@@ -267,7 +269,117 @@ export type FxEvent =
       bonus: number;
       next: string;
       nextTheme: WaveTheme;
+    }
+  | {
+      /** A ground unit scooped up a wreck: `value` scrap (after incomeMult) went to `faction`. */
+      type: "salvage";
+      faction: Faction;
+      x: number;
+      y: number;
+      value: number;
+      wreckId: number;
+      /** The collecting unit (or the building placed on top of the wreck). */
+      collectorId: number;
+    }
+  | {
+      /**
+       * A commander calldown was fired (powers.ts). Public: both sides see
+       * the telegraph through the fog. It lands at `landTick`.
+       */
+      type: "calldown";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      landTick: number;
+    }
+  | {
+      /**
+       * A calldown landed: one per Barrage shell; the EMP pulse; the Drop
+       * Pod touching down (`unitIds` = its crew); the Sky Hammer strike.
+       * `hits` = enemy units and buildings it damaged or stunned.
+       */
+      type: "calldownImpact";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      hits: number;
+      unitIds: number[];
+    }
+  | {
+      /** EMP: these entities (of `faction`) can't move, fire or produce until `until`. */
+      type: "stun";
+      faction: Faction;
+      ids: number[];
+      x: number;
+      y: number;
+      until: number;
+    }
+  | {
+      /** A power just came online for `faction` (the Sky Hammer at 6:00). */
+      type: "powerOnline";
+      faction: Faction;
+      power: PowerKind;
     };
+
+/**
+ * What a destroyed combat unit leaves behind (salvage.ts): a burning hull
+ * worth scrap to whichever side's ground unit reaches it first. Wrecks are
+ * pure loot: they never block movement or placement.
+ */
+export interface Wreck {
+  /** The dead unit's id (ids are never reused, so this is unique). */
+  id: number;
+  kind: UnitKind;
+  /** Whose unit it was (the renderer tints the hull; anyone may salvage it). */
+  faction: Faction;
+  /** Resting position (tiles): where it died, or nudged onto passable ground. */
+  x: number;
+  y: number;
+  /** Hull facing at death, radians clockwise from North. */
+  facing: number;
+  /** Scrap it is worth before the collector's incomeMult. */
+  value: number;
+  /** Ticks left before it burns out. */
+  ttl: number;
+  /** Ticks left while it is still too hot to salvage. */
+  hot: number;
+}
+
+/** Commander calldowns (powers.ts): three on the Command meter plus the late-game Sky Hammer. */
+export type PowerKind = "barrage" | "emp" | "droppod" | "hammer";
+
+/** A calldown in flight: telegraphed from `startTick`, landing at `landTick`. */
+export interface Calldown {
+  id: number;
+  faction: Faction;
+  power: PowerKind;
+  x: number;
+  y: number;
+  radius: number;
+  startTick: number;
+  landTick: number;
+  /** Barrage: where and when each shell lands (seeded scatter). */
+  shells: { x: number; y: number; tick: number }[];
+}
+
+export interface PowerState {
+  /** Command meter per side, 0–POWERS.meterMax. */
+  meter: Record<Faction, number>;
+  /** Tick each power is next usable, per side (the Sky Hammer starts locked). */
+  readyAt: Record<Faction, Record<PowerKind, number>>;
+  /** Telegraphed calldowns not yet resolved (public information). */
+  active: Calldown[];
+  /** EMP'd entity id → tick the stun wears off. */
+  stunned: Map<number, number>;
+  /** Calldowns fired per side and power (stats). */
+  fired: Record<Faction, Record<PowerKind, number>>;
+}
 
 import type { FactionFog } from "./fog";
 import type { SurvivalState, WaveTheme } from "./modes/survival";
@@ -289,6 +401,10 @@ export interface World {
   units: Map<number, Unit>;
   buildings: Map<number, Building>;
   projectiles: Projectile[];
+  /** Salvageable wrecks on the field, oldest first. */
+  wrecks: Wreck[];
+  /** Commander meters, cooldowns, calldowns in flight and EMP stuns (powers.ts). */
+  powers: PowerState;
   factions: Record<Faction, FactionState>;
   /** null while the match runs; the winning faction once an HQ dies. */
   winner: Faction | null;
@@ -325,4 +441,5 @@ export type Command =
   | { type: "sell"; faction: Faction; buildingId: number }
   | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
   /** Last Stand: bring the next wave in now for a scrap bonus. */
-  | { type: "callWave"; faction: Faction };
+  | { type: "callWave"; faction: Faction }
+  | { type: "calldown"; faction: Faction; power: PowerKind; x: number; y: number };

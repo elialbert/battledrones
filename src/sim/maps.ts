@@ -1,5 +1,6 @@
 import { BUILDINGS } from "./balance";
-import { Terrain, type Biome, type World } from "./types";
+import { applyOpener, type OpenerId } from "./openers";
+import { Terrain, type Biome, type Faction, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 import { setupSurvival, type SurvivalOptions } from "./modes/survival";
 import { applyMutators, type MutatorId } from "./rules";
@@ -308,6 +309,10 @@ function createClassicTerrain(w: World): void {
   for (let ty = 22; ty <= 25; ty++)
     for (let tx = 22; tx <= 25; tx++)
       if (w.terrain[ty * S + tx] === Terrain.Ground) setTerrain(w, tx, ty, Terrain.Scrap);
+  // Side fields on the open western flank (mirrored: red's on the east):
+  // the second field each side expands to once the home field runs dry,
+  // out on the lane that skirts the ridge, so holding it takes an army.
+  for (let ty = 27; ty <= 29; ty++) for (let tx = 3; tx <= 5; tx++) both(tx, ty, Terrain.Scrap);
 }
 
 /**
@@ -323,6 +328,8 @@ export interface MatchOptions {
   mutators?: MutatorId[];
   /** Ops: play this scenario (ops.ts) — its own rules, enemy, setup and goals. */
   op?: string;
+  /** Quick-start opener per side (see openers.ts). Default: the classic start. */
+  openers?: Partial<Record<Faction, OpenerId>>;
 }
 
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
@@ -347,6 +354,12 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   spawnUnit(w, "harvester", "blue", hx + hs + 1.5, hy + 1.5);
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
   if (opts.mutators?.length) applyMutators(w, opts.mutators);
+  // openers belong to the classic skirmish start; Last Stand and Ops set up their own
+  if (!opts.survival && !opts.op)
+    for (const f of ["blue", "red"] as const) {
+      const o = opts.openers?.[f];
+      if (o) applyOpener(w, f, o);
+    }
   if (opts.survival) setupSurvival(w, opts.survival);
   if (opts.op) setupOp(w, opts.op);
   return w;

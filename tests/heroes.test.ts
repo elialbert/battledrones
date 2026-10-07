@@ -263,7 +263,7 @@ describe("chronicle analysis", () => {
 
 describe("after-action report stats", () => {
   it("reads stats added by other features defensively", () => {
-    const core: FactionStats = { unitsBuilt: 1, unitsLost: 2, unitsKilled: 3, buildingsLost: 0, buildingsKilled: 1, scrapHarvested: 500 };
+    const core: FactionStats = { unitsBuilt: 1, unitsLost: 2, unitsKilled: 3, buildingsLost: 0, buildingsKilled: 1, scrapHarvested: 500, scrapSalvaged: 0 };
     expect(extraStatRows(core, core)).toEqual([]);
     const blue = { ...core, scrapSalvaged: 240, weirdThing: 3, flag: true } as unknown as FactionStats;
     const red = { ...core, scrapSalvaged: 80 } as unknown as FactionStats;

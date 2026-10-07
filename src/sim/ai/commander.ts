@@ -6,6 +6,8 @@ import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival
 import { findPath } from "../movement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import { bannedBy } from "../rules";
+import { planSalvage } from "./salvage";
+import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import type {
   Building,
   BuildingKind,
@@ -188,6 +190,10 @@ export function createAiState(strategy?: StrategyName, difficulty: Difficulty = 
 }
 
 const RETREAT_ARMY_VALUE = 350;
+/** No raids before this: an opener's starting units guard home while both sides settle in. */
+const OPENING_GRACE = 45 * TICK_RATE;
+/** Enemy army value at the HQ that, if it outguns the home guard, recalls everyone. */
+const HOME_ALARM_VALUE = 400;
 /** Visible armed enemies this close to our buildings/harvesters are threats. */
 const DEFENSE_RADIUS = 11;
 const GUARD_RADIUS = 5;
@@ -216,10 +222,12 @@ function rand(s: AiState): number {
 export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const diff = DIFFICULTY[s.difficulty];
   w.factions[faction].incomeMult = diff.incomeMult;
-  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return [];
+  // calldown reflex: scatter from enemy reticles every tick, not just on decision passes
+  const reflex = w.winner ? [] : dodgeCalldowns(w, faction, s);
+  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return reflex;
   s.lastDecisionTick = w.tick;
 
-  const cmds: Command[] = [];
+  const cmds: Command[] = reflex;
   const hq = hqOf(w, faction);
   if (!hq) return cmds;
   const f = w.factions[faction];
@@ -366,7 +374,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   );
   if (
     s.mode === "buildup" && diff.harass && raiders.length >= s.strategy.harassGroup &&
-    s.seenAA <= raiders.length / 2
+    s.seenAA <= raiders.length / 2 && w.tick >= OPENING_GRACE
   )
     s.mode = "harass";
   if (armyValue >= assaultAt && s.mode !== "assault") {
@@ -378,7 +386,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (w.survival) s.mode = "buildup";
 
   // ======================= tactics =========================================
-  const used = new Set<number>();
+  const used = new Set<number>(dodgingUnits(w, s)); // units running from a reticle stay put
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
 
   // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
@@ -401,6 +409,28 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       v += UNITS[u.kind].cost;
     }
     if (squad.length > 0) cmds.push({ type: "attack", faction, unitIds: squad, targetId: t.id });
+  }
+
+  // --- 1b. home defence: a real attack on the base recalls the army -------
+  // (with quick-start openers an 8-unit push can land at 1:00; an army out
+  // raiding must not leave the HQ to die)
+  const atHome = threats.filter((t) => dist(t.x, t.y, hqC.x, hqC.y) <= DEFENSE_RADIUS);
+  const raidValue = atHome.reduce((v, t) => v + UNITS[t.kind].cost, 0);
+  const homeGuard = value(army.filter((u) => dist(u.x, u.y, hqC.x, hqC.y) <= DEFENSE_RADIUS));
+  if (raidValue >= HOME_ALARM_VALUE && raidValue > homeGuard) {
+    s.mode = "buildup";
+    const enemyHome = mirror(w, hqC.x, hqC.y);
+    const away = army.filter(
+      (u) =>
+        !used.has(u.id) &&
+        dist(u.x, u.y, hqC.x, hqC.y) > DEFENSE_RADIUS &&
+        dist(u.x, u.y, enemyHome.x, enemyHome.y) > 8 && // about to finish the job there
+        atHome.some((t) => canHitDomain(UNITS[u.kind].targets, t.domain))
+    );
+    if (away.length > 0) {
+      away.forEach((u) => used.add(u.id));
+      cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
+    }
   }
 
   // --- 2. economy guard: a share of the army holds the mining line --------
@@ -486,6 +516,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (earlyCallBonus(w) > 0 && armyValue >= 1.8 * waveBudget(w.survival.difficulty, w.survival.wave + 1))
       cmds.push({ type: "callWave", faction });
   }
+
+  // --- 4b. salvage: once a fight near home is over, sweep up the wrecks ----
+  cmds.push(
+    ...planSalvage(w, faction, {
+      army, harvesters, buildings: myBuildings, used, threatened: raidValue >= HOME_ALARM_VALUE, assault: s.mode === "assault"
+    })
+  );
+
+  // --- 4c. commander calldowns (ai/powers.ts) ------------------------------
+  cmds.push(...planCalldowns(w, faction, s, { mode: s.mode, hqC, guardPoint, enemyHqPos, army, threats }));
 
   // --- 5. menders tag along with whoever needs them -------------------------
   for (const m of mine.filter((u) => u.kind === "mender" && u.order.type === "idle" && !used.has(u.id))) {

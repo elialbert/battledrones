@@ -1,10 +1,13 @@
 // Headless balance harness.
 //   npx vite-node tools/balance.ts duels          cost-equal unit duel matrix
-//   npx vite-node tools/balance.ts matches [map]  AI-vs-AI round robin (every map, or one)
+//   npx vite-node tools/balance.ts matches [map] [--classic]
+//                                                 AI-vs-AI round robin (every map, or one), each AI
+//                                                 taking its personality's opener (--classic: none)
 //   npx vite-node tools/balance.ts passive        each strategy vs a passive foe
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
-import { MAPS, createMapWorld } from "../src/sim/maps";
+import { MAPS, createMapWorld, mapById } from "../src/sim/maps";
+import { pickAiOpener } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { UnitKind, World } from "../src/sim/types";
 import { createWorld, spawnUnit } from "../src/sim/world";
@@ -53,8 +56,14 @@ function duels(): void {
   }
 }
 
+const classic = process.argv.includes("--classic");
+
 function match(map: string, blue: StrategyName, red: StrategyName, maxMin = 25): { winner: string; min: number; w: World } {
-  const w = createMapWorld(map);
+  const seed = mapById(map).seed;
+  const w = createMapWorld(
+    map,
+    classic ? {} : { openers: { blue: pickAiOpener(blue, seed, "blue"), red: pickAiOpener(red, seed, "red") } }
+  );
   const sb = createAiState(blue, "normal", 1);
   const sr = createAiState(red, "normal", 2);
   for (let i = 0; i < maxMin * 60 * TICK_RATE && !w.winner; i++)
@@ -70,7 +79,10 @@ function matches(): void {
   let draws = 0;
   let totalMin = 0;
   let n = 0;
-  const only = process.argv[3];
+  let salvaged = 0;
+  let harvested = 0;
+  const calls: Record<string, number> = {};
+  const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
       for (let j = 0; j < names.length; j++) {
@@ -83,7 +95,11 @@ function matches(): void {
         if (winner === "blue") wins[names[i]!]!++;
         else if (winner === "red") wins[names[j]!]!++;
         else draws++;
-        for (const f of ["blue", "red"] as const) void f;
+        for (const f of ["blue", "red"] as const) {
+          salvaged += w.factions[f].stats.scrapSalvaged;
+          harvested += w.factions[f].stats.scrapHarvested;
+          for (const [k, v] of Object.entries(w.powers.fired[f])) calls[k] = (calls[k] ?? 0) + v;
+        }
         for (const u of w.units.values()) built[u.kind] = (built[u.kind] ?? 0) + 1;
         process.stdout.write(`${map.id} ${names[i]} vs ${names[j]}: ${winner} @ ${min.toFixed(1)}m\n`);
       }
@@ -91,6 +107,15 @@ function matches(): void {
   console.log("\nwin rates:");
   for (const s of names) console.log(`  ${s.padEnd(10)} ${((100 * wins[s]!) / games[s]!).toFixed(0)}%`);
   console.log(`draws ${draws}/${n}, mean length ${(totalMin / n).toFixed(1)} min`);
+  console.log(
+    `salvage ${(salvaged / n).toFixed(0)} scrap per match (${((100 * salvaged) / Math.max(1, salvaged + harvested)).toFixed(1)}% of income)`
+  );
+  const totalCalls = Object.values(calls).reduce((a, b) => a + b, 0);
+  console.log(
+    `calldowns ${(totalCalls / n / 2).toFixed(1)} per AI per match (${Object.entries(calls)
+      .map(([k, v]) => `${k} ${(v / n / 2).toFixed(1)}`)
+      .join(", ")})`
+  );
   console.log("units alive at match end:", built);
 }
 

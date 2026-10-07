@@ -30,6 +30,12 @@ export interface HudApi {
   enemy: { strategy: string; difficulty: string };
   /** Extra info-card line for a build option (the counter advisor). */
   cardNote?(kind: UnitKind | BuildingKind): string | null;
+  /** Battlefield wrecks the player knows about (tiles), drawn as gold minimap dots. */
+  wrecks?: () => { x: number; y: number }[];
+  /** While a calldown is armed: the "Tap map: …" chip and its cancel (powers). */
+  targetChip?: () => { label: string; cancel(): void } | null;
+  /** Calldown reticles in flight (tiles), drawn as rings on the minimap. */
+  calldowns?: () => { x: number; y: number; r: number; enemy: boolean }[];
 }
 
 export interface Hud {
@@ -40,10 +46,12 @@ export interface Hud {
   radio(msg: string, tone: string, x?: number, y?: number): void;
   /** A minimap ping; "inbound" is a bigger amber pulse for an approaching raid. */
   ping(x: number, y: number, kind?: "hit" | "inbound"): void;
-  /** A 💡 tip in the ticker. */
-  hint(msg: string, ms?: number): void;
+  /** A 💡 tip in the ticker, shown for `ms`; tapping it jumps the camera to (x, y) when given. */
+  hint(msg: string, ms?: number, x?: number, y?: number): void;
   /** A small toast (veteran promoted / lost…); tapping it jumps to (x, y). */
   notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
+  /** A plain short toast (e.g. why a calldown can't fire). */
+  notify(msg: string, tone?: "bad" | "good"): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -423,6 +431,8 @@ export function createHud(api: HudApi): Hud {
     t.className = `toast ${cls}`;
     t.textContent = msg;
     if (onTap) t.addEventListener("click", onTap);
+    // nothing to tap: let touches fall through to the battlefield underneath
+    else t.classList.add("passive");
     toastsEl.appendChild(t);
     // the ticker keeps two lines at most: the newest pushes the oldest out
     while (toastsEl.children.length > 2) toastsEl.firstChild?.remove();
@@ -486,13 +496,23 @@ export function createHud(api: HudApi): Hud {
     const secs = api.matchSeconds();
     const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
     const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
-    if (hintStage === 0 && secs > 2) {
-      hint("Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.");
-      hintStage = 1;
+    if (hintStage === 0 && secs > 4) {
+      // quick-start openers hand out a factory (and maybe an army) up front
+      if (mine("fab-plant") || mine("airpad")) {
+        hint(
+          army > 0
+            ? "Your harvesters mine on their own. Tap a unit (or ⚔ Select army), then tap the map to send it."
+            : "Your harvesters mine on their own. Train tanks in Vehicles, then tap a unit and tap the map to send it."
+        );
+        hintStage = 2;
+      } else {
+        hint("Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.");
+        hintStage = 1;
+      }
     } else if (hintStage === 1 && mine("fab-plant")) {
       hint("Train tanks in Vehicles. Tap a unit, then tap the map to send it.");
       hintStage = 2;
-    } else if (hintStage === 2 && army >= 3) {
+    } else if (hintStage === 2 && army >= 3 && secs > 30) {
       hint("Long-press any build button to see what it counters. ⚔ Select army grabs everyone.");
       hintStage = 3;
     } else if (hintStage === 3 && secs > 150) {
@@ -598,12 +618,13 @@ export function createHud(api: HudApi): Hud {
     if (clock !== lastClock) {
       lastClock = clock;
       clockEl.textContent = clock;
-      // income over the last 60 s of harvesting
-      incomeWindow.push({ t: secs, v: fs.stats.scrapHarvested });
+      // income over the last 60 s of harvesting and salvage
+      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged;
+      incomeWindow.push({ t: secs, v: earned });
       while (incomeWindow.length > 1 && secs - incomeWindow[0]!.t > 60) incomeWindow.shift();
       const first = incomeWindow[0]!;
       const span = Math.max(10, secs - first.t);
-      const rate = ((fs.stats.scrapHarvested - first.v) / span) * 60;
+      const rate = ((earned - first.v) / span) * 60;
       rateEl.textContent = secs > 10 ? `+${Math.round(rate)}/m` : "";
     }
     surv?.update();
@@ -615,7 +636,12 @@ export function createHud(api: HudApi): Hud {
     const chips: Chip[] = [];
     // phones narrower than this get short chip labels so the squad chips fit on one row
     const narrow = window.innerWidth < 400;
-    if (ctrl.placing) {
+    const armed = api.targetChip?.();
+    if (armed) {
+      // a calldown is armed: tap the map to fire it (src/ui/powers.ts)
+      chips.push({ id: "target", label: armed.label, cls: "info", on: () => {} });
+      chips.push({ id: "untarget", label: "✕", cls: "warn", on: () => armed.cancel() });
+    } else if (ctrl.placing) {
       // the ghost's spot: build it here, or why not (src/game/placement-view.ts)
       const why = ctrl.placementProblem();
       chips.push({
@@ -757,6 +783,9 @@ export function createHud(api: HudApi): Hud {
       if (fogOn && vis[i] === Vis.Unexplored) continue;
       mctx.fillRect(tx * k + k * 0.25, ty * k + k * 0.25, k * 0.5, k * 0.5);
     }
+    // wrecks worth salvaging (fog-respecting: the renderer only lists ones we've seen)
+    mctx.fillStyle = "#ffd66e";
+    for (const r of api.wrecks?.() ?? []) mctx.fillRect(r.x * k - 2, r.y * k - 2, 4, 4);
     const enemyBuildings = fogOn
       ? [...w.fog[PLAYER].known.values()]
       : [...w.buildings.values()].filter((b) => b.faction !== PLAYER);
@@ -780,6 +809,14 @@ export function createHud(api: HudApi): Hud {
         mctx.fillStyle = "#ffb0a0";
       }
       mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
+    }
+    // calldown reticles in flight (public: shown through the fog)
+    for (const c of api.calldowns?.() ?? []) {
+      mctx.strokeStyle = c.enemy ? "#ff3b30" : "#ffd23f";
+      mctx.lineWidth = 2;
+      mctx.beginPath();
+      mctx.arc(c.x * k, c.y * k, Math.max(4, c.r * k), 0, Math.PI * 2);
+      mctx.stroke();
     }
     // alert pings
     const now = api.matchSeconds();
@@ -851,11 +888,14 @@ export function createHud(api: HudApi): Hud {
     ping(x, y, kind) {
       if (pings.length < 12 || kind === "inbound") pings.push({ x, y, t: api.matchSeconds(), kind });
     },
-    hint(msg, ms = 7000) {
-      toast(`💡 ${msg}`, undefined, "hint", ms);
+    hint(msg, ms = 7000, x, y) {
+      toast(`💡 ${msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", ms);
     },
     notice(msg, tone, x, y) {
       toast(msg, () => api.centerCamera(x, y), tone === "info" ? "" : tone, 3600);
+    },
+    notify(msg, tone) {
+      toast(msg, undefined, tone ?? "", tone === "bad" ? 2200 : 4200);
     },
     togglePause,
     destroy() {
@@ -870,10 +910,12 @@ export function createHud(api: HudApi): Hud {
 
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
+  <h3>Openers</h3><p>Every skirmish starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
+  <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every 2 minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
   <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
   <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00, win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
-  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
+  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
