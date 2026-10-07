@@ -118,7 +118,7 @@ export class CommandUi {
     parent.appendChild(btn);
     let timer = 0;
     let fired = false;
-    let down: { x: number; y: number } | null = null;
+    let down: { x: number; y: number; t: number } | null = null;
     const cancel = () => {
       window.clearTimeout(timer);
       btn.classList.remove("arming");
@@ -132,7 +132,7 @@ export class CommandUi {
         this.assign(i);
         return;
       }
-      down = { x: e.clientX, y: e.clientY };
+      down = { x: e.clientX, y: e.clientY, t: performance.now() };
       btn.classList.add("arming");
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
@@ -145,9 +145,15 @@ export class CommandUi {
       if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) cancel();
     });
     btn.addEventListener("pointerup", () => {
-      const tapped = !!down && !fired;
+      // a busy main thread can deliver the release before the hold timer
+      // runs: a press that lasted the full hold time still counts as a hold
+      const held = !!down && !fired && performance.now() - down.t >= SQUAD.holdMs;
+      const tapped = !!down && !fired && !held;
       cancel();
-      if (tapped) this.tap(i);
+      if (held) {
+        fired = true;
+        this.assign(i);
+      } else if (tapped) this.tap(i);
     });
     btn.addEventListener("pointerleave", cancel);
     btn.addEventListener("pointercancel", cancel);

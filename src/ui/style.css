@@ -1759,8 +1759,11 @@ button {
   pointer-events: none;
 }
 @media (orientation: landscape) {
+  /* squads sit at the row's right end, by the sidebar under the thumb, so
+     they never shift when the selection adds or removes chips (Stop, Move…) */
   .chiprow {
-    justify-content: flex-end;
+    flex-direction: row-reverse;
+    justify-content: flex-start;
   }
 }
 .squads {
