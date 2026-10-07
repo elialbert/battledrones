@@ -1225,3 +1225,90 @@ button {
     animation-duration: 1ms;
   }
 }
+
+/* ------------------------------------------- sound settings (music.ts) --- */
+/* menu: the same one-tap master mute as in game, top-left over the key art */
+.menu-mute {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+}
+/* pause menu: All / Music / Effects / Voice toggles (src/ui/audio-panel.ts) */
+.sound-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  width: min(280px, 100%);
+  margin: 12px auto 0;
+}
+.snd {
+  min-height: 48px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #141c2b;
+  color: var(--dim);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-weight: 800;
+}
+.snd .si {
+  font-size: 16px;
+  line-height: 1;
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+.snd .sl {
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  text-decoration: line-through;
+}
+.snd.on {
+  background: #1d3b66;
+  border-color: var(--line-hi);
+  color: #fff;
+}
+.snd.on .si {
+  filter: none;
+  opacity: 1;
+}
+.snd.on .sl {
+  text-decoration: none;
+}
+/* switched on but silenced by the master mute */
+.snd.held {
+  opacity: 0.5;
+}
+.snd:active {
+  transform: scale(0.96);
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  #pause .panel {
+    padding: 12px 22px 14px;
+  }
+  #pause .panel h1 {
+    font-size: 26px;
+    letter-spacing: 3px;
+    margin-bottom: 0;
+  }
+  #pause .panel .time {
+    margin-bottom: 8px;
+  }
+  #pause .cta {
+    min-height: 42px;
+  }
+  #pause .cta.alt {
+    margin-top: 6px;
+  }
+  #pause .sound-row {
+    margin-top: 8px;
+  }
+  #pause .snd {
+    min-height: 44px;
+  }
+}

@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
 import { MAPS } from "./sim/maps";
 import { sfx } from "./game/audio";
+import { music } from "./game/music";
 import { mapAssetBase } from "./game/assets";
 import { GameScene } from "./game/GameScene";
 import { gameMode, loadSettings, saveSettings } from "./game/mode";
@@ -105,6 +106,7 @@ function showMenu(): void {
   const diffs = Object.keys(DIFFICULTY) as Difficulty[];
   menu.innerHTML = `
     <div class="keyart"></div>
+    <button class="round menu-mute" id="menu-mute" title="Mute all">🔊</button>
     <div class="menu-inner">
       <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
       <p class="sub">Mine scrap. Build your swarm. Destroy the enemy HQ.</p>
@@ -140,6 +142,16 @@ function showMenu(): void {
   setArt();
   landscape.addEventListener("change", setArt);
 
+  // menu music: a gentle take on the selected map's theme, from the first touch
+  const biomeOf = (id: string) => MAPS.find((m) => m.id === id)?.biome ?? "temperate";
+  music.play("menu", biomeOf(gameMode.mapId));
+  sfx.unlockOnGesture();
+  const muteBtn = menu.querySelector<HTMLButtonElement>("#menu-mute")!;
+  const syncMute = () => (muteBtn.textContent = sfx.muted ? "🔇" : "🔊");
+  syncMute();
+  const offMute = sfx.onChange(syncMute);
+  muteBtn.addEventListener("click", () => sfx.setMuted(!sfx.muted));
+
   const sync = () => {
     menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => el.classList.toggle("on", el.dataset.id === gameMode.mapId));
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
@@ -152,6 +164,7 @@ function showMenu(): void {
       gameMode.mapId = el.dataset.id!;
       saveSettings();
       sync();
+      music.play("menu", biomeOf(gameMode.mapId));
     })
   );
   menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) =>
@@ -177,6 +190,7 @@ function showMenu(): void {
     } catch {
       /* declined or unsupported — fine */
     }
+    offMute();
     menu.remove();
     startGame();
   };
@@ -192,10 +206,10 @@ function showMenu(): void {
     /* ignore */
   }
   if (rematch) {
+    offMute();
     menu.remove();
     startGame();
-    // audio needs a gesture: unlock on the first touch
-    window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
+    // audio needs a gesture: sfx.unlockOnGesture() (above) starts it on the first touch
   }
 }
 

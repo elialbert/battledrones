@@ -25,7 +25,13 @@ installable as a PWA.
   rules and fog of war as you — or watch two AIs fight.
 - Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
   at device resolution with turrets that track their targets, shadows,
-  particles, smooth fog of war — and fully synthesised sound effects.
+  particles, smooth fog of war — and fully synthesised sound.
+- An **adaptive soundtrack** synthesised live: each biome has its own mode,
+  chords and instruments; bass, drums and an arpeggio join as fights heat up
+  near your camera, an alarm motif plays when your base is under attack,
+  and matches end on a fanfare or a lament. Quiet biome ambience (wind,
+  birds, desert hiss, lava rumble) fills the lulls; Music / Effects / Voice
+  toggles live in the pause menu.
 - Punchy, readable fights: hit flashes, damage-trail health bars, team
   rings under units in combat, kill and loss cues that sound different,
   on-screen-only camera shake, and gold "+100" pops with a rising coin

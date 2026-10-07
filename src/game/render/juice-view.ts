@@ -3,12 +3,12 @@ import { BUILDINGS, UNITS } from "../../sim/balance";
 import type { Faction, FxEvent, World } from "../../sim/types";
 import { TILE } from "../assets";
 import { sfx } from "../audio";
+import { coinPitchIn } from "../score";
 import {
   DepositPops,
   HpTrail,
   SpendWatch,
   barBlink,
-  coinPitch,
   combatAge,
   deathCue,
   enemyBarColor,
@@ -137,7 +137,7 @@ export class CombatJuice {
     const wy = ev.y * TILE;
     this.popText(key, wx, wy, r.amount, r.merged);
     if (h.spectator) return;
-    sfx.play("coin", this.onScreen(wx, wy) ? 0.9 : 0.3, coinPitch(r.streak));
+    sfx.play("coin", this.onScreen(wx, wy) ? 0.9 : 0.3, coinPitchIn(h.world.biome, r.streak));
     this.pill("bump");
   }
 

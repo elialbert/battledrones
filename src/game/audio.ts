@@ -3,6 +3,11 @@
  * (filtered noise bursts, oscillator sweeps) — zero audio assets to load.
  * Voices are rate-limited per sound and capped overall so a big battle
  * stays a rumble rather than a wall of clipping noise.
+ *
+ * The engine also owns the shared AudioContext and the mix: three buses
+ * (sfx, music, voice) feed one master gain and the glue compressor. The
+ * adaptive score (music.ts) and the announcer play into their own buses,
+ * each with its own on/off setting, persisted with the master mute.
  */
 
 export type SfxName =
@@ -11,22 +16,119 @@ export type SfxName =
   | "victory" | "defeat"
   | "kill" | "lost" | "coin";
 
-const MUTE_KEY = "battledrones.muted";
+export type AudioChannel = "sfx" | "music" | "voice";
 
-class Sfx {
+/** Player audio settings: a master mute plus one switch per bus. */
+export interface AudioSettings {
+  muted: boolean;
+  music: boolean;
+  sfx: boolean;
+  voice: boolean;
+}
+
+export const AUDIO_SETTINGS_KEY = "battledrones.audio";
+/** Pre-music builds stored only a master mute flag here. */
+const LEGACY_MUTE_KEY = "battledrones.muted";
+
+/** Parse stored settings (tolerating junk), falling back to the legacy mute flag. */
+export function parseAudioSettings(raw: string | null, legacyMuted: string | null = null): AudioSettings {
+  const s: AudioSettings = { muted: legacyMuted === "1", music: true, sfx: true, voice: true };
+  if (!raw) return s;
+  try {
+    const o = JSON.parse(raw) as Partial<Record<keyof AudioSettings, unknown>> | null;
+    if (o && typeof o === "object")
+      for (const k of ["muted", "music", "sfx", "voice"] as const) if (typeof o[k] === "boolean") s[k] = o[k];
+  } catch {
+    /* corrupt entry: defaults */
+  }
+  return s;
+}
+
+const MASTER_GAIN = 0.55;
+/** Bus levels under the master: music ships at 60% so it sits under the battle. */
+const BUS_GAIN: Record<AudioChannel, number> = { sfx: 1, music: 0.6, voice: 1 };
+
+/** What the music and voice layers need from the engine once audio is unlocked. */
+export interface AudioEngine {
+  ctx: AudioContext;
+  /** Connect music here: it passes the duck stage and the Music on/off level. */
+  musicIn: AudioNode;
+  /** Connect announcer lines here (the Voice on/off level). */
+  voiceIn: AudioNode;
+  /** Shared 2 s white-noise buffer. */
+  noise: AudioBuffer;
+}
+
+export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  private buses: Record<AudioChannel, GainNode> | null = null;
+  /** Music passes through this before its bus level; ducked by big sounds and voice lines. */
+  private duckNode: GainNode | null = null;
+  private duckUntil = 0;
   private noise: AudioBuffer | null = null;
   private last = new Map<SfxName, number>();
   private voices = 0;
-  muted = false;
+  private readyFns = new Set<(e: AudioEngine) => void>();
+  private changeFns = new Set<(s: AudioSettings) => void>();
+  private wantUnlock = false;
+  readonly settings: AudioSettings;
 
   constructor() {
+    let raw: string | null = null;
+    let legacy: string | null = null;
     try {
-      this.muted = localStorage.getItem(MUTE_KEY) === "1";
+      raw = localStorage.getItem(AUDIO_SETTINGS_KEY);
+      legacy = localStorage.getItem(LEGACY_MUTE_KEY);
     } catch {
       /* ignore */
     }
+    this.settings = parseAudioSettings(raw, legacy);
+    if (typeof document !== "undefined") {
+      // a hidden tab makes no sound and burns no battery; come back on return
+      document.addEventListener("visibilitychange", () => {
+        if (!this.ctx) return;
+        if (document.hidden) void this.ctx.suspend();
+        else void this.ctx.resume();
+      });
+      // Touch browsers only count pointerup/touchend (not pointerdown) as a
+      // gesture that may start audio, and iOS can leave the context
+      // suspended or "interrupted" after a call or an app switch: on every
+      // gesture, create (once asked to) or resume the context until it runs
+      const wake = () => {
+        if (document.hidden) return;
+        // creating the context outside an activating gesture leaves it suspended (and warns)
+        const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+        if (ua && !ua.isActive) return;
+        if (!this.ctx) {
+          if (this.wantUnlock) this.unlock();
+        } else if (this.ctx.state !== "running") void this.ctx.resume();
+      };
+      // the events that count as a user gesture: mouse down, touch/pen up, keys
+      for (const ev of ["mousedown", "pointerup", "touchend", "keydown"])
+        window.addEventListener(ev, wake, { capture: true, passive: true });
+    }
+  }
+
+  /** Master mute (one tap): silences every bus. */
+  get muted(): boolean {
+    return this.settings.muted;
+  }
+
+  /** The live engine, once unlock() has created it. */
+  get engine(): AudioEngine | null {
+    if (!this.ctx || !this.buses || !this.duckNode || !this.noise) return null;
+    return { ctx: this.ctx, musicIn: this.duckNode, voiceIn: this.buses.voice, noise: this.noise };
+  }
+
+  /** Is this bus audible right now (not muted and switched on)? */
+  enabled(ch: AudioChannel): boolean {
+    return !this.settings.muted && this.settings[ch];
+  }
+
+  /** Start audio on the next user gesture (menu music, a rematch that skipped the menu). */
+  unlockOnGesture(): void {
+    this.wantUnlock = true;
   }
 
   /** Must be called from a user gesture (browsers block autoplay). */
@@ -39,26 +141,84 @@ class Sfx {
     if (!AC) return;
     this.ctx = new AC();
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.55;
+    this.master.gain.value = this.settings.muted ? 0 : MASTER_GAIN;
     // gentle compression glues overlapping battle sounds together
     const comp = this.ctx.createDynamicsCompressor();
     comp.threshold.value = -18;
     comp.ratio.value = 4;
     this.master.connect(comp).connect(this.ctx.destination);
+    const bus = (ch: AudioChannel) => {
+      const g = this.ctx!.createGain();
+      g.gain.value = this.settings[ch] ? BUS_GAIN[ch] : 0;
+      g.connect(this.master!);
+      return g;
+    };
+    this.buses = { sfx: bus("sfx"), music: bus("music"), voice: bus("voice") };
+    this.duckNode = this.ctx.createGain();
+    this.duckNode.connect(this.buses.music);
     const len = this.ctx.sampleRate * 2; // 2 s: longer than any sound + its random offset
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const e = this.engine!;
+    for (const fn of this.readyFns) fn(e);
+  }
+
+  /** Run `fn` with the engine as soon as audio is unlocked (now, if it already is). */
+  onReady(fn: (e: AudioEngine) => void): () => void {
+    this.readyFns.add(fn);
+    const e = this.engine;
+    if (e) fn(e);
+    return () => this.readyFns.delete(fn);
+  }
+
+  /** Subscribe to settings changes (mute or any bus switch). */
+  onChange(fn: (s: AudioSettings) => void): () => void {
+    this.changeFns.add(fn);
+    return () => this.changeFns.delete(fn);
   }
 
   setMuted(m: boolean): void {
-    this.muted = m;
-    if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.55, this.ctx.currentTime, 0.05);
+    this.settings.muted = m;
+    if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : MASTER_GAIN, this.ctx.currentTime, 0.05);
+    this.saved();
+  }
+
+  /** Switch one bus (Music / SFX / Voice) on or off. */
+  setChannel(ch: AudioChannel, on: boolean): void {
+    this.settings[ch] = on;
+    if (this.buses && this.ctx) this.buses[ch].gain.setTargetAtTime(on ? BUS_GAIN[ch] : 0, this.ctx.currentTime, 0.08);
+    this.saved();
+  }
+
+  private saved(): void {
     try {
-      localStorage.setItem(MUTE_KEY, m ? "1" : "0");
+      localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify(this.settings));
+      localStorage.removeItem(LEGACY_MUTE_KEY);
     } catch {
       /* ignore */
     }
+    for (const fn of this.changeFns) fn(this.settings);
+  }
+
+  /**
+   * Duck the music by `db` decibels for `seconds` (then recover over ~0.4 s):
+   * big explosions, alarms and announcer lines cut through the score.
+   */
+  duck(db: number, seconds: number): void {
+    const ctx = this.ctx;
+    const node = this.duckNode;
+    if (!ctx || !node) return;
+    const now = ctx.currentTime;
+    const g = node.gain;
+    const level = Math.pow(10, -Math.abs(db) / 20);
+    // a deeper or longer duck may extend a running one, never cut it short
+    const until = Math.max(this.duckUntil, now + seconds);
+    this.duckUntil = until;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.setTargetAtTime(Math.min(level, g.value), now, 0.03);
+    g.setTargetAtTime(1, until, 0.4);
   }
 
   /**
@@ -67,16 +227,18 @@ class Sfx {
    */
   play(name: SfxName, vol = 1, pitch = 1): void {
     const ctx = this.ctx;
-    if (!ctx || !this.master || this.muted || vol < 0.03) return;
+    if (!ctx || !this.buses || !this.enabled("sfx") || vol < 0.03) return;
     const now = ctx.currentTime;
     const minGap = GAP[name] ?? 0.05;
     if (now - (this.last.get(name) ?? -1) < minGap) return;
     // feedback cues keep two reserved voices so a loud battle can't swallow them
     if (this.voices > (PRIORITY.has(name) ? 16 : 14)) return;
     this.last.set(name, now);
+    const duck = DUCKS[name];
+    if (duck && vol >= 0.25) this.duck(duck[0] * Math.min(1, vol), duck[1]);
     const out = ctx.createGain();
     out.gain.value = vol;
-    out.connect(this.master);
+    out.connect(this.buses.sfx);
     this.voices++;
     const dur = RECIPES[name](ctx, out, now, this.noise!, pitch);
     setTimeout(() => {
@@ -85,6 +247,14 @@ class Sfx {
     }, (dur + 0.1) * 1000);
   }
 }
+
+/** Sounds that duck the music: [dB, seconds]. */
+const DUCKS: Partial<Record<SfxName, [number, number]>> = {
+  bigExplosion: [6, 0.6],
+  alert: [5, 0.6],
+  victory: [6, 1.2],
+  defeat: [6, 1.2]
+};
 
 const GAP: Partial<Record<SfxName, number>> = {
   mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,

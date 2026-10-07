@@ -21,6 +21,8 @@ import { Controller, PLAYER, hitTest } from "./controller";
 import { GestureRecognizer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
+import { music } from "./music";
+import { BattleMood } from "./score";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { CombatJuice } from "./render/juice-view";
@@ -50,6 +52,8 @@ export class GameScene extends Phaser.Scene {
   private entities!: EntityRenderer;
   private fx!: Fx;
   private juice!: CombatJuice;
+  /** Battle intensity for the adaptive score. */
+  private mood!: BattleMood;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -127,6 +131,13 @@ export class GameScene extends Phaser.Scene {
       earshot: (x, y) => this.earshot(x, y),
       px: (css) => this.px(css)
     });
+    this.mood = new BattleMood({
+      player: PLAYER, spectator: gameMode.spectator,
+      earshot: (x, y) => this.earshot(x * TILE, y * TILE),
+      sees: (x, y) => this.seesPoint(x, y),
+      factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null
+    });
+    music.play("battle", this.world.biome);
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -168,6 +179,7 @@ export class GameScene extends Phaser.Scene {
       cam,
       scene: this,
       announce,
+      music,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
@@ -251,11 +263,18 @@ export class GameScene extends Phaser.Scene {
     this.juice.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
+    music.update({
+      intensity: this.mood.update(delta / 1000, this.simSeconds),
+      alarm: this.mood.alarm(this.simSeconds),
+      paused: this.ctrl.paused
+    });
 
     if (this.world.winner && !this.ended) {
       this.ended = true;
       const won = this.world.winner === PLAYER;
-      if (!gameMode.spectator) sfx.play(won ? "victory" : "defeat");
+      // the score resolves into a fanfare / lament; the SFX jingle covers music-off
+      if (!music.finale(won || gameMode.spectator ? "victory" : "defeat") && !gameMode.spectator)
+        sfx.play(won ? "victory" : "defeat");
       this.time.delayedCall(1400, () => this.hud.showEnd(this.world.winner!));
     }
   }
@@ -276,6 +295,7 @@ export class GameScene extends Phaser.Scene {
   private afterTick(): void {
     for (const ev of this.world.fx) this.handleFx(ev);
     this.juice.events(this.world.fx);
+    this.mood.events(this.world.fx, this.simSeconds);
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;

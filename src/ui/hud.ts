@@ -8,6 +8,7 @@ import { TILE, mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
+import { mountAudioToggles } from "./audio-panel";
 
 export interface HudApi {
   world: World;
@@ -79,7 +80,7 @@ export function createHud(api: HudApi): Hud {
     <div id="versus" class="versus" hidden></div>
     <div class="tl">
       <button id="btn-menu" class="round" title="Pause (P)">❚❚</button>
-      <button id="btn-mute" class="round" title="Sound">🔊</button>
+      <button id="btn-mute" class="round" title="Mute all (sound settings in the pause menu)">🔊</button>
     </div>
     <div id="toasts" class="toasts"></div>
     <div id="banner" class="banner" hidden></div>
@@ -452,10 +453,10 @@ export function createHud(api: HudApi): Hud {
   const muteBtn = $<HTMLButtonElement>("#btn-mute");
   const syncMute = () => (muteBtn.textContent = sfx.muted ? "🔇" : "🔊");
   syncMute();
-  muteBtn.addEventListener("click", () => {
-    sfx.setMuted(!sfx.muted);
-    syncMute();
-  });
+  // one-tap master mute; the per-bus switches live in the pause menu
+  const offMute = sfx.onChange(syncMute);
+  let offToggles: (() => void) | null = null;
+  muteBtn.addEventListener("click", () => sfx.setMuted(!sfx.muted));
   $("#btn-menu").addEventListener("click", () => togglePause());
 
   for (const [id, factor] of [
@@ -475,18 +476,22 @@ export function createHud(api: HudApi): Hud {
     if (!endEl.hidden) return;
     api.ctrl.paused = !api.ctrl.paused;
     pauseEl.hidden = !api.ctrl.paused;
+    offToggles?.();
+    offToggles = null;
     if (!api.ctrl.paused) return;
     pauseEl.innerHTML = `
       <div class="panel">
         <h1>PAUSED</h1>
         <p class="time">${api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
         <button class="cta" id="p-resume">▶ Resume</button>
+        <div id="p-sound"></div>
         <button class="cta alt" id="p-help">How to play</button>
         <button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>
         <button class="cta alt" id="p-quit">Quit to menu</button>
         <div id="p-helptext" class="help" hidden>${HELP_HTML}</div>
       </div>`;
     shield(pauseEl);
+    offToggles = mountAudioToggles(pauseEl.querySelector<HTMLElement>("#p-sound")!);
     pauseEl.querySelector("#p-resume")!.addEventListener("click", togglePause);
     pauseEl.querySelector("#p-help")!.addEventListener("click", () => {
       const h = pauseEl.querySelector<HTMLElement>("#p-helptext")!;
@@ -768,6 +773,8 @@ export function createHud(api: HudApi): Hud {
     togglePause,
     destroy() {
       offAnnounce();
+      offMute();
+      offToggles?.();
       window.clearTimeout(bannerTimer);
       root.innerHTML = "";
     }

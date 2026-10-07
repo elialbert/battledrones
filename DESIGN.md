@@ -45,7 +45,8 @@ personalities and difficulty levels, painted art and procedural audio.
 - **Testing:** Vitest for the simulation (economy, pathfinding, combat,
   terrain, tech tree, AI, maps); a Playwright smoke test that drives the
   real touch input paths; a headless balance harness (`tools/balance.ts`).
-- **Audio:** every sound is synthesised live with WebAudio — no audio files.
+- **Audio:** every sound — effects, the adaptive score and the ambience — is
+  synthesised live with WebAudio; no audio files.
 - **No server.** Everything runs on-device. Settings persist in
   `localStorage`.
 
@@ -180,9 +181,57 @@ being hit), and kills, losses and income must each feel distinct. Rules in
   Losing a building buzzes the phone (`navigator.vibrate(20)`, Android).
 - **Economy:** each delivery pops a gold "+100" over the drop-off with a
   coin blip; deliveries within 2.5 s of each other climb a pentatonic
-  scale, and arrivals at one drop-off within 400 ms merge into one label.
+  scale (retuned into each biome's music key, `coinKey` in score.ts), and
+  arrivals at one drop-off within 400 ms merge into one label.
   The scrap pill bumps on income and flashes red when you spend.
 - Spectators get the visuals for both sides but no kill/loss/coin cues.
+
+### Music & ambience (adaptive score)
+
+The battle used to be silent half the time. A procedural score
+(`src/game/music.ts`, rules in the engine-free, tested `src/game/score.ts`)
+now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
+(menu 80), in 16th-note steps with one chord per two bars:
+
+- **Layers**, each opened only on a bar line: a voice-led **pad** (always;
+  four gliding voices, no muddy seconds or sevenths in the bass), a calm
+  **melody** that plays call-and-answer phrases while you build, a **bass**
+  groove once your units are in contact, **drums** (with a crash on entry
+  and fills every fourth bar) when a fight is on screen, and a 16th-note
+  **arp** when it gets big. While your base is under sustained attack
+  (3+ building hits in 4 s) the arp swaps in a tritone and the filters open
+  — for at most 15 s per attack, so it stays a warning.
+- **Biomes:** temperate D dorian (Dm7–Fmaj7–Cmaj7–G7, kalimba pluck),
+  desert E phrygian dominant (E–F–Am–Dm, oud pluck, tresillo bass, tabla),
+  arctic F lydian (Fmaj7–G7–Dm7–Am7, FM glass bells, half-time drums),
+  volcanic C aeolian (Cm–Ab–Eb–Bb, marimba, driven chugging bass, toms).
+- **Intensity** (`BattleMood`, from the sim's fx stream):
+  `I = audibleShots4s/32 + 0.5·(base under attack) + 0.25·min(1, losses10s/3)`,
+  floored at 0.3 while your units fought anywhere in the last 8 s; attack
+  0.5 s, release 6 s. Shots count by the same earshot rule as the SFX and
+  only if you can see them. Bass enters around I 0.15–0.35, drums 0.42–0.6,
+  arp 0.72–0.9. Spectators hear on-screen combat from both sides (1.5× the
+  shots for full) with no alarm. Measured over six AI-vs-AI matches with a
+  follow-cam: calm 24% / bass 15% / drums 33% / arp 28% of match time
+  (HQ-parked camera 24/42/23/11); first drums at 36–138 s.
+- **Stingers** on the next beat: a I–IV–V–I fanfare (victory, which then
+  holds the tonic major for a quiet coda), a descending minor lament
+  (defeat), and for `announce()` lines a rising call (`epic`), two low stabs
+  a semitone apart (`bad`, which also lifts the tension for 8 s), a light
+  lift (`good`, priority ≤ 1) or a tom hit (keys matching `first-blood`).
+  At most one per 3.5 s. When music is off, the old SFX jingles play instead.
+- **Mix:** the score ducks 6 dB under big explosions and alarms (`sfx.duck`,
+  also for announcer lines), is muffled to a 420 Hz lowpass while paused,
+  and stops with the tab hidden (the AudioContext is suspended). Budget:
+  8 persistent pad oscillators plus ≤ 10 transient voices (14 during a
+  stinger), shared noise buffers; the scheduler costs ~0.07 ms per 25 ms
+  tick. Offline renders: calm ≈ −34 dBFS RMS, intense ≈ −26, peaks ≤ 0.6.
+- **Ambience** (`src/game/ambience.ts`): a quiet looped bed per biome —
+  wind and birdsong, desert roar and sand hiss, a sliding arctic whistle, a
+  volcanic rumble with crackles — at about −44 dBFS, ducked by
+  `1 − 0.7·I`. It plays under the Music switch.
+- **Menu:** a gentle pad/melody/arp take on the selected map's biome,
+  starting on the first touch (browsers block audio until a gesture).
 
 ### Fog of war
 
@@ -292,6 +341,10 @@ DOM overlaid on the canvas, re-flowing by orientation:
 - Toasts for "building ready", attacks (tap to jump there) and hints;
   minimap pings where you're being hit. The scrap pill bumps when a
   harvester delivers and flashes red when scrap is spent.
+- **Sound:** the top-left speaker (in game and on the menu) is a one-tap
+  master mute. The pause menu has four toggles — Sound (master), Music
+  (score and ambience), Effects and Voice (the announcer) — persisted in
+  `localStorage` (`battledrones.audio`).
 
 ### Minimap
 
@@ -324,7 +377,10 @@ src/
   game/       # Phaser: scene, camera, input, rendering
     render/         # world-view (terrain, piles, fog), entities, fx, juice-view
     juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
-    audio.ts        # procedural WebAudio sound effects
+    audio.ts        # AudioContext, sfx/music/voice buses, settings, procedural SFX
+    score.ts        # music rules: harmony, patterns, stingers, battle mood (tested)
+    music.ts        # adaptive score: lookahead scheduler + synth voices
+    ambience.ts     # biome ambience beds
   ui/         # DOM HUD, menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
@@ -343,4 +399,3 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 - Online multiplayer (the deterministic command-driven sim keeps the door
   open), campaigns, map editor, replays, saves mid-match.
 - Upgrades research, superweapons, walls, control groups.
-- Music (sound effects only).
