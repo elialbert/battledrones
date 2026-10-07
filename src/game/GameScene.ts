@@ -22,6 +22,9 @@ import { GestureRecognizer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
 import { SurvivalPresenter, finishRun } from "./survival";
+import { chronicleOf, type Chronicle } from "./chronicle";
+import { Finale, finaleZoom, freeAreaOffset } from "./finale";
+import { HeroPresenter } from "./hero-fx";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
@@ -43,6 +46,11 @@ export class GameScene extends Phaser.Scene {
   private blueAi: AiState | null = null;
   /** Last Stand banners and spawn marker (null in skirmish). */
   private survival: SurvivalPresenter | null = null;
+  /** Veteran promotions/deaths, the match record, and the HQ-kill cinematic. */
+  private heroes!: HeroPresenter;
+  private chronicle!: Chronicle;
+  private finale: Finale | null = null;
+  private finaleAt: { x: number; y: number; size: number } | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
@@ -131,6 +139,15 @@ export class GameScene extends Phaser.Scene {
       (f) => f === PLAYER || !this.ctrl.showFog
     );
     this.overlay = this.add.graphics().setDepth(8);
+    this.chronicle = chronicleOf(this.world);
+    this.heroes = new HeroPresenter(this, this.world, {
+      dpr: this.dpr,
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      seesPoint: (x, y) => this.seesPoint(x, y),
+      unitPos: (id) => this.entities.pos(id),
+      notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
+    });
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
     const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
@@ -247,10 +264,12 @@ export class GameScene extends Phaser.Scene {
     }
     this.ctrl.prune();
     const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
-    this.worldView.update(delta, this.ctrl.showFog);
-    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
+    this.finale?.update(delta);
+    const slow = this.finale?.timeScale ?? 1;
+    this.worldView.update(delta * slow, this.ctrl.showFog);
+    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta * slow);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
-    this.fx.update(this.ctrl.paused ? 0 : delta);
+    this.fx.update(this.ctrl.paused ? 0 : delta * slow);
     this.drawOverlay(alpha);
     this.hud.update();
 
@@ -259,9 +278,53 @@ export class GameScene extends Phaser.Scene {
       const won = this.world.winner === PLAYER;
       // Last Stand always ends in defeat; a new record still gets the fanfare
       const run = this.survival && !gameMode.spectator ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
-      if (!gameMode.spectator) sfx.play(won || run?.isNew ? "victory" : "defeat");
-      this.time.delayedCall(1400, () => this.hud.showEnd(this.world.winner!));
+      this.chronicle.finish();
+      this.playFinale(() => {
+        if (!gameMode.spectator) sfx.play(won || run?.isNew ? "victory" : "defeat");
+      });
     }
+  }
+
+  /**
+   * The HQ kill: slow motion, a camera glide onto the wreck, rolling blasts,
+   * a white flash with the result line, then the after-action report.
+   */
+  private playFinale(stinger: () => void): void {
+    const winner = this.world.winner!;
+    const at = this.finaleAt ?? { x: this.world.width / 2, y: this.world.height / 2, size: 3 };
+    const spec = gameMode.spectator;
+    const won = winner === PLAYER;
+    this.glide = null;
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    const zoom = finaleZoom(this.cameras.main.zoom, DEFAULT_ZOOM * this.dpr);
+    const free = freeAreaOffset();
+    this.finale = new Finale({
+      scene: this,
+      fx: this.fx,
+      ...at,
+      shiftX: (free.x * this.dpr) / this.clampedZoom(zoom),
+      shiftY: (free.y * this.dpr) / this.clampedZoom(zoom),
+      onFlash: () => {
+        stinger();
+        const loser = winner === "blue" ? "Red" : "Blue";
+        announce(
+          this.survival
+            ? { key: "base-overrun", text: "Base overrun", sub: "The HQ has fallen", tone: "bad", priority: 0, x: at.x, y: at.y }
+            : spec
+              ? { key: "hq-destroyed", text: `${loser} HQ destroyed`, sub: `${loser === "Red" ? "Blue" : "Red"} wins`, tone: "epic", priority: 0, x: at.x, y: at.y }
+              : won
+                ? { key: "victory", text: "Enemy HQ destroyed", sub: "Victory", tone: "epic", priority: 0, x: at.x, y: at.y }
+                : { key: "defeat", text: "Our HQ has fallen", sub: "Defeat", tone: "bad", priority: 0, x: at.x, y: at.y }
+        );
+      },
+      onDone: () => {
+        this.finale = null;
+        this.hud.showEnd(winner);
+      }
+    });
+    this.zoomBy(zoom / this.targetZoom);
   }
 
   // ------------------------------------------------------------- sim glue --
@@ -279,6 +342,8 @@ export class GameScene extends Phaser.Scene {
 
   private afterTick(): void {
     for (const ev of this.world.fx) this.handleFx(ev);
+    this.chronicle.tick();
+    this.heroes.flush();
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
@@ -289,6 +354,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleFx(ev: FxEvent): void {
+    this.chronicle.onFx(ev);
+    this.heroes.handleFx(ev);
+    if (ev.type === "death" && ev.buildingKind === "hq")
+      this.finaleAt = { x: ev.x, y: ev.y, size: BUILDINGS.hq.size };
     if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
@@ -622,6 +691,7 @@ export class GameScene extends Phaser.Scene {
       button: (p.event as PointerEvent)?.button ?? 0
     });
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.finale) return; // the camera belongs to the cinematic now
       this.glide = null; // touching the map stops any glide
       this.gest.down(toPointer(p), performance.now());
     });

@@ -144,7 +144,8 @@ triangle; air vs anti-air sits across it.
   Splash falls off from 100% to 50% at the edge.
 - **Cover.** Ground units in woods take less damage.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
-  each +15% damage, rank 3 self-repairs. Shown as gold chevrons.
+  each +15% damage, rank 3 self-repairs. Shown as gold chevrons. Ranked
+  units become heroes (see *Veteran heroes* below).
 - **Retaliation.** Idle units hit by something out of reach go after the
   attacker, and nearby idle allies join in.
 - Auto-acquire targets in range; attack-move is the default command, with
@@ -177,7 +178,9 @@ scrap piles up; forward depots at distant fields; adaptive production
 armour); defend-the-economy guard squads; threat response against
 intruders; wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
-menders escorting the army.
+menders escorting the army; wounded veterans (rank ≥ 2 under 35% HP) falling
+back to a Mender behind them or to the HQ, with an idle Mender sent to patch
+them up (`ai/veterans.ts`).
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -193,10 +196,50 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
    (or watch the AI play).
 2. Both HQs pre-placed, one harvester each (it starts mining at once).
 3. Real-time play until one HQ is destroyed. Pause any time.
-4. Victory/defeat screen with stats → Rematch or Menu.
+4. The HQ kill plays as a short cinematic, then the after-action report
+   → Rematch or Menu.
 
 First-time players get four contextual hints (build a Fab, move units,
 counters, tech).
+
+### Veteran heroes, the finale and the after-action report
+
+Presentation only — the sim just counts `Unit.kills` and faction stats.
+
+- **Callsigns** (`game/heroes.ts`): every unit has one of 48 callsigns,
+  chosen by a hash of its id, skipping names its side already used this
+  match (then "Viper II"). Shown from rank 2: selection panel "★★ Viper ·
+  Lancer · 9 kills", toasts, the report.
+- **Promotions** (`game/hero-fx.ts`): a gold VETERAN / HARDENED / ELITE title
+  rises over the unit (enemies' only from rank 2, at most 8 at once) and the
+  new chevron pops; rank 3 units get a pulsing gold shimmer. Your unit
+  reaching rank 2 gets a "earned a callsign" toast; rank 3 an announcement.
+  Your named unit dying gives "✝ Viper (Lancer, 9 kills) destroyed" (one
+  toast per tick); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives
+  "🎯 Enemy ace … down".
+- **Finale** (`game/finale.ts`): when an HQ falls the render clocks (tweens,
+  sprite anims, particles, tracers) drop to 0.3×, the camera glides and
+  zooms onto the wreck (centred in the area the dock leaves free), five
+  staged blasts roll across it, then a white flash, a shake, the result
+  banner and the stinger at 1.5 s; time eases back and the report appears at
+  2.8 s. Input and pause are locked meanwhile; everything runs on the real
+  frame delta.
+- **After-action report** (`ui/report.ts`, data from `game/chronicle.ts`,
+  which samples both armies every 5 s with full information and logs every
+  death): an army-strength timeline (SVG, both sides, tap or drag for
+  values) with numbered markers for up to three moments — *first blood*,
+  the *biggest battle* (most deaths within 20 s and 10 tiles, with each
+  side's losses and where), and the *turning point* (the lead passing to the
+  other side and holding 30 s) or, if it never changed hands, when the
+  winner *pulled ahead* (≥ 1.5× and 400 up to the end); the MVP card (most
+  kills, fallen or alive) and the enemy's ace; stats with correct kill
+  counts plus any numeric stats other features add to `FactionStats`; and
+  one rule-picked tip (no anti-air vs an air force, harvesters lost, idle
+  factories, banked scrap, Titans unanswered, …). Spectators get both
+  MVPs and a one-line story per commander instead of a tip. Buttons stay
+  pinned at the bottom of the scrolling panel; landscape uses two columns.
+  `addReportSection()` lets later features add blocks (career medals).
+  The Last Stand end screen shows the run's MVP card too.
 
 ### Last Stand (survival mode)
 
@@ -332,10 +375,14 @@ src/
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
     ai/commander.ts # the enemy commander: strategies, difficulty
+    ai/veterans.ts  # wounded veterans fall back to a Mender or the HQ
   game/       # Phaser: scene, camera, input, rendering
     render/         # world-view (terrain, piles, fog), entities, fx
     audio.ts        # procedural WebAudio sound effects
-  ui/         # DOM HUD, menu styles
+    heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
+    chronicle.ts    # match recorder + story analysis for the report
+    finale.ts       # the cinematic HQ kill
+  ui/         # DOM HUD (hud.ts), after-action report (report.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```

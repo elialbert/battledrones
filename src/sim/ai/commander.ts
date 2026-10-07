@@ -4,6 +4,7 @@ import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScr
 import { isVisible, knownBuildings } from "../fog";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
+import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import type {
   Building,
   BuildingKind,
@@ -315,7 +316,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       s.lastScoutTick = w.tick;
     }
     else if (have("raptor") < wantRaptors) kind = "raptor";
-    else if (have("mender") < Math.min(3, Math.floor(armySize / 6))) kind = "mender";
+    else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
+      kind = "mender";
     else if (tech && (s.strategy.airOnly ? rand(s) < 0.4 : rand(s) < 0.25 + s.seenHeavy * 0.08)) kind = "hornet";
     else if (s.strategy.heavy && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks
     else kind = "wasp";
@@ -369,6 +371,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // ======================= tactics =========================================
   const used = new Set<number>();
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
+
+  // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
+  cmds.push(...veteranRetreats(faction, army, hqC, used));
 
   // --- 1. threat response: answer unengaged intruders with counters -------
   const threats = findThreats(w, faction, myBuildings, harvesters);

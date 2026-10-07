@@ -23,6 +23,14 @@ installable as a PWA.
 - An AI commander with **6 personalities** (Balanced, Rush, Air Swarm,
   Boom, Skyforce, Ironclad) and **3 difficulties**, playing by the same
   rules and fog of war as you — or watch two AIs fight.
+- **Veteran heroes**: units that rank up earn callsigns ("★★ Viper ·
+  Lancer · 9 kills"), promotions pop over the unit, elites shimmer gold, and
+  you hear about it when a named unit falls; the AI pulls its wounded
+  veterans back too.
+- **A cinematic HQ kill** (slow motion, camera glide, rolling blasts, white
+  flash) and an **after-action report**: an army-strength timeline with
+  first blood, the biggest battle and the turning point marked, your MVP
+  unit, correct kill stats and one tip for next time.
 - **Last Stand** survival mode: hold your base against endless, announced
   waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and a Boss
   every fifth wave — from shifting map edges. Call waves early for bonus

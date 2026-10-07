@@ -9,6 +9,8 @@ import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
 import { createSurvivalHud } from "./survival";
+import { NAMED_RANK, heroLine, killsLabel, stars } from "../game/heroes";
+import { showReport } from "./report";
 
 export interface HudApi {
   world: World;
@@ -27,6 +29,8 @@ export interface Hud {
   update(): void;
   showEnd(winner: Faction): void;
   alert(msg: string, x: number, y: number): void;
+  /** A small toast (veteran promoted / lost…); tapping it jumps to (x, y). */
+  notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
   ping(x: number, y: number): void;
   togglePause(): void;
   destroy(): void;
@@ -345,9 +349,14 @@ export function createHud(api: HudApi): Hud {
       if (ctrl.selectedUnits.size === 1) {
         const u = w.units.get([...ctrl.selectedUnits][0]!);
         if (u) {
-          key += `:${Math.round(u.hp)}:${u.rank}`;
+          key += `:${Math.round(u.hp)}:${u.rank}:${u.kills}`;
           const st = UNITS[u.kind];
-          html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b>${st.name}${u.rank ? ` <span class="rank">${"★".repeat(u.rank)}</span>` : ""}</b>
+          // veterans earn a callsign: "★★ Viper · Lancer · 9 kills"
+          const title =
+            u.rank >= NAMED_RANK
+              ? heroLine(w, u).replace(/^(★+)/, '<span class="rank">$1</span>')
+              : `${st.name}${u.rank ? ` <span class="rank">${stars(u.rank)}</span>` : ""}${u.kills ? ` · ${killsLabel(u.kills)}` : ""}`;
+          html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
             <span class="hp">${Math.ceil(u.hp)} / ${st.hp}</span><span class="hint">${st.role}</span></div>`;
         }
       } else {
@@ -487,7 +496,7 @@ export function createHud(api: HudApi): Hud {
   }
 
   function togglePause(): void {
-    if (!endEl.hidden) return;
+    if (!endEl.hidden || w.winner) return; // over (the finale is playing): nothing to pause
     api.ctrl.paused = !api.ctrl.paused;
     pauseEl.hidden = !api.ctrl.paused;
     if (!api.ctrl.paused) return;
@@ -750,35 +759,19 @@ export function createHud(api: HudApi): Hud {
       shield(endEl);
       return;
     }
-    const spec = api.ctrl.spectator;
-    const won = winner === PLAYER;
-    const title = spec ? `${winner.toUpperCase()} WINS` : won ? "VICTORY" : "DEFEAT";
-    const titleClass = spec ? (winner === "blue" ? "win" : "lose") : won ? "win" : "lose";
-    const secs = Math.round(api.matchSeconds());
-    const mm = Math.floor(secs / 60);
-    const ss = String(secs % 60).padStart(2, "0");
-    const st = (fc: Faction) => w.factions[fc].stats;
-    const row = (label: string, a: number, b: number) =>
-      `<tr><td>${label}</td><td>${Math.floor(a)}</td><td>${Math.floor(b)}</td></tr>`;
-    endEl.hidden = false;
-    endEl.innerHTML = `
-      <div class="panel">
-        <h1 class="${titleClass}">${title}</h1>
-        <p class="time">${spec ? `${api.strategies?.blue} vs ${api.strategies?.red} · ` : `vs ${api.enemy.strategy} AI (${api.enemy.difficulty}) · `}${mm}:${ss}</p>
-        <table>
-          <tr><th></th><th>${spec ? "Blue" : "You"}</th><th>${spec ? "Red" : "Enemy"}</th></tr>
-          ${row("Units built", st("blue").unitsBuilt, st("red").unitsBuilt)}
-          ${row("Units lost", st("blue").unitsLost, st("red").unitsLost)}
-          ${row("Kills", st("blue").unitsKilled, st("red").unitsKilled)}
-          ${row("Buildings lost", st("blue").buildingsLost, st("red").buildingsLost)}
-          ${row("Scrap harvested", st("blue").scrapHarvested, st("red").scrapHarvested)}
-        </table>
-        <button id="again" class="cta">↻ Rematch</button>
-        <button id="menu" class="cta alt">Main menu</button>
-      </div>`;
+    // the after-action report (src/ui/report.ts)
+    showReport(endEl, {
+      world: w,
+      winner,
+      pov: PLAYER,
+      spectator: api.ctrl.spectator,
+      secs: Math.round(api.matchSeconds()),
+      strategies: api.strategies,
+      enemy: api.enemy,
+      onRematch: rematch,
+      onMenu: () => window.location.reload()
+    });
     shield(endEl);
-    endEl.querySelector("#again")!.addEventListener("click", rematch);
-    endEl.querySelector("#menu")!.addEventListener("click", () => window.location.reload());
   }
 
   return {
@@ -786,6 +779,9 @@ export function createHud(api: HudApi): Hud {
     showEnd,
     alert(msg, x, y) {
       toast(`⚠ ${msg}`, () => api.centerCamera(x, y), "bad");
+    },
+    notice(msg, tone, x, y) {
+      toast(msg, () => api.centerCamera(x, y), tone === "info" ? "" : tone, 3600);
     },
     ping(x, y) {
       if (pings.length < 12) pings.push({ x, y, t: api.matchSeconds() });

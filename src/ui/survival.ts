@@ -3,6 +3,8 @@ import type { Faction, World } from "../sim/types";
 import { PLAYER, type Controller } from "../game/controller";
 import { THEME_ICONS, finishRun, fmtSecs, loadBest } from "../game/survival";
 import { MAPS } from "../sim/maps";
+import { chronicleOf } from "../game/chronicle";
+import { mvpCard } from "./report";
 
 /**
  * Last Stand HUD pieces, wired into hud.ts by a few hook lines: the wave
@@ -121,6 +123,9 @@ export function createSurvivalHud(
       : r.isNew
         ? `<p class="ls-best new">🏆 New best${r.prevBest > 0 ? ` — beat ${r.prevBest}` : ""}</p>`
         : `<p class="ls-best">Best ${r.best} · ${r.best - r.waves > 0 ? `${r.best - r.waves} short` : "tied your best"}</p>`;
+    // the defender's hero of the run, fallen or standing
+    const hero = chronicleOf(w).mvp()[s.defender];
+    const mvp = hero ? `<div class="aar-mvps">${mvpCard(w, hero, opts.spectator ? "AI's MVP" : "Your MVP", "main")}</div>` : "";
     endEl.hidden = false;
     endEl.innerHTML = `
       <div class="panel laststand-end${r.isNew ? " record" : ""}">
@@ -128,6 +133,7 @@ export function createSurvivalHud(
         <p class="time">Last Stand · ${mapName} · ${diff} · ${fmtSecs(secs)}</p>
         <div class="ls-score"><b>${r.waves}</b><span>wave${r.waves === 1 ? "" : "s"} survived</span></div>
         ${bestLine}
+        ${mvp}
         <table>
           <tr><td>Enemies destroyed</td><td>${st.unitsKilled}</td></tr>
           <tr><td>Units lost</td><td>${st.unitsLost}</td></tr>
