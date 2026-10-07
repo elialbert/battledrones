@@ -115,12 +115,15 @@ npm run build          # typecheck + production build into docs/
 npm run smoke          # headless Playwright test of the real touch flow (against docs/)
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives)
-npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds]
+npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds] [--calldowns]
                        # Last Stand: waves survived by an AI / scripted-player defender
 npx vite-node tools/ops.ts [op|all] [seeds]
                        # Ops: can the stand-in pilots clear each op, and with how many stars
+npx vite-node tools/beginner.ts [novice|beginner|decent] [easy|normal|hard] [seeds]
+                       # difficulty on-ramp: a scripted phone player vs the AI on every map
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --shard 0/4   # pacing & snowball panel (shard across processes)
 npx vite-node tools/pacing.ts summary out*.jsonl                    # …the table in DESIGN.md "Balance & pacing"
+npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --mirror      # side fairness: each personality vs itself
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects

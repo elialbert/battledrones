@@ -26,6 +26,7 @@ import {
   hqOf,
   isResource,
   nearestDropOff,
+  sideFrame,
   tileIndex
 } from "../world";
 
@@ -124,7 +125,9 @@ export const DIFFICULTY: Record<
 > = {
   easy: {
     label: "Easy", interval: 3.5, incomeMult: 0.75, extraHarvesters: -1, assaultMult: 1.35, harass: false,
-    pool: ["balanced", "rush", "airswarm", "skyforce"]
+    // no Skyforce: its all-air wave at ~3:00 beat a scripted first-week player
+    // 11 games in 15 on Easy (tools/beginner.ts); the other three lost 6 in 45
+    pool: ["balanced", "rush", "airswarm"]
   },
   normal: {
     label: "Normal", interval: 2, incomeMult: 1, extraHarvesters: 0, assaultMult: 1, harass: true,
@@ -253,12 +256,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   observeEnemy(w, faction, s);
 
   const hqC = buildingCenter(hq);
-  const activeField = nearestScrapTile(w, hqC.x, hqC.y);
+  const activeField = nearestScrapTile(w, hqC.x, hqC.y, faction);
   /** Where the economy needs defending: the mined field, shaded toward home. */
   const guardPoint = activeField
     ? {
-        x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x) * 1.5,
-        y: activeField.y + 0.5 + Math.sign(hqC.y - activeField.y) * 1.5
+        x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x - 0.5) * 1.5,
+        y: activeField.y + 0.5 + Math.sign(hqC.y - activeField.y - 0.5) * 1.5
       }
     : hqC;
 
@@ -288,7 +291,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     cmds.push({ type: "produce", faction, buildingId: hq.id, unit: "harvester" });
   for (const h of harvesters)
     if (h.order.type === "idle") {
-      const field = nearestReachableResource(w, h.x, h.y);
+      const field = nearestReachableResource(w, h.x, h.y, faction);
       if (field)
         cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
     }
@@ -607,7 +610,13 @@ function pickPriorityTarget(w: World, faction: Faction, fallback: { x: number; y
   const known = knownBuildings(w, faction);
   for (const kinds of [["fab-plant", "airpad", "tech-lab", "depot"], ["turret", "sam-site", "radar"], ["hq"]] as const) {
     const cands = known.filter((kb) => (kinds as readonly string[]).includes(kb.kind));
-    cands.sort((a, b) => dist(a.tx, a.ty, fallback.x, fallback.y) - dist(b.tx, b.ty, fallback.x, fallback.y));
+    // by footprint centre (a top-left corner is not mirror-symmetric)
+    const centre = (kb: (typeof cands)[number]) => BUILDINGS[kb.kind].size / 2;
+    cands.sort(
+      (a, b) =>
+        dist(a.tx + centre(a), a.ty + centre(a), fallback.x, fallback.y) -
+        dist(b.tx + centre(b), b.ty + centre(b), fallback.x, fallback.y)
+    );
     const b = cands[0];
     if (b) {
       const size = BUILDINGS[b.kind].size;
@@ -734,9 +743,11 @@ function depotSite(
   faction: Faction,
   hqC: { x: number; y: number }
 ): { spot: { tx: number; ty: number } } | null {
+  const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   let best: { x: number; y: number; d: number } | null = null;
-  for (let ty = 0; ty < w.height; ty++)
-    for (let tx = 0; tx < w.width; tx++) {
+  for (let fy = 0; fy < w.height; fy++)
+    for (let fx = 0; fx < w.width; fx++) {
+      const [tx, ty] = fr.tile(fx, fy, 1);
       if (!isResource(w, tileIndex(w, tx, ty))) continue;
       const drop = nearestDropOff(w, faction, tx + 0.5, ty + 0.5);
       if (!drop) continue;
@@ -748,7 +759,8 @@ function depotSite(
   if (!best || best.d > 24) return null;
   const spot = findPlacementSpot(w, faction, "depot", best);
   if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) return null;
-  if (!findPath(w, hqC.x, hqC.y + 2.5, best.x, best.y)) return null;
+  // reachable by ground from just behind the HQ (in the side's own frame)
+  if (!findPath(w, hqC.x, hqC.y + (fr.flip ? -2.5 : 2.5), best.x, best.y, "ground", faction)) return null;
   return { spot };
 }
 
@@ -760,18 +772,23 @@ function findPlacementSpot(
   anchor: { x: number; y: number }
 ): { tx: number; ty: number } | null {
   const size = BUILDINGS[kind].size;
+  // candidates are generated and compared in the side's own frame, so ties
+  // (common: spots equidistant from the HQ) resolve as mirror images
+  const fr = sideFrame(w, faction);
+  const a = fr.pt(anchor);
   let best: { tx: number; ty: number } | null = null;
   let bestD = Infinity;
   for (const b of w.buildings.values()) {
     if (b.faction !== faction) continue;
-    const c = buildingCenter(b);
+    const c = fr.pt(buildingCenter(b));
     const r = ECONOMY.buildRadius + 2;
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
-        const tx = Math.round(c.x + dx - size / 2);
-        const ty = Math.round(c.y + dy - size / 2);
-        const d = dist(tx + size / 2, ty + size / 2, anchor.x, anchor.y);
+        const fx = Math.round(c.x + dx - size / 2);
+        const fy = Math.round(c.y + dy - size / 2);
+        const d = dist(fx + size / 2, fy + size / 2, a.x, a.y);
         if (d >= bestD) continue;
+        const [tx, ty] = fr.tile(fx, fy, size);
         if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
         // keep a lane open: don't wall the HQ in with production buildings
         if (size > 1 && tooCramped(w, tx, ty, size)) continue;
@@ -825,7 +842,7 @@ function enemyHarvestArea(
       isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))
     )
       return { x: u.x, y: u.y, targetId: u.id };
-  const own = nearestScrapTile(w, hqC.x, hqC.y);
+  const own = nearestScrapTile(w, hqC.x, hqC.y, faction);
   if (own) return mirror(w, own.x + 0.5, own.y + 0.5);
   return mirror(w, hqC.x, hqC.y);
 }

@@ -9,6 +9,8 @@
 // processes (`--shard 0/4` … `3/4`) and feed all the files to `summary`.
 // `--tune '{"POWERS.passive":0.05,"STRATEGIES.rush.assaultValue":1200}'`
 // overrides exported balance numbers (and AI personalities) for an A/B run.
+// `--mirror` plays each personality against itself instead (the side-fairness
+// check: red's share of decided games and of harvest at 4:00, by map).
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import * as balance from "../src/sim/balance";
 import { STRATEGIES, type StrategyName } from "../src/sim/ai/commander";
@@ -44,13 +46,14 @@ function run(): void {
   const [shard, shards] = (arg("--shard") ?? "0/1").split("/").map(Number) as [number, number];
   const maps = arg("--maps")?.split(",") ?? MAPS.map((x) => x.id);
   const names = Object.keys(STRATEGIES) as StrategyName[];
+  const mirror = process.argv.includes("--mirror");
   writeFileSync(out, "");
   let idx = 0;
   for (let s = 0; s < seeds; s++)
     for (const map of maps)
       for (const b of names)
         for (const r of names) {
-          if (b === r) continue;
+          if ((b === r) !== mirror) continue;
           const job = idx++;
           if (job % shards !== shard) continue;
           const m = playMatch(map, b, r, 7000 + job * 13 + s * 1000, 11 + job * 2);
@@ -116,6 +119,16 @@ function summary(): void {
       if (x.winner === s) wins[p]![0]++;
     }
   console.log("personality win rates: " + Object.entries(wins).map(([k, [w, n]]) => `${k} ${pct(w, n)}`).join(", "));
+  // side fairness: blue and red play mirror-image starts, so both should be ~50%
+  const maps = [...new Set(d.map((x) => x.map))];
+  const side = (xs: Match[]) => {
+    const dd = xs.filter((x) => x.winner !== "draw");
+    const h = xs.filter((x) => x.harvest4);
+    const hb = h.reduce((a, x) => a + x.harvest4.blue, 0);
+    const hr = h.reduce((a, x) => a + x.harvest4.red, 0);
+    return `${pct(dd.filter((x) => x.winner === "red").length, dd.length)} (n=${dd.length})` + (hb ? ` harvest@4:00 ${hr >= hb ? "+" : ""}${((100 * hr) / hb - 100).toFixed(1)}%` : "");
+  };
+  console.log("red's share of decided games: " + [...maps.map((m) => `${m} ${side(d.filter((x) => x.map === m))}`), `all ${side(d)}`].join(", "));
 }
 
 if (process.argv[2] === "run") run();

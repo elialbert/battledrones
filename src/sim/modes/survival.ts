@@ -39,7 +39,7 @@ export const SURVIVAL = {
   /** Wave budget in scrap: (base + growth · n^exp) × difficulty multiplier. */
   budgetBase: 240,
   budgetGrowth: 228,
-  budgetExp: 1.3,
+  budgetExp: 1.4,
   budgetMult: { easy: 0.7, normal: 1, hard: 1.3 } as Record<SurvivalDifficulty, number>,
   /** Boss waves get this much extra budget (on top of +1 veterancy rank). */
   bossBudget: 1.1,
@@ -68,7 +68,15 @@ export const SURVIVAL = {
   /** Idle wave units with nothing in reach get a new objective this often. */
   retaskTicks: 20,
   /** Spawn sites must be at least this fraction of the map size from the HQ. */
-  siteMinDist: 0.6
+  siteMinDist: 0.6,
+  /**
+   * Wreck value of a wave unit, as a share of its cost (skirmish wrecks are
+   * worth SALVAGE.share = 30%). At 30% a defender salvaged 17–116k scrap a
+   * run and lasted 30–50 waves: the waves had become an economy. The clear
+   * bonus already pays for a wave beaten; the defender's own losses still
+   * leave normal wrecks.
+   */
+  waveWreckShare: 0.05
 };
 
 export interface SpawnSite {
@@ -133,6 +141,8 @@ export interface SurvivalState {
   members: Map<number, number>;
   /** Seconds between waves when an op sets its own pace (else SURVIVAL.interval). */
   interval?: number;
+  /** Wreck value of a wave unit as a share of its cost (salvage.ts; SURVIVAL.waveWreckShare). */
+  wreckShare: number;
 }
 
 export const THEME_NAMES: Record<WaveTheme, string> = {
@@ -235,7 +245,8 @@ export function setupSurvival(w: World, opts: SurvivalOptions = {}, defender: Fa
     bonusEarned: 0,
     marches: [],
     members: new Map(),
-    ...(opts.interval ? { interval: opts.interval } : {})
+    ...(opts.interval ? { interval: opts.interval } : {}),
+    wreckShare: SURVIVAL.waveWreckShare
   };
 }
 

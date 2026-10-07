@@ -176,16 +176,23 @@ export function pickDropSite(w: World, k: number, last: number): number {
   return i;
 }
 
-/** Where a crate aimed at (x, y) can land: the spot, or the nearest open ground within 3 tiles. */
-export function crateSpot(w: World, x: number, y: number): { x: number; y: number } | null {
+/**
+ * Where a crate aimed at (x, y) can land: the spot, or the nearest open ground
+ * within 3 tiles (`mirrored`: scanned in red's frame, so a drop's mirror crate
+ * lands on the mirror of its twin's tile).
+ */
+export function crateSpot(w: World, x: number, y: number, mirrored = false): { x: number; y: number } | null {
   const ok = (tx: number, ty: number) => inBounds(w, tx, ty) && passable(w, tx, ty, "ground");
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   if (ok(tx, ty)) return { x, y };
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
-  for (let dy = -3; dy <= 3; dy++)
-    for (let dx = -3; dx <= 3; dx++) {
+  const s = mirrored ? -1 : 1;
+  for (let i = -3; i <= 3; i++)
+    for (let j = -3; j <= 3; j++) {
+      const dy = i * s;
+      const dx = j * s;
       if (!ok(tx + dx, ty + dy)) continue;
       const d = Math.hypot(dx, dy);
       if (d < bestD) {
@@ -207,7 +214,7 @@ function announceDrop(w: World): void {
   const m = mirrorPoint(w, s.x, s.y);
   const landTick = dropLandTick(k);
   for (const at of [s, m]) {
-    const spot = crateSpot(w, at.x, at.y);
+    const spot = crateSpot(w, at.x, at.y, at === m);
     if (!spot) continue;
     const c: Crate = {
       id: w.nextId++, x: spot.x, y: spot.y, reward, drop: k,

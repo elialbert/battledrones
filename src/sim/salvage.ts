@@ -13,9 +13,19 @@ import { buildingAtTile, groundPassable } from "./world";
  */
 
 /** Wreck value of a unit kind (0 for harvesters: they spill their cargo, not a hull). */
-export function wreckValue(kind: Unit["kind"]): number {
+export function wreckValue(kind: Unit["kind"], share: number = SALVAGE.share): number {
   if (kind === "harvester") return 0;
-  return Math.round(UNITS[kind].cost * SALVAGE.share);
+  return Math.round(UNITS[kind].cost * share);
+}
+
+/**
+ * Share of its cost a dead unit of `faction` leaves as a wreck in this world:
+ * SALVAGE.share, except Last Stand's wave units (the survival state's own,
+ * much smaller share — the waves are not an economy to farm).
+ */
+export function wreckShareOf(w: World, faction: Faction): number {
+  const s = w.survival;
+  return s && faction !== s.defender ? s.wreckShare : SALVAGE.share;
 }
 
 /**
@@ -51,7 +61,7 @@ export function wreckRestingSpot(w: World, x: number, y: number): { x: number; y
 
 /** Leave a wreck where unit `u` died (called from cleanupDeaths). */
 export function leaveWreck(w: World, u: Unit): Wreck | null {
-  const value = wreckValue(u.kind);
+  const value = wreckValue(u.kind, wreckShareOf(w, u.faction));
   if (value <= 0) return null;
   const spot = wreckRestingSpot(w, u.x, u.y);
   if (!spot) return null;

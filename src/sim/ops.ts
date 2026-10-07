@@ -434,7 +434,7 @@ export function setupOp(w: World, id: string): void {
         const p = spreadSpot(w, kind, x, y, i);
         const u = spawnUnit(w, kind, faction, p.x, p.y);
         if (kind === "harvester") {
-          const f = nearestReachableResource(w, u.x, u.y);
+          const f = nearestReachableResource(w, u.x, u.y, u.faction);
           if (f) u.order = { type: "harvest", fieldX: f.x, fieldY: f.y, phase: "toField" };
         }
         tag(t, u.id);

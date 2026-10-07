@@ -23,6 +23,7 @@ import {
   nearestDropOff,
   passable,
   removeBuilding,
+  sideFrame,
   spawnBuilding,
   spawnUnit,
   terrainAt,
@@ -191,29 +192,37 @@ export function tickProduction(w: World): void {
 function findSpawnSpot(w: World, b: Building, kind: UnitKind): { x: number; y: number } {
   const size = BUILDINGS[b.kind].size;
   const mc = moveClassOf(kind);
-  // prefer the south side (the bay doors face down on the art), then ring out
+  // Prefer the back of the base (blue: the south side, where the bay doors
+  // face on the art), then ring out. Searched in the side's own frame — red
+  // plays the map rotated 180°, so its "south" is north and its scan order
+  // runs backwards — or red's units would roll out toward the enemy and
+  // blue's away from it (part of the old Ashlands red-side bias).
+  const flip = b.faction === "red";
   for (let r = 1; r <= 4; r++) {
     const ring: { x: number; y: number; pref: number }[] = [];
-    for (let dy = -r; dy <= size + r - 1; dy++)
-      for (let dx = -r; dx <= size + r - 1; dx++) {
+    for (let i = -r; i <= size + r - 1; i++)
+      for (let j = -r; j <= size + r - 1; j++) {
+        const dy = flip ? size - 1 - i : i;
+        const dx = flip ? size - 1 - j : j;
         if (Math.max(dx < 0 ? -dx : dx - size + 1, dy < 0 ? -dy : dy - size + 1) !== r) continue;
         const tx = b.tx + dx;
         const ty = b.ty + dy;
         if (!inBounds(w, tx, ty)) continue;
         if (mc !== "air" && !passable(w, tx, ty, mc)) continue;
-        ring.push({ x: tx + 0.5, y: ty + 0.5, pref: -dy + Math.abs(dx - (size - 1) / 2) * 0.5 });
+        const back = flip ? dy - (size - 1) : -dy; // own-frame "south" first
+        ring.push({ x: tx + 0.5, y: ty + 0.5, pref: back + Math.abs(dx - (size - 1) / 2) * 0.5 });
       }
     ring.sort((p, q) => p.pref - q.pref);
     if (ring[0]) return { x: ring[0].x, y: ring[0].y };
   }
-  return { x: b.tx + size / 2, y: b.ty - 1 };
+  return { x: b.tx + size / 2, y: flip ? b.ty + size + 1 : b.ty - 1 };
 }
 
 function applyRally(w: World, u: Unit, b: Building): void {
   if (!b.rally) {
     // fresh harvesters go straight to work on the nearest field
     if (u.kind === "harvester") {
-      const f = nearestReachableResource(w, u.x, u.y);
+      const f = nearestReachableResource(w, u.x, u.y, u.faction);
       if (f) u.order = { type: "harvest", fieldX: f.x, fieldY: f.y, phase: "toField" };
     }
     return;
@@ -228,14 +237,20 @@ function applyRally(w: World, u: Unit, b: Building): void {
 
 // -------------------------------------------------------------- harvest ----
 
-/** Find the closest scrap/crystal tile with anything remaining, or null. */
-export function nearestScrapTile(w: World, x: number, y: number): { x: number; y: number } | null {
+/**
+ * Find the closest scrap/crystal tile with anything remaining, or null.
+ * Ties go by scan order, run in `faction`'s own frame (see sideFrame).
+ */
+export function nearestScrapTile(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
+  const fr = sideFrame(w, faction);
+  const p = fr.pt({ x, y });
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
-  for (let ty = 0; ty < w.height; ty++)
-    for (let tx = 0; tx < w.width; tx++) {
+  for (let fy = 0; fy < w.height; fy++)
+    for (let fx = 0; fx < w.width; fx++) {
+      const [tx, ty] = fr.tile(fx, fy, 1);
       if (!isResource(w, tileIndex(w, tx, ty))) continue;
-      const d = Math.hypot(tx + 0.5 - x, ty + 0.5 - y);
+      const d = Math.hypot(fx + 0.5 - p.x, fy + 0.5 - p.y);
       if (d < bestD) {
         bestD = d;
         best = { x: tx, y: ty };
@@ -249,8 +264,10 @@ export function nearestScrapTile(w: World, x: number, y: number): { x: number; y
  * by breadth-first search over passable tiles (8-way, no corner cutting).
  * Straight-line distance is fooled by rivers and rock-locked tiles.
  */
-export function nearestReachableResource(w: World, x: number, y: number): { x: number; y: number } | null {
+export function nearestReachableResource(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
   const W = w.width;
+  // neighbour order in the side's own frame: red's BFS is blue's, turned 180°
+  const s = faction === "red" ? -1 : 1;
   const start = tileIndex(w, Math.floor(x), Math.floor(y));
   if (start < 0 || start >= W * w.height) return null;
   const seen = new Uint8Array(W * w.height);
@@ -264,8 +281,10 @@ export function nearestReachableResource(w: World, x: number, y: number): { x: n
     if (isResource(w, cur)) return { x: cur % W, y: Math.floor(cur / W) };
     const cx = cur % W;
     const cy = Math.floor(cur / W);
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let i = -1; i <= 1; i++)
+      for (let j = -1; j <= 1; j++) {
+        const dy = i * s;
+        const dx = j * s;
         if (dx === 0 && dy === 0) continue;
         const nx = cx + dx;
         const ny = cy + dy;
@@ -298,12 +317,16 @@ function dockPoint(b: Building, x: number, y: number): { x: number; y: number } 
   const size = BUILDINGS[b.kind].size;
   const cx = Math.max(b.tx + 0.5, Math.min(b.tx + size - 0.5, x));
   const cy = Math.max(b.ty + 0.5, Math.min(b.ty + size - 0.5, y));
-  // push the clamped point out of the footprint toward the harvester
+  // push the clamped point out of the footprint toward the harvester (ties
+  // break toward the side's own east/south, so red docks as blue's mirror)
   const c = buildingCenter(b);
+  const red = b.faction === "red";
   const dx = cx - c.x;
   const dy = cy - c.y;
-  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? b.tx + size + 0.5 : b.tx - 0.5, y: cy };
-  return { x: cx, y: dy >= 0 ? b.ty + size + 0.5 : b.ty - 0.5 };
+  const east = dx > 0 || (dx === 0 && !red);
+  const south = dy > 0 || (dy === 0 && !red);
+  if (Math.abs(dx) >= Math.abs(dy)) return { x: east ? b.tx + size + 0.5 : b.tx - 0.5, y: cy };
+  return { x: cx, y: south ? b.ty + size + 0.5 : b.ty - 0.5 };
 }
 
 export function tickHarvest(w: World): void {
@@ -341,7 +364,7 @@ export function tickHarvest(w: World): void {
       }
       const i = tileIndex(w, o.fieldX, o.fieldY);
       if (!isResource(w, i)) {
-        const next = nearestReachableResource(w, u.x, u.y);
+        const next = nearestReachableResource(w, u.x, u.y, u.faction);
         if (!next) {
           u.order = { type: "idle" };
           continue;
@@ -355,7 +378,7 @@ export function tickHarvest(w: World): void {
         if (Math.hypot(o.fieldX + 0.5 - u.x, o.fieldY + 0.5 - u.y) < 2.2) o.phase = "harvesting";
         else {
           // that field is cut off — settle for the nearest one we can reach
-          const next = nearestReachableResource(w, u.x, u.y);
+          const next = nearestReachableResource(w, u.x, u.y, u.faction);
           if (next && (next.x !== o.fieldX || next.y !== o.fieldY)) {
             o.fieldX = next.x;
             o.fieldY = next.y;

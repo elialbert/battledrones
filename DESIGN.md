@@ -16,7 +16,7 @@ personalities and difficulty levels, painted art and procedural audio.
    identifiable on a 6" screen. Big touch targets, high-contrast sprites,
    minimal chrome.
 2. **A full match in a coffee break.** Target match length ~10 minutes
-   against a human (AI-vs-AI games settle in a median of ~8½; see Balance
+   against a human (AI-vs-AI games settle in a median of ~8¼; see Balance
    & pacing).
 3. **Air vs ground is the core tension.** The rock-paper-scissors between
    flying and ground drones is what makes this game *Battle Drones* and not
@@ -56,7 +56,9 @@ personalities and difficulty levels, painted art and procedural audio.
 ### Maps & terrain
 
 Five 2-player maps, all point-symmetric (rotated 180°) so both sides are
-equal, painted procedurally from a seed in `src/sim/maps.ts`:
+equal, painted procedurally from a seed in `src/sim/maps.ts`. The rules are
+symmetric too: every search whose ties go by scan order runs in each side's
+own frame (see *Side fairness* under Balance & pacing).
 
 | Map | Size | Biome | Character |
 |---|---|---|---|
@@ -98,8 +100,9 @@ and skirt mud. Air units fly straight over everything.
 ### Battlefield salvage
 
 Every destroyed combat unit leaves a burning wreck worth **30% of its
-cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none) for
-**60 s**. After 2.5 s it has cooled enough to touch, and the first ground
+cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none; Last
+Stand's wave units only 5%, see Last Stand) for **60 s**. After 2.5 s it
+has cooled enough to touch, and the first ground
 unit of *either* side — harvesters included — whose centre comes within
 0.9 tiles scoops it up (income multipliers apply; a side on a frozen
 economy — an op's zero income — can't cash wrecks in, so its units drive
@@ -716,8 +719,10 @@ Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 menu, never hidden). Each difficulty also picks from its own pool of
 personalities: AI-vs-AI tournaments (`tools/balance.ts matches`) show
 Ironclad, Boom and Balanced are the strongest, so Easy draws from Balanced,
-Rush, Air Swarm and Skyforce, and Hard from Balanced, Air Swarm, Boom and
-Ironclad. AI-vs-AI games settle in a median of ~8½ minutes.
+Rush and Air Swarm (Skyforce's all-air wave at ~3:00 was the one Easy
+opponent a first-week player usually lost to; see *Difficulty on-ramp*), and
+Hard from Balanced, Air Swarm, Boom and Ironclad. AI-vs-AI games settle in a
+median of ~8¼ minutes.
 
 ### Balance & pacing
 
@@ -747,28 +752,41 @@ What changed (numbers only, plus AI thresholds):
   amplifier (switching them off took the 4:00 leader from 87% to 75%, but
   mid-map deaths fell from 26% to 13%), so they now pay less and still pull
   armies into the middle.
-- Unit stats are unchanged, so the duel matrix and counter web are exactly
-  as before.
+- Unit stats are unchanged. The duel matrix (`tools/balance.ts duels`)
+  moved by a few hundredths with the final pass's fairness fix (red's units
+  now path as blue's mirror image) and every counter in the web still holds
+  (e.g. Stingers +0.66 vs Flak, Lancers +0.30 vs Titans, Titans +0.63 vs
+  Stingers, Flak +0.66 / +0.65 / +0.21 vs Wasps / Raptors / Hornets).
+- **Final pass** (every lane merged): the skirmish numbers above needed no
+  re-tuning (the "Merged" column below, re-measured with lane C's
+  wounded-veteran retreats and Air War rules in). The fixes were fairness
+  (red's edge, below), Easy's personality pool (*Difficulty on-ramp*) and
+  Last Stand, which salvage had broken (see Last Stand).
 
 Measured with `tools/pacing.ts`: AI vs AI, Normal, each AI on its own
 opener, Uplinks and drops on, every ordered pair of distinct personalities
-on all 5 maps × 8 match seeds (1,200 matches per column), 25-minute cap.
-The original-game column is the same measurement run against a checkout of
-187e23a, which had no openers or objectives.
+on all 5 maps × 8 match seeds (1,200 matches per column, so the headline
+shares are good to about ±3%), 25-minute cap. The original-game column is
+the same measurement against a checkout of 187e23a (no openers or
+objectives); "First pass" is this pass as it first shipped, before lane C.
 
-| | Original (187e23a) | Before the pass | After |
-|---|---|---|---|
-| 25-minute draws | 14% | 0% | 0.8% |
-| Decided match length, median (p10–p90) | 5:51 (4:01–16:52) | 6:03 (4:31–11:34) | **8:43** (5:22–17:18) |
-| First combat-unit death, median | 1:47 | 1:13 | 1:18 |
-| Big fights (≥ 1000 scrap destroyed) per decided match: median / mean / share with ≥ 3 | 2 / 3.0 / 34% | 2 / 2.0 / 22% | **3 / 3.5 / 51%** |
-| Side ahead by > 200 value at 2:00 / 3:00 / 4:00 went on to win | 82 / 86 / 89% | 83 / 89 / 90% | **67 / 75 / 78%** |
-| Lead changes per match (300 deadband), mean; winner had been 800+ behind | 1.6; 24% | 1.3; 27% | 2.2; **46%** |
-| Unit deaths in the middle 40% of the HQ–HQ line | 12% | 23% | **29%** |
-| Calldowns per AI per match, median (mean) | — | 8 (9.8) | **7 (7.5)**: Barrage 1.9, EMP 2.6, Drop Pod 0.7, Sky Hammer 2.3 |
-| Matches where an Uplink changed hands | — | 69% | 84% |
-| Landed supply crates claimed | — | 99% | 99% |
-| Personality win rates (Balanced / Rush / Air Swarm / Boom / Skyforce / Ironclad) | 55 / 16 / 28 / 69 / 7 / 83% | 55 / 24 / 36 / 81 / 13 / 91% | 54 / 30 / 35 / 71 / 37 / 71% |
+| | Original (187e23a) | First pass | Merged | Final |
+|---|---|---|---|---|
+| 25-minute draws | 14% | 0.8% | 0.8% | 0.9% |
+| Decided match length, median (p10–p90) | 5:51 (4:01–16:52) | 8:43 (5:22–17:18) | 8:33 (5:24–17:20) | **8:17** (5:23–17:17) |
+| First combat-unit death, median | 1:47 | 1:18 | 1:18 | 1:17 |
+| Big fights (≥ 1000 scrap destroyed) per decided match: median / mean / share with ≥ 3 | 2 / 3.0 / 34% | 3 / 3.5 / 51% | 2 / 3.5 / 49% | 2 / 3.4 / **47%** |
+| Side ahead by > 200 value at 2:00 / 3:00 / 4:00 went on to win | 82 / 86 / 89% | 67 / 75 / 78% | 67 / 74 / 78% | **67 / 74 / 78%** |
+| Lead changes per match (300 deadband), mean; winner had been 800+ behind | 1.6; 24% | 2.2; 46% | 2.2; 46% | 2.2; **46%** |
+| Unit deaths in the middle 40% of the HQ–HQ line | 12% | 29% | 28% | **28%** |
+| Calldowns per AI per match, median (mean) | — | 7 (7.5) | 6 (7.4) | 6 (7.3): Barrage 1.9, EMP 2.5, Drop Pod 0.7, Sky Hammer 2.2 |
+| Matches where an Uplink changed hands; landed crates claimed | — | 84%; 99% | 83%; 99% | 83%; 99% |
+| Personality win rates (Balanced / Rush / Air Swarm / Boom / Skyforce / Ironclad) | 55 / 16 / 28 / 69 / 7 / 83% | 54 / 30 / 35 / 71 / 37 / 71% | 53 / 31 / 36 / 68 / 37 / 73% | 51 / 27 / 41 / 68 / 38 / 73% |
+| Red's share of decided games: Riverlands / Dune Sea / Frostbite / Ashlands / Proving Grounds | — | — | 51 / 51 / 55 / **65** / 48% | 47 / 49 / 48 / **51** / 48% |
+
+Targets: draws ≤ 3%, decided median 7–10 min, the 4:00 leader winning
+≤ 82%, ≥ 25% of deaths in the middle 40%, 3+ big fights in ≥ 45% of
+decided matches, every personality within ~25–75%. All hold.
 
 How to read it:
 
@@ -779,31 +797,71 @@ How to read it:
 - The long tail is the air-versus-anti-air pairings (Skyforce, Air Swarm),
   most often on Ashlands. The Sky Hammer and the 7:00 threshold discount
   keep draws under 1%.
-- There is a red-side edge on Ashlands: red wins about 70% of mirror
-  matches there (same personality on both sides), in the original game and
-  now. The other maps are 50/50. Longer games make it show up more: red
-  won 61% of the decided Ashlands games above and 54% overall. The map
-  itself is exactly point-symmetric, and neither the side a factory's units
-  exit from nor the AI's building placement explains it. It is still open.
 
-**A scripted player against the Normal AI.** The design panel's
-`human.ts` builds Fab → harvesters → Airpad → Turret → Tech Lab,
-attack-moves at 8 units and ignores Uplinks, crates and calldowns. Over 30
-games per opener (5 maps × 6 personalities) it was never flattened early:
+**Side fairness.** Every map is exactly point-symmetric, yet red won about
+70% of Ashlands mirror matches (same personality on both sides) and 65% of
+its decided games above, and out-harvested blue by ~9% at 4:00 in AI
+mirror games while plain harvesting was even. The player is always blue.
+The cause was tie-breaks that went by scan order, which a 180° turn doesn't
+preserve: units always rolled out of a factory's *south* side (away from
+the enemy for blue, toward it for red); the harvesters' nearest-field BFS,
+`nearestScrapTile` and A* took neighbours in a fixed order, and A* floored
+a point on a tile edge (Riverlands' centre Uplink) to different tiles for
+the two sides; the AI's building-placement, depot and Drop Pod scans, dock
+ties, its guard point (a tile corner, not its centre) and priority targets
+(sorted by footprint corner) all leaned one way; and the AI raced the first
+crate of a drop's pair, which is blue's for both sides. Every such search
+now runs in the side's own frame (`sideFrame` in `world.ts`: red's search
+is blue's turned 180°). A mirror match with the same seeds stays an exact
+mirror image through its opening (`tests/symmetry.test.ts`, every case of
+which fails on the old code); later, fights between interleaved unit ids
+drift it apart at float precision, which is noise, not bias.
 
-- Its earliest loss came at 3:08 and losses averaged about 5:00. Before
-  the pass they averaged 4:27–4:46, and 6:09 in the original game.
-- The first enemy unit reached its base or harvesters at a median of
-  1:53–2:13 (the earliest at 0:55, just after the AI's 45 s raid grace),
-  up from 1:12–1:44 before the pass.
-- It wins less than before: 11 of 90 games, against 18 of 90 before the
-  pass and 10 of 30 in the original game. A patient version that waits for
-  14 units and fires calldowns like the AI won 16 of 90. Against Easy it
-  wins about half its games.
+| Riverlands / Dune Sea / Frostbite / Ashlands / Proving Grounds | Before | After |
+|---|---|---|
+| AI mirror matches (`tools/pacing.ts run --mirror --seeds 8`, ~46 decided a map, ±7%): red's share of decided games | 30 / 59 / 52 / **70** / 38% | 52 / 44 / 65 / **37** / 54% (all 51%) |
+| …red's harvest by 4:00 vs blue's | −1 / **+9** / −2 / **+9** / +1% | +1 / −1 / +1 / 0 / +2% |
+| The panel above (distinct personalities, ~238 decided a map, ±3%): red's share | 51 / 51 / 55 / **65** / 48% | 47 / 49 / 48 / **51** / 48% |
 
-The AI now uses mechanics the script ignores, so a real player who
-contests Uplinks and crates should do better. The script's win rate is a
-floor, not a target.
+The harvest gap, the cleanest symptom, is gone on every map, and the big
+panel puts every map within noise of 50%. The small mirror sample still
+swings by up to ±15 points a map (about 2σ at this size; other seeds gave
+Frostbite 44–63% and Ashlands 38–46%), as it did before the fix
+(Riverlands 30%).
+
+**Difficulty on-ramp** (`tools/beginner.ts`): a scripted blue player
+against the AI on all 5 maps, every personality the difficulty draws and
+each opener, Uplinks and drops on. None of the scripts touches calldowns,
+Uplinks or crates:
+
+- *novice*: looks at the battle every 4 s and gives one order per look,
+  keeps 3 harvesters, builds Fab → Turret → Airpad and never techs, attacks
+  at 8:00 with 12+ units;
+- *beginner*: looks every 3 s with steady macro (Fab → Airpad → Turret →
+  Tech Lab → Turret, 4 harvesters), answers attacks on its base, attacks
+  late (from 7:00, 12+ units);
+- *decent*: the beginner's macro, looking every second and attacking with
+  8+ units from the start (close to the first pass's `human.ts`).
+
+| Player wins | vs Easy (before → after) | vs Normal |
+|---|---|---|
+| novice | 72% → **89%** | 32% |
+| beginner | 93% → **100%** | 84% |
+| decent | — → **82%** | 37% |
+
+The AI got tougher, but not for a new player on Easy: the one Easy
+opponent that beat the novice was Skyforce, whose all-air wave lands at
+~3:00 (11 of 15 games won against a player still building Stingers; Air
+Swarm, Easy's other air commander, lost 11 of 15), so Easy now draws only
+Balanced, Rush and Air Swarm. Easy's income and wave knobs didn't help
+there (income 75% → 65%: Skyforce still won 11 of 15; assault ×1.35 →
+×1.6: 14 of 15). Normal stays a challenge: the novice and the decent
+script win about a third of their games. The patient beginner wins most
+(74% before the fairness fix, which also took away the AI's red-side
+edge): the Normal AI keeps launching its waves into a turtled base with
+two turrets and loses units two-for-one, then has nothing left when the
+push comes. A real player who also takes Uplinks, crates and calldowns
+should do better than any of these scripts; their win rates are floors.
 
 ### Match flow
 
@@ -903,7 +961,7 @@ best per map and difficulty is saved on the device and shown on the menu
   (mortars with escorts) and **Mixed Assault**, then a **Boss** wave (Titan
   Spearhead, Bomber Wing or Elite Strike Force, in a seeded order). Wave 1 is
   always a small ground wave.
-- **Budgets** grow as (240 + 228·n^1.3) scrap × difficulty (0.7 / 1 / 1.3),
+- **Budgets** grow as (240 + 228·n^1.4) scrap × difficulty (0.7 / 1 / 1.3),
   boss waves ×1.1; units arrive at veterancy rank 1 from wave 6 and rank 2
   from wave 12, bosses one rank higher. They are ordinary units under the
   normal rules — no stat cheats.
@@ -927,16 +985,32 @@ best per map and difficulty is saved on the device and shown on the menu
   harness) never raids or assaults, adds turrets and SAMs to its build,
   holds a line toward the announced edge, engages wave units it can see near
   the base, and calls waves early when its army is ≥ 1.8× the next budget.
-- **Tuning** (`npx vite-node tools/survival.ts both all all 3`): a scripted
-  "decent phone player" survives a median of ~10 waves on Normal (8–16), ~9
-  on Hard and ~18 on Easy; the Normal Balanced AI ~15. Proving Grounds (30k
-  scrap in total) is the hardest map; the rich Dune Sea the easiest. (Those
-  numbers predate salvage and calldowns. Spot checks after the merge, one
-  run each of a Normal Balanced AI defender with / without calldowns:
-  Riverlands 15 / 33 waves, Proving Grounds 25 / 25 — so calldowns don't make
-  it easier — while it salvaged 17–67k scrap a run from the waves' wrecks.
-  Retuning wave budgets or salvage for Last Stand belongs to the balance
-  pass.)
+- **Salvage**: wave units leave wrecks worth just 5% of their cost
+  (`SURVIVAL.waveWreckShare`, carried on the run's survival state, so
+  skirmish wrecks keep their 30%); the defender's own losses salvage as
+  usual. At 30% the waves were an economy: a defender salvaged 17–116k
+  scrap a run, and the median run lasted 30 waves for the AI and 50 (the
+  45-minute cap) for the scripted player.
+- **Calldowns** stay the player's (the waves have none) and are worth
+  about a wave: the scripted player below survives a median of 11 waves on
+  Normal when it also fires Sky Hammers and Barrages at wave clumps near
+  its base and a Drop Pod when outgunned, 10 without. The AI defender
+  gets nothing measurable from its own (median 15 waves with or without;
+  `--no-calldowns`), so they don't make the mode easier.
+- **Tuning** (`npx vite-node tools/survival.ts both all all 4`): waves
+  survived, median (min–max), over 5 maps; the AI defender is a Normal
+  Balanced commander:
+
+  | Defender | Easy | Normal | Hard |
+  |---|---|---|---|
+  | Scripted "decent phone player" | 15 (14–27) | **10 (8–15)** | 8 (7–10) |
+  | Normal Balanced AI | 19 (14–30) | **15 (9–22)** | 14 (9–29) |
+  | *Before this pass (30% wrecks, n^1.3):* scripted / AI | | 50 (16–50) / 30 (14–51) | |
+
+  Nobody fell within the first three waves. Most Normal runs end at a
+  boss (wave 10 or 15): the first boss is the wall a decent player learns
+  to beat. Waves stop growing at 36 units (around wave 14 on Normal) and
+  ranks top out at wave 12, so a defender that holds past ~20 can run long.
 
 ### Career, medals, mutators and the Daily Op
 
@@ -1045,13 +1119,15 @@ completion goal.
 | 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
 | 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
 
-- **Measured** (stand-in pilots, `tools/ops.ts`, 3 seeds): idle play loses
-  every op; the scripted pilots clear all eight every time (Bridgehead ★★–★★★
-  at 4:00, Harvest Moon ★★ ~4:05, Decapitation ★–★★ ~1:45, Frozen Assets ★★
-  ~1:50, Sky Pirates ★★ ~3:05, Glass Jaw ★★★ ~3:00, Iron Tide ★★★, Last
-  Light ★★ ~7:25); a stock Balanced AI commander clears six of the eight at
-  least once — it leaves the bridge to attack in Bridgehead and wastes its
-  fixed budget in Frozen Assets.
+- **Measured** (stand-in pilots, `npx vite-node tools/ops.ts all 6`, after
+  the final balance pass): idle play loses every op; the scripted pilots
+  clear seven of the eight on every seed (Bridgehead ★★ at 4:00, Harvest
+  Moon ★★ ~4:10, Decapitation ★★ 1:17, Frozen Assets ★★ 1:40, Sky Pirates
+  ★★ 2:52, Iron Tide ★★★ in 5 of 6, Last Light ★–★★ ~7:40) and Glass Jaw
+  ★★★ ~2:55 in 4 of 6 (Glass Cannons makes it swingy: 5 of 6 before the
+  pass). A stock Balanced AI commander clears six of the eight at least
+  once (Last Light every time, ★★) — it leaves the bridge to attack in
+  Bridgehead and wastes its fixed budget in Frozen Assets.
 - **Campaign**: the first three ops are open; every op completed opens one
   more. Progress (best star mask, best time, attempts) lives in the career
   (`CareerData.ops`); XP: 60 per clear, +100 the first time, +40 per new star,

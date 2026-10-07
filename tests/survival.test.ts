@@ -17,7 +17,8 @@ import {
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
 import type { FxEvent, World } from "../src/sim/types";
-import { buildingCenter, hqOf, passable } from "../src/sim/world";
+import { wreckValue } from "../src/sim/salvage";
+import { buildingCenter, hqOf, passable, spawnUnit } from "../src/sim/world";
 
 const lastStand = (map = "riverlands", seed = 42, difficulty: SurvivalDifficulty = "normal") =>
   createMapWorld(map, { seed, survival: { difficulty } });
@@ -243,6 +244,25 @@ describe("clearing waves and game over", () => {
     for (let i = 0; i < 12 * 60 * TICK_RATE && !w.winner; i++) step(w, []);
     expect(w.winner).toBe("red");
     expect(wavesSurvived(w)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("Last Stand salvage", () => {
+  it("wave units leave only scrap-light wrecks; the defender's own losses salvage as usual", () => {
+    const w = lastStand("riverlands", 42);
+    const mine = spawnUnit(w, "titan", "blue", 20.5, 40.5);
+    const theirs = spawnUnit(w, "titan", "red", 30.5, 30.5);
+    mine.hp = 0;
+    theirs.hp = 0;
+    step(w, []);
+    const wreck = (f: string) => w.wrecks.find((r) => r.faction === f)!;
+    expect(wreck("red").value).toBe(Math.round(UNITS.titan.cost * SURVIVAL.waveWreckShare));
+    // at the skirmish's 30% a defender salvaged 17–67k a run and outlasted 25+ waves
+    expect(wreck("red").value).toBeLessThanOrEqual(UNITS.titan.cost * 0.1);
+    expect(wreck("blue").value).toBe(wreckValue("titan"));
+    // the share lives on this world's survival state, not in a global
+    expect(createMapWorld("riverlands").survival).toBeFalsy();
+    expect(wreckValue("titan")).toBe(Math.round(UNITS.titan.cost * 0.3));
   });
 });
 

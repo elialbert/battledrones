@@ -284,7 +284,7 @@ export class GameScene extends Phaser.Scene {
     // the starting harvester gets to work immediately
     for (const u of this.world.units.values())
       if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator) {
-        const f = nearestReachableResource(this.world, u.x, u.y);
+        const f = nearestReachableResource(this.world, u.x, u.y, u.faction);
         if (f) this.ctrl.enqueue({ type: "harvest", faction: PLAYER, unitIds: [u.id], x: f.x + 0.5, y: f.y + 0.5 });
       }
     this.hud = createHud({
