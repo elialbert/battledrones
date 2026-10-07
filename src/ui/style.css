@@ -1189,3 +1189,213 @@ button {
     min-height: 40px;
   }
 }
+
+/* ------------------------------------------------------------ Last Stand --- */
+/* wave pill in the top bar: wave + countdown on top, what's coming below */
+.wavepill {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 9px 4px;
+  line-height: 1.15;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  min-height: 40px;
+  align-content: center;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.wavepill .wv {
+  grid-area: 1 / 1;
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.wavepill .wc {
+  grid-area: 1 / 2;
+  justify-self: end;
+  color: var(--gold);
+}
+.wavepill .wt {
+  grid-area: 2 / 1 / 3 / 3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c3cde0;
+}
+.wavepill.active {
+  border-color: rgba(255, 110, 90, 0.55);
+}
+.wavepill.active .wt {
+  color: var(--red);
+}
+.wavepill.hot {
+  border-color: rgba(255, 110, 90, 0.95);
+  animation: wavehot 0.8s ease-in-out infinite alternate;
+}
+.wavepill.hot .wc {
+  color: var(--red);
+}
+.wavepill.boss {
+  border-color: var(--gold);
+}
+.wavepill.boss .wt {
+  color: var(--gold);
+}
+@keyframes wavehot {
+  from { box-shadow: 0 0 0 rgba(255, 90, 74, 0); }
+  to { box-shadow: 0 0 16px rgba(255, 90, 74, 0.7); }
+}
+@media (orientation: portrait) {
+  /* the top bar is a narrow column between the round buttons and the minimap */
+  .wavepill {
+    max-width: calc(100vw - 236px);
+  }
+}
+.chip.callwave {
+  color: var(--gold);
+  border-color: rgba(255, 214, 110, 0.65);
+}
+
+/* menu: mode selector, best score, per-map badges */
+.seg.modes button {
+  min-height: 40px;
+  font-size: 16px;
+}
+.seg.modes button.on[data-m="survival"] {
+  background: #4d3410;
+  color: var(--gold);
+}
+.lsbest {
+  margin-top: -4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffe7a6;
+  text-shadow: 0 2px 6px #000;
+}
+.lsbest b {
+  color: var(--gold);
+}
+.mapcard {
+  position: relative;
+}
+.mapcard .mbest {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(8, 12, 20, 0.85);
+  border: 1px solid rgba(255, 214, 110, 0.5);
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* end of a run */
+.laststand-end h1 {
+  font-size: 30px;
+  letter-spacing: 3px;
+}
+.panel h1.record {
+  color: var(--gold);
+  text-shadow: 0 0 28px rgba(255, 214, 110, 0.6);
+  animation: recordPop 0.6s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.laststand-end.record {
+  border-color: rgba(255, 214, 110, 0.8);
+  box-shadow: 0 0 60px rgba(255, 196, 80, 0.25), 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.ls-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 2px 0;
+}
+.ls-score b {
+  font-size: 64px;
+  line-height: 1;
+  font-weight: 900;
+  color: var(--gold);
+  text-shadow: 0 0 24px rgba(255, 196, 80, 0.45);
+  animation: recordPop 0.5s 0.15s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.ls-score span {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.ls-best {
+  margin: 8px 0 14px;
+  font-weight: 700;
+}
+.ls-best.new {
+  color: var(--gold);
+}
+@keyframes recordPop {
+  from { transform: scale(1.6); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+/* short landscape phones: mode and difficulty share a row to stay above the fold */
+@media (orientation: landscape) and (max-height: 500px) {
+  .menu-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-content: center;
+    column-gap: 8px;
+  }
+  .menu-inner > * {
+    grid-column: 1 / -1;
+  }
+  .menu-inner > #gmode {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .menu-inner > #diff {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .seg.modes button,
+  .menu-inner > #diff button {
+    min-height: 40px;
+    font-size: 14px;
+  }
+  .lsbest {
+    margin-top: 0;
+    font-size: 13px;
+  }
+}
+/* short landscape: the run summary goes side by side so the buttons stay visible */
+@media (orientation: landscape) and (max-height: 500px) {
+  .panel.laststand-end {
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 28px;
+    align-items: center;
+    max-width: min(94vw, 680px);
+    padding: 14px 24px;
+  }
+  .laststand-end > h1 { grid-area: 1 / 1; margin: 0; }
+  .laststand-end > .time { grid-area: 2 / 1; margin-bottom: 4px; }
+  .laststand-end > .ls-score { grid-area: 3 / 1; }
+  .laststand-end > .ls-best { grid-area: 4 / 1; margin: 4px 0 0; }
+  .laststand-end > table { grid-area: 1 / 2 / 3 / 3; margin: 0 auto; }
+  .laststand-end > #again { grid-area: 3 / 2; }
+  .laststand-end > #menu { grid-area: 4 / 2; }
+  .laststand-end .ls-score b { font-size: 52px; }
+  .laststand-end table td { padding: 2px 10px; }
+}

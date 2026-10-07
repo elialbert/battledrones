@@ -245,9 +245,32 @@ export type FxEvent =
       x: number;
       y: number;
       amount: number;
+    }
+  | {
+      /** Last Stand: wave `wave` lands in `eta` ticks at (x, y), entering from `dir`. */
+      type: "waveIncoming";
+      wave: number;
+      theme: WaveTheme;
+      name: string;
+      x: number;
+      y: number;
+      dir: string;
+      eta: number;
+      /** Scrap paid because the defender called this wave early (0 if not). */
+      early: number;
+    }
+  | { type: "waveSpawned"; wave: number; theme: WaveTheme; name: string; x: number; y: number; count: number }
+  | {
+      /** Last Stand: every wave unit is dead; the defender got `bonus` scrap. */
+      type: "waveCleared";
+      wave: number;
+      bonus: number;
+      next: string;
+      nextTheme: WaveTheme;
     };
 
 import type { FactionFog } from "./fog";
+import type { SurvivalState, WaveTheme } from "./modes/survival";
 
 export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
 
@@ -278,6 +301,8 @@ export interface World {
    * never Math.random, so a match replays identically from its commands.
    */
   seed: number;
+  /** Last Stand (survival mode) wave director state; absent in skirmish. */
+  survival?: SurvivalState | null;
 }
 
 export type Command =
@@ -292,4 +317,6 @@ export type Command =
   | { type: "cancelBuilding"; faction: Faction }
   | { type: "placeBuilding"; faction: Faction; tx: number; ty: number }
   | { type: "sell"; faction: Faction; buildingId: number }
-  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number };
+  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
+  /** Last Stand: bring the next wave in now for a scrap bonus. */
+  | { type: "callWave"; faction: Faction };

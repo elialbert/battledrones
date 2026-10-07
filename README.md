@@ -23,6 +23,10 @@ installable as a PWA.
 - An AI commander with **6 personalities** (Balanced, Rush, Air Swarm,
   Boom, Skyforce, Ironclad) and **3 difficulties**, playing by the same
   rules and fog of war as you — or watch two AIs fight.
+- **Last Stand** survival mode: hold your base against endless, announced
+  waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and a Boss
+  every fifth wave — from shifting map edges. Call waves early for bonus
+  scrap; your best per map and difficulty is saved.
 - Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
   at device resolution with turrets that track their targets, shadows,
   particles, smooth fog of war — and fully synthesised sound effects.
@@ -37,6 +41,8 @@ npm run build          # typecheck + production build into docs/
 npm run smoke          # headless Playwright test of the real touch flow (against docs/)
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin
+npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds]
+                       # Last Stand: waves survived by an AI / scripted-player defender
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects

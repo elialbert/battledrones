@@ -21,6 +21,7 @@ import { Controller, PLAYER, hitTest } from "./controller";
 import { GestureRecognizer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
+import { SurvivalPresenter, finishRun } from "./survival";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
@@ -40,6 +41,8 @@ export class GameScene extends Phaser.Scene {
   ctrl!: Controller;
   private ai!: AiState;
   private blueAi: AiState | null = null;
+  /** Last Stand banners and spawn marker (null in skirmish). */
+  private survival: SurvivalPresenter | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
@@ -92,6 +95,14 @@ export class GameScene extends Phaser.Scene {
 
     this.world = createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    if (this.world.survival)
+      this.survival = new SurvivalPresenter(this.world, {
+        mapId: gameMode.mapId,
+        difficulty: this.world.survival.difficulty,
+        spectator: gameMode.spectator,
+        ping: (x, y) => this.hud?.ping(x, y),
+        gfx: this.add.graphics().setDepth(10.5)
+      });
     // spectating pits two Normal commanders against each other
     this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
     if (gameMode.spectator) {
@@ -146,9 +157,9 @@ export class GameScene extends Phaser.Scene {
       zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => this.simSeconds,
       strategies: this.blueAi
-        ? { blue: this.blueAi.strategy.label, red: this.ai.strategy.label }
+        ? { blue: this.blueAi.strategy.label, red: this.survival ? "the waves" : this.ai.strategy.label }
         : null,
-      enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
+      enemy: { strategy: this.survival ? "Last Stand" : this.ai.strategy.label, difficulty: gameMode.difficulty }
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
@@ -246,7 +257,9 @@ export class GameScene extends Phaser.Scene {
     if (this.world.winner && !this.ended) {
       this.ended = true;
       const won = this.world.winner === PLAYER;
-      if (!gameMode.spectator) sfx.play(won ? "victory" : "defeat");
+      // Last Stand always ends in defeat; a new record still gets the fanfare
+      const run = this.survival && !gameMode.spectator ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
+      if (!gameMode.spectator) sfx.play(won || run?.isNew ? "victory" : "defeat");
       this.time.delayedCall(1400, () => this.hud.showEnd(this.world.winner!));
     }
   }
@@ -276,6 +289,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleFx(ev: FxEvent): void {
+    if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
       case "shot": {
@@ -450,6 +464,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.survival?.drawOverlay((css) => this.px(css), this.time.now);
     this.drawPlacement(g);
 
     if (this.boxRect) {

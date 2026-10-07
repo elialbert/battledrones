@@ -4,7 +4,8 @@ import { MAPS } from "./sim/maps";
 import { sfx } from "./game/audio";
 import { mapAssetBase } from "./game/assets";
 import { GameScene } from "./game/GameScene";
-import { gameMode, loadSettings, saveSettings } from "./game/mode";
+import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
+import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -107,7 +108,12 @@ function showMenu(): void {
     <div class="keyart"></div>
     <div class="menu-inner">
       <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
-      <p class="sub">Mine scrap. Build your swarm. Destroy the enemy HQ.</p>
+      <p class="sub" id="sub"></p>
+      <div class="seg modes" id="gmode">
+        <button data-m="skirmish">⚔ Skirmish</button>
+        <button data-m="survival">🛡 Last Stand</button>
+      </div>
+      <p class="lsbest" id="lsbest" hidden></p>
       <div class="maps" id="maps">
         ${MAPS.map(
           (m) => `
@@ -115,6 +121,7 @@ function showMenu(): void {
             <img src="${mapAssetBase(m.id)}/thumb.webp" alt="" draggable="false" />
             <span class="mn">${m.name}</span>
             <span class="mb">${m.size}×${m.size} · ${m.biome}</span>
+            <span class="mbest" hidden></span>
           </button>`
         ).join("")}
       </div>
@@ -141,10 +148,33 @@ function showMenu(): void {
   landscape.addEventListener("change", setArt);
 
   const sync = () => {
-    menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => el.classList.toggle("on", el.dataset.id === gameMode.mapId));
+    const survival = gameMode.mode === "survival";
+    menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => {
+      el.classList.toggle("on", el.dataset.id === gameMode.mapId);
+      // Last Stand: each map card shows its best for the chosen difficulty
+      const badge = el.querySelector<HTMLElement>(".mbest")!;
+      const rec = survival ? loadBest(el.dataset.id!, gameMode.difficulty) : null;
+      badge.hidden = !rec;
+      badge.textContent = rec ? `🛡 ${rec.best}` : "";
+    });
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
+    menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
     const m = MAPS.find((x) => x.id === gameMode.mapId);
     menu.querySelector("#blurb")!.textContent = m?.blurb ?? "";
+    menu.querySelector("#sub")!.textContent = survival
+      ? "Hold your base against endless, themed waves. How long can you last?"
+      : "Mine scrap. Build your swarm. Destroy the enemy HQ.";
+    const best = menu.querySelector<HTMLElement>("#lsbest")!;
+    best.hidden = !survival;
+    if (survival) {
+      const rec = loadBest(gameMode.mapId, gameMode.difficulty);
+      const where = `${m?.name ?? "this map"} · ${DIFFICULTY[gameMode.difficulty].label}`;
+      best.innerHTML = rec
+        ? `🏆 Best on ${where}: <b>${rec.best} wave${rec.best === 1 ? "" : "s"}</b>`
+        : `No record yet on ${where} — set one!`;
+    }
+    menu.querySelector("#play")!.textContent = survival ? "▶ Start Last Stand" : "▶ Play";
+    menu.querySelector("#play-spectate")!.textContent = survival ? "🤖 Watch AI defend" : "🤖 Watch AI vs AI";
   };
   sync();
   menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) =>
@@ -157,6 +187,14 @@ function showMenu(): void {
   menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) =>
     el.addEventListener("click", () => {
       gameMode.difficulty = el.dataset.d as Difficulty;
+      saveSettings();
+      sync();
+    })
+  );
+  menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) =>
+    el.addEventListener("click", () => {
+      gameMode.mode = el.dataset.m as GameType;
+      sfx.play("click", 0.5);
       saveSettings();
       sync();
     })

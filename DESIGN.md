@@ -26,9 +26,9 @@ personalities and difficulty levels, painted art and procedural audio.
 | Decision | Choice |
 |---|---|
 | Platform | Web PWA — TypeScript, Phaser 3 (WebGL), rendered at device pixel ratio (≤ 2×) |
-| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), or AI vs AI spectator |
+| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, or Last Stand waves |
 | Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
-| Win condition | Destroy the enemy HQ |
+| Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can) |
 | Roster size | 11 units, 8 buildings |
 | Art | Painted top-down sprites and terrain generated with OpenAI `gpt-image-2.5-sunburst` (see ART.md) |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
@@ -189,13 +189,58 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
-1. Menu: pick a map and difficulty → Play (or Watch AI vs AI).
+1. Menu: pick a mode (Skirmish | Last Stand), a map and a difficulty → Play
+   (or watch the AI play).
 2. Both HQs pre-placed, one harvester each (it starts mining at once).
 3. Real-time play until one HQ is destroyed. Pause any time.
 4. Victory/defeat screen with stats → Rematch or Menu.
 
 First-time players get four contextual hints (build a Fab, move units,
 counters, tech).
+
+### Last Stand (survival mode)
+
+A second mode for short, replayable sessions: no enemy base or economy, just
+endless themed waves against your base. The score is **waves survived**; the
+best per map and difficulty is saved on the device and shown on the menu
+(selector line and map-card badges) and on the end screen ("New record!").
+
+- **Waves** (`src/sim/modes/survival.ts`, a pure, seeded wave director called
+  from `step()` only when `World.survival` is set): the first lands at 1:35
+  (Easy 1:50, Hard 1:25), then one every 50 s (60 s after a boss). Each block
+  of five is a seeded shuffle of **Air Raid** (wasps, then hornets and
+  raptors), **Armour Column** (stingers, lancers, titans), **Artillery**
+  (mortars with escorts) and **Mixed Assault**, then a **Boss** wave (Titan
+  Spearhead, Bomber Wing or Elite Strike Force, in a seeded order). Wave 1 is
+  always a small ground wave.
+- **Budgets** grow as (240 + 228·n^1.3) scrap × difficulty (0.7 / 1 / 1.3),
+  boss waves ×1.1; units arrive at veterancy rank 1 from wave 6 and rank 2
+  from wave 12, bosses one rank higher. They are ordinary units under the
+  normal rules — no stat cheats.
+- **Spawning**: waves enter from map-edge sites (corners and edge midpoints
+  far from the HQ, each snapped to ground the HQ can be driven to from) picked
+  per wave, never the same edge twice running. At most **30** wave units live
+  at once (phone frame rate); the rest queue off-map and stream in.
+- **Marching**: a wave moves as a formation — units more than 3 tiles ahead of
+  its rear wait — until it is within 12 tiles of its objective, under fire,
+  or 50 s old. Then each unit picks targets: air raids hunt harvesters,
+  artillery shells turrets and SAMs, columns hit the nearest structure,
+  bosses go for the HQ. (Measured: strung-out waves were trivially farmed.)
+- **Announcements**: the next wave's theme is in the top-bar pill from the
+  start of its countdown ("Wave 8 · 0:42 / ✈ Air Raid"); 15 s ahead a banner
+  names it and its edge, the pill pulses red, a minimap arrow and an
+  above-the-fog map marker point at the entry. Clearing the field pays
+  60 × wave scrap ("Wave 7 cleared · +420") with a counter tip for the next
+  theme, and brings the next wave within 30 s. With the field clear, the
+  **Call wave** chip brings it now for (5 + n) scrap per second skipped.
+- **AI**: a defending commander (spectator "Watch AI defend", and the tuning
+  harness) never raids or assaults, adds turrets and SAMs to its build,
+  holds a line toward the announced edge, engages wave units it can see near
+  the base, and calls waves early when its army is ≥ 1.8× the next budget.
+- **Tuning** (`npx vite-node tools/survival.ts both all all 3`): a scripted
+  "decent phone player" survives a median of ~10 waves on Normal (8–16), ~9
+  on Hard and ~18 on Easy; the Normal Balanced AI ~15. Proving Grounds (30k
+  scrap in total) is the hardest map; the rich Dune Sea the easiest.
 
 ## Controls & UI (mobile-first, full-screen)
 
@@ -281,6 +326,7 @@ src/
     world.ts        # entities, tile grid, occupancy, passability
     balance.ts      # every tunable number: units, buildings, terrain, damage table
     maps.ts         # the 5 maps (seeded painter) + createMapWorld
+    modes/survival.ts # Last Stand wave director (pure, seeded)
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy

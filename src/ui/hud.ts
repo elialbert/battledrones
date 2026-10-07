@@ -8,6 +8,7 @@ import { TILE, mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
+import { createSurvivalHud } from "./survival";
 
 export interface HudApi {
   world: World;
@@ -75,6 +76,7 @@ export function createHud(api: HudApi): Hud {
     <div class="topbar">
       <div class="res" id="res"><span class="gear">⚙</span><span id="scrap">0</span><span class="rate" id="rate"></span></div>
       <div class="clock" id="clock">0:00</div>
+      <div class="wavepill" id="wavepill" hidden></div>
     </div>
     <div id="versus" class="versus" hidden></div>
     <div class="tl">
@@ -129,6 +131,10 @@ export function createHud(api: HudApi): Hud {
 
   const w = api.world;
   const f = () => w.factions[PLAYER];
+  // Last Stand: wave pill, call-wave chip, minimap arrow, end screen
+  const surv = w.survival
+    ? createSurvivalHud($("#wavepill"), w, { ctrl: api.ctrl, spectator: api.ctrl.spectator, centerCamera: api.centerCamera })
+    : null;
 
   // ---------------------------------------------------------- build bar ---
   let tab: Tab = "build";
@@ -284,10 +290,19 @@ export function createHud(api: HudApi): Hud {
   // --------------------------------------------------------------- chips ---
   type Chip = { id: string; label: string; cls?: string; on: () => void; active?: boolean };
   let lastChipKey = "";
+  let lastChipShape = "";
   function renderChips(list: Chip[]): void {
     const key = list.map((c) => c.id + (c.active ? "*" : "") + c.label).join("|");
     if (key === lastChipKey) return;
     lastChipKey = key;
+    // same chips, only a label ticked (e.g. the call-wave bonus): update the
+    // text in place so a tap in progress isn't lost to a rebuilt button
+    const shape = list.map((c) => c.id + (c.active ? "*" : "")).join("|");
+    if (shape === lastChipShape && chipsEl.children.length === list.length) {
+      list.forEach((c, i) => ((chipsEl.children[i] as HTMLElement).textContent = c.label));
+      return;
+    }
+    lastChipShape = shape;
     chipsEl.innerHTML = "";
     for (const c of list) {
       const b = document.createElement("button");
@@ -479,7 +494,7 @@ export function createHud(api: HudApi): Hud {
     pauseEl.innerHTML = `
       <div class="panel">
         <h1>PAUSED</h1>
-        <p class="time">${api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
+        <p class="time">${surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
         <button class="cta" id="p-resume">▶ Resume</button>
         <button class="cta alt" id="p-help">How to play</button>
         <button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>
@@ -539,6 +554,7 @@ export function createHud(api: HudApi): Hud {
       const rate = ((fs.stats.scrapHarvested - first.v) / span) * 60;
       rateEl.textContent = secs > 10 ? `+${Math.round(rate)}/m` : "";
     }
+    surv?.update();
 
     const ctrl = api.ctrl;
     tutorial();
@@ -566,6 +582,8 @@ export function createHud(api: HudApi): Hud {
     } else if (!ctrl.spectator) {
       const army = [...w.units.values()].some((u) => u.faction === PLAYER && u.kind !== "harvester");
       if (army) chips.push({ id: "army", label: "⚔ Select army", on: () => ctrl.selectArmy() });
+      const call = surv?.chip();
+      if (call) chips.push(call);
     }
     renderChips(chips);
     renderSelection();
@@ -711,6 +729,7 @@ export function createHud(api: HudApi): Hud {
       mctx.arc(p.x * k, p.y * k, 4 + age * 8, 0, Math.PI * 2);
       mctx.stroke();
     }
+    surv?.drawMinimap(mctx, k, performance.now());
     const cam = api.camera.worldView;
     mctx.strokeStyle = "rgba(255,255,255,0.85)";
     mctx.lineWidth = 1.5;
@@ -718,6 +737,19 @@ export function createHud(api: HudApi): Hud {
   }
 
   function showEnd(winner: Faction): void {
+    const rematch = () => {
+      try {
+        sessionStorage.setItem("battledrones.rematch", "1");
+      } catch {
+        /* ignore */
+      }
+      window.location.reload();
+    };
+    if (surv) {
+      surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => window.location.reload());
+      shield(endEl);
+      return;
+    }
     const spec = api.ctrl.spectator;
     const won = winner === PLAYER;
     const title = spec ? `${winner.toUpperCase()} WINS` : won ? "VICTORY" : "DEFEAT";
@@ -745,14 +777,7 @@ export function createHud(api: HudApi): Hud {
         <button id="menu" class="cta alt">Main menu</button>
       </div>`;
     shield(endEl);
-    endEl.querySelector("#again")!.addEventListener("click", () => {
-      try {
-        sessionStorage.setItem("battledrones.rematch", "1");
-      } catch {
-        /* ignore */
-      }
-      window.location.reload();
-    });
+    endEl.querySelector("#again")!.addEventListener("click", rematch);
     endEl.querySelector("#menu")!.addEventListener("click", () => window.location.reload());
   }
 
@@ -776,6 +801,7 @@ export function createHud(api: HudApi): Hud {
 
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
+  <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>

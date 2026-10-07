@@ -2,6 +2,7 @@ import { BUILDINGS, ECONOMY, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
+import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
 import type {
   Building,
@@ -362,6 +363,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     s.waveValue = armyValue;
   }
   if (s.mode === "assault" && armyValue < Math.max(RETREAT_ARMY_VALUE, s.waveValue * 0.25)) s.mode = "buildup";
+  // Last Stand: there is no enemy base to raid or assault — defend
+  if (w.survival) s.mode = "buildup";
 
   // ======================= tactics =========================================
   const used = new Set<number>();
@@ -451,6 +454,22 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         }
       }
     }
+  }
+
+  // --- Last Stand: hold a line toward the incoming wave, engage the siege ---
+  if (w.survival) {
+    const hold = survivalHoldPoint(w, faction);
+    if (hold) {
+      const squad = idleArmy()
+        .filter((u) => (hold.engage ? u.kind !== "mortar" || dist(u.x, u.y, hold.x, hold.y) > 7 : true))
+        .filter((u) => dist(u.x, u.y, hold.x, hold.y) > (hold.engage ? 2 : STAGE_RADIUS))
+        .map((u) => u.id);
+      squad.forEach((id) => used.add(id));
+      if (squad.length > 0) cmds.push({ type: "attackMove", faction, unitIds: squad, x: hold.x, y: hold.y });
+    }
+    // strong enough for what's next and nothing on the field: bring it on
+    if (earlyCallBonus(w) > 0 && armyValue >= 1.8 * waveBudget(w.survival.difficulty, w.survival.wave + 1))
+      cmds.push({ type: "callWave", faction });
   }
 
   // --- 5. menders tag along with whoever needs them -------------------------
@@ -602,6 +621,8 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   const have = new Map<BuildingKind, number>();
   for (const b of myBuildings) have.set(b.kind, (have.get(b.kind) ?? 0) + 1);
   const order = [...s.strategy.buildOrder];
+  // Last Stand: static defences earn their keep against endless waves
+  if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
