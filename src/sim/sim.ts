@@ -19,8 +19,8 @@ import { isResource, tileIndex } from "./world";
 
 /** Advance the world exactly one tick, applying this tick's commands first. */
 export function step(w: World, commands: Command[]): void {
+  w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
-  w.fx = [];
   for (const c of commands) applyCommand(w, c);
   tickConstruction(w);
   tickProduction(w);

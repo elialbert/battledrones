@@ -102,7 +102,7 @@ cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none) for
 **60 s**. After 2.5 s it has cooled enough to touch, and the first ground
 unit of *either* side — harvesters included — whose centre comes within
 0.9 tiles scoops it up (income multipliers apply; a side on a frozen
-economy — an op's zero income — can't cash wrecks in, so its units drive
+economy — an op's zero income, or Last Stand's waves — can't cash wrecks in, so its units drive
 over them, no "+0" pops or salvage tip, and the wreck stays for the enemy).
 Fights leave loot worth
 holding the field for, a defender who breaks a wave gets paid for it, and

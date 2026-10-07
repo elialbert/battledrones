@@ -30,7 +30,8 @@ export function isWoundedVeteran(u: Unit): boolean {
 }
 
 /**
- * Retreat orders for wounded veterans among `army`. Every wounded veteran is
+ * Retreat orders for wounded veterans among `army` not already in `used`
+ * (a unit dodging a reticle finishes that first). Every wounded veteran is
  * added to `used` (so no other tactic recruits it); idle Menders not in
  * `used` are sent to veterans resting at home.
  */
@@ -44,7 +45,8 @@ export function veteranRetreats(
   const menders = army.filter((u) => u.kind === "mender");
   const resting: Unit[] = [];
   for (const u of army) {
-    if (!isWoundedVeteran(u)) continue;
+    // (already spoken for: e.g. dodging a reticle — it heads home once clear)
+    if (!isWoundedVeteran(u) || used.has(u.id)) continue;
     used.add(u.id);
     const dHome = dist(u.x, u.y, home.x, home.y);
     // a Mender behind the unit (nearer home) beats the long walk back

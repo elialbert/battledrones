@@ -230,14 +230,15 @@ function rand(s: AiState): number {
 export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const diff = DIFFICULTY[s.difficulty];
   w.factions[faction].incomeMult = diff.incomeMult;
+  // no HQ, no commander: Last Stand's waves are the director's alone (not even the dodge reflex)
+  const hq = hqOf(w, faction);
+  if (!hq) return [];
   // calldown reflex: scatter from enemy reticles every tick, not just on decision passes
   const reflex = w.winner ? [] : dodgeCalldowns(w, faction, s);
   if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return reflex;
   s.lastDecisionTick = w.tick;
 
   const cmds: Command[] = reflex;
-  const hq = hqOf(w, faction);
-  if (!hq) return cmds;
   const f = w.factions[faction];
   const mine = [...w.units.values()].filter((u) => u.faction === faction);
   const myBuildings = [...w.buildings.values()].filter((b) => b.faction === faction);
@@ -506,13 +507,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, enemyHqPos);
-      launchWave(cmds, faction, staged, target, used);
+      launchWave(w, cmds, faction, staged, target, used);
     } else {
       for (const u of idleArmy()) {
         if (dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < 14) {
           // already deep in enemy territory: keep fighting, don't yo-yo home
           const target = pickPriorityTarget(w, faction, enemyHqPos);
-          launchWave(cmds, faction, [u], target, used);
+          launchWave(w, cmds, faction, [u], target, used);
         } else if (dist(u.x, u.y, staging.x, staging.y) > STAGE_RADIUS) {
           used.add(u.id);
           cmds.push({ type: "attackMove", faction, unitIds: [u.id], x: staging.x, y: staging.y });
@@ -619,22 +620,27 @@ function pickPriorityTarget(w: World, faction: Faction, fallback: { x: number; y
 
 /** Send a wave at a target: attackers attack it, the rest escort. */
 function launchWave(
+  w: World,
   cmds: Command[],
   faction: Faction,
   units: Unit[],
   target: PriorityTarget,
   used: Set<number>
 ): void {
+  // a remembered building may have died out of sight: an attack on its id
+  // idles the wave on the spot, so march on its last known position instead
+  // (the same place either way; arriving re-sees the footprint, forgets the ghost)
+  const id = target.id !== undefined && (w.units.has(target.id) || w.buildings.has(target.id)) ? target.id : undefined;
   const attackers: number[] = [];
   const escorts: number[] = [];
   for (const u of units) {
     used.add(u.id);
-    if (target.id !== undefined && canHitDomain(UNITS[u.kind].targets, target.domain))
+    if (id !== undefined && canHitDomain(UNITS[u.kind].targets, target.domain))
       attackers.push(u.id);
     else escorts.push(u.id);
   }
-  if (attackers.length > 0 && target.id !== undefined)
-    cmds.push({ type: "attack", faction, unitIds: attackers, targetId: target.id });
+  if (attackers.length > 0 && id !== undefined)
+    cmds.push({ type: "attack", faction, unitIds: attackers, targetId: id });
   if (escorts.length > 0)
     cmds.push({ type: "attackMove", faction, unitIds: escorts, x: target.x, y: target.y });
 }

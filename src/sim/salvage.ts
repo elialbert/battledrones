@@ -91,6 +91,8 @@ export function tickSalvage(w: World): void {
   const reach = SALVAGE.pickupRadius;
   // a side on a frozen economy (an op's zero income) can't cash wrecks in: its units drive over them
   const earns = { blue: incomeOf(w, "blue") > 0, red: incomeOf(w, "red") > 0 };
+  // ...nor can Last Stand's waves (no economy to feed): the wrecks stay for the defender
+  if (w.survival) earns[w.survival.defender === "blue" ? "red" : "blue"] = false;
   const ground: Unit[] = [];
   for (const u of w.units.values()) if (UNITS[u.kind].domain === "ground" && earns[u.faction]) ground.push(u);
   const keep: Wreck[] = [];

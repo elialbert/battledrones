@@ -60,7 +60,8 @@ const EDGE_PAD = 4 * TILE;
 export class GameScene extends Phaser.Scene {
   world!: World;
   ctrl!: Controller;
-  private ai!: AiState;
+  /** Red's commander (null in Last Stand and survival ops: the waves have none). */
+  private ai: AiState | null = null;
   private blueAi: AiState | null = null;
   /** Last Stand banners and spawn marker (null in skirmish). */
   private survival: SurvivalPresenter | null = null;
@@ -154,7 +155,7 @@ export class GameScene extends Phaser.Scene {
     // spectating pits two Normal commanders against each other
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
-    this.ai = opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+    this.ai = this.world.survival ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
       this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
@@ -165,7 +166,7 @@ export class GameScene extends Phaser.Scene {
     const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
     if (this.world.survival || this.world.ops) {
       /* no opener cards */
-    } else if (this.blueAi) {
+    } else if (this.blueAi && this.ai) {
       // (match rules may ban a pick, e.g. no Fab Plants under Air War: take an allowed one)
       openers.blue = allowedOpener(this.world, "blue", pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue")) ?? undefined;
       openers.red = allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red")) ?? undefined;
@@ -302,10 +303,10 @@ export class GameScene extends Phaser.Scene {
       strategies: this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
-            red: this.survival ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
+            red: !this.ai ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
           }
         : null,
-      enemy: { strategy: this.survival ? "Last Stand" : this.ai.strategy.label, difficulty: gameMode.difficulty },
+      enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale
     });
@@ -353,7 +354,7 @@ export class GameScene extends Phaser.Scene {
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
       const picker = showOpenerPicker({
-        context: `${mapById(gameMode.mapId).name} · vs ${this.ai.strategy.label} AI (${DIFFICULTY[gameMode.difficulty].label})`,
+        context: `${mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
         onPick: (id) => this.startWithOpener(id),
         blocked: (id) => openerBlocked(this.world, PLAYER, id)
       });
@@ -397,7 +398,7 @@ export class GameScene extends Phaser.Scene {
   private startWithOpener(id: OpenerId): void {
     if (!this.holdStart) return;
     const mine = applyOpener(this.world, PLAYER, id);
-    const red = allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
+    const red = this.ai && allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
     if (red) applyOpener(this.world, "red", red);
     tickFog(this.world);
     this.holdStart = false;
@@ -478,11 +479,12 @@ export class GameScene extends Phaser.Scene {
       const plan = planTicks(this.acc, delta, this.aware.value);
       this.acc = plan.acc;
       for (let i = 0; i < plan.ticks; i++) {
+        // decided mid-frame: the winning tick's events were handled once, don't replay them
+        if (this.world.winner) break;
         this.snapshotPrev();
-        const cmds = this.blueAi
-          ? [...tickAi(this.world, "blue", this.blueAi), ...tickAi(this.world, "red", this.ai)]
-          : [...this.ctrl.drainCommands(), ...tickAi(this.world, "red", this.ai)];
-        step(this.world, cmds);
+        const blue = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
+        const red = this.ai ? tickAi(this.world, "red", this.ai) : []; // (Last Stand: the waves have no commander)
+        step(this.world, [...blue, ...red]);
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
       }

@@ -1,7 +1,7 @@
 import { BUILDINGS, UNITS } from "./balance";
 import { canPlaceBuilding } from "./economy";
 import { hash32, saltOf } from "./rand";
-import { bannedBy } from "./rules";
+import { applySpawnRank, bannedBy } from "./rules";
 import { Terrain, type BuildingKind, type Faction, type UnitKind, type World } from "./types";
 import {
   buildingCenter,
@@ -358,6 +358,7 @@ function spawnFacing(w: World, faction: Faction, kind: UnitKind, fr: Frame, p: P
   const wp = fr.pt(p);
   const wl = fr.pt(look);
   const u = spawnUnit(w, kind, faction, wp.x, wp.y);
+  applySpawnRank(w, u); // the Veterans mutator ranks opener armies too
   u.facing = u.aim = Math.atan2(wl.x - wp.x, -(wl.y - wp.y));
   return u;
 }
