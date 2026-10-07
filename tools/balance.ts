@@ -1,10 +1,13 @@
 // Headless balance harness.
 //   npx vite-node tools/balance.ts duels          cost-equal unit duel matrix
-//   npx vite-node tools/balance.ts matches [map]  AI-vs-AI round robin (every map, or one)
+//   npx vite-node tools/balance.ts matches [map] [--classic]
+//                                                 AI-vs-AI round robin (every map, or one), each AI
+//                                                 taking its personality's opener (--classic: none)
 //   npx vite-node tools/balance.ts passive        each strategy vs a passive foe
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
-import { MAPS, createMapWorld } from "../src/sim/maps";
+import { MAPS, createMapWorld, mapById } from "../src/sim/maps";
+import { pickAiOpener } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { UnitKind, World } from "../src/sim/types";
 import { createWorld, spawnUnit } from "../src/sim/world";
@@ -53,8 +56,14 @@ function duels(): void {
   }
 }
 
+const classic = process.argv.includes("--classic");
+
 function match(map: string, blue: StrategyName, red: StrategyName, maxMin = 25): { winner: string; min: number; w: World } {
-  const w = createMapWorld(map);
+  const seed = mapById(map).seed;
+  const w = createMapWorld(
+    map,
+    classic ? {} : { openers: { blue: pickAiOpener(blue, seed, "blue"), red: pickAiOpener(red, seed, "red") } }
+  );
   const sb = createAiState(blue, "normal", 1);
   const sr = createAiState(red, "normal", 2);
   for (let i = 0; i < maxMin * 60 * TICK_RATE && !w.winner; i++)
@@ -70,7 +79,7 @@ function matches(): void {
   let draws = 0;
   let totalMin = 0;
   let n = 0;
-  const only = process.argv[3];
+  const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
       for (let j = 0; j < names.length; j++) {

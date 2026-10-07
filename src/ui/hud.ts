@@ -425,13 +425,23 @@ export function createHud(api: HudApi): Hud {
     const secs = api.matchSeconds();
     const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
     const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
-    if (hintStage === 0 && secs > 2) {
-      hint("Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.");
-      hintStage = 1;
+    if (hintStage === 0 && secs > 4) {
+      // quick-start openers hand out a factory (and maybe an army) up front
+      if (mine("fab-plant") || mine("airpad")) {
+        hint(
+          army > 0
+            ? "Your harvesters mine on their own. Tap a unit (or ⚔ Select army), then tap the map to send it."
+            : "Your harvesters mine on their own. Train tanks in Vehicles, then tap a unit and tap the map to send it."
+        );
+        hintStage = 2;
+      } else {
+        hint("Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.");
+        hintStage = 1;
+      }
     } else if (hintStage === 1 && mine("fab-plant")) {
       hint("Train tanks in Vehicles. Tap a unit, then tap the map to send it.");
       hintStage = 2;
-    } else if (hintStage === 2 && army >= 3) {
+    } else if (hintStage === 2 && army >= 3 && secs > 30) {
       hint("Long-press any build button to see what it counters. ⚔ Select army grabs everyone.");
       hintStage = 3;
     } else if (hintStage === 3 && secs > 150) {
@@ -776,6 +786,7 @@ export function createHud(api: HudApi): Hud {
 
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
+  <h3>Openers</h3><p>Every match starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>

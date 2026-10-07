@@ -1,7 +1,7 @@
 // Headless smoke test: serves docs/ (or uses a given URL), boots the game
 // and drives the REAL input paths with taps: construct + place a Fab Plant,
-// queue a Stinger, select it on the canvas and order it around, open an
-// info card, pause/resume. Fails on any console error.
+// pick an opener card, queue a Stinger, select it on the canvas and order
+// it around, open an info card, pause/resume. Fails on any console error.
 // Usage: node tools/smoke.mjs [width] [height] [--shots] [url]
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
@@ -58,7 +58,20 @@ await page.evaluate(() => localStorage.setItem("battledrones.settings", JSON.str
 await page.reload({ waitUntil: "networkidle" });
 await shot("menu");
 await page.tap("#play");
+// the opener cards hold the clock until one is picked
+await page.waitForSelector(".op-card", { timeout: 30000 });
+await page.waitForTimeout(600);
+await shot("openers");
+if ((await world(() => window.__bd.world.tick)) !== 0) fail("the sim ran before an opener was picked");
+// Air Wing leaves the Fab Plant to build by hand below
+await page.locator(".op-card[data-id=airwing]").tap();
 await page.waitForFunction(() => window.__bd?.world?.tick > 5, null, { timeout: 30000 });
+const opened = await world(() => {
+  const w = window.__bd.world;
+  const mine = (k) => [...w.units.values()].filter((u) => u.faction === "blue" && u.kind === k).length;
+  return { airpad: [...w.buildings.values()].some((b) => b.faction === "blue" && b.kind === "airpad"), wasps: mine("wasp"), harvesters: mine("harvester") };
+});
+if (!opened.airpad || opened.wasps !== 3 || opened.harvesters !== 2) fail(`Air Wing opener not applied: ${JSON.stringify(opened)}`);
 await page.waitForTimeout(500);
 await shot("start");
 
@@ -167,7 +180,8 @@ if (await world(() => window.__bd.ctrl.paused)) fail("resume did not unpause");
 
 // 6. the AI must be doing something
 await ff(600);
-const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction === "red").length > 1);
+// (HQ + its opener factory are free: it must have built something since)
+const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction === "red").length > 2);
 if (!aiActive) fail("AI built nothing in the first minutes");
 await shot("late");
 

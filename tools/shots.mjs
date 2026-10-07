@@ -33,6 +33,13 @@ await page.screenshot({ path: `${out}/menu-${tag}.png` });
 
 const spectate = process.env.SPECTATE === "1";
 await page.click(spectate ? "#play-spectate" : "#play");
+if (!spectate) {
+  // pick an opener (OPENER=blitz|industry|airwing, default the first card)
+  await page.waitForSelector(".op-card", { timeout: 30000 });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: `${out}/openers-${tag}.png` });
+  await page.click(process.env.OPENER ? `.op-card[data-id=${process.env.OPENER}]` : ".op-card");
+}
 await page.waitForFunction(() => window.__bd?.world?.tick > 5, null, { timeout: 30000 });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/start-${tag}.png` });

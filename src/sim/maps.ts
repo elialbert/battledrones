@@ -1,5 +1,6 @@
 import { BUILDINGS } from "./balance";
-import { Terrain, type Biome, type World } from "./types";
+import { applyOpener, type OpenerId } from "./openers";
+import { Terrain, type Biome, type Faction, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 
 /**
@@ -305,6 +306,10 @@ function createClassicTerrain(w: World): void {
   for (let ty = 22; ty <= 25; ty++)
     for (let tx = 22; tx <= 25; tx++)
       if (w.terrain[ty * S + tx] === Terrain.Ground) setTerrain(w, tx, ty, Terrain.Scrap);
+  // Side fields on the open western flank (mirrored: red's on the east):
+  // the second field each side expands to once the home field runs dry,
+  // out on the lane that skirts the ridge, so holding it takes an army.
+  for (let ty = 27; ty <= 29; ty++) for (let tx = 3; tx <= 5; tx++) both(tx, ty, Terrain.Scrap);
 }
 
 /**
@@ -314,6 +319,8 @@ function createClassicTerrain(w: World): void {
 export interface MatchOptions {
   /** Match seed for deterministic randomness (see rand.ts). Default: the map's seed. */
   seed?: number;
+  /** Quick-start opener per side (see openers.ts). Default: the classic start. */
+  openers?: Partial<Record<Faction, OpenerId>>;
 }
 
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
@@ -337,6 +344,10 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   // starting harvester just east of each HQ (mirrored: west of red's)
   spawnUnit(w, "harvester", "blue", hx + hs + 1.5, hy + 1.5);
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
+  for (const f of ["blue", "red"] as const) {
+    const o = opts.openers?.[f];
+    if (o) applyOpener(w, f, o);
+  }
   return w;
 }
 

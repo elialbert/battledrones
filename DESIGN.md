@@ -62,7 +62,7 @@ equal, painted procedurally from a seed in `src/sim/maps.ts`:
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
-| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges and one contested field |
+| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges, one contested field, an expansion field out on each flank |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 
@@ -88,7 +88,36 @@ and skirt mud. Air units fly straight over everything.
   Harvesters flee home when shot and auto-mine when built.
 - Each HQ also salvages a trickle of 2 scrap/second, so no side can be left
   permanently broke.
-- Starting stockpile: 600 scrap and one harvester.
+- Starting stockpile: 600 scrap and one harvester, plus the side's opener
+  (below) — so in practice two or three harvesters and a factory.
+
+### Openers (quick start)
+
+Every skirmish opens on three cards and the clock waits for the pick, so
+there is no dead "wait for the first factory" stretch (the old opening had
+a 14 s idle gap and the first combat unit at 0:51):
+
+| Opener | You get | Plays like |
+|---|---|---|
+| **Blitz** | Fab Plant + 3 Stingers + 2 harvesters, −100 scrap | Army on the field at 0:00; raid early |
+| **Industry** | Fab Plant + 3 harvesters + 200 scrap | Out-mine now, out-build later |
+| **Air Wing** | Airpad + 3 Wasps + 2 harvesters | Fast strike drones; dies to Flak |
+
+Blitz and Industry are worth 650 scrap; the Airpad is a side-grade (you
+still want a Fab for anti-air), so Air Wing carries a third Wasp (950). A
+720-game AI-vs-AI opener matrix (every opener pair, both sides, six
+personality pairings, five maps) has them winning 53% / 55% / 42% of
+decided games — Air Wing rewards a human's micro more than the AI's.
+
+`src/sim/openers.ts` places the factory deterministically ~4.5 tiles from
+the HQ toward the map centre (legal, off the roads and the harvest route,
+never walling anything in), with every search done in the side's own
+frame so both sides get mirror-image setups. `createMapWorld(id, { openers: { blue, red } })` applies them for
+tests and the balance harness; without the option the classic start is
+unchanged. The AI picks by personality (Rush → Blitz, Boom → Industry,
+Air Swarm / Skyforce → Air Wing, Balanced → any, Ironclad → Blitz or
+Industry, seeded) and holds its raiders home for the first 45 s. The
+cards name the enemy personality, so the pick can be a counter-pick.
 
 ### Buildings (8)
 
@@ -145,6 +174,11 @@ triangle; air vs anti-air sits across it.
 - **Cover.** Ground units in woods take less damage.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
   each +15% damage, rank 3 self-repairs. Shown as gold chevrons.
+- **Fights you can play.** Combat units carry 1.5× their original HP
+  (Hornets 1.3×, so Flak still beats them; Harvesters, Scouts and
+  buildings unchanged): half of an 8-v-8 Stinger brawl now dies in 7.5 s
+  instead of 5, Wasps vs Flak 4.7 s instead of 2.4 — time to select, retreat
+  or focus-fire on a phone. The duel matrix keeps the counter web below.
 - **Retaliation.** Idle units hit by something out of reach go after the
   attacker, and nearby idle allies join in.
 - Auto-acquire targets in range; attack-move is the default command, with
@@ -175,7 +209,9 @@ Behaviours: build orders with reactive SAM sites and extra factories when
 scrap piles up; forward depots at distant fields; adaptive production
 (flak/raptors vs air it has seen, mortars vs defences, air vs heavy
 armour); defend-the-economy guard squads; threat response against
-intruders; wasp raids that avoid remembered anti-air; staged assault waves
+intruders; home defence (a force at the HQ that outguns the home guard
+recalls the army from raids and waves — openers make 1:00 pushes real);
+wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
 menders escorting the army.
 
@@ -190,12 +226,15 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 ### Match flow
 
 1. Menu: pick a map and difficulty → Play (or Watch AI vs AI).
-2. Both HQs pre-placed, one harvester each (it starts mining at once).
-3. Real-time play until one HQ is destroyed. Pause any time.
-4. Victory/defeat screen with stats → Rematch or Menu.
+2. Opener cards over the frozen battlefield (Blitz / Industry / Air Wing;
+   tap, or keys 1–3). The camera already frames the HQ, its home field and
+   the factory site, clear of the HUD. Spectated AIs pick instantly.
+3. The pick rolls out (factory, units, harvesters already mining) and
+   the clock starts. Real-time play until one HQ is destroyed. Pause any time.
+4. Victory/defeat screen with stats → Rematch (back to the cards) or Menu.
 
-First-time players get four contextual hints (build a Fab, move units,
-counters, tech).
+First-time players get contextual hints (command your opener units — or
+build a Fab on a classic start — then counters, tech).
 
 ## Controls & UI (mobile-first, full-screen)
 

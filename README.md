@@ -8,6 +8,9 @@ installable as a PWA.
 
 **Play it: <https://simonw.github.io/battledrones/>**
 
+- **Pick an opener, play from second one**: every match starts on three
+  cards — Blitz (Fab Plant + 3 Stingers), Industry (a third harvester +
+  scrap) or Air Wing (Airpad + 3 Wasps) — and the AI picks its own.
 - **11 units** across a real counter web: Stinger light tanks, Flak
   Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet
@@ -36,7 +39,7 @@ npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into docs/
 npm run smoke          # headless Playwright test of the real touch flow (against docs/)
 npm run balance duels  # cost-equal unit duel matrix
-npm run balance matches [map]   # AI-vs-AI round robin
+npm run balance matches [map]   # AI-vs-AI round robin (with openers; --classic for none)
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects

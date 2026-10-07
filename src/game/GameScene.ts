@@ -1,9 +1,10 @@
 import Phaser from "phaser";
-import { createAiState, tickAi, type AiState } from "../sim/ai/commander";
+import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/commander";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
 import { canPlaceBuilding, nearestReachableResource } from "../sim/economy";
-import { isVisible } from "../sim/fog";
+import { isVisible, tickFog } from "../sim/fog";
 import { createMapWorld, mapById } from "../sim/maps";
+import { OPENERS, applyOpener, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, FxEvent, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
@@ -26,6 +27,8 @@ import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
+import { showOpenerPicker } from "../ui/openers";
+import { fitZoom, frameCentre, hudInsets, startBox } from "./framing";
 
 const TICK_MS = 1000 / TICK_RATE;
 /** Logical (CSS-pixel) zoom range; the camera zoom also includes the DPR. */
@@ -52,6 +55,8 @@ export class GameScene extends Phaser.Scene {
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
   private ended = false;
+  /** The clock waits for the player's opener pick. */
+  private holdStart = false;
   private simSeconds = 0;
   private lastAlert = -1e9;
   /** Smooth-zoom target and its screen anchor point (game px). */
@@ -99,6 +104,15 @@ export class GameScene extends Phaser.Scene {
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
+    // quick-start openers: spectated AIs take theirs at once; the player picks first
+    const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
+    if (this.blueAi) {
+      openers.blue = pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue");
+      openers.red = pickAiOpener(this.ai.strategy.name, this.world.seed, "red");
+      applyOpener(this.world, "blue", openers.blue);
+      applyOpener(this.world, "red", openers.red);
+    } else this.holdStart = true;
+    tickFog(this.world); // the base shows through the opener cards
 
     const cam = this.cameras.main;
     cam.roundPixels = false;
@@ -146,12 +160,23 @@ export class GameScene extends Phaser.Scene {
       zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => this.simSeconds,
       strategies: this.blueAi
-        ? { blue: this.blueAi.strategy.label, red: this.ai.strategy.label }
+        ? {
+            blue: `${this.blueAi.strategy.label} · ${OPENERS[openers.blue!].name}`,
+            red: `${this.ai.strategy.label} · ${OPENERS[openers.red!].name}`
+          }
         : null,
       enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    if (focus) this.frameStart();
+    if (this.holdStart) {
+      const picker = showOpenerPicker({
+        context: `${mapById(gameMode.mapId).name} · vs ${this.ai.strategy.label} AI (${DIFFICULTY[gameMode.difficulty].label})`,
+        onPick: (id) => this.startWithOpener(id)
+      });
+      this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => picker.destroy());
+    }
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -163,6 +188,43 @@ export class GameScene extends Phaser.Scene {
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
+  }
+
+  /** Open on the player's HQ, home field and factory site, framed clear of the HUD. */
+  private frameStart(): void {
+    const box = startBox(this.world, PLAYER);
+    if (!box) return;
+    const cam = this.cameras.main;
+    const ins = hudInsets();
+    const vw = cam.width / this.dpr;
+    const vh = cam.height / this.dpr;
+    const fit = Phaser.Math.Clamp(fitZoom(box, vw, vh, ins, TILE), 0.4, 0.75);
+    cam.setZoom(this.clampedZoom(fit * this.dpr));
+    this.targetZoom = cam.zoom;
+    const at = frameCentre(box, cam.zoom / this.dpr, vw, vh, ins, TILE);
+    cam.centerOn(at.x, at.y);
+  }
+
+  /** The player picked an opener: both sides get theirs and the clock starts. */
+  private startWithOpener(id: OpenerId): void {
+    if (!this.holdStart) return;
+    const mine = applyOpener(this.world, PLAYER, id);
+    applyOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
+    tickFog(this.world);
+    this.holdStart = false;
+    // roll-out flourish on everything that just arrived
+    const b = mine.buildingId !== null ? this.world.buildings.get(mine.buildingId) : null;
+    if (b) {
+      const c = buildingCenter(b);
+      this.fx.pulse(c.x * TILE, c.y * TILE, 0x7ef29b, BUILDINGS[b.kind].size);
+    }
+    for (const uid of mine.unitIds) {
+      const u = this.world.units.get(uid);
+      if (u) this.fx.pulse(u.x * TILE, u.y * TILE, 0x7ec1ff, 0.8);
+    }
+    sfx.play("build");
+    const o = OPENERS[id];
+    announce({ key: `opener-${id}`, text: `${o.name}!`, sub: o.rollout, tone: "good", priority: 1 });
   }
 
   /** Nudge the smooth-zoom target (zoom buttons, +/- keys, wheel). */
@@ -221,7 +283,7 @@ export class GameScene extends Phaser.Scene {
     this.gest.tick(performance.now());
     this.updateCamera(delta);
 
-    if (!this.ctrl.paused && !this.ended) {
+    if (!this.ctrl.paused && !this.ended && !this.holdStart) {
       this.acc += Math.min(delta, 250);
       while (this.acc >= TICK_MS) {
         this.acc -= TICK_MS;
@@ -626,7 +688,7 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
       if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
       else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);
-      else if (e.key === "p" || e.key === " ") this.hud.togglePause();
+      else if ((e.key === "p" || e.key === " ") && !this.holdStart) this.hud.togglePause();
       else if (e.key === "q") this.ctrl.selectArmy();
       else if (e.key === "Delete") this.ctrl.sellSelected();
     });
