@@ -1,5 +1,7 @@
 import type { Difficulty } from "../sim/ai/commander";
 import type { MatchOptions } from "../sim/maps";
+import { isMutatorId, type MutatorId } from "../sim/rules";
+import type { DailyOp } from "./daily";
 
 /** Skirmish (vs an AI commander) or Last Stand (survive endless waves). */
 export type GameType = "skirmish" | "survival";
@@ -10,8 +12,21 @@ export const gameMode = {
   spectator: false,
   mapId: "riverlands",
   difficulty: "normal" as Difficulty,
-  mode: "skirmish" as GameType
+  mode: "skirmish" as GameType,
+  /** Skirmish mutators picked on the menu (saved with the settings). */
+  mutators: [] as MutatorId[],
+  /** Set while playing the Daily Op (never saved: it overrides map, difficulty and mutators). */
+  daily: null as DailyOp | null
 };
+
+/** The mutators the next match runs with (Last Stand runs classic rules). */
+export function activeMutators(): MutatorId[] {
+  if (gameMode.daily) return gameMode.daily.mutators;
+  return gameMode.mode === "skirmish" ? gameMode.mutators : [];
+}
+
+/** What the end screen's Rematch stores, so the reload replays the same kind of match. */
+export const rematchToken = (): string => (gameMode.daily ? "daily" : "1");
 
 /**
  * The sim setup for the next match, built from the menu choices. A fresh
@@ -19,9 +34,13 @@ export const gameMode = {
  * seeded events varied while each match stays internally deterministic.
  */
 export function matchOptions(): MatchOptions {
+  const mutators = activeMutators();
   return {
     seed: (Math.random() * 0x7fffffff) | 0,
-    ...(gameMode.mode === "survival" ? { survival: { difficulty: gameMode.difficulty } } : {})
+    ...(gameMode.mode === "survival" ? { survival: { difficulty: gameMode.difficulty } } : {}),
+    // mutators, and the Daily Op's date seed (everyone plays the same match)
+    ...(mutators.length ? { mutators } : {}),
+    ...(gameMode.daily ? { seed: gameMode.daily.seed } : {})
   };
 }
 
@@ -36,14 +55,16 @@ export function loadSettings(): void {
     if (s.difficulty === "easy" || s.difficulty === "normal" || s.difficulty === "hard")
       gameMode.difficulty = s.difficulty;
     if (s.mode === "skirmish" || s.mode === "survival") gameMode.mode = s.mode;
+    if (Array.isArray(s.mutators)) gameMode.mutators = s.mutators.filter(isMutatorId);
   } catch {
     /* storage unavailable — defaults are fine */
   }
 }
 
 export function saveSettings(): void {
+  if (gameMode.daily) return; // the Daily Op's map and difficulty are not the player's picks
   try {
-    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode }));
+    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators }));
   } catch {
     /* ignore */
   }

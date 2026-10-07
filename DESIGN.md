@@ -192,8 +192,8 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
-1. Menu: pick a mode (Skirmish | Last Stand), a map and a difficulty → Play
-   (or watch the AI play).
+1. Menu: pick a mode (Skirmish | Last Stand), a map, a difficulty and any
+   mutators → Play (or watch the AI play), or play today's Daily Op.
 2. Both HQs pre-placed, one harvester each (it starts mining at once).
 3. Real-time play until one HQ is destroyed. Pause any time.
 4. The HQ kill plays as a short cinematic, then the after-action report
@@ -285,6 +285,61 @@ best per map and difficulty is saved on the device and shown on the menu
   on Hard and ~18 on Easy; the Normal Balanced AI ~15. Proving Grounds (30k
   scrap in total) is the hardest map; the rich Dune Sea the easiest.
 
+### Career, medals, mutators and the Daily Op
+
+Reasons to come back between matches. Spectated games never count.
+
+- **Medals** (`sim/awards.ts`, pure functions of an end-of-match recap built
+  from the chronicle): ⚡ Lightning War (win < 5:00), 🛡️ Untouchable (win, no
+  building lost), 🔄 Comeback (win after your army fell to ≤ ½ of theirs and
+  800+ behind, after 1:30), 💎 Flawless (win losing ≤ 5 units), 💰 Tycoon (win
+  harvesting 2× theirs), and — in defeat too — 🎖️ Ace (one unit, 9 kills),
+  🗿 Giant Slayer (3 Titans), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
+  (defences kill 30), ☠️ Exterminator (60 kills), 🏚 Wrecking Crew (12
+  buildings); Last Stand 🏰 Holdout (10 waves) and 🗼 Unbreakable (20).
+  Thresholds were calibrated on 40 AI-vs-AI matches so a typical win earns
+  one or two and the rest are goals.
+- **Career** (`game/career.ts`, localStorage `battledrones.career`, pure math
+  + try/catch storage): XP = win 100 / loss 30 (scaled down for losses under
+  5:00) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
+  × difficulty, +25 per medal, +100 for the day's first Daily Op win. Ten
+  ranks — Cadet, Private, Corporal, Sergeant, Lieutenant, Captain, Major,
+  Colonel, General, Marshal (100 … 6,000 XP) — with chevron / bar / star
+  insignia. Three **stars** per map × difficulty: win, win under 8:00, win
+  without losing a building (classic rules only). Wins/losses, medal counts,
+  Last Stand totals (bests stay in `battledrones.laststand`) and the Daily
+  streak. Banked once when the HQ falls (`game/meta.ts settleCareer`).
+- **Menu** (`ui/career.ts`): rank badge with XP bar under the logo (tap: the
+  Career sheet — medals, star grid, Last Stand bests, rank ladder), the Daily
+  Op card, a mutator picker, ☆☆☆ on each map card for the chosen difficulty.
+  Landscape puts these in a column over the key art.
+- **End screen**: a career block heads the after-action report (and the Last
+  Stand screen): XP counts up and the bar fills, a promotion swaps the
+  insignia with a PROMOTED ribbon and glow, medals pop in one by one (NEW on
+  a first), new stars pop, the Daily streak shows. Spectators see each
+  side's medals instead.
+- **Mutators** (`sim/rules.ts`, `World.rules`, via `MatchOptions.mutators`;
+  absent = classic, read through `rulesOf(w)`): ⚡ Blitz (3,000 starting
+  scrap), 💰 Gold Rush (income ×1.5, multiplied on top of the AI's own
+  `incomeMult`), 💥 Glass Cannons (damage ×2), 🔧 Rapid Fab (build progress ×2
+  per tick), ✈️ Air War (no ground combat units, Fab Plants or SAM sites —
+  measured: with SAMs every AI-vs-AI air war drew at 25:00), 🎖️ Veterans
+  (combat units roll out at rank 1), ☀️ Clear Skies (no fog for either side).
+  Skirmish only; both sides obey them (`unitBlocker`/`buildingBlocker` say
+  "Disabled: Air War", the HUD shows ⛔). The AI picks a personality whose
+  plan survives the rules (`strategyFits`: no Rush/Ironclad in Air War) and,
+  in Air War, plays the air-only plan with more bombers and one big wave.
+  Shown in an opening banner, the pause screen and the end screen.
+- **Daily Op** (`game/daily.ts`): the local date hashes into a map, an AI
+  personality, Normal or Hard, two compatible mutators and the match seed —
+  the same match for everyone. Its own rematch, +100 XP for the first win of
+  the day, and a win streak that survives until a whole day passes without
+  a win. No stars (it is always mutated).
+- AI-vs-AI sanity (50 matches each, 25:00 cap): classic 48/50 decisive,
+  median 5.6 min; Blitz 47, Gold Rush 46, Glass Cannons 43, Rapid Fab 48
+  (median 4.2), Veterans 46, Clear Skies 47; Air War 13/20. The next 21
+  Daily Ops all finished (median 4.7 min).
+
 ## Controls & UI (mobile-first, full-screen)
 
 ### Full-screen behavior
@@ -370,6 +425,8 @@ src/
     balance.ts      # every tunable number: units, buildings, terrain, damage table
     maps.ts         # the 5 maps (seeded painter) + createMapWorld
     modes/survival.ts # Last Stand wave director (pure, seeded)
+    rules.ts        # match mutators (World.rules) and their hooks
+    awards.ts       # medals from an end-of-match recap (pure)
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
@@ -382,7 +439,8 @@ src/
     heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
     chronicle.ts    # match recorder + story analysis for the report
     finale.ts       # the cinematic HQ kill
-  ui/         # DOM HUD (hud.ts), after-action report (report.ts), menu styles
+    career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
+  ui/         # DOM HUD (hud.ts), after-action report (report.ts), career UI (career.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```

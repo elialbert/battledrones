@@ -1,0 +1,372 @@
+import { TICK_RATE } from "../sim/balance";
+import { MEDAL_IDS, computeMedals, type MatchRecap, type MedalId } from "../sim/awards";
+import { wavesSurvived } from "../sim/modes/survival";
+import { isMutated, rulesOf, type MutatorId } from "../sim/rules";
+import type { Faction, World } from "../sim/types";
+import { chronicleOf, type Chronicle } from "./chronicle";
+import { today as todayIndex } from "./daily";
+
+/**
+ * The Commander career: XP and ten ranks, medal counts, map stars per
+ * map × difficulty, wins and losses, the Daily Op streak and Last Stand
+ * totals. The math is pure (and unit-tested); storage is one localStorage
+ * key with the same try/catch fallbacks as mode.ts — a blocked browser just
+ * plays without a career. Spectated matches never touch it.
+ */
+
+// ------------------------------------------------------------------ ranks ---
+
+export interface RankDef {
+  name: string;
+  /** Total XP needed to hold this rank. */
+  xp: number;
+}
+
+export const RANKS: RankDef[] = [
+  { name: "Cadet", xp: 0 },
+  { name: "Private", xp: 100 },
+  { name: "Corporal", xp: 300 },
+  { name: "Sergeant", xp: 600 },
+  { name: "Lieutenant", xp: 1000 },
+  { name: "Captain", xp: 1500 },
+  { name: "Major", xp: 2200 },
+  { name: "Colonel", xp: 3100 },
+  { name: "General", xp: 4300 },
+  { name: "Marshal", xp: 6000 }
+];
+
+export interface RankInfo {
+  index: number;
+  name: string;
+  /** XP where this rank starts, and where the next one does (null at the top). */
+  floor: number;
+  next: number | null;
+  nextName: string | null;
+  /** 0..1 through the current rank (1 at the top rank). */
+  progress: number;
+}
+
+export function rankOf(xp: number): RankInfo {
+  let i = 0;
+  while (i + 1 < RANKS.length && xp >= RANKS[i + 1]!.xp) i++;
+  const floor = RANKS[i]!.xp;
+  const nxt = RANKS[i + 1] ?? null;
+  return {
+    index: i,
+    name: RANKS[i]!.name,
+    floor,
+    next: nxt ? nxt.xp : null,
+    nextName: nxt ? nxt.name : null,
+    progress: nxt ? Math.max(0, Math.min(1, (xp - floor) / (nxt.xp - floor))) : 1
+  };
+}
+
+// --------------------------------------------------------------------- XP ---
+
+export const XP = {
+  win: 100,
+  loss: 30,
+  /** A loss pays in full only after this long (no farming by quitting fast). */
+  lossFullSecs: 300,
+  medal: 25,
+  /** Last Stand: per wave survived. */
+  wave: 10,
+  /** First Daily Op win of the day. */
+  dailyWin: 100,
+  difficulty: { easy: 1, normal: 1.5, hard: 2.2 } as Record<string, number>
+};
+
+/** Stars per map × difficulty: win · win under 8:00 · win without losing a building. */
+export const STAR_SECS = 8 * 60;
+export const STAR_LABELS = ["Win", "Win in under 8:00", "Win without losing a building"];
+
+export type GameKind = "skirmish" | "survival";
+
+export interface MatchResult {
+  kind: GameKind;
+  mapId: string;
+  difficulty: string;
+  won: boolean;
+  secs: number;
+  buildingsLost: number;
+  medals: MedalId[];
+  /** Mutators active (no stars). */
+  mutators: MutatorId[];
+  /** Day index when this was the Daily Op, else null. */
+  daily: number | null;
+  /** Last Stand: waves survived. */
+  waves?: number;
+}
+
+export interface XpLine {
+  label: string;
+  xp: number;
+}
+
+const diffLabel = (d: string) => d.charAt(0).toUpperCase() + d.slice(1);
+
+/** The XP breakdown for a result (before the daily bonus, which depends on the career). */
+export function xpLines(r: MatchResult): XpLine[] {
+  const mult = XP.difficulty[r.difficulty] ?? 1;
+  const lines: XpLine[] = [];
+  if (r.kind === "survival") {
+    const waves = r.waves ?? 0;
+    lines.push({ label: `${waves} wave${waves === 1 ? "" : "s"} · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.wave * waves * mult) });
+  } else if (r.won) {
+    lines.push({ label: `Victory · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.win * mult) });
+  } else {
+    const k = Math.max(0.2, Math.min(1, r.secs / XP.lossFullSecs));
+    lines.push({ label: `Defeat · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.loss * mult * k) });
+  }
+  if (r.medals.length > 0)
+    lines.push({ label: `${r.medals.length} medal${r.medals.length === 1 ? "" : "s"}`, xp: XP.medal * r.medals.length });
+  return lines;
+}
+
+/** Star bitmask (bit 0 win, bit 1 fast win, bit 2 no buildings lost) this result earns. */
+export function starsFor(r: MatchResult): number {
+  if (r.kind !== "skirmish" || !r.won || r.mutators.length > 0 || r.daily !== null) return 0;
+  let s = 1;
+  if (r.secs < STAR_SECS) s |= 2;
+  if (r.buildingsLost === 0) s |= 4;
+  return s;
+}
+
+export const starCount = (mask: number): number => (mask & 1) + ((mask >> 1) & 1) + ((mask >> 2) & 1);
+
+// ----------------------------------------------------------------- career ---
+
+export interface CareerData {
+  v: 1;
+  xp: number;
+  wins: number;
+  losses: number;
+  medals: Partial<Record<MedalId, number>>;
+  /** "map:difficulty" → star bitmask. */
+  stars: Record<string, number>;
+  /** "map:difficulty" → skirmish record. */
+  records: Record<string, { w: number; l: number; bestSecs: number | null }>;
+  daily: {
+    /** Day index of the latest Daily Op win (0 = never). */
+    lastWin: number;
+    streak: number;
+    bestStreak: number;
+    wins: number;
+    plays: number;
+  };
+  laststand: { runs: number; waves: number; best: number };
+}
+
+export function emptyCareer(): CareerData {
+  return {
+    v: 1,
+    xp: 0,
+    wins: 0,
+    losses: 0,
+    medals: {},
+    stars: {},
+    records: {},
+    daily: { lastWin: 0, streak: 0, bestStreak: 0, wins: 0, plays: 0 },
+    laststand: { runs: 0, waves: 0, best: 0 }
+  };
+}
+
+export const recordKey = (mapId: string, difficulty: string) => `${mapId}:${difficulty}`;
+
+/** The streak as it stands today: it survives until a whole day passes without a win. */
+export function currentStreak(c: CareerData, day: number): number {
+  return c.daily.lastWin >= day - 1 && c.daily.lastWin > 0 ? c.daily.streak : 0;
+}
+
+export interface Settlement {
+  result: MatchResult;
+  xpBefore: number;
+  xpAfter: number;
+  gained: number;
+  lines: XpLine[];
+  rankBefore: RankInfo;
+  rankAfter: RankInfo;
+  rankedUp: boolean;
+  /** Medals earned this match, and which of them are first-ever. */
+  medals: MedalId[];
+  firstMedals: MedalId[];
+  starsBefore: number;
+  starsAfter: number;
+  /** Daily Op outcome (null if this wasn't one). */
+  daily: { number: number; won: boolean; streak: number; firstWinToday: boolean } | null;
+}
+
+/** Bank a result: pure — returns the new career and what changed. */
+export function applyResult(c0: CareerData, r: MatchResult, day = todayIndex(), opNumber = 0): { career: CareerData; s: Settlement } {
+  const c: CareerData = JSON.parse(JSON.stringify(c0)) as CareerData;
+  const lines = xpLines(r);
+  let daily: Settlement["daily"] = null;
+  if (r.daily !== null) {
+    c.daily.plays++;
+    const firstWinToday = r.won && c.daily.lastWin !== r.daily;
+    if (firstWinToday) {
+      c.daily.streak = c.daily.lastWin === r.daily - 1 ? c.daily.streak + 1 : 1;
+      c.daily.lastWin = r.daily;
+      c.daily.bestStreak = Math.max(c.daily.bestStreak, c.daily.streak);
+      c.daily.wins++;
+      lines.push({ label: "Daily Op", xp: XP.dailyWin });
+    }
+    daily = { number: opNumber, won: r.won, streak: currentStreak(c, day), firstWinToday };
+  }
+  const gained = lines.reduce((s, l) => s + l.xp, 0);
+  const firstMedals = r.medals.filter((m) => !c.medals[m]);
+  for (const m of r.medals) c.medals[m] = (c.medals[m] ?? 0) + 1;
+  const key = recordKey(r.mapId, r.difficulty);
+  const starsBefore = c.stars[key] ?? 0;
+  if (r.kind === "skirmish") {
+    if (r.won) c.wins++;
+    else c.losses++;
+    const rec = c.records[key] ?? { w: 0, l: 0, bestSecs: null };
+    if (r.won) {
+      rec.w++;
+      if (r.mutators.length === 0 && r.daily === null) rec.bestSecs = rec.bestSecs === null ? r.secs : Math.min(rec.bestSecs, r.secs);
+    } else rec.l++;
+    c.records[key] = rec;
+    const add = starsFor(r);
+    if (add) c.stars[key] = starsBefore | add;
+  } else {
+    c.laststand.runs++;
+    c.laststand.waves += r.waves ?? 0;
+    c.laststand.best = Math.max(c.laststand.best, r.waves ?? 0);
+  }
+  const xpBefore = c.xp;
+  c.xp += gained;
+  const rankBefore = rankOf(xpBefore);
+  const rankAfter = rankOf(c.xp);
+  return {
+    career: c,
+    s: {
+      result: r,
+      xpBefore,
+      xpAfter: c.xp,
+      gained,
+      lines,
+      rankBefore,
+      rankAfter,
+      rankedUp: rankAfter.index > rankBefore.index,
+      medals: r.medals,
+      firstMedals,
+      starsBefore,
+      starsAfter: c.stars[key] ?? 0,
+      daily
+    }
+  };
+}
+
+// ---------------------------------------------------------------- storage ---
+
+const KEY = "battledrones.career";
+
+function sanitize(raw: unknown): CareerData {
+  const c = emptyCareer();
+  if (!raw || typeof raw !== "object") return c;
+  const o = raw as Partial<CareerData>;
+  const num = (v: unknown, d = 0) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  c.xp = Math.max(0, num(o.xp));
+  c.wins = num(o.wins);
+  c.losses = num(o.losses);
+  if (o.medals && typeof o.medals === "object")
+    for (const id of MEDAL_IDS) if (num(o.medals[id]) > 0) c.medals[id] = num(o.medals[id]);
+  if (o.stars && typeof o.stars === "object")
+    for (const [k, v] of Object.entries(o.stars)) if (typeof v === "number") c.stars[k] = v & 7;
+  if (o.records && typeof o.records === "object")
+    for (const [k, v] of Object.entries(o.records))
+      if (v && typeof v === "object") c.records[k] = { w: num(v.w), l: num(v.l), bestSecs: typeof v.bestSecs === "number" ? v.bestSecs : null };
+  if (o.daily && typeof o.daily === "object")
+    c.daily = {
+      lastWin: num(o.daily.lastWin),
+      streak: num(o.daily.streak),
+      bestStreak: num(o.daily.bestStreak),
+      wins: num(o.daily.wins),
+      plays: num(o.daily.plays)
+    };
+  if (o.laststand && typeof o.laststand === "object")
+    c.laststand = { runs: num(o.laststand.runs), waves: num(o.laststand.waves), best: num(o.laststand.best) };
+  return c;
+}
+
+export function loadCareer(): CareerData {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return sanitize(raw ? JSON.parse(raw) : null);
+  } catch {
+    return emptyCareer(); // storage blocked or corrupt: play on without a career
+  }
+}
+
+export function saveCareer(c: CareerData): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(c));
+  } catch {
+    /* ignore */
+  }
+}
+
+// ------------------------------------------------------------- settlement ---
+
+/** One side's medal recap from the match chronicle (full information, end of match). */
+export function recapOf(w: World, chronicle: Chronicle, pov: Faction): MatchRecap {
+  const mvp = chronicle.mvp();
+  return {
+    pov,
+    won: w.winner === pov,
+    secs: w.tick / TICK_RATE,
+    stats: { blue: w.factions.blue.stats, red: w.factions.red.stats },
+    samples: chronicle.samples,
+    deaths: chronicle.deaths,
+    bestUnitKills: mvp[pov]?.kills ?? 0,
+    waves: w.survival ? wavesSurvived(w) : null
+  };
+}
+
+/** Medals each side earned (spectator end screens annotate AI-vs-AI games). */
+export function medalsOf(w: World, pov: Faction): MedalId[] {
+  const ch = chronicleOf(w);
+  ch.finish();
+  return computeMedals(recapOf(w, ch, pov));
+}
+
+export interface MatchMeta {
+  pov: Faction;
+  difficulty: string;
+  /** Daily Op day index and number, when this match was the Daily Op. */
+  daily: { day: number; number: number } | null;
+}
+
+const settled = new WeakMap<World, Settlement>();
+
+/**
+ * Bank a finished match in the career (once per world: the scene calls it
+ * when the HQ falls and the end screen asks again for the result).
+ */
+export function settleMatch(w: World, meta: MatchMeta): Settlement {
+  const done = settled.get(w);
+  if (done) return done;
+  const ch = chronicleOf(w);
+  ch.finish();
+  const recap = recapOf(w, ch, meta.pov);
+  const result: MatchResult = {
+    kind: w.survival ? "survival" : "skirmish",
+    mapId: w.mapId,
+    difficulty: meta.difficulty,
+    won: !w.survival && w.winner === meta.pov,
+    secs: Math.round(recap.secs),
+    buildingsLost: w.factions[meta.pov].stats.buildingsLost,
+    medals: computeMedals(recap),
+    mutators: isMutated(w) ? [...rulesOf(w).mutators] : [],
+    daily: meta.daily ? meta.daily.day : null,
+    ...(w.survival ? { waves: recap.waves ?? 0 } : {})
+  };
+  const { career, s } = applyResult(loadCareer(), result, todayIndex(), meta.daily?.number ?? 0);
+  saveCareer(career);
+  settled.set(w, s);
+  return s;
+}
+
+/** The settlement for a world, if it was banked. */
+export const settlementOf = (w: World): Settlement | null => settled.get(w) ?? null;

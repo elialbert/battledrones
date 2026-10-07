@@ -271,6 +271,7 @@ export type FxEvent =
 
 import type { FactionFog } from "./fog";
 import type { SurvivalState, WaveTheme } from "./modes/survival";
+import type { Rules } from "./rules";
 
 export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
 
@@ -303,6 +304,8 @@ export interface World {
   seed: number;
   /** Last Stand (survival mode) wave director state; absent in skirmish. */
   survival?: SurvivalState | null;
+  /** Match mutators (rules.ts); absent = classic rules. Read via rulesOf(w). */
+  rules?: Rules | null;
 }
 
 export type Command =

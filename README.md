@@ -35,6 +35,12 @@ installable as a PWA.
   waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and a Boss
   every fifth wave — from shifting map edges. Call waves early for bonus
   scrap; your best per map and difficulty is saved.
+- **A Commander career**: XP and ten ranks from Cadet to Marshal, 13
+  medals (Lightning War, Comeback, Ace, Giant Slayer…) popping in on the end
+  screen, three stars per map and difficulty, and a **Daily Op** — one seeded
+  match a day, the same for everyone, with a win streak.
+- **Seven mutators** to twist a skirmish for both sides: Blitz, Gold Rush,
+  Glass Cannons, Rapid Fab, Air War, Veterans and Clear Skies.
 - Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
   at device resolution with turrets that track their targets, shadows,
   particles, smooth fog of war — and fully synthesised sound effects.

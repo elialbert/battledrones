@@ -7,6 +7,8 @@ import { GameScene } from "./game/GameScene";
 import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
+import { mountMenuCareer, starsText } from "./ui/career";
+import { dailyOp, today, type DailyOp } from "./game/daily";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -108,6 +110,11 @@ function showMenu(): void {
     <div class="keyart"></div>
     <div class="menu-inner">
       <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
+      <div class="menu-side" id="menuside">
+        <button class="rankbadge" id="rankbadge"></button>
+        <div class="dailyop" id="dailyop"></div>
+        <button class="mutbtn side"></button>
+      </div>
       <p class="sub" id="sub"></p>
       <div class="seg modes" id="gmode">
         <button data-m="skirmish">⚔ Skirmish</button>
@@ -122,6 +129,7 @@ function showMenu(): void {
             <span class="mn">${m.name}</span>
             <span class="mb">${m.size}×${m.size} · ${m.biome}</span>
             <span class="mbest" hidden></span>
+            <span class="mstars" hidden></span>
           </button>`
         ).join("")}
       </div>
@@ -129,6 +137,7 @@ function showMenu(): void {
       <div class="seg" id="diff">
         ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
       </div>
+      <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
       <div class="row">
         <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
@@ -147,8 +156,17 @@ function showMenu(): void {
   setArt();
   landscape.addEventListener("change", setArt);
 
+  // career: rank badge, Daily Op card, mutator picker, map stars (ui/career.ts)
+  const career = mountMenuCareer(menu, {
+    playDaily: (op) => {
+      startDaily(op);
+      void begin(false);
+    },
+    changed: () => saveSettings()
+  });
   const sync = () => {
     const survival = gameMode.mode === "survival";
+    career.sync();
     menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => {
       el.classList.toggle("on", el.dataset.id === gameMode.mapId);
       // Last Stand: each map card shows its best for the chosen difficulty
@@ -156,6 +174,11 @@ function showMenu(): void {
       const rec = survival ? loadBest(el.dataset.id!, gameMode.difficulty) : null;
       badge.hidden = !rec;
       badge.textContent = rec ? `🛡 ${rec.best}` : "";
+      const stars = el.querySelector<HTMLElement>(".mstars")!;
+      const mask = survival ? 0 : career.starsFor(el.dataset.id!);
+      stars.hidden = survival;
+      stars.textContent = starsText(mask);
+      stars.classList.toggle("got", mask > 0);
     });
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
     menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
@@ -224,7 +247,9 @@ function showMenu(): void {
   // "Rematch" from the end screen skips straight back into a game
   let rematch = false;
   try {
-    rematch = sessionStorage.getItem("battledrones.rematch") === "1";
+    const token = sessionStorage.getItem("battledrones.rematch");
+    rematch = token === "1" || token === "daily";
+    if (token === "daily") startDaily(dailyOp(today()));
     sessionStorage.removeItem("battledrones.rematch");
   } catch {
     /* ignore */
@@ -235,6 +260,14 @@ function showMenu(): void {
     // audio needs a gesture: unlock on the first touch
     window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
   }
+}
+
+/** Point the next match at the Daily Op (not saved: the player's own picks stay). */
+function startDaily(op: DailyOp): void {
+  gameMode.daily = op;
+  gameMode.mapId = op.mapId;
+  gameMode.difficulty = op.difficulty;
+  gameMode.mode = "skirmish";
 }
 
 showMenu();

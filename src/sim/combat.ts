@@ -1,6 +1,7 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
 import { moveUnitToward } from "./movement";
 import type { ArmorClass, Building, Domain, Faction, TargetDomain, Unit, World } from "./types";
+import { rulesOf } from "./rules";
 import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
 
 type Attacker = { unit: Unit } | { building: Building };
@@ -173,7 +174,7 @@ function fire(w: World, attacker: Attacker, targetId: number, incidents: Inciden
     attacker.building.facing = angle;
   }
   const rank = isUnit ? attacker.unit.rank : 0;
-  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage);
+  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage) * rulesOf(w).dmgMult;
   const dmgType = stats.dmgType ?? "kinetic";
   const fromAir = isUnit && unitDomain(attacker.unit) === "air";
   const vsAir = t.domain === "air" ? stats.airMult ?? 1 : 1;

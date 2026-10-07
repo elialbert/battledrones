@@ -25,6 +25,7 @@ import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { Finale, finaleZoom, freeAreaOffset } from "./finale";
 import { HeroPresenter } from "./hero-fx";
+import { aiSeed, aiStrategy, announceRules, settleCareer } from "./meta";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
@@ -112,9 +113,11 @@ export class GameScene extends Phaser.Scene {
         gfx: this.add.graphics().setDepth(10.5)
       });
     // spectating pits two Normal commanders against each other
-    this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
+    // mutators / the Daily Op decide which personalities can play (meta.ts)
+    const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
+    this.ai = createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
-      this.blueAi = createAiState(undefined, "normal", (Math.random() * 1e9) | 0);
+      this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
@@ -180,6 +183,7 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    window.setTimeout(() => announceRules(this.world), 1200); // Daily Op / mutators banner
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -279,6 +283,7 @@ export class GameScene extends Phaser.Scene {
       // Last Stand always ends in defeat; a new record still gets the fanfare
       const run = this.survival && !gameMode.spectator ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
       this.chronicle.finish();
+      settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
       this.playFinale(() => {
         if (!gameMode.spectator) sfx.play(won || run?.isNew ? "victory" : "defeat");
       });

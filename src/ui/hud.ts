@@ -11,6 +11,8 @@ import { onAnnounce, type Announcement } from "../game/announce";
 import { createSurvivalHud } from "./survival";
 import { NAMED_RANK, heroLine, killsLabel, stars } from "../game/heroes";
 import { showReport } from "./report";
+import { markBanned, pauseRulesHtml } from "./career";
+import { rematchToken } from "../game/mode";
 
 export interface HudApi {
   world: World;
@@ -504,6 +506,7 @@ export function createHud(api: HudApi): Hud {
       <div class="panel">
         <h1>PAUSED</h1>
         <p class="time">${surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
+        ${pauseRulesHtml(w)}
         <button class="cta" id="p-resume">▶ Resume</button>
         <button class="cta alt" id="p-help">How to play</button>
         <button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>
@@ -622,6 +625,7 @@ export function createHud(api: HudApi): Hud {
       el.classList.toggle("ready", !!(pendingThis && p.ready));
       el.classList.toggle("placing", ctrl.placing === kind);
       lock.hidden = !blocked;
+      markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       if (pendingThis && !p.ready) {
         prog.hidden = false;
         const total = BUILDINGS[kind].buildTime * TICK_RATE;
@@ -649,6 +653,7 @@ export function createHud(api: HudApi): Hud {
       el.classList.toggle("locked", !!blocked);
       el.classList.toggle("poor", fs.scrap < UNITS[kind].cost);
       lock.hidden = !blocked;
+      markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       badge.hidden = queued === 0;
       if (badge.textContent !== String(queued)) badge.textContent = String(queued);
       prog.hidden = headProg < 0;
@@ -748,7 +753,7 @@ export function createHud(api: HudApi): Hud {
   function showEnd(winner: Faction): void {
     const rematch = () => {
       try {
-        sessionStorage.setItem("battledrones.rematch", "1");
+        sessionStorage.setItem("battledrones.rematch", rematchToken());
       } catch {
         /* ignore */
       }
@@ -798,6 +803,7 @@ export function createHud(api: HudApi): Hud {
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
+  <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00, win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>

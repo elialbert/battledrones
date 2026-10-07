@@ -5,6 +5,8 @@ import { THEME_ICONS, finishRun, fmtSecs, loadBest } from "../game/survival";
 import { MAPS } from "../sim/maps";
 import { chronicleOf } from "../game/chronicle";
 import { mvpCard } from "./report";
+import { careerBlockHtml, mountCareerBlock } from "./career";
+import { settlementOf } from "../game/career";
 
 /**
  * Last Stand HUD pieces, wired into hud.ts by a few hook lines: the wave
@@ -126,6 +128,9 @@ export function createSurvivalHud(
     // the defender's hero of the run, fallen or standing
     const hero = chronicleOf(w).mvp()[s.defender];
     const mvp = hero ? `<div class="aar-mvps">${mvpCard(w, hero, opts.spectator ? "AI's MVP" : "Your MVP", "main")}</div>` : "";
+    // career: XP for the waves held, Last Stand medals (ui/career.ts)
+    const settled = opts.spectator ? null : settlementOf(w);
+    const career = settled ? `<div class="ls-career">${careerBlockHtml(settled, "")}</div>` : "";
     endEl.hidden = false;
     endEl.innerHTML = `
       <div class="panel laststand-end${r.isNew ? " record" : ""}">
@@ -134,6 +139,7 @@ export function createSurvivalHud(
         <div class="ls-score"><b>${r.waves}</b><span>wave${r.waves === 1 ? "" : "s"} survived</span></div>
         ${bestLine}
         ${mvp}
+        ${career}
         <table>
           <tr><td>Enemies destroyed</td><td>${st.unitsKilled}</td></tr>
           <tr><td>Units lost</td><td>${st.unitsLost}</td></tr>
@@ -146,6 +152,8 @@ export function createSurvivalHud(
       </div>`;
     endEl.querySelector("#again")!.addEventListener("click", onAgain);
     endEl.querySelector("#menu")!.addEventListener("click", onMenu);
+    const careerEl = endEl.querySelector<HTMLElement>(".ls-career");
+    if (careerEl && settled) mountCareerBlock(careerEl, settled, 700);
   }
 
   function pauseLine(): string {
