@@ -1,7 +1,8 @@
 import { BUILDINGS, UNITS } from "../sim/balance";
-import { canPlaceBuilding } from "../sim/economy";
+import { placementBlocker, snapPlacement } from "../sim/placement";
 import type { BuildingKind, Command, Faction, World } from "../sim/types";
 import { buildingAtTile, isResource, tileIndex } from "../sim/world";
+import { Squads } from "./squads";
 
 export const PLAYER: Faction = "blue";
 
@@ -25,6 +26,12 @@ export class Controller {
   spectator = false;
   paused = false;
   lastFeedback: TapFeedback = null;
+  /** Where the placement ghost sits (top-left tile) while placing. */
+  placeAt: { tx: number; ty: number } | null = null;
+  /** A placement attempt that failed, for the ghost shake (the scene consumes it). */
+  denied: { reason: string; tx: number; ty: number } | null = null;
+  /** Three saved control groups (squad chips, keys 1–3). */
+  readonly squads = new Squads(PLAYER);
   private queue: Command[] = [];
 
   constructor(public world: World) {}
@@ -48,6 +55,8 @@ export class Controller {
       this.selectedBuilding = null;
     if (this.placing && this.world.factions[PLAYER].pending?.kind !== this.placing)
       this.placing = null;
+    if (!this.placing) this.placeAt = null;
+    this.squads.prune(this.world);
   }
 
   selectUnits(ids: number[]): void {
@@ -70,6 +79,57 @@ export class Controller {
     this.selectUnits(ids);
   }
 
+  /** Combat units with no orders (sitting at home, or done with their last order). */
+  idleArmy(): number[] {
+    return [...this.world.units.values()]
+      .filter((u) => u.faction === PLAYER && u.kind !== "harvester" && u.order.type === "idle")
+      .map((u) => u.id);
+  }
+
+  /** Save the current unit selection as squad i. Returns how many were saved. */
+  assignSquad(i: number): number {
+    return this.squads.assign(i, this.selectedUnits, this.world);
+  }
+
+  /** Select squad i's living members. Returns how many. */
+  selectSquad(i: number): number {
+    const ids = this.squads.ids(i, this.world);
+    if (ids.length > 0) this.selectUnits(ids);
+    return ids.length;
+  }
+
+  // ----------------------------------------------------------- placement --
+
+  /** Why the ghost can't be built where it sits, or null when it can. */
+  placementProblem(): string | null {
+    if (!this.placing || !this.placeAt) return null;
+    return placementBlocker(this.world, PLAYER, this.placing, this.placeAt.tx, this.placeAt.ty);
+  }
+
+  /** Move the ghost to (tx, ty), nudged onto a valid spot a tile away if that's all it takes. */
+  movePlacement(tx: number, ty: number, snap = true): void {
+    if (!this.placing) return;
+    this.placeAt = snap ? snapPlacement(this.world, PLAYER, this.placing, tx, ty) : { tx, ty };
+  }
+
+  /** Build the ghost where it sits. On failure, records why in `denied`. */
+  commitPlacement(): boolean {
+    const kind = this.placing;
+    const at = this.placeAt;
+    if (!kind || !at || this.spectator) return false;
+    const why = placementBlocker(this.world, PLAYER, kind, at.tx, at.ty);
+    if (why) {
+      this.denied = { reason: why, tx: at.tx, ty: at.ty };
+      return false;
+    }
+    const size = BUILDINGS[kind].size;
+    this.enqueue({ type: "placeBuilding", faction: PLAYER, tx: at.tx, ty: at.ty });
+    this.placing = null;
+    this.placeAt = null;
+    this.lastFeedback = { kind: "place", x: at.tx + size / 2, y: at.ty + size / 2 };
+    return true;
+  }
+
   /** Player tapped world position (wx, wy in tile units). */
   tapWorld(wx: number, wy: number, hit: TapHit): void {
     const w = this.world;
@@ -81,14 +141,10 @@ export class Controller {
       return;
     }
     if (this.placing) {
+      // one-click placement (mouse): the ghost goes where you click and builds if it can
       const size = BUILDINGS[this.placing].size;
-      const tx = Math.round(wx - size / 2);
-      const ty = Math.round(wy - size / 2);
-      if (canPlaceBuilding(w, PLAYER, this.placing, tx, ty)) {
-        this.enqueue({ type: "placeBuilding", faction: PLAYER, tx, ty });
-        this.placing = null;
-        this.lastFeedback = { kind: "place", x: tx + size / 2, y: ty + size / 2 };
-      }
+      this.placeAt = { tx: Math.round(wx - size / 2), ty: Math.round(wy - size / 2) };
+      this.commitPlacement();
       return;
     }
 

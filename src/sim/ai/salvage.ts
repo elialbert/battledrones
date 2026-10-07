@@ -1,0 +1,130 @@
+import { BUILDINGS, ECONOMY, UNITS } from "../balance";
+import { isVisible, knownBuildings } from "../fog";
+import type { Building, Command, Faction, Unit, World, Wreck } from "../types";
+import { distToBuilding } from "../world";
+
+/**
+ * The commander's salvage sweeps (salvage.ts has the rules). It plays by the
+ * same fog as everyone: only wrecks on tiles it can see count. Never feeds
+ * units into the enemy for loot: a wreck is only swept when no visible armed
+ * enemy is near it, no known enemy turret covers it, and nothing of ours
+ * near it has been shot at for a few seconds (the fight there is over).
+ */
+
+/** Idle ground units sweep cool wrecks within this many tiles of themselves. */
+export const SWEEP_RADIUS = 8;
+/** Harvesters carrying less than this divert to a wreck within HARVESTER_DIVERT tiles. */
+const HARVESTER_CARGO = ECONOMY.harvesterCapacity / 2;
+const HARVESTER_DIVERT = 3;
+/** Visible armed enemies this close to a wreck make it bait, not loot. */
+const DANGER_RADIUS = 7;
+/** Our units/buildings this close to a wreck that were hit this recently mean the fight isn't over. */
+const CALM_RADIUS = 8;
+const CALM_TICKS = 50;
+/** Most army units sent sweeping per decision pass (the rest keep their posts). */
+const MAX_SWEEPERS = 4;
+/** Don't chase a wreck that will burn out before a unit can plausibly get there. */
+const MIN_TTL = 40;
+
+export interface SalvageContext {
+  army: Unit[];
+  harvesters: Unit[];
+  buildings: Building[];
+  /** Units already given orders this decision pass (updated in place). */
+  used: Set<number>;
+  /** A real attack on the base is under way: the army stays put (harvesters may still divert). */
+  threatened: boolean;
+  /** Assault waves pick wrecks up by driving over them; only harvesters divert. */
+  assault: boolean;
+}
+
+/** Orders that send idle ground units (and nearly-empty harvesters) to scoop up nearby wrecks. */
+export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Command[] {
+  const cmds: Command[] = [];
+  const loot = w.wrecks.filter(
+    (r) => r.hot <= 0 && r.ttl > MIN_TTL && isVisible(w, faction, Math.floor(r.x), Math.floor(r.y))
+  );
+  if (loot.length === 0) return cmds;
+
+  const enemies: Unit[] = [];
+  for (const u of w.units.values())
+    if (
+      u.faction !== faction &&
+      UNITS[u.kind].dps > 0 &&
+      UNITS[u.kind].targets !== "air" &&
+      isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))
+    )
+      enemies.push(u);
+  const defences = knownBuildings(w, faction).filter((kb) => {
+    const st = BUILDINGS[kb.kind];
+    return st.dps > 0 && st.targets !== "air";
+  });
+  const safe = (r: Wreck): boolean => {
+    for (const e of enemies) if (Math.hypot(e.x - r.x, e.y - r.y) <= DANGER_RADIUS) return false;
+    for (const kb of defences) {
+      const st = BUILDINGS[kb.kind];
+      const d = Math.hypot(kb.tx + st.size / 2 - r.x, kb.ty + st.size / 2 - r.y) - st.size / 2;
+      if (d <= st.range + 2) return false;
+    }
+    for (const u of ctx.army)
+      if (w.tick - u.damagedTick < CALM_TICKS && Math.hypot(u.x - r.x, u.y - r.y) <= CALM_RADIUS) return false;
+    for (const h of ctx.harvesters)
+      if (w.tick - h.damagedTick < CALM_TICKS && Math.hypot(h.x - r.x, h.y - r.y) <= CALM_RADIUS) return false;
+    for (const b of ctx.buildings)
+      if (w.tick - b.damagedTick < CALM_TICKS && distToBuilding(b, r.x, r.y) <= CALM_RADIUS) return false;
+    return true;
+  };
+  const claimed = new Set<number>();
+  const send = (u: Unit, r: Wreck) => {
+    claimed.add(r.id);
+    ctx.used.add(u.id);
+    // attack-move: a sweeper still answers anything that shows up on the way
+    cmds.push({ type: u.kind === "harvester" ? "move" : "attackMove", faction, unitIds: [u.id], x: r.x, y: r.y });
+  };
+  // richest wrecks first (ties: oldest), each to the nearest free sweeper
+  const ranked = loot.filter(safe).sort((a, b) => b.value - a.value || a.ttl - b.ttl);
+  if (ranked.length === 0) return cmds;
+
+  // nearly-empty harvesters on their way out (or digging) grab a wreck that's right there
+  for (const h of ctx.harvesters) {
+    if (ctx.used.has(h.id) || h.cargo >= HARVESTER_CARGO || w.tick - h.damagedTick < CALM_TICKS) continue;
+    const o = h.order;
+    if (!(o.type === "idle" || (o.type === "harvest" && (o.phase === "toField" || o.phase === "harvesting"))))
+      continue;
+    let best: Wreck | null = null;
+    let bestD = HARVESTER_DIVERT;
+    for (const r of ranked) {
+      if (claimed.has(r.id)) continue;
+      const d = Math.hypot(r.x - h.x, r.y - h.y);
+      if (d < bestD) {
+        bestD = d;
+        best = r;
+      }
+    }
+    if (best) send(h, best);
+  }
+
+  if (ctx.threatened || ctx.assault) return cmds;
+  const sweepers = ctx.army.filter(
+    (u) => !ctx.used.has(u.id) && u.order.type === "idle" && UNITS[u.kind].domain === "ground"
+  );
+  let sent = 0;
+  for (const r of ranked) {
+    if (sent >= MAX_SWEEPERS) break;
+    if (claimed.has(r.id)) continue;
+    let best: Unit | null = null;
+    let bestD = SWEEP_RADIUS;
+    for (const u of sweepers) {
+      if (ctx.used.has(u.id)) continue;
+      const d = Math.hypot(u.x - r.x, u.y - r.y);
+      if (d < bestD) {
+        bestD = d;
+        best = u;
+      }
+    }
+    if (!best) continue;
+    send(best, r);
+    sent++;
+  }
+  return cmds;
+}

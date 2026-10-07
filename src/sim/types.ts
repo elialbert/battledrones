@@ -106,6 +106,8 @@ export interface Unit {
   xp: number;
   /** Veterancy rank 0–3 (derived from xp); boosts damage. */
   rank: number;
+  /** Enemy units and buildings this unit has destroyed. */
+  kills: number;
 }
 
 export interface QueueItem {
@@ -144,7 +146,11 @@ export interface FactionStats {
   unitsLost: number;
   unitsKilled: number;
   buildingsLost: number;
+  /** Enemy buildings destroyed (by anything this faction owns). */
+  buildingsKilled: number;
   scrapHarvested: number;
+  /** Scrap collected from battlefield wrecks (salvage.ts). */
+  scrapSalvaged: number;
 }
 
 export interface FactionState {
@@ -196,10 +202,291 @@ export type FxEvent =
   | { type: "heal"; x: number; y: number; tx: number; ty: number; sourceId: number; targetId: number }
   | { type: "built"; faction: Faction; id: number }
   | { type: "sold"; id: number }
-  | { type: "hit"; faction: Faction; x: number; y: number; building: boolean }
-  | { type: "rankUp"; id: number };
+  | {
+      type: "hit";
+      /** Victim's faction, id and position. */
+      faction: Faction;
+      id: number;
+      x: number;
+      y: number;
+      building: boolean;
+      /** Who dealt the damage (may already be dead next tick). */
+      attackerId: number;
+    }
+  | { type: "rankUp"; id: number }
+  | {
+      /**
+       * Something was destroyed. Emitted once per death alongside the
+       * visual "explosion" event, with everything feedback, stats and
+       * awards need (the entity is already gone from the world).
+       */
+      type: "death";
+      id: number;
+      /** The victim's faction; the kill is credited to the other one. */
+      faction: Faction;
+      unitKind: UnitKind | null;
+      buildingKind: BuildingKind | null;
+      x: number;
+      y: number;
+      air: boolean;
+      /** Scrap value of what died (HQs count 500). */
+      value: number;
+      /** Killer unit/building id if it is still alive this tick, else null. */
+      killerId: number | null;
+      /** The killer's unit kind, when the killer is a living unit. */
+      killerKind: UnitKind | null;
+      /** Victim's veterancy rank and kill count at death (0 for buildings). */
+      rank: number;
+      kills: number;
+    }
+  | {
+      /** A harvester started unloading `amount` scrap at a drop-off. */
+      type: "deposit";
+      faction: Faction;
+      id: number;
+      x: number;
+      y: number;
+      amount: number;
+    }
+  | {
+      /** Last Stand: wave `wave` lands in `eta` ticks at (x, y), entering from `dir`. */
+      type: "waveIncoming";
+      wave: number;
+      theme: WaveTheme;
+      name: string;
+      x: number;
+      y: number;
+      dir: string;
+      eta: number;
+      /** Scrap paid because the defender called this wave early (0 if not). */
+      early: number;
+    }
+  | { type: "waveSpawned"; wave: number; theme: WaveTheme; name: string; x: number; y: number; count: number }
+  | {
+      /** Last Stand: every wave unit is dead; the defender got `bonus` scrap. */
+      type: "waveCleared";
+      wave: number;
+      bonus: number;
+      next: string;
+      nextTheme: WaveTheme;
+    }
+  | {
+      /** A ground unit scooped up a wreck: `value` scrap (after incomeMult) went to `faction`. */
+      type: "salvage";
+      faction: Faction;
+      x: number;
+      y: number;
+      value: number;
+      wreckId: number;
+      /** The collecting unit (or the building placed on top of the wreck). */
+      collectorId: number;
+    }
+  | {
+      /**
+       * A commander calldown was fired (powers.ts). Public: both sides see
+       * the telegraph through the fog. It lands at `landTick`.
+       */
+      type: "calldown";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      landTick: number;
+    }
+  | {
+      /**
+       * A calldown landed: one per Barrage shell; the EMP pulse; the Drop
+       * Pod touching down (`unitIds` = its crew); the Sky Hammer strike.
+       * `hits` = enemy units and buildings it damaged or stunned.
+       */
+      type: "calldownImpact";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      hits: number;
+      unitIds: number[];
+    }
+  | {
+      /** EMP: these entities (of `faction`) can't move, fire or produce until `until`. */
+      type: "stun";
+      faction: Faction;
+      ids: number[];
+      x: number;
+      y: number;
+      until: number;
+    }
+  | {
+      /** A power just came online for `faction` (the Sky Hammer at 6:00). */
+      type: "powerOnline";
+      faction: Faction;
+      power: PowerKind;
+    }
+  | {
+      /**
+       * An Uplink changed hands (objectives.ts): `owner` took it (from
+       * neutral), or `owner` is null when `prev` lost it to a neutralising
+       * push by `by`. Public: both sides see it.
+       */
+      type: "uplinkFlip";
+      id: number;
+      x: number;
+      y: number;
+      owner: Faction | null;
+      prev: Faction | null;
+      by: Faction;
+    }
+  | {
+      /** `faction` started pushing an Uplink's capture bar its way (fires once per push). */
+      type: "uplinkContest";
+      id: number;
+      x: number;
+      y: number;
+      faction: Faction;
+      /** Owner at the moment the push began. */
+      owner: Faction | null;
+    }
+  | {
+      /** A supply crate was announced (public, both sides): it lands at `landTick`. */
+      type: "crateIncoming";
+      id: number;
+      x: number;
+      y: number;
+      reward: CrateReward;
+      landTick: number;
+      /** Which drop of the match (0 = the first); both crates of a drop share it. */
+      drop: number;
+    }
+  | { type: "crateLanded"; id: number; x: number; y: number; reward: CrateReward }
+  | {
+      /**
+       * `faction` claimed a crate. `amount`: scrap or charge gained, units
+       * promoted or healed; `unitIds`: the units it affected (or the one it
+       * delivered).
+       */
+      type: "crateClaimed";
+      id: number;
+      x: number;
+      y: number;
+      faction: Faction;
+      collectorId: number;
+      reward: CrateReward;
+      amount: number;
+      unitIds: number[];
+      /** Scrap credited (the scrap reward, or the fallback when a kit had nothing to work on). */
+      scrap: number;
+    }
+  | { type: "crateExpired"; id: number; x: number; y: number };
+
+/**
+ * A capturable Uplink relay (objectives.ts). Not a building: nothing
+ * occupies its tiles and nothing can shoot it, so combat never sees it.
+ */
+export interface Uplink {
+  id: number;
+  /** Centre of the capture zone, in tiles. */
+  x: number;
+  y: number;
+  owner: Faction | null;
+  /** Capture bar: −100 (red holds it) … 0 (neutral) … +100 (blue holds it). */
+  progress: number;
+  /** Who is pushing the bar right now (null: nobody, or contested). */
+  pushing: Faction | null;
+  /** Both sides are inside the zone (the bar is frozen). */
+  contested: boolean;
+}
+
+/** What a supply crate holds (the same for both crates of a drop: fair). */
+export type CrateReward = "scrap" | "veterans" | "repair" | "charge" | "unit";
+
+export interface Crate {
+  id: number;
+  x: number;
+  y: number;
+  reward: CrateReward;
+  drop: number;
+  /** Announced at, lands (claimable from) at, and burns out at, in ticks. */
+  announcedTick: number;
+  landTick: number;
+  expireTick: number;
+}
+
+export interface ObjectiveState {
+  uplinks: Uplink[];
+  /** Announced or landed crates not yet claimed or expired. */
+  crates: Crate[];
+  /** Supply-drop sites (tiles, blue-side; each drop lands a crate here and at the mirror). Empty = no drops. */
+  dropSites: { x: number; y: number }[];
+  /** Drops announced so far (the next drop's index). */
+  drops: number;
+  /** Index into `dropSites` of the last drop (the next one lands elsewhere). */
+  lastSite: number;
+  /** Per side: scrap from Uplinks and crates, captures, crates claimed. */
+  stats: Record<Faction, { uplinkScrap: number; crateScrap: number; captures: number; crates: number }>;
+}
+
+/**
+ * What a destroyed combat unit leaves behind (salvage.ts): a burning hull
+ * worth scrap to whichever side's ground unit reaches it first. Wrecks are
+ * pure loot: they never block movement or placement.
+ */
+export interface Wreck {
+  /** The dead unit's id (ids are never reused, so this is unique). */
+  id: number;
+  kind: UnitKind;
+  /** Whose unit it was (the renderer tints the hull; anyone may salvage it). */
+  faction: Faction;
+  /** Resting position (tiles): where it died, or nudged onto passable ground. */
+  x: number;
+  y: number;
+  /** Hull facing at death, radians clockwise from North. */
+  facing: number;
+  /** Scrap it is worth before the collector's incomeMult. */
+  value: number;
+  /** Ticks left before it burns out. */
+  ttl: number;
+  /** Ticks left while it is still too hot to salvage. */
+  hot: number;
+}
+
+/** Commander calldowns (powers.ts): three on the Command meter plus the late-game Sky Hammer. */
+export type PowerKind = "barrage" | "emp" | "droppod" | "hammer";
+
+/** A calldown in flight: telegraphed from `startTick`, landing at `landTick`. */
+export interface Calldown {
+  id: number;
+  faction: Faction;
+  power: PowerKind;
+  x: number;
+  y: number;
+  radius: number;
+  startTick: number;
+  landTick: number;
+  /** Barrage: where and when each shell lands (seeded scatter). */
+  shells: { x: number; y: number; tick: number }[];
+}
+
+export interface PowerState {
+  /** Command meter per side, 0–POWERS.meterMax. */
+  meter: Record<Faction, number>;
+  /** Tick each power is next usable, per side (the Sky Hammer starts locked). */
+  readyAt: Record<Faction, Record<PowerKind, number>>;
+  /** Telegraphed calldowns not yet resolved (public information). */
+  active: Calldown[];
+  /** EMP'd entity id → tick the stun wears off. */
+  stunned: Map<number, number>;
+  /** Calldowns fired per side and power (stats). */
+  fired: Record<Faction, Record<PowerKind, number>>;
+}
 
 import type { FactionFog } from "./fog";
+import type { SurvivalState, WaveTheme } from "./modes/survival";
+import type { Rules } from "./rules";
+import type { OpsState } from "./ops";
 
 export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
 
@@ -216,6 +503,12 @@ export interface World {
   units: Map<number, Unit>;
   buildings: Map<number, Building>;
   projectiles: Projectile[];
+  /** Salvageable wrecks on the field, oldest first. */
+  wrecks: Wreck[];
+  /** Commander meters, cooldowns, calldowns in flight and EMP stuns (powers.ts). */
+  powers: PowerState;
+  /** Map objectives: Uplink relays and supply drops (objectives.ts). Empty unless the match enables them. */
+  objectives: ObjectiveState;
   factions: Record<Faction, FactionState>;
   /** null while the match runs; the winning faction once an HQ dies. */
   winner: Faction | null;
@@ -225,6 +518,17 @@ export interface World {
   /** Map metadata for the renderer. */
   mapId: string;
   biome: Biome;
+  /**
+   * Per-match seed. All sim randomness must derive from this (see rand.ts),
+   * never Math.random, so a match replays identically from its commands.
+   */
+  seed: number;
+  /** Last Stand (survival mode) wave director state; absent in skirmish. */
+  survival?: SurvivalState | null;
+  /** Match mutators (rules.ts); absent = classic rules. Read via rulesOf(w). */
+  rules?: Rules | null;
+  /** Ops campaign scenario state (ops.ts); absent in skirmish and Last Stand. */
+  ops?: OpsState | null;
 }
 
 export type Command =
@@ -239,4 +543,7 @@ export type Command =
   | { type: "cancelBuilding"; faction: Faction }
   | { type: "placeBuilding"; faction: Faction; tx: number; ty: number }
   | { type: "sell"; faction: Faction; buildingId: number }
-  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number };
+  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
+  /** Last Stand: bring the next wave in now for a scrap bonus. */
+  | { type: "callWave"; faction: Faction }
+  | { type: "calldown"; faction: Faction; power: PowerKind; x: number; y: number };

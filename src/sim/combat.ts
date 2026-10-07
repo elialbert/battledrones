@@ -1,6 +1,9 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
 import { moveUnitToward } from "./movement";
+import { isStunned } from "./powers";
+import { leaveWreck } from "./salvage";
 import type { ArmorClass, Building, Domain, Faction, TargetDomain, Unit, World } from "./types";
+import { rulesOf } from "./rules";
 import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
 
 type Attacker = { unit: Unit } | { building: Building };
@@ -111,7 +114,7 @@ function applyDamage(
     u.damagedTick = w.tick;
     u.lastAttackerId = attackerId;
     incidents.push({ victimId: id, attackerId });
-    w.fx.push({ type: "hit", faction: u.faction, x: u.x, y: u.y, building: false });
+    w.fx.push({ type: "hit", faction: u.faction, id, x: u.x, y: u.y, building: false, attackerId });
     return;
   }
   const b = w.buildings.get(id);
@@ -121,7 +124,7 @@ function applyDamage(
     b.lastAttackerId = attackerId;
     incidents.push({ victimId: id, attackerId });
     const c = buildingCenter(b);
-    w.fx.push({ type: "hit", faction: b.faction, x: c.x, y: c.y, building: true });
+    w.fx.push({ type: "hit", faction: b.faction, id, x: c.x, y: c.y, building: true, attackerId });
   }
 }
 
@@ -153,6 +156,35 @@ function splash(
     }
 }
 
+/**
+ * Splash damage from outside the weapon loop (commander calldowns): the same
+ * falloff, armour and kill credit as a shell from `attackerId`. Returns how
+ * many enemies it hit.
+ */
+export function areaBlast(
+  w: World,
+  faction: Faction,
+  x: number,
+  y: number,
+  radius: number,
+  damage: number,
+  dmgType: keyof typeof DAMAGE_VS,
+  targets: TargetDomain,
+  attackerId: number
+): number {
+  const incidents: Incident[] = [];
+  splash(w, faction, x, y, radius, damage, dmgType, targets, attackerId, incidents);
+  retaliate(w, incidents);
+  return incidents.length;
+}
+
+/** Raw damage to listed entities (the Sky Hammer), with the usual hit events and kill credit. */
+export function strikeDamage(w: World, hits: { id: number; damage: number }[], attackerId: number): void {
+  const incidents: Incident[] = [];
+  for (const h of hits) applyDamage(w, h.id, h.damage, attackerId, incidents);
+  retaliate(w, incidents);
+}
+
 function fire(w: World, attacker: Attacker, targetId: number, incidents: Incident[]): void {
   const isUnit = "unit" in attacker;
   const holder = isUnit ? attacker.unit : attacker.building;
@@ -173,7 +205,7 @@ function fire(w: World, attacker: Attacker, targetId: number, incidents: Inciden
     attacker.building.facing = angle;
   }
   const rank = isUnit ? attacker.unit.rank : 0;
-  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage);
+  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage) * rulesOf(w).dmgMult;
   const dmgType = stats.dmgType ?? "kinetic";
   const fromAir = isUnit && unitDomain(attacker.unit) === "air";
   const vsAir = t.domain === "air" ? stats.airMult ?? 1 : 1;
@@ -276,6 +308,10 @@ export function tickCombat(w: World): Set<number> {
 
   for (const u of w.units.values()) {
     if (u.cooldown > 0) u.cooldown--;
+    if (isStunned(w, u.id)) {
+      engaged.add(u.id); // EMP'd (powers.ts): no firing, healing or moving
+      continue;
+    }
     const stats = UNITS[u.kind];
     if (u.rank >= 3 && u.hp < stats.hp && w.tick % TICK_RATE === 0)
       u.hp = Math.min(stats.hp, u.hp + stats.hp * COMBAT.eliteRegen);
@@ -323,6 +359,7 @@ export function tickCombat(w: World): Set<number> {
 
   for (const b of w.buildings.values()) {
     if (b.cooldown > 0) b.cooldown--;
+    if (isStunned(w, b.id)) continue; // EMP'd: guns offline
     const stats = BUILDINGS[b.kind];
     if (stats.targets === "none") continue;
     const c = buildingCenter(b);
@@ -371,38 +408,77 @@ function rankFor(u: Unit): number {
   return r;
 }
 
-function creditKill(w: World, killerId: number | null, victimCost: number): void {
+/**
+ * Credit a kill. The faction stat always goes to the victim's enemy (every
+ * source of damage is hostile), even when the killer has since died or is a
+ * building; XP and the kill count go to the killing unit if it was alive this
+ * tick (one that dies on the tick of its killing blow keeps the kill).
+ */
+function creditKill(w: World, victimFaction: Faction, killerId: number | null, victimCost: number, building: boolean): void {
+  const enemy = victimFaction === "blue" ? "red" : "blue";
+  const stats = w.factions[enemy].stats;
+  if (building) stats.buildingsKilled++;
+  else stats.unitsKilled++;
   if (killerId === null) return;
   const k = w.units.get(killerId);
-  if (!k) return;
-  w.factions[k.faction].stats.unitsKilled++;
+  if (!k || k.faction === victimFaction) return;
+  k.kills++;
   k.xp += victimCost;
   const r = rankFor(k);
   if (r > k.rank) {
     k.rank = r;
-    w.fx.push({ type: "rankUp", id: k.id });
+    if (k.hp > 0) w.fx.push({ type: "rankUp", id: k.id }); // (no fanfare for the fallen)
   }
 }
 
-/** Remove dead entities, emit explosions, and settle the winner. */
+/** Killer id/kind if the last attacker is still alive this tick. */
+function killerOf(w: World, id: number | null): { killerId: number | null; killerKind: Unit["kind"] | null } {
+  if (id === null) return { killerId: null, killerKind: null };
+  const u = w.units.get(id);
+  if (u) return { killerId: id, killerKind: u.kind };
+  return w.buildings.has(id) ? { killerId: id, killerKind: null } : { killerId: null, killerKind: null };
+}
+
+/**
+ * Remove dead entities, emit explosions, and settle the winner. Two passes:
+ * every kill is credited while all of this tick's dead are still on the map
+ * (so mutual kills credit both sides whatever the id order), then they go.
+ */
 export function cleanupDeaths(w: World): void {
-  for (const [id, u] of w.units) {
+  const deadUnits: { u: Unit; killer: ReturnType<typeof killerOf> }[] = [];
+  const deadBuildings: { b: Building; killer: ReturnType<typeof killerOf> }[] = [];
+  for (const u of w.units.values()) {
     if (u.hp > 0) continue;
+    deadUnits.push({ u, killer: killerOf(w, u.lastAttackerId) });
+    creditKill(w, u.faction, u.lastAttackerId, UNITS[u.kind].cost, false);
+  }
+  for (const b of w.buildings.values()) {
+    if (b.hp > 0) continue;
+    deadBuildings.push({ b, killer: killerOf(w, b.lastAttackerId) });
+    creditKill(w, b.faction, b.lastAttackerId, BUILDINGS[b.kind].cost || 500, true);
+  }
+  for (const { u, killer } of deadUnits) {
+    const id = u.id;
     w.units.delete(id);
     w.factions[u.faction].stats.unitsLost++;
-    creditKill(w, u.lastAttackerId, UNITS[u.kind].cost);
+    const air = unitDomain(u) === "air";
+    w.fx.push({ type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2, air, kind: "unit" });
     w.fx.push({
-      type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2,
-      air: unitDomain(u) === "air", kind: "unit"
+      type: "death", id, faction: u.faction, unitKind: u.kind, buildingKind: null,
+      x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
     });
+    leaveWreck(w, u); // combat units leave salvage (salvage.ts)
   }
-  for (const b of [...w.buildings.values()]) {
-    if (b.hp > 0) continue;
+  for (const { b, killer } of deadBuildings) {
     removeBuilding(w, b);
     w.factions[b.faction].stats.buildingsLost++;
-    creditKill(w, b.lastAttackerId, BUILDINGS[b.kind].cost || 500);
+    const value = BUILDINGS[b.kind].cost || 500;
     const c = buildingCenter(b);
     w.fx.push({ type: "explosion", x: c.x, y: c.y, size: BUILDINGS[b.kind].size, air: false, kind: "building" });
+    w.fx.push({
+      type: "death", id: b.id, faction: b.faction, unitKind: null, buildingKind: b.kind,
+      x: c.x, y: c.y, air: false, value, ...killer, rank: 0, kills: 0
+    });
     if (b.kind === "hq" && w.winner === null)
       w.winner = b.faction === "blue" ? "red" : "blue";
   }

@@ -1,5 +1,7 @@
 import { BUILDINGS, ECONOMY, TERRAIN, UNITS } from "./balance";
 import { createFog } from "./fog";
+import { createObjectiveState } from "./objectives";
+import { createPowerState } from "./powers";
 import {
   Terrain,
   type Building,
@@ -14,7 +16,7 @@ import {
 const newFaction = (): FactionState => ({
   scrap: ECONOMY.startingScrap,
   pending: null,
-  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, scrapHarvested: 0 },
+  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, buildingsKilled: 0, scrapHarvested: 0, scrapSalvaged: 0 },
   incomeMult: 1
 });
 
@@ -30,12 +32,16 @@ export function createWorld(width: number, height: number): World {
     units: new Map(),
     buildings: new Map(),
     projectiles: [],
+    wrecks: [],
+    powers: createPowerState(),
+    objectives: createObjectiveState(),
     factions: { blue: newFaction(), red: newFaction() },
     winner: null,
     fx: [],
     fog: createFog(width, height),
     mapId: "custom",
-    biome: "temperate"
+    biome: "temperate",
+    seed: 1
   };
 }
 
@@ -124,7 +130,8 @@ export function spawnUnit(
     lastAttackerId: null,
     firedTick: -1000,
     xp: 0,
-    rank: 0
+    rank: 0,
+    kills: 0
   };
   w.units.set(unit.id, unit);
   return unit;
@@ -213,4 +220,31 @@ export function nearestDropOff(w: World, faction: Faction, x: number, y: number)
 export function hasBuilding(w: World, faction: Faction, kind: BuildingKind): boolean {
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === kind) return true;
   return false;
+}
+
+/**
+ * Coordinates as seen from one side. Every map is point-symmetric and red
+ * plays it rotated 180°, so any search whose tie-breaks depend on scan order
+ * (grid scans, BFS/A* neighbour order, "prefer the south side") must run in
+ * the side's own frame, or blue and red make different choices in mirror-
+ * image situations (that bias once handed red ~70% of Ashlands mirror games).
+ * Identity for blue, the map turn for red (its own inverse).
+ */
+export interface SideFrame {
+  flip: boolean;
+  /** Frame point ↔ world point. */
+  pt(p: { x: number; y: number }): { x: number; y: number };
+  /** Top-left world tile of a `size`² footprint whose frame top-left is (fx, fy). */
+  tile(fx: number, fy: number, size: number): [number, number];
+}
+
+const IDENTITY_FRAME: SideFrame = { flip: false, pt: (p) => ({ x: p.x, y: p.y }), tile: (fx, fy) => [fx, fy] };
+
+export function sideFrame(w: World, faction: Faction | undefined): SideFrame {
+  if (faction !== "red") return IDENTITY_FRAME;
+  return {
+    flip: true,
+    pt: (p) => ({ x: w.width - p.x, y: w.height - p.y }),
+    tile: (fx, fy, size) => [w.width - fx - size, w.height - fy - size]
+  };
 }

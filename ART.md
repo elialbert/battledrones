@@ -45,10 +45,15 @@ stores each raw as `art/raw/<name>.webp` (lossy colour, lossless alpha —
 small enough to commit, faithful enough to reprocess). Sprites use
 `quality="high"` at 1024² or 1536×1024; textures `quality="medium"`.
 
-Inventory (59 raws): 11 units, 8 buildings, rubble, decals, scrap piles,
+Inventory (61 raws): 11 units, 8 buildings, rubble, decals, scrap piles,
 crystal clusters, an 8-frame explosion, 7 materials × 4 biomes (ground,
 ground2, rough, rock, liquid, road, forest canopy), a doodad sheet per
-biome, portrait and landscape key art, and the icon.
+biome, portrait and landscape key art, the icon, and the two map
+objectives: the `uplink` relay (a round platform + its rotating dish, as a
+PAIR) and the `supply-crate`. Those use a **NEUTRAL** contract instead of
+STYLE — gunmetal with hazard-yellow stripes and amber lights, no blue or red
+at all — because they belong to no side: the engine draws the holder's
+colour as a ring, so they get no red variant.
 
 ## 2. Sprites — `art/process.py`
 
@@ -84,7 +89,9 @@ Outputs and the contract the engine relies on:
 Frame names: `u/<faction>/<unit>` (hull or body), `u/<faction>/<unit>-turret`,
 `u/<faction>/harvester-full`, `b/<faction>/<building>`,
 `b/<faction>/<turret|sam-site|radar>-head`, `rubble/0-3`, `decal/0-5`,
-`scrap/0-5`, `crystal/0-5`, `explosion/0-7`. Art is authored at 128 texture
+`scrap/0-5`, `crystal/0-5`, `explosion/0-7`, and the neutral
+`obj/uplink` (2.25 tiles across), `obj/uplink-head` (pivot on its hub; its
+mount offset is `mounts.uplink`) and `obj/crate` (0.85 tiles). Art is authored at 128 texture
 px per tile; the world is 64 px per tile, so sprites draw at 0.5×.
 
 ## 3. Terrain — `art/terrain.py`

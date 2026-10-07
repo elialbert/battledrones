@@ -117,6 +117,8 @@ BUILDING_SIZES = {
 SINGLE_BUILDINGS = ["hq", "fab-plant", "airpad", "tech-lab", "depot"]
 HEAD_BUILDINGS = ["turret", "sam-site", "radar"]
 BUILDING_INSET = 6  # content fits (size*128 - 6) px, centred in the size*128 frame
+# Map objectives (neutral, drawn by the engine with the owner's ring): longest side in tiles.
+OBJECTIVE_SIZES = {"uplink": 2.25, "supply-crate": 0.85}
 
 # Where to look for the empty ring, as fractions of the hull/base bbox
 # (x0, x1, y0, y1) for the ring CENTRE.
@@ -506,6 +508,28 @@ class Builder:
             self.composites[k] = dict(base=f"b/blue/{k}", top=f"b/blue/{k}-head")
             print(f"  {k:13s} ring=({rx:.1f},{ry:.1f}) r={rr:.1f} head pivot=({hp[0]:.1f},{hp[1]:.1f}) mount={self.mounts[k]}")
 
+    # ---- map objectives (neutral frames: no red variant; the engine draws the owner)
+    def objectives(self) -> None:
+        base, head = split_parts("uplink", "pair")
+        S = round(OBJECTIVE_SIZES["uplink"] * PX_PER_TILE)
+        s = (S - BUILDING_INSET) / max_side(base)
+        geo = fit_frame(base, s, base.bbox(), size=(S, S))
+        self.add("obj/uplink", resample(base, s, *geo))
+        rx, ry, rr = detect_ring(base)
+        hp = hub_pivot(head)
+        hgeo = fit_frame(head, s, head.bbox())
+        self.add("obj/uplink-head", resample(head, s, *hgeo), to_frame(hp, hgeo, s))
+        fx, fy = to_frame((rx, ry), geo, s)
+        self.mounts["uplink"] = [r4((fx - S / 2) / PX_PER_TILE), r4((fy - S / 2) / PX_PER_TILE)]
+        self.icon_src["uplink"] = [(base, None, None), (head, hp, (rx, ry))]
+        print(f"  uplink        ring=({rx:.1f},{ry:.1f}) r={rr:.1f} head pivot=({hp[0]:.1f},{hp[1]:.1f}) mount={self.mounts['uplink']}")
+        (crate,) = split_parts("supply-crate", "single")
+        S = round(OBJECTIVE_SIZES["supply-crate"] * PX_PER_TILE)
+        s = (S - 2 * FRAME_MARGIN) / max_side(crate)
+        geo = fit_frame(crate, s, crate.bbox(), size=(S, S))
+        self.add("obj/crate", resample(crate, s, *geo))
+        self.icon_src["supply-crate"] = [(crate, None, None)]
+
     # ---- neutral sheets
     def sheets(self) -> None:
         for i, p in enumerate(split_parts("rubble", ("grid", 2, 2), soft=6)):
@@ -880,6 +904,8 @@ def main() -> None:
     b.units()
     print("buildings")
     b.buildings()
+    print("objectives")
+    b.objectives()
     print("sheets")
     b.sheets()
 

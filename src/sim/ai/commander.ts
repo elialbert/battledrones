@@ -1,8 +1,14 @@
-import { BUILDINGS, ECONOMY, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
+import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
+import { isWoundedVeteran, veteranRetreats } from "./veterans";
+import { bannedBy } from "../rules";
+import { planSalvage } from "./salvage";
+import { objectiveHolds, planObjectives } from "./objectives";
+import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import type {
   Building,
   BuildingKind,
@@ -20,6 +26,7 @@ import {
   hqOf,
   isResource,
   nearestDropOff,
+  sideFrame,
   tileIndex
 } from "../world";
 
@@ -55,17 +62,17 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Balanced",
     buildOrder: ["fab-plant", "airpad", "turret", "tech-lab", "depot", "turret", "radar"],
     harvesters: 4,
-    assaultValue: 1400,
+    assaultValue: 1700,
     harassGroup: 2
   },
-  /** Early ground pressure: attacks at half the usual army size. */
+  /** Early ground pressure: Stinger raids in packs of five, two factories, the earliest and smallest waves. */
   rush: {
     name: "rush",
     label: "Rush",
     buildOrder: ["fab-plant", "turret", "airpad", "fab-plant", "tech-lab"],
     harvesters: 4,
-    assaultValue: 800,
-    harassGroup: 3,
+    assaultValue: 1400,
+    harassGroup: 5,
     groundRaids: true
   },
   /** Airpad first: relentless wasp raids, bombers later. */
@@ -74,7 +81,7 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Air Swarm",
     buildOrder: ["airpad", "fab-plant", "turret", "tech-lab", "depot", "airpad"],
     harvesters: 4,
-    assaultValue: 1200,
+    assaultValue: 1700,
     harassGroup: 2
   },
   /** Greedy economy: extra harvesters, a forward depot, a huge late push. */
@@ -92,17 +99,17 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Skyforce",
     buildOrder: ["airpad", "turret", "tech-lab", "airpad", "fab-plant", "depot", "sam-site"],
     harvesters: 4,
-    assaultValue: 1300,
+    assaultValue: 2000,
     harassGroup: 2,
     airOnly: true
   },
-  /** Armoured column: rushes the Tech Lab for Titans, Lancers and Mortars. */
+  /** Armoured column: rushes the Tech Lab (right after a turret) for Titans, Lancers and Mortars. */
   ironclad: {
     name: "ironclad",
     label: "Ironclad",
-    buildOrder: ["fab-plant", "tech-lab", "turret", "airpad", "depot", "fab-plant", "sam-site"],
+    buildOrder: ["fab-plant", "turret", "tech-lab", "airpad", "depot", "fab-plant", "sam-site"],
     harvesters: 4,
-    assaultValue: 1800,
+    assaultValue: 1500,
     harassGroup: 3,
     heavy: true
   }
@@ -118,7 +125,9 @@ export const DIFFICULTY: Record<
 > = {
   easy: {
     label: "Easy", interval: 3.5, incomeMult: 0.75, extraHarvesters: -1, assaultMult: 1.35, harass: false,
-    pool: ["balanced", "rush", "airswarm", "skyforce"]
+    // no Skyforce: its all-air wave at ~3:00 beat a scripted first-week player
+    // 11 games in 15 on Easy (tools/beginner.ts); the other three lost 6 in 45
+    pool: ["balanced", "rush", "airswarm"]
   },
   normal: {
     label: "Normal", interval: 2, incomeMult: 1, extraHarvesters: 0, assaultMult: 1, harass: true,
@@ -157,13 +166,17 @@ export interface AiState {
   waveValue: number;
 }
 
-/** Pass a strategy for deterministic behaviour (tests); omit for random. */
-export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number): AiState {
+/**
+ * Pass a strategy for deterministic behaviour (tests); omit for random.
+ * `tweak` overrides parts of the personality (Ops: a commander that never
+ * attacks gets `assaultValue: Infinity, harassGroup: Infinity`).
+ */
+export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number, tweak?: Partial<Strategy>): AiState {
   const names = DIFFICULTY[difficulty].pool;
   const picked = strategy ?? names[Math.floor(Math.random() * names.length)]!;
   return {
     mode: "buildup",
-    strategy: STRATEGIES[picked],
+    strategy: tweak ? { ...STRATEGIES[picked], ...tweak } : STRATEGIES[picked],
     difficulty,
     lastDecisionTick: -1000,
     seenAir: 0,
@@ -181,6 +194,17 @@ export function createAiState(strategy?: StrategyName, difficulty: Difficulty = 
 }
 
 const RETREAT_ARMY_VALUE = 350;
+/**
+ * Share of the assault threshold that must gather at the staging point
+ * before a wave launches: big waves, and a lull while the next one gathers
+ * (at 0.6 waves trickled out every 500–1,200 scrap, fighting never paused,
+ * and the side ahead at 4:00 won 87–90%).
+ */
+const WAVE_LAUNCH = 0.75;
+/** No raids before this: an opener's starting units guard home while both sides settle in. */
+const OPENING_GRACE = 45 * TICK_RATE;
+/** Enemy army value at the HQ that, if it outguns the home guard, recalls everyone. */
+const HOME_ALARM_VALUE = 400;
 /** Visible armed enemies this close to our buildings/harvesters are threats. */
 const DEFENSE_RADIUS = 11;
 const GUARD_RADIUS = 5;
@@ -209,12 +233,15 @@ function rand(s: AiState): number {
 export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const diff = DIFFICULTY[s.difficulty];
   w.factions[faction].incomeMult = diff.incomeMult;
-  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return [];
+  // no HQ, no commander: Last Stand's waves are the director's alone (not even the dodge reflex)
+  const hq = hqOf(w, faction);
+  if (!hq) return [];
+  // calldown reflex: scatter from enemy reticles every tick, not just on decision passes
+  const reflex = w.winner ? [] : dodgeCalldowns(w, faction, s);
+  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return reflex;
   s.lastDecisionTick = w.tick;
 
-  const cmds: Command[] = [];
-  const hq = hqOf(w, faction);
-  if (!hq) return cmds;
+  const cmds: Command[] = reflex;
   const f = w.factions[faction];
   const mine = [...w.units.values()].filter((u) => u.faction === faction);
   const myBuildings = [...w.buildings.values()].filter((b) => b.faction === faction);
@@ -230,12 +257,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   observeEnemy(w, faction, s);
 
   const hqC = buildingCenter(hq);
-  const activeField = nearestScrapTile(w, hqC.x, hqC.y);
+  const activeField = nearestScrapTile(w, hqC.x, hqC.y, faction);
   /** Where the economy needs defending: the mined field, shaded toward home. */
   const guardPoint = activeField
     ? {
-        x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x) * 1.5,
-        y: activeField.y + 0.5 + Math.sign(hqC.y - activeField.y) * 1.5
+        x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x - 0.5) * 1.5,
+        y: activeField.y + 0.5 + Math.sign(hqC.y - activeField.y - 0.5) * 1.5
       }
     : hqC;
 
@@ -265,7 +292,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     cmds.push({ type: "produce", faction, buildingId: hq.id, unit: "harvester" });
   for (const h of harvesters)
     if (h.order.type === "idle") {
-      const field = nearestReachableResource(w, h.x, h.y);
+      const field = nearestReachableResource(w, h.x, h.y, faction);
       if (field)
         cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
     }
@@ -306,7 +333,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   }
   for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
     if (pad.queue.length >= depth) continue;
-    const wantRaptors = Math.min(s.strategy.airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
+    // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
+    const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
+    const airOnly = s.strategy.airOnly || airWar;
+    const wantRaptors = Math.min(airWar ? 5 : airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
     const armySize = army.length;
     let kind: UnitKind;
     if (have("scout") < 1 && w.tick - s.lastScoutTick > 60 * TICK_RATE) {
@@ -314,8 +344,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       s.lastScoutTick = w.tick;
     }
     else if (have("raptor") < wantRaptors) kind = "raptor";
-    else if (have("mender") < Math.min(3, Math.floor(armySize / 6))) kind = "mender";
-    else if (tech && (s.strategy.airOnly ? rand(s) < 0.4 : rand(s) < 0.25 + s.seenHeavy * 0.08)) kind = "hornet";
+    else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
+      kind = "mender";
+    else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < 0.25 + s.seenHeavy * 0.08))
+      kind = "hornet";
     else if (s.strategy.heavy && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks
     else kind = "wasp";
     produce(pad, kind);
@@ -345,16 +377,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (s.seenAir >= 8 && s.extraSams < 2) s.extraSams = 2;
 
   // --- mode transitions ----------------------------------------------------
-  // the longer the match drags on, the lower the bar for an all-in push
+  // the longer the match drags on (from 7:00, 6% a minute, down to half), the lower the bar for an all-in push
   const minutes = w.tick / TICK_RATE / 60;
-  const lateGame = Math.max(0.5, 1 - Math.max(0, minutes - 9) * 0.06);
+  const lateGame = Math.max(0.5, 1 - Math.max(0, minutes - 7) * 0.06);
   const assaultAt = s.strategy.assaultValue * diff.assaultMult * lateGame;
   const raiders = mine.filter(
     (u) => (u.kind === "wasp" || (s.strategy.groundRaids && u.kind === "stinger")) && u.order.type === "idle"
   );
   if (
     s.mode === "buildup" && diff.harass && raiders.length >= s.strategy.harassGroup &&
-    s.seenAA <= raiders.length / 2
+    s.seenAA <= raiders.length / 2 && w.tick >= OPENING_GRACE
   )
     s.mode = "harass";
   if (armyValue >= assaultAt && s.mode !== "assault") {
@@ -362,10 +394,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     s.waveValue = armyValue;
   }
   if (s.mode === "assault" && armyValue < Math.max(RETREAT_ARMY_VALUE, s.waveValue * 0.25)) s.mode = "buildup";
+  // Last Stand: there is no enemy base to raid or assault — defend
+  if (w.survival) s.mode = "buildup";
 
   // ======================= tactics =========================================
-  const used = new Set<number>();
+  const used = new Set<number>(dodgingUnits(w, s)); // units running from a reticle stay put
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
+
+  // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
+  cmds.push(...veteranRetreats(faction, army, hqC, used));
 
   // --- 1. threat response: answer unengaged intruders with counters -------
   const threats = findThreats(w, faction, myBuildings, harvesters);
@@ -385,6 +422,30 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     }
     if (squad.length > 0) cmds.push({ type: "attack", faction, unitIds: squad, targetId: t.id });
   }
+
+  // --- 1b. home defence: a real attack on the base recalls the army -------
+  // (with quick-start openers an 8-unit push can land at 1:00; an army out
+  // raiding must not leave the HQ to die)
+  const atHome = threats.filter((t) => dist(t.x, t.y, hqC.x, hqC.y) <= DEFENSE_RADIUS);
+  const raidValue = atHome.reduce((v, t) => v + UNITS[t.kind].cost, 0);
+  const homeGuard = value(army.filter((u) => dist(u.x, u.y, hqC.x, hqC.y) <= DEFENSE_RADIUS));
+  if (raidValue >= HOME_ALARM_VALUE && raidValue > homeGuard) {
+    s.mode = "buildup";
+    const enemyHome = mirror(w, hqC.x, hqC.y);
+    const away = army.filter(
+      (u) =>
+        !used.has(u.id) &&
+        dist(u.x, u.y, hqC.x, hqC.y) > DEFENSE_RADIUS &&
+        dist(u.x, u.y, enemyHome.x, enemyHome.y) > 8 && // about to finish the job there
+        atHome.some((t) => canHitDomain(UNITS[u.kind].targets, t.domain))
+    );
+    if (away.length > 0) {
+      away.forEach((u) => used.add(u.id));
+      cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
+    }
+  }
+  // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
+  for (const id of objectiveHolds(w, faction, s)) used.add(id);
 
   // --- 2. economy guard: a share of the army holds the mining line --------
   const guardShare = s.mode === "assault" ? 0.15 : 0.35;
@@ -407,6 +468,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (squad.length > 0)
       cmds.push({ type: "attackMove", faction, unitIds: squad, x: guardPoint.x, y: guardPoint.y });
   }
+
+  // --- 2b. map objectives: take Uplinks, hold them, race for supply crates --
+  const enemyHomeGuess = knownBuildings(w, faction).find((b) => b.kind === "hq");
+  cmds.push(
+    ...planObjectives(w, faction, s, {
+      mode: s.mode, hqC, guardPoint, guardNeed: guardShare * armyValue, army, used,
+      threatened: raidValue >= HOME_ALARM_VALUE,
+      enemyHqPos: enemyHomeGuess ? { x: enemyHomeGuess.tx + 1.5, y: enemyHomeGuess.ty + 1.5 } : mirror(w, hqC.x, hqC.y)
+    })
+  );
 
   // --- 3/4. offence by mode -----------------------------------------------
   const enemyHq = knownBuildings(w, faction).find((b) => b.kind === "hq");
@@ -434,17 +505,18 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       (u) => !used.has(u.id) && dist(u.x, u.y, staging.x, staging.y) <= STAGE_RADIUS
     );
     const stagedValue = value(staged);
-    const launchAt = Math.max(450, assaultAt * 0.6);
+    // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
+    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, enemyHqPos);
-      launchWave(cmds, faction, staged, target, used);
+      launchWave(w, cmds, faction, staged, target, used);
     } else {
       for (const u of idleArmy()) {
         if (dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < 14) {
           // already deep in enemy territory: keep fighting, don't yo-yo home
           const target = pickPriorityTarget(w, faction, enemyHqPos);
-          launchWave(cmds, faction, [u], target, used);
+          launchWave(w, cmds, faction, [u], target, used);
         } else if (dist(u.x, u.y, staging.x, staging.y) > STAGE_RADIUS) {
           used.add(u.id);
           cmds.push({ type: "attackMove", faction, unitIds: [u.id], x: staging.x, y: staging.y });
@@ -452,6 +524,32 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       }
     }
   }
+
+  // --- Last Stand: hold a line toward the incoming wave, engage the siege ---
+  if (w.survival) {
+    const hold = survivalHoldPoint(w, faction);
+    if (hold) {
+      const squad = idleArmy()
+        .filter((u) => (hold.engage ? u.kind !== "mortar" || dist(u.x, u.y, hold.x, hold.y) > 7 : true))
+        .filter((u) => dist(u.x, u.y, hold.x, hold.y) > (hold.engage ? 2 : STAGE_RADIUS))
+        .map((u) => u.id);
+      squad.forEach((id) => used.add(id));
+      if (squad.length > 0) cmds.push({ type: "attackMove", faction, unitIds: squad, x: hold.x, y: hold.y });
+    }
+    // strong enough for what's next and nothing on the field: bring it on
+    if (earlyCallBonus(w) > 0 && armyValue >= 1.8 * waveBudget(w.survival.difficulty, w.survival.wave + 1))
+      cmds.push({ type: "callWave", faction });
+  }
+
+  // --- 4b. salvage: once a fight near home is over, sweep up the wrecks ----
+  cmds.push(
+    ...planSalvage(w, faction, {
+      army, harvesters, buildings: myBuildings, used, threatened: raidValue >= HOME_ALARM_VALUE, assault: s.mode === "assault"
+    })
+  );
+
+  // --- 4c. commander calldowns (ai/powers.ts) ------------------------------
+  cmds.push(...planCalldowns(w, faction, s, { mode: s.mode, hqC, guardPoint, enemyHqPos, army, threats }));
 
   // --- 5. menders tag along with whoever needs them -------------------------
   for (const m of mine.filter((u) => u.kind === "mender" && u.order.type === "idle" && !used.has(u.id))) {
@@ -513,7 +611,13 @@ function pickPriorityTarget(w: World, faction: Faction, fallback: { x: number; y
   const known = knownBuildings(w, faction);
   for (const kinds of [["fab-plant", "airpad", "tech-lab", "depot"], ["turret", "sam-site", "radar"], ["hq"]] as const) {
     const cands = known.filter((kb) => (kinds as readonly string[]).includes(kb.kind));
-    cands.sort((a, b) => dist(a.tx, a.ty, fallback.x, fallback.y) - dist(b.tx, b.ty, fallback.x, fallback.y));
+    // by footprint centre (a top-left corner is not mirror-symmetric)
+    const centre = (kb: (typeof cands)[number]) => BUILDINGS[kb.kind].size / 2;
+    cands.sort(
+      (a, b) =>
+        dist(a.tx + centre(a), a.ty + centre(a), fallback.x, fallback.y) -
+        dist(b.tx + centre(b), b.ty + centre(b), fallback.x, fallback.y)
+    );
     const b = cands[0];
     if (b) {
       const size = BUILDINGS[b.kind].size;
@@ -525,22 +629,27 @@ function pickPriorityTarget(w: World, faction: Faction, fallback: { x: number; y
 
 /** Send a wave at a target: attackers attack it, the rest escort. */
 function launchWave(
+  w: World,
   cmds: Command[],
   faction: Faction,
   units: Unit[],
   target: PriorityTarget,
   used: Set<number>
 ): void {
+  // a remembered building may have died out of sight: an attack on its id
+  // idles the wave on the spot, so march on its last known position instead
+  // (the same place either way; arriving re-sees the footprint, forgets the ghost)
+  const id = target.id !== undefined && (w.units.has(target.id) || w.buildings.has(target.id)) ? target.id : undefined;
   const attackers: number[] = [];
   const escorts: number[] = [];
   for (const u of units) {
     used.add(u.id);
-    if (target.id !== undefined && canHitDomain(UNITS[u.kind].targets, target.domain))
+    if (id !== undefined && canHitDomain(UNITS[u.kind].targets, target.domain))
       attackers.push(u.id);
     else escorts.push(u.id);
   }
-  if (attackers.length > 0 && target.id !== undefined)
-    cmds.push({ type: "attack", faction, unitIds: attackers, targetId: target.id });
+  if (attackers.length > 0 && id !== undefined)
+    cmds.push({ type: "attack", faction, unitIds: attackers, targetId: id });
   if (escorts.length > 0)
     cmds.push({ type: "attackMove", faction, unitIds: escorts, x: target.x, y: target.y });
 }
@@ -569,7 +678,10 @@ function findThreats(
       return dist(u.x, u.y, c.x, c.y) <= DEFENSE_RADIUS;
     });
     const nearHarvester = harvesters.some((h) => dist(u.x, u.y, h.x, h.y) <= 6);
-    if (nearBuilding || nearHarvester)
+    const nearUplink = w.objectives.uplinks.some(
+      (l) => l.owner === faction && dist(u.x, u.y, l.x, l.y) <= OBJECTIVES.uplink.radius + 2
+    );
+    if (nearBuilding || nearHarvester || nearUplink)
       out.push({ id: u.id, x: u.x, y: u.y, kind: u.kind, domain: UNITS[u.kind].domain });
   }
   return out;
@@ -602,11 +714,14 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   const have = new Map<BuildingKind, number>();
   for (const b of myBuildings) have.set(b.kind, (have.get(b.kind) ?? 0) + 1);
   const order = [...s.strategy.buildOrder];
+  // Last Stand: static defences earn their keep against endless waves
+  if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
+  const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   for (let i = 0; i < s.extraProduction; i++) {
-    const air = s.strategy.airOnly || (!s.strategy.heavy && pads + (i % 2) <= fabs);
+    const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
     order.push(air ? "airpad" : "fab-plant");
   }
   const wanted = new Map<BuildingKind, number>();
@@ -634,9 +749,11 @@ function depotSite(
   faction: Faction,
   hqC: { x: number; y: number }
 ): { spot: { tx: number; ty: number } } | null {
+  const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   let best: { x: number; y: number; d: number } | null = null;
-  for (let ty = 0; ty < w.height; ty++)
-    for (let tx = 0; tx < w.width; tx++) {
+  for (let fy = 0; fy < w.height; fy++)
+    for (let fx = 0; fx < w.width; fx++) {
+      const [tx, ty] = fr.tile(fx, fy, 1);
       if (!isResource(w, tileIndex(w, tx, ty))) continue;
       const drop = nearestDropOff(w, faction, tx + 0.5, ty + 0.5);
       if (!drop) continue;
@@ -648,7 +765,8 @@ function depotSite(
   if (!best || best.d > 24) return null;
   const spot = findPlacementSpot(w, faction, "depot", best);
   if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) return null;
-  if (!findPath(w, hqC.x, hqC.y + 2.5, best.x, best.y)) return null;
+  // reachable by ground from just behind the HQ (in the side's own frame)
+  if (!findPath(w, hqC.x, hqC.y + (fr.flip ? -2.5 : 2.5), best.x, best.y, "ground", faction)) return null;
   return { spot };
 }
 
@@ -660,18 +778,23 @@ function findPlacementSpot(
   anchor: { x: number; y: number }
 ): { tx: number; ty: number } | null {
   const size = BUILDINGS[kind].size;
+  // candidates are generated and compared in the side's own frame, so ties
+  // (common: spots equidistant from the HQ) resolve as mirror images
+  const fr = sideFrame(w, faction);
+  const a = fr.pt(anchor);
   let best: { tx: number; ty: number } | null = null;
   let bestD = Infinity;
   for (const b of w.buildings.values()) {
     if (b.faction !== faction) continue;
-    const c = buildingCenter(b);
+    const c = fr.pt(buildingCenter(b));
     const r = ECONOMY.buildRadius + 2;
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
-        const tx = Math.round(c.x + dx - size / 2);
-        const ty = Math.round(c.y + dy - size / 2);
-        const d = dist(tx + size / 2, ty + size / 2, anchor.x, anchor.y);
+        const fx = Math.round(c.x + dx - size / 2);
+        const fy = Math.round(c.y + dy - size / 2);
+        const d = dist(fx + size / 2, fy + size / 2, a.x, a.y);
         if (d >= bestD) continue;
+        const [tx, ty] = fr.tile(fx, fy, size);
         if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
         // keep a lane open: don't wall the HQ in with production buildings
         if (size > 1 && tooCramped(w, tx, ty, size)) continue;
@@ -725,7 +848,7 @@ function enemyHarvestArea(
       isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))
     )
       return { x: u.x, y: u.y, targetId: u.id };
-  const own = nearestScrapTile(w, hqC.x, hqC.y);
+  const own = nearestScrapTile(w, hqC.x, hqC.y, faction);
   if (own) return mirror(w, own.x + 0.5, own.y + 0.5);
   return mirror(w, hqC.x, hqC.y);
 }

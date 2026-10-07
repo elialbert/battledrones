@@ -14,6 +14,7 @@ import {
   unitFrame
 } from "../assets";
 import { AIR_LIFT, type Fx } from "./fx";
+import { FlashClock, JUICE } from "../juice";
 
 interface UnitView {
   kind: "unit";
@@ -22,6 +23,8 @@ interface UnitView {
   turret?: Phaser.GameObjects.Image;
   turretShadow?: Phaser.GameObjects.Image;
   glow?: Phaser.GameObjects.Image;
+  /** Rank 3 (elite): a pulsing gold copy of the body behind it. */
+  shimmer?: Phaser.GameObjects.Image;
   chevrons: Phaser.GameObjects.Image[];
   face: number;
   aim: number;
@@ -35,6 +38,8 @@ interface UnitView {
   bx: number;
   by: number;
   visible: boolean;
+  /** Body/turret currently drawn as a white hit-flash silhouette. */
+  flashing?: boolean;
 }
 
 interface BuildingView {
@@ -69,6 +74,7 @@ export class EntityRenderer {
   private views = new Map<number, View>();
   private sold = new Set<number>();
   private time = 0;
+  private flashes = new FlashClock();
 
   constructor(
     private scene: Phaser.Scene,
@@ -93,6 +99,13 @@ export class EntityRenderer {
     if (!v) return null;
     if (v.kind === "unit") return { x: v.bx, y: v.by, gx: v.gx, gy: v.gy };
     return { x: v.cx, y: v.cy, gx: v.cx, gy: v.cy };
+  }
+
+  /** Last rendered pose of a unit (wrecks start from it): body/ground px, hull and turret angles. */
+  pose(id: number): { bx: number; by: number; gx: number; gy: number; face: number; aim: number; visible: boolean } | null {
+    const v = this.views.get(id);
+    if (!v || v.kind !== "unit") return null;
+    return { bx: v.bx, by: v.by, gx: v.gx, gy: v.gy, face: v.face, aim: v.aim, visible: v.visible };
   }
 
   isShown(id: number): boolean {
@@ -126,6 +139,36 @@ export class EntityRenderer {
     if (v.kind === "unit" && v.turret) v.aim = angle;
     else if (v.kind === "unit") v.face = v.aim = angle;
     else v.face = angle;
+  }
+
+  /**
+   * A hit landed on a visible entity: units flash a white silhouette (body
+   * and turret), buildings a brief warm glow. Throttled per entity so
+   * sustained fire flickers instead of strobing.
+   */
+  hitFlash(id: number): void {
+    const v = this.views.get(id);
+    if (!v || !v.visible) return;
+    // wall-clock timing: a flash still ends if the game is paused mid-blink
+    const now = performance.now();
+    if (v.kind === "unit") {
+      this.flashes.hit(id, now);
+      return;
+    }
+    if (!this.flashes.hit(id, now, JUICE.buildingFlashMs, JUICE.buildingFlashGapMs)) return;
+    for (const src of [v.body, v.head]) {
+      if (!src) continue;
+      const glow = this.scene.add
+        .image(src.x, src.y, ATLAS, src.frame.name)
+        .setOrigin(src.originX, src.originY)
+        .setScale(src.scaleX, src.scaleY)
+        .setRotation(src.rotation)
+        .setDepth(src.depth + 0.005)
+        .setTint(0xffe2c0)
+        .setAlpha(0.6)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.scene.tweens.add({ targets: glow, alpha: 0, duration: JUICE.buildingFlashMs, onComplete: () => glow.destroy() });
+    }
   }
 
   // ------------------------------------------------------------- sync ---
@@ -162,7 +205,7 @@ export class EntityRenderer {
           this.scene.tweens.add({ targets: parts, alpha: 0, scale: "*=0.9", duration: 350, onComplete: () => parts.forEach((o) => o.destroy()) });
         else parts.forEach((o) => o.destroy());
       } else {
-        for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow, ...v.chevrons]) o?.destroy();
+        for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow, v.shimmer, ...v.chevrons]) o?.destroy();
       }
       this.views.delete(id);
     }
@@ -188,6 +231,8 @@ export class EntityRenderer {
       lastFired: u.firedTick, phase: (u.id * 1.37) % (Math.PI * 2), dustT: 0,
       gx: u.x * TILE, gy: u.y * TILE, bx: u.x * TILE, by: u.y * TILE, visible: true
     };
+    // units that arrive ranked (Last Stand waves) don't pop their chevrons
+    for (let i = 0; i < u.rank; i++) v.chevrons.push(s.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(0.8));
     if (stats.turret) {
       const tf = turretFrame(u.faction, u.kind);
       const [tx, ty] = frameOrigin(tf);
@@ -221,10 +266,20 @@ export class EntityRenderer {
     v.visible = visible;
     for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow]) o?.setVisible(visible);
     for (const c of v.chevrons) c.setVisible(visible);
+    v.shimmer?.setVisible(visible);
     const moved = Math.hypot(gx - v.gx, gy - v.gy);
     v.gx = gx;
     v.gy = gy;
     if (!visible) return;
+    const flashing = this.flashes.active(u.id, performance.now());
+    if (flashing !== (v.flashing ?? false)) {
+      v.flashing = flashing;
+      for (const o of [v.body, v.turret]) {
+        if (!o) continue;
+        if (flashing) o.setTintFill(0xffffff);
+        else o.clearTint();
+      }
+    }
 
     v.face += angleDelta(v.face, u.facing) * turnK;
     if (stats.turret) {
@@ -281,9 +336,25 @@ export class EntityRenderer {
     if (v.glow) v.glow.setPosition(gx, gy + 2).setAlpha(0.25 + Math.sin(this.time / 200 + v.phase) * 0.08);
 
     // veterancy chevrons float above the unit
-    while (v.chevrons.length < u.rank)
-      v.chevrons.push(this.scene.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(0.8));
+    while (v.chevrons.length < u.rank) {
+      // a promotion: the new chevron pops in
+      const c = this.scene.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(1.6);
+      this.scene.tweens.add({ targets: c, scale: 0.8, duration: 450, ease: "Back.easeOut" });
+      v.chevrons.push(c);
+    }
     v.chevrons.forEach((c, i) => c.setPosition(bx - (u.rank - 1) * 7 + i * 14, by - 30));
+    if (u.rank >= 3 && !v.shimmer)
+      v.shimmer = this.scene.add
+        .image(0, 0, ATLAS, v.body.frame.name)
+        .setOrigin(v.body.originX, v.body.originY)
+        .setTint(0xffd66e)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(v.body.depth - 0.01);
+    v.shimmer
+      ?.setPosition(bx, by)
+      .setRotation(v.face)
+      .setScale(ART_SCALE * 1.1)
+      .setAlpha(0.3 + 0.1 * Math.sin(this.time / 260 + v.phase));
 
     // ground vehicles kick up dust when moving
     if (!air && !stats.hover && moved > 0.4) {

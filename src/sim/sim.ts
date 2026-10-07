@@ -8,22 +8,33 @@ import {
 } from "./economy";
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
+import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement } from "./movement";
+import { tickOps } from "./ops";
+import { tickObjectives } from "./objectives";
+import { applyCalldown, chargePowers, tickPowers } from "./powers";
+import { tickSalvage } from "./salvage";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
 /** Advance the world exactly one tick, applying this tick's commands first. */
 export function step(w: World, commands: Command[]): void {
+  w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
-  w.fx = [];
   for (const c of commands) applyCommand(w, c);
   tickConstruction(w);
   tickProduction(w);
   tickHarvest(w);
   tickTrickle(w);
+  tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
+  tickSalvage(w);
+  tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)
+  chargePowers(w); // Command meters fill from this tick's losses
+  if (w.survival) tickSurvival(w);
+  if (w.ops) tickOps(w);
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;
 }
@@ -69,6 +80,12 @@ function applyCommand(w: World, c: Command): void {
         u.path = null;
         u.autoTargetId = null;
       }
+      break;
+    case "callWave":
+      callWaveEarly(w, c.faction);
+      break;
+    case "calldown":
+      applyCalldown(w, c);
       break;
     default:
       applyEconomyCommand(w, c);

@@ -196,6 +196,19 @@ export class GestureRecognizer {
     this.mode = this.pointers.size >= 2 ? "multi" : "idle";
   }
 
+  /**
+   * Let go of every pointer without firing anything (no tap, box or pan end):
+   * something else just took the camera. Later moves and lifts of those
+   * pointers are ignored; the next down starts afresh.
+   */
+  reset(): void {
+    this.pointers.clear();
+    this.mode = "idle";
+    this.pinchActive = false;
+    this.pinchDist = 0;
+    this.lastTapTime = -Infinity;
+  }
+
   wheel(deltaY: number, x: number, y: number): void {
     this.cb.onWheel(deltaY, x, y);
   }

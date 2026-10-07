@@ -1,5 +1,5 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { Terrain, type Unit, type World } from "./types";
+import { Terrain, type Faction, type Unit, type World } from "./types";
 import { inBounds, moveClassOf, passable, terrainSpeed, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
@@ -39,13 +39,21 @@ export function findPath(
   fromY: number,
   toX: number,
   toY: number,
-  mc: MoveClass = "ground"
+  mc: MoveClass = "ground",
+  faction?: Faction
 ): { x: number; y: number }[] | null {
   const pass = (x: number, y: number) => passable(w, x, y, mc);
-  const sx = Math.floor(fromX);
-  const sy = Math.floor(fromY);
-  let gx = Math.floor(toX);
-  let gy = Math.floor(toY);
+  // scan orders run in the side's own frame (red's is blue's turned 180°), so
+  // equal-cost ties resolve as mirror images for the two sides (see sideFrame)
+  const s = faction === "red" ? -1 : 1;
+  // the tile under a point, floored in that frame too: a point on a tile edge
+  // (e.g. an Uplink at (28, 28)) belongs to the tile on the side's own far side
+  const tileX = (x: number) => (s > 0 ? Math.floor(x) : w.width - 1 - Math.floor(w.width - x));
+  const tileY = (y: number) => (s > 0 ? Math.floor(y) : w.height - 1 - Math.floor(w.height - y));
+  const sx = tileX(fromX);
+  const sy = tileY(fromY);
+  let gx = tileX(toX);
+  let gy = tileY(toY);
   if (!inBounds(w, gx, gy)) {
     gx = Math.max(0, Math.min(w.width - 1, gx));
     gy = Math.max(0, Math.min(w.height - 1, gy));
@@ -56,8 +64,10 @@ export function findPath(
     let found: { x: number; y: number } | null = null;
     for (let r = 1; r <= 6 && !found; r++) {
       let bestD = Infinity;
-      for (let dy = -r; dy <= r; dy++)
-        for (let dx = -r; dx <= r; dx++) {
+      for (let i = -r; i <= r; i++)
+        for (let j = -r; j <= r; j++) {
+          const dy = i * s;
+          const dx = j * s;
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           if (!pass(gx + dx, gy + dy)) continue;
           const d = Math.hypot(gx + dx - sx, gy + dy - sy);
@@ -142,8 +152,10 @@ export function findPath(
     closed[cur] = 1;
     const cx = cur % W;
     const cy = Math.floor(cur / W);
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let i = -1; i <= 1; i++)
+      for (let j = -1; j <= 1; j++) {
+        const dy = i * s;
+        const dx = j * s;
         if (dx === 0 && dy === 0) continue;
         const nx = cx + dx;
         const ny = cy + dy;
@@ -193,7 +205,7 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
     !u.pathGoal ||
     Math.hypot(u.pathGoal.x - x, u.pathGoal.y - y) > 0.6
   ) {
-    u.path = findPath(w, u.x, u.y, x, y, mc);
+    u.path = findPath(w, u.x, u.y, x, y, mc, u.faction);
     u.pathGoal = { x, y };
     if (!u.path) return true; // unreachable: give up (caller goes idle)
   }
@@ -266,6 +278,8 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
   separate(w);
 }
 
+const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS).map((k, i) => [k, i]));
+
 /** Gentle separation so same-domain units don't stack. */
 function separate(w: World): void {
   const units = [...w.units.values()];
@@ -286,8 +300,14 @@ function separate(w: World): void {
       let uy: number;
       if (d < 1e-3) {
         // perfectly coincident (e.g. spawned at the same tile centre): no
-        // direction to push along, so derive one deterministically from ids
-        const angle = ((a.id * 7 + b.id * 13) % 16) * (Math.PI / 8);
+        // direction to push along, so derive one deterministically — for a
+        // side's own pair from kinds and the clock, turned 180° for red, so
+        // both sides' mirror-image pairs split as mirror images
+        const angle =
+          a.faction === b.faction
+            ? ((KIND_INDEX[a.kind]! * 7 + KIND_INDEX[b.kind]! * 13 + w.tick) % 16) * (Math.PI / 8) +
+              (a.faction === "red" ? Math.PI : 0)
+            : ((a.id * 7 + b.id * 13) % 16) * (Math.PI / 8);
         ux = Math.sin(angle);
         uy = -Math.cos(angle);
       } else {

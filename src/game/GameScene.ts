@@ -1,30 +1,53 @@
 import Phaser from "phaser";
-import { createAiState, tickAi, type AiState } from "../sim/ai/commander";
+import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/commander";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
 import { canPlaceBuilding, nearestReachableResource } from "../sim/economy";
-import { isVisible } from "../sim/fog";
+import { isVisible, tickFog } from "../sim/fog";
 import { createMapWorld, mapById } from "../sim/maps";
+import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, FxEvent, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import {
-  ART_SCALE,
   ATLAS,
   TILE,
-  buildingFrame,
   loadAssets,
   setSpriteMeta,
   type SpriteMeta
 } from "./assets";
 import { Controller, PLAYER, hitTest } from "./controller";
 import { GestureRecognizer } from "./gestures";
-import { gameMode } from "./mode";
+import { announce } from "./announce";
+import { gameMode, matchOptions } from "./mode";
+import { music } from "./music";
+import { BattleMood } from "./score";
+import { voices, type VoiceHooks } from "./voices";
+import { Announcer } from "./announcer";
+import { Awareness } from "./awareness-view";
+import { calldownThreatens, planTicks } from "./awareness";
+import { HINTS } from "./hints";
+import { SurvivalPresenter, finishRun } from "./survival";
+import { chronicleOf, type Chronicle } from "./chronicle";
+import { Finale, finaleOutcome, finaleZoom, freeAreaOffset } from "./finale";
+import { HeroPresenter } from "./hero-fx";
+import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
+import { OpsPresenter } from "./ops";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
+import { CombatJuice } from "./render/juice-view";
 import { WorldView } from "./render/world-view";
+import { WreckRenderer } from "./render/wrecks";
+import { PowerRenderer } from "./render/powers";
+import { ObjectiveRenderer } from "./render/objectives";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
+import { PlacementView } from "./placement-view";
+import { CommandUi } from "../ui/command";
+import { showOpenerPicker } from "../ui/openers";
+import { createPowerPanel, type PowerPanel } from "../ui/powers";
+import { createObjectivePill, type ObjectivePill } from "../ui/objectives";
+import { fitZoom, frameCentre, hudInsets, startBox } from "./framing";
 
 const TICK_MS = 1000 / TICK_RATE;
 /** Logical (CSS-pixel) zoom range; the camera zoom also includes the DPR. */
@@ -37,20 +60,50 @@ const EDGE_PAD = 4 * TILE;
 export class GameScene extends Phaser.Scene {
   world!: World;
   ctrl!: Controller;
-  private ai!: AiState;
+  /** Red's commander (null in Last Stand and survival ops: the waves have none). */
+  private ai: AiState | null = null;
   private blueAi: AiState | null = null;
+  /** Last Stand banners and spawn marker (null in skirmish). */
+  private survival: SurvivalPresenter | null = null;
+  /** Veteran promotions/deaths, the match record, and the HQ-kill cinematic. */
+  private heroes!: HeroPresenter;
+  private chronicle!: Chronicle;
+  private finale: Finale | null = null;
+  private finaleAt: { x: number; y: number; size: number } | null = null;
+  /** Ops: briefing banner, countdowns and star notices (null outside ops). */
+  private ops: OpsPresenter | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
   private overlay!: Phaser.GameObjects.Graphics;
-  private ghost!: Phaser.GameObjects.Image;
+  /** Building placement: ghost, suggested spot, touch move/drag/confirm. */
+  private place!: PlacementView;
+  /** Squad chips, counter/idle advisor badges. */
+  private command!: CommandUi;
   private worldView!: WorldView;
   private entities!: EntityRenderer;
   private fx!: Fx;
+  private juice!: CombatJuice;
+  /** Battle intensity for the adaptive score. */
+  private mood!: BattleMood;
+  /** The radio announcer (and the kill-streak callouts it owns). */
+  private radio!: Announcer;
+  private voiceHooks!: VoiceHooks;
+  /** Game speed, inbound warnings, edge arrows, jump button, battle meter. */
+  private aware!: Awareness;
+  private wrecks!: WreckRenderer;
+  /** Commander calldowns: reticles/effects, and the HUD buttons + targeting. */
+  private powerFx!: PowerRenderer;
+  private powerUi?: PowerPanel;
+  /** Map objectives: Uplinks and supply crates (world view + the top-bar pill). */
+  private objFx!: ObjectiveRenderer;
+  private objPill: ObjectivePill | null = null;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
   private ended = false;
+  /** The clock waits for the player's opener pick. */
+  private holdStart = false;
   private simSeconds = 0;
   private lastAlert = -1e9;
   /** Smooth-zoom target and its screen anchor point (game px). */
@@ -89,15 +142,38 @@ export class GameScene extends Phaser.Scene {
       hideOnComplete: true
     });
 
-    this.world = createMapWorld(gameMode.mapId);
+    this.world = createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    if (this.world.survival)
+      this.survival = new SurvivalPresenter(this.world, {
+        mapId: gameMode.mapId,
+        difficulty: this.world.survival.difficulty,
+        spectator: gameMode.spectator || !!this.world.ops, // (no Last Stand records in an op)
+        ping: (x, y) => this.hud?.ping(x, y),
+        gfx: this.add.graphics().setDepth(10.5)
+      });
     // spectating pits two Normal commanders against each other
-    this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
+    // mutators / the Daily Op decide which personalities can play (meta.ts)
+    const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
+    this.ai = this.world.survival ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
-      this.blueAi = createAiState(undefined, "normal", (Math.random() * 1e9) | 0);
+      this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
+    // quick-start openers: spectated AIs take theirs at once; the player picks first
+    // (skirmish and the Daily Op only: Last Stand and Ops set up their own starts)
+    const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
+    if (this.world.survival || this.world.ops) {
+      /* no opener cards */
+    } else if (this.blueAi && this.ai) {
+      // (match rules may ban a pick, e.g. no Fab Plants under Air War: take an allowed one)
+      openers.blue = allowedOpener(this.world, "blue", pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue")) ?? undefined;
+      openers.red = allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red")) ?? undefined;
+      if (openers.blue) applyOpener(this.world, "blue", openers.blue);
+      if (openers.red) applyOpener(this.world, "red", openers.red);
+    } else this.holdStart = OPENER_IDS.some((id) => !openerBlocked(this.world, PLAYER, id));
+    tickFog(this.world); // the base shows through the opener cards
 
     const cam = this.cameras.main;
     cam.roundPixels = false;
@@ -118,11 +194,87 @@ export class GameScene extends Phaser.Scene {
       (b) => this.buildingShown(b),
       (f) => f === PLAYER || !this.ctrl.showFog
     );
+    this.juice = new CombatJuice(this, {
+      world: this.world, entities: this.entities, fx: this.fx, player: PLAYER, spectator: gameMode.spectator,
+      sees: (x, y) => this.seesPoint(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      px: (css) => this.px(css)
+    });
+    this.mood = new BattleMood({
+      player: PLAYER, spectator: gameMode.spectator,
+      earshot: (x, y) => this.earshot(x * TILE, y * TILE),
+      sees: (x, y) => this.seesPoint(x, y),
+      factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null,
+      // (the siren's rule: a strike that would catch our units or buildings)
+      threatened: (x, y, r) => calldownThreatens(this.world, PLAYER, x, y, r)
+    });
+    music.play("battle", this.world.biome);
+    const inView = (x: number, y: number) => this.cameras.main.worldView.contains(x * TILE, y * TILE);
+    this.radio = new Announcer({
+      world: this.world, player: PLAYER, spectator: gameMode.spectator, onScreen: inView,
+      caption: (l) => this.hud.radio(l.text, l.tone, l.x, l.y)
+    });
+    this.voiceHooks = {
+      world: this.world, player: PLAYER, spectator: gameMode.spectator,
+      inView: (x, y) => this.seesPoint(x, y) && inView(x, y)
+    };
+    this.wrecks = new WreckRenderer(this, this.world, this.fx, {
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      pose: (id) => this.entities.pose(id),
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      hint: (msg, x, y, shown) =>
+        this.hud.offerHint({ id: "salvage", msg, priority: HINTS.priority.salvage, x, y, onShow: shown })
+    });
+    this.powerFx = new PowerRenderer(this, this.world, this.fx, {
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      pos: (id) => this.entities.pos(id),
+      isShown: (id) => this.entities.isShown(id),
+      // (when the game just dropped to 1× for this strike, that note already says it)
+      alert: (msg, x, y) => {
+        // (its shells landing are the same event: no "Units under attack!" line right after it)
+        this.lastAlert = this.simSeconds;
+        if (!this.aware.slowedFor("calldown")) this.hud.alert(msg, x, y);
+      },
+      ping: (x, y) => this.hud.ping(x, y)
+    });
+    this.objFx = new ObjectiveRenderer(this, this.world, this.fx, {
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      alert: (msg, x, y) => this.hud.alert(msg, x, y),
+      notify: (msg, tone) => this.hud.notify(msg, tone),
+      ping: (x, y) => this.hud.ping(x, y),
+      hint: (msg, x, y) => this.hud.hint(msg, x, y)
+    });
     this.overlay = this.add.graphics().setDepth(8);
-    this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
+    this.place = new PlacementView({
+      scene: this, world: this.world, ctrl: this.ctrl, dpr: this.dpr,
+      viewCentre: () => this.aware.viewCentre(),
+      inView: (x, y) => this.aware.inPlay(x, y, 40),
+      glideTo: (x, y) => this.aware.glideTo(x, y),
+      hint: (id, msg) => this.command.hint(id, msg),
+      handoff: (p) => this.gest.down(p, performance.now())
+    });
+    this.chronicle = chronicleOf(this.world);
+    this.heroes = new HeroPresenter(this, this.world, {
+      dpr: this.dpr,
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      seesPoint: (x, y) => this.seesPoint(x, y),
+      unitPos: (id) => this.entities.pos(id),
+      notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
+    });
 
     const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
-    const c = focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 };
+    const c = gameMode.op?.focus ?? (focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 });
     cam.setZoom(DEFAULT_ZOOM * this.dpr);
     this.clampZoom();
     cam.centerOn(c.x * TILE, c.y * TILE);
@@ -133,7 +285,7 @@ export class GameScene extends Phaser.Scene {
     // the starting harvester gets to work immediately
     for (const u of this.world.units.values())
       if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator) {
-        const f = nearestReachableResource(this.world, u.x, u.y);
+        const f = nearestReachableResource(this.world, u.x, u.y, u.faction);
         if (f) this.ctrl.enqueue({ type: "harvest", faction: PLAYER, unitIds: [u.id], x: f.x + 0.5, y: f.y + 0.5 });
       }
     this.hud = createHud({
@@ -141,16 +293,79 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       camera: cam,
       dpr: this.dpr,
-      centerCamera: (wx, wy) => cam.centerOn(wx * TILE, wy * TILE),
-      zoomBy: (f) => this.zoomBy(f),
+      // (the HQ-kill cinematic owns the camera: minimap, toasts, banners and zoom buttons wait)
+      centerCamera: (wx, wy) => {
+        if (!this.finale) cam.centerOn(wx * TILE, wy * TILE);
+      },
+      zoomBy: (f) => {
+        if (!this.finale) this.zoomBy(f);
+      },
       matchSeconds: () => this.simSeconds,
+      wrecks: () => this.wrecks.dots(),
+      targetChip: () => this.powerUi?.chip() ?? null,
+      calldowns: () => this.powerFx.rings(),
+      minimapOverlay: (ctx, k) => this.objFx.minimap(ctx, k),
       strategies: this.blueAi
-        ? { blue: this.blueAi.strategy.label, red: this.ai.strategy.label }
+        ? {
+            blue: `${this.blueAi.strategy.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
+            red: !this.ai ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
+          }
         : null,
-      enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
+      enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
+      cardNote: (k) => this.command?.cardNote(k) ?? null,
+      busy: () => this.holdStart || !!this.finale
     });
 
-    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    this.aware = new Awareness({
+      scene: this, world: this.world, player: PLAYER, spectator: gameMode.spectator, dpr: this.dpr,
+      hud: this.hud, radio: this.radio,
+      sees: (x, y) => this.seesPoint(x, y),
+      cinematic: () => !!this.finale,
+      pulse: (x, y, c) => this.fx.pulse(x * TILE, y * TILE, c, 1.4)
+    });
+    this.command = new CommandUi({
+      root: document.getElementById("hud")!, world: this.world, ctrl: this.ctrl, spectator: gameMode.spectator,
+      glideTo: (x, y) => this.aware.glideTo(x, y),
+      tip: (msg, ms) => this.hud.hint(msg, ms),
+      offerHint: (h) => this.hud.offerHint(h)
+    });
+    this.objPill = createObjectivePill(this.world, PLAYER, gameMode.spectator);
+    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.objPill?.destroy();
+      this.objFx.destroy();
+    });
+    const powerUi = createPowerPanel({
+      world: this.world,
+      ctrl: this.ctrl,
+      notify: (msg, tone) => this.hud.notify(msg, tone),
+      // (long-press details run longer than a 2-line ticker toast)
+      info: (msg) => this.hud.hint(msg, 6500),
+      offerHint: (h) => this.hud.offerHint(h),
+      viewCentre: () => ({ x: cam.midPoint.x / TILE, y: cam.midPoint.y / TILE })
+    });
+    this.powerUi = powerUi;
+
+    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.command.destroy();
+      this.place.destroy();
+      this.aware.destroy();
+      powerUi.destroy();
+      this.powerFx.destroy();
+      this.hud.destroy();
+      this.radio.destroy();
+    });
+    // Daily Op / mutators banner (with opener cards up it waits for the pick: the cards would hide it)
+    if (!this.holdStart) window.setTimeout(() => announceRules(this.world), 1200);
+    if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
+    if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
+    if (this.holdStart) {
+      const picker = showOpenerPicker({
+        context: `${mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
+        onPick: (id) => this.startWithOpener(id),
+        blocked: (id) => openerBlocked(this.world, PLAYER, id)
+      });
+      this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => picker.destroy());
+    }
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -158,9 +373,55 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       cam,
       scene: this,
+      announce,
+      music,
+      radio: this.radio,
+      voices,
+      aware: this.aware,
+      place: this.place,
+      command: this.command,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
+  }
+
+  /** Open on the player's HQ, home field and factory site, framed clear of the HUD. */
+  private frameStart(): void {
+    const box = startBox(this.world, PLAYER);
+    if (!box) return;
+    const cam = this.cameras.main;
+    const ins = hudInsets();
+    const vw = cam.width / this.dpr;
+    const vh = cam.height / this.dpr;
+    const fit = Phaser.Math.Clamp(fitZoom(box, vw, vh, ins, TILE), 0.4, 0.75);
+    cam.setZoom(this.clampedZoom(fit * this.dpr));
+    this.targetZoom = cam.zoom;
+    const at = frameCentre(box, cam.zoom / this.dpr, vw, vh, ins, TILE);
+    cam.centerOn(at.x, at.y);
+  }
+
+  /** The player picked an opener: both sides get theirs and the clock starts. */
+  private startWithOpener(id: OpenerId): void {
+    if (!this.holdStart) return;
+    const mine = applyOpener(this.world, PLAYER, id);
+    const red = this.ai && allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
+    if (red) applyOpener(this.world, "red", red);
+    tickFog(this.world);
+    this.holdStart = false;
+    // roll-out flourish on everything that just arrived
+    const b = mine.buildingId !== null ? this.world.buildings.get(mine.buildingId) : null;
+    if (b) {
+      const c = buildingCenter(b);
+      this.fx.pulse(c.x * TILE, c.y * TILE, 0x7ef29b, BUILDINGS[b.kind].size);
+    }
+    for (const uid of mine.unitIds) {
+      const u = this.world.units.get(uid);
+      if (u) this.fx.pulse(u.x * TILE, u.y * TILE, 0x7ec1ff, 0.8);
+    }
+    sfx.play("build");
+    const o = OPENERS[id];
+    announce({ key: `opener-${id}`, text: `${o.name}!`, sub: o.rollout, tone: "good", priority: 1 });
+    announceRules(this.world); // (queued behind the roll-out)
   }
 
   /** Nudge the smooth-zoom target (zoom buttons, +/- keys, wheel). */
@@ -188,6 +449,7 @@ export class GameScene extends Phaser.Scene {
       const a = this.zoomAnchor ?? { x: cam.width / 2, y: cam.height / 2 };
       this.zoomAround(next, a.x, a.y);
     }
+    if (this.finale) return; // the cinematic owns the camera (its pan and push-in): no keys, no momentum
     // keyboard panning (arrows / WASD), speed in CSS px/s
     const panSpeed = (700 * this.dpr * delta) / 1000 / cam.zoom;
     let kx = 0;
@@ -219,34 +481,110 @@ export class GameScene extends Phaser.Scene {
     this.gest.tick(performance.now());
     this.updateCamera(delta);
 
-    if (!this.ctrl.paused && !this.ended) {
-      this.acc += Math.min(delta, 250);
-      while (this.acc >= TICK_MS) {
-        this.acc -= TICK_MS;
+    if (!this.ctrl.paused && !this.ended && !this.holdStart) {
+      // game speed (1–4×), at most AWARE.maxTicksPerFrame ticks per frame
+      const plan = planTicks(this.acc, delta, this.aware.value);
+      this.acc = plan.acc;
+      for (let i = 0; i < plan.ticks; i++) {
+        // decided mid-frame: the winning tick's events were handled once, don't replay them
+        if (this.world.winner) break;
         this.snapshotPrev();
-        const cmds = this.blueAi
-          ? [...tickAi(this.world, "blue", this.blueAi), ...tickAi(this.world, "red", this.ai)]
-          : [...this.ctrl.drainCommands(), ...tickAi(this.world, "red", this.ai)];
-        step(this.world, cmds);
+        const blue = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
+        const red = this.ai ? tickAi(this.world, "red", this.ai) : []; // (Last Stand: the waves have no commander)
+        step(this.world, [...blue, ...red]);
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
       }
     }
     this.ctrl.prune();
     const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
-    this.worldView.update(delta, this.ctrl.showFog);
-    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
+    this.finale?.update(delta);
+    const slow = this.finale?.timeScale ?? 1;
+    this.worldView.update(delta * slow, this.ctrl.showFog);
+    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta * slow);
+    this.wrecks.sync(this.ctrl.paused ? 0 : delta * slow);
+    this.powerFx.sync(this.ctrl.paused ? 0 : delta * slow, alpha, this.powerUi?.preview() ?? null);
+    this.objFx.sync(this.ctrl.paused ? 0 : delta * slow, alpha);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
-    this.fx.update(this.ctrl.paused ? 0 : delta);
+    this.fx.update(this.ctrl.paused ? 0 : delta * slow);
+    this.juice.update(this.ctrl.paused ? 0 : delta * slow);
+    this.place.update(delta);
     this.drawOverlay(alpha);
-    this.hud.update();
+    this.hud.update(delta);
+    this.command.update();
+    this.aware.update(delta, this.ctrl.paused);
+    voices.watchSelection(this.ctrl.selectedUnits, this.world);
+    this.radio.update(delta, this.ctrl.paused);
+    music.update({
+      intensity: this.mood.update(delta / 1000, this.simSeconds),
+      alarm: this.mood.alarm(this.simSeconds),
+      paused: this.ctrl.paused
+    });
+    this.powerUi?.update();
+    this.objPill?.update();
 
     if (this.world.winner && !this.ended) {
       this.ended = true;
       const won = this.world.winner === PLAYER;
-      if (!gameMode.spectator) sfx.play(won ? "victory" : "defeat");
-      this.time.delayedCall(1400, () => this.hud.showEnd(this.world.winner!));
+      // Last Stand always ends in defeat; a new record still gets the fanfare
+      const run = this.survival && !gameMode.spectator && !this.world.ops ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
+      this.chronicle.finish();
+      settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
+      this.playFinale(() => {
+        // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
+        const outcome = finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
+        if (!music.finale(outcome) && !gameMode.spectator) sfx.play(outcome);
+      });
     }
+  }
+
+  /**
+   * The HQ kill: slow motion, a camera glide onto the wreck, rolling blasts,
+   * a white flash with the result line, then the after-action report.
+   */
+  private playFinale(stinger: () => void): void {
+    const winner = this.world.winner!;
+    // an op that ended on its objective has no HQ wreck: look where it was decided, skip the blasts
+    const opEnd = this.world.ops?.result;
+    const at = (opEnd?.byGoal ? { x: opEnd.x, y: opEnd.y, size: 3 } : null) ??
+      this.finaleAt ?? { x: this.world.width / 2, y: this.world.height / 2, size: 3 };
+    const spec = gameMode.spectator;
+    const won = winner === PLAYER;
+    this.glide = null;
+    this.gest.reset(); // a drag or pinch in progress lets go of the camera
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    const zoom = finaleZoom(this.cameras.main.zoom, DEFAULT_ZOOM * this.dpr);
+    const free = freeAreaOffset();
+    this.finale = new Finale({
+      scene: this,
+      fx: this.fx,
+      ...at,
+      blasts: !opEnd?.byGoal,
+      shiftX: (free.x * this.dpr) / this.clampedZoom(zoom),
+      shiftY: (free.y * this.dpr) / this.clampedZoom(zoom),
+      onFlash: () => {
+        stinger();
+        const loser = winner === "blue" ? "Red" : "Blue";
+        announce(
+          this.ops
+            ? this.ops.endAnnouncement()
+            : this.survival
+            ? { key: "base-overrun", text: "Base overrun", sub: "The HQ has fallen", tone: "bad", priority: 0, x: at.x, y: at.y }
+            : spec
+              ? { key: "hq-destroyed", text: `${loser} HQ destroyed`, sub: `${loser === "Red" ? "Blue" : "Red"} wins`, tone: "epic", priority: 0, x: at.x, y: at.y }
+              : won
+                ? { key: "victory", text: "Enemy HQ destroyed", sub: "Victory", tone: "epic", priority: 0, x: at.x, y: at.y }
+                : { key: "defeat", text: "Our HQ has fallen", sub: "Defeat", tone: "bad", priority: 0, x: at.x, y: at.y }
+        );
+      },
+      onDone: () => {
+        this.finale = null;
+        this.hud.showEnd(winner);
+      }
+    });
+    this.zoomBy(zoom / this.targetZoom);
   }
 
   // ------------------------------------------------------------- sim glue --
@@ -263,17 +601,38 @@ export class GameScene extends Phaser.Scene {
   }
 
   private afterTick(): void {
-    for (const ev of this.world.fx) this.handleFx(ev);
+    // first: game-speed safety may drop to 1× and say why, so the alerts below can stay quiet
+    this.aware.events(this.world.fx, this.simSeconds);
+    for (const ev of this.world.fx) {
+      this.handleFx(ev);
+      this.wrecks.onFx(ev);
+      this.powerFx.onFx(ev);
+      this.objFx.onFx(ev);
+    }
+    this.juice.events(this.world.fx);
+    this.mood.events(this.world.fx, this.simSeconds);
+    this.radio.events(this.world.fx, this.simSeconds);
+    voices.events(this.world.fx, this.voiceHooks);
+    this.command.events(this.world.fx, this.simSeconds);
+    this.ops?.tick();
+    this.chronicle.tick();
+    this.heroes.flush();
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
       const tint = fb.kind === "attack" ? 0xff5a4a : fb.kind === "rally" ? 0xffe066 : 0x7ef29b;
       this.fx.marker(fb.x * TILE, fb.y * TILE, tint);
       sfx.play("click", 0.6);
+      voices.order(fb.kind, this.ctrl.selectedUnits, this.world);
     }
   }
 
   private handleFx(ev: FxEvent): void {
+    this.chronicle.onFx(ev);
+    this.heroes.handleFx(ev);
+    if (ev.type === "death" && ev.buildingKind === "hq")
+      this.finaleAt = { x: ev.x, y: ev.y, size: BUILDINGS.hq.size };
+    if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
       case "shot": {
@@ -307,7 +666,7 @@ export class GameScene extends Phaser.Scene {
           const c = buildingCenter(b);
           this.fx.pulse(c.x * TILE, c.y * TILE, 0x7ef29b, BUILDINGS[b.kind].size);
         } else if (u) {
-          sfx.play("ready", 0.5);
+          if (!voices.active) sfx.play("ready", 0.5); // else the unit reports in (voices.ts)
           this.fx.pulse(u.x * TILE, u.y * TILE, 0x7ec1ff, 0.8);
         }
         break;
@@ -324,7 +683,10 @@ export class GameScene extends Phaser.Scene {
           if (!onScreen) {
             this.lastAlert = this.simSeconds;
             sfx.play("alert", 0.8);
-            this.hud.alert(ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
+            const hq = ev.building && w.buildings.get(ev.id)?.kind === "hq";
+            // (a drop to 1× for this attack already put "Speed 1× — HQ under attack" in the ticker)
+            if (!(hq && this.aware.slowedFor("hq")))
+              this.hud.alert(hq ? "HQ under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
           }
         }
         this.hud.ping(ev.x, ev.y);
@@ -333,7 +695,7 @@ export class GameScene extends Phaser.Scene {
         const u = w.units.get(ev.id);
         if (!u || !this.seesPoint(u.x, u.y)) return;
         this.fx.pulse(u.x * TILE, u.y * TILE, 0xffd66e, 1);
-        if (u.faction === PLAYER) sfx.play("rank", 0.7);
+        if (u.faction === PLAYER && !voices.answers(this.voiceHooks)) sfx.play("rank", 0.7); // else a voiced sparkle
         break;
       }
     }
@@ -424,7 +786,7 @@ export class GameScene extends Phaser.Scene {
       const p = this.entities.pos(u.id);
       if (!p) continue;
       const bw = Math.max(34, UNITS[u.kind].radius * TILE * 2);
-      this.healthBar(g, p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 14, bw, u.hp / max, u.faction === PLAYER);
+      this.healthBar(g, u.id, p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 14, bw, u.hp / max, u.faction === PLAYER);
       if (u.kind === "harvester" && u.faction === PLAYER && selected) {
         const k = u.cargo / ECONOMY.harvesterCapacity;
         g.fillStyle(0x10141c, 0.8).fillRect(p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 7, bw, 4);
@@ -436,7 +798,7 @@ export class GameScene extends Phaser.Scene {
       const size = BUILDINGS[b.kind].size;
       if (!this.entities.isShown(b.id)) continue;
       if (b.hp < max || this.ctrl.selectedBuilding === b.id)
-        this.healthBar(g, b.tx * TILE + 6, b.ty * TILE - 4, size * TILE - 12, b.hp / max, b.faction === PLAYER);
+        this.healthBar(g, b.id, b.tx * TILE + 6, b.ty * TILE - 4, size * TILE - 12, b.hp / max, b.faction === PLAYER);
       // production progress along the bottom edge of our factories
       const head = b.queue[0];
       if (head && b.faction === PLAYER) {
@@ -448,6 +810,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.survival?.drawOverlay((css) => this.px(css), this.time.now);
     this.drawPlacement(g);
 
     if (this.boxRect) {
@@ -463,53 +826,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawPlacement(g: Phaser.GameObjects.Graphics): void {
-    const kind = this.ctrl.placing;
-    if (!kind || !this.world.factions[PLAYER].pending?.ready) {
-      this.ghost.setVisible(false);
-      return;
-    }
-    const w = this.world;
-    // build-radius hint around our buildings
-    for (const b of w.buildings.values()) {
-      if (b.faction !== PLAYER) continue;
-      const c = buildingCenter(b);
-      const size = BUILDINGS[b.kind].size;
-      g.fillStyle(0x7ef29b, 0.05).fillCircle(c.x * TILE, c.y * TILE, (ECONOMY.buildRadius + size / 2) * TILE);
-    }
-    const size = BUILDINGS[kind].size;
-    const pointer = this.input.activePointer;
-    const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const tx = Math.round(wp.x / TILE - size / 2);
-    const ty = Math.round(wp.y / TILE - size / 2);
-    const ok = canPlaceBuilding(w, PLAYER, kind, tx, ty);
-    this.ghost
-      .setVisible(true)
-      .setFrame(buildingFrame(PLAYER, kind))
-      .setScale(ART_SCALE)
-      .setPosition((tx + size / 2) * TILE, (ty + size / 2) * TILE)
-      .setTint(ok ? 0xb8ffc8 : 0xff8080);
-    g.fillStyle(ok ? 0x37d67a : 0xe25555, 0.25).fillRect(tx * TILE, ty * TILE, size * TILE, size * TILE);
-    g.lineStyle(this.px(2), ok ? 0x37d67a : 0xe25555, 0.9).strokeRect(tx * TILE, ty * TILE, size * TILE, size * TILE);
+    this.place.draw(g, (css) => this.px(css));
   }
 
+  /** Damage-trail health bar (see render/juice-view.ts). */
   private healthBar(
     g: Phaser.GameObjects.Graphics,
+    id: number,
     x: number,
     y: number,
     width: number,
     ratio: number,
     friendly: boolean
   ): void {
-    const h = Math.max(5, this.px(4));
-    g.fillStyle(0x0a0d14, 0.85).fillRect(x - 1, y - 1, width + 2, h + 2);
-    const col = friendly
-      ? ratio > 0.6 ? 0x53d769 : ratio > 0.3 ? 0xf2c14e : 0xf06a4a
-      : 0xe25555;
-    g.fillStyle(col, 1).fillRect(x, y, Math.max(0, width * ratio), h);
-    // segment ticks make big health pools readable at a glance
-    const segs = Math.min(10, Math.round(width / 10));
-    g.fillStyle(0x0a0d14, 0.5);
-    for (let i = 1; i < segs; i++) g.fillRect(x + (width * i) / segs, y, 1, h);
+    this.juice.healthBar(g, id, x, y, width, ratio, friendly);
   }
 
   // --------------------------------------------------------------- input ---
@@ -528,11 +858,14 @@ export class GameScene extends Phaser.Scene {
   private setupInput(): void {
     const cam = this.cameras.main;
     this.gest = new GestureRecognizer({
-      onTap: (sx, sy) => {
+      onTap: (sx, sy, type) => {
+        if (this.place.tap(sx, sy, type)) return; // placing: move the ghost / build
         const p = this.worldAt(sx, sy);
+        if (this.powerUi?.tapWorld(p.x, p.y)) return; // an armed calldown fires here
         this.ctrl.tapWorld(p.x, p.y, hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee));
       },
       onDoubleTap: (sx, sy) => {
+        if (this.place.tap(sx, sy)) return; // 2nd tap lands on the ghost it just moved: build
         const p = this.worldAt(sx, sy);
         const hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         if (hit.kind !== "ownUnit") return;
@@ -584,6 +917,11 @@ export class GameScene extends Phaser.Scene {
         this.targetZoom = cam.zoom; // pinch is immediate; keep target in sync
       },
       onRightClick: (sx, sy) => {
+        if (this.powerUi?.targeting) return this.powerUi.cancel(); // right-click disarms a calldown
+        if (this.ctrl.placing) {
+          this.ctrl.placing = null; // right-click cancels placement
+          return;
+        }
         const p = this.worldAt(sx, sy);
         let hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         // right-click never re-selects; own entities count as ground
@@ -605,28 +943,56 @@ export class GameScene extends Phaser.Scene {
       button: (p.event as PointerEvent)?.button ?? 0
     });
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.finale) return; // the camera belongs to the cinematic now
       this.glide = null; // touching the map stops any glide
+      if (this.place.down(toPointer(p))) return; // a finger on the ghost drags it
       this.gest.down(toPointer(p), performance.now());
     });
-    this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.gest.move(toPointer(p), performance.now()));
-    const up = (p: Phaser.Input.Pointer) => this.gest.up(toPointer(p), performance.now());
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (!this.place.move(toPointer(p))) this.gest.move(toPointer(p), performance.now());
+    });
+    // an armed calldown's preview follows the mouse, or the finger on the map
+    const aim = (p: Phaser.Input.Pointer) => {
+      if (!this.powerUi?.targeting) return;
+      const q = this.worldAt(p.x / this.dpr, p.y / this.dpr);
+      this.powerUi.aim(q.x, q.y);
+    };
+    this.input.on("pointermove", aim);
+    this.input.on("pointerdown", aim);
+    const up = (p: Phaser.Input.Pointer) => {
+      if (!this.place.up(toPointer(p))) this.gest.up(toPointer(p), performance.now());
+    };
     this.input.on("pointerup", up);
     this.input.on("pointerupoutside", up);
-    this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) =>
-      this.gest.wheel(dy, p.x / this.dpr, p.y / this.dpr)
-    );
+    this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
+      if (!this.finale) this.gest.wheel(dy, p.x / this.dpr, p.y / this.dpr);
+    });
     this.input.keyboard?.on("keydown-ESC", () => {
+      this.powerUi?.cancel();
       this.ctrl.placing = null;
       this.ctrl.clearSelection();
     });
     this.cursors = this.input.keyboard?.createCursorKeys();
     this.wasd = this.input.keyboard?.addKeys("W,A,S,D") as typeof this.wasd;
+    // Phaser re-dispatches its whole key queue when several key events land in one frame
+    // (a modifier combo like Ctrl+1): act on each DOM event once
+    const handled = new WeakSet<KeyboardEvent>();
     this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
+      if (handled.has(e) || this.finale) return; // (the cinematic: no zoom, squads or jumps)
+      handled.add(e);
       if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
       else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);
-      else if (e.key === "p" || e.key === " ") this.hud.togglePause();
+      else if ((e.key === "p" || e.key === " ") && !this.holdStart) this.hud.togglePause();
       else if (e.key === "q") this.ctrl.selectArmy();
       else if (e.key === "Delete") this.ctrl.sellSelected();
+      else if (e.key === ".") this.aware.cycleSpeed();
+      else if (e.key === "j") this.aware.jump();
+      else if (/^Digit[1-3]$/.test(e.code)) {
+        // squads: 1–3 select (twice: fly there); Ctrl/Cmd/Shift + 1–3 save
+        const save = e.ctrlKey || e.metaKey || e.shiftKey;
+        if (save) e.preventDefault();
+        this.command.key(Number(e.code.slice(5)) - 1, save);
+      }
     });
   }
 

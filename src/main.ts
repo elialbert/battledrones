@@ -2,10 +2,17 @@ import Phaser from "phaser";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
 import { MAPS } from "./sim/maps";
 import { sfx } from "./game/audio";
+import { music } from "./game/music";
 import { mapAssetBase } from "./game/assets";
 import { GameScene } from "./game/GameScene";
-import { gameMode, loadSettings, saveSettings } from "./game/mode";
+import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
+import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
+import { mountMenuCareer, starsText } from "./ui/career";
+import { dailyOp, today, type DailyOp } from "./game/daily";
+import { opById, type OpDef } from "./sim/ops";
+import { mountMenuOps } from "./ui/ops";
+import { fullscreen } from "./ui/fullscreen";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -63,6 +70,8 @@ function setupPageZoomRescue(): void {
   });
 }
 setupPageZoomRescue();
+// a rematch or Menu reload dropped full screen: ask again on the first tap
+fullscreen.restoreOnGesture();
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -105,9 +114,24 @@ function showMenu(): void {
   const diffs = Object.keys(DIFFICULTY) as Difficulty[];
   menu.innerHTML = `
     <div class="keyart"></div>
+    <button class="round menu-mute" id="menu-mute" title="Mute all">🔊</button>
     <div class="menu-inner">
       <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
-      <p class="sub">Mine scrap. Build your swarm. Destroy the enemy HQ.</p>
+      <div class="menu-side" id="menuside">
+        <button class="rankbadge" id="rankbadge"></button>
+        <div class="dailyop" id="dailyop"></div>
+        <button class="mutbtn side"></button>
+      </div>
+      <p class="sub" id="sub"></p>
+      <div class="seg modes" id="gmode">
+        <button data-m="skirmish">⚔ Skirmish</button>
+        <button data-m="survival">🛡 Last Stand</button>
+        <button data-m="ops">🎖 Ops</button>
+      </div>
+      <p class="lsbest" id="lsbest" hidden></p>
+      <p class="lsbest opsum" id="opsum" hidden></p>
+      <div class="maps opcards" id="opcards" hidden></div>
+      <p class="blurb opblurb" id="opblurb" hidden></p>
       <div class="maps" id="maps">
         ${MAPS.map(
           (m) => `
@@ -115,6 +139,8 @@ function showMenu(): void {
             <img src="${mapAssetBase(m.id)}/thumb.webp" alt="" draggable="false" />
             <span class="mn">${m.name}</span>
             <span class="mb">${m.size}×${m.size} · ${m.biome}</span>
+            <span class="mbest" hidden></span>
+            <span class="mstars" hidden></span>
           </button>`
         ).join("")}
       </div>
@@ -122,6 +148,7 @@ function showMenu(): void {
       <div class="seg" id="diff">
         ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
       </div>
+      <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
       <div class="row">
         <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
@@ -140,18 +167,85 @@ function showMenu(): void {
   setArt();
   landscape.addEventListener("change", setArt);
 
+  // menu music: a gentle take on the selected map's theme, from the first touch
+  const biomeOf = (id: string) => MAPS.find((m) => m.id === id)?.biome ?? "temperate";
+  music.play("menu", biomeOf(gameMode.mapId));
+  sfx.unlockOnGesture();
+  const muteBtn = menu.querySelector<HTMLButtonElement>("#menu-mute")!;
+  const syncMute = () => (muteBtn.textContent = sfx.muted ? "🔇" : "🔊");
+  syncMute();
+  const offMute = sfx.onChange(syncMute);
+  muteBtn.addEventListener("click", () => sfx.setMuted(!sfx.muted));
+
+  // career: rank badge, Daily Op card, mutator picker, map stars (ui/career.ts)
+  const career = mountMenuCareer(menu, {
+    playDaily: (op) => void begin(false, () => startDaily(op)),
+    changed: () => saveSettings()
+  });
+  // Ops: op cards, progress line and the briefing sheet (ui/ops.ts)
+  const ops = mountMenuOps(menu, {
+    start: (op) => void begin(false, () => startOp(op)),
+    selectedId: () => gameMode.opId,
+    select: (id) => {
+      gameMode.opId = id;
+      saveSettings();
+      sync(); // the Play button names the picked op
+    }
+  });
   const sync = () => {
-    menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => el.classList.toggle("on", el.dataset.id === gameMode.mapId));
+    const survival = gameMode.mode === "survival";
+    const opsMode = gameMode.mode === "ops";
+    career.sync();
+    for (const id of ["#opsum", "#opcards", "#opblurb"]) menu.querySelector<HTMLElement>(id)!.hidden = !opsMode;
+    for (const id of ["#maps", "#blurb", "#diff"]) menu.querySelector<HTMLElement>(id)!.hidden = opsMode;
+    ops.sync();
+    menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
+    menu.classList.toggle("ops-mode", opsMode);
+    menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) => {
+      el.classList.toggle("on", el.dataset.id === gameMode.mapId);
+      // Last Stand: each map card shows its best for the chosen difficulty
+      const badge = el.querySelector<HTMLElement>(".mbest")!;
+      const rec = survival ? loadBest(el.dataset.id!, gameMode.difficulty) : null;
+      badge.hidden = !rec;
+      badge.textContent = rec ? `🛡 ${rec.best}` : "";
+      const stars = el.querySelector<HTMLElement>(".mstars")!;
+      const mask = survival ? 0 : career.starsFor(el.dataset.id!);
+      stars.hidden = survival;
+      stars.textContent = starsText(mask);
+      stars.classList.toggle("got", mask > 0);
+    });
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
+    menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
     const m = MAPS.find((x) => x.id === gameMode.mapId);
     menu.querySelector("#blurb")!.textContent = m?.blurb ?? "";
+    menu.querySelector("#sub")!.textContent = opsMode
+      ? "Short missions with a twist. Three stars each — can you take them all?"
+      : survival
+        ? "Hold your base against endless, themed waves. How long can you last?"
+        : "Mine scrap. Build your swarm. Destroy the enemy HQ.";
+    const best = menu.querySelector<HTMLElement>("#lsbest")!;
+    best.hidden = !survival;
+    if (survival) {
+      const rec = loadBest(gameMode.mapId, gameMode.difficulty);
+      const where = `${m?.name ?? "this map"} · ${DIFFICULTY[gameMode.difficulty].label}`;
+      best.innerHTML = rec
+        ? `🏆 Best on ${where}: <b>${rec.best} wave${rec.best === 1 ? "" : "s"}</b>`
+        : `No record yet on ${where} — set one!`;
+    }
+    const sel = ops.selected();
+    menu.querySelector("#play")!.textContent = opsMode
+      ? ops.locked(sel) ? "🔒 Locked" : `▶ Op: ${sel.title}`
+      : survival ? "▶ Start Last Stand" : "▶ Play";
+    menu.querySelector("#play")!.classList.toggle("locked", opsMode && ops.locked(sel));
+    menu.querySelector("#play-spectate")!.textContent = survival ? "🤖 Watch AI defend" : "🤖 Watch AI vs AI";
   };
   sync();
-  menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) =>
+  menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) =>
     el.addEventListener("click", () => {
       gameMode.mapId = el.dataset.id!;
       saveSettings();
       sync();
+      music.play("menu", biomeOf(gameMode.mapId));
     })
   );
   menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) =>
@@ -161,42 +255,80 @@ function showMenu(): void {
       sync();
     })
   );
+  menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) =>
+    el.addEventListener("click", () => {
+      gameMode.mode = el.dataset.m as GameType;
+      sfx.play("click", 0.5);
+      saveSettings();
+      sync();
+    })
+  );
   menu.querySelector("#howto")!.addEventListener("click", () => {
     const h = menu.querySelector<HTMLElement>("#helpbox")!;
     h.hidden = !h.hidden;
   });
 
-  const begin = async (spectator: boolean) => {
+  // one match per page: a second tap while the full-screen request is
+  // pending (Android takes a moment) must not boot a second game
+  let starting = false;
+  const begin = async (spectator: boolean, setup?: () => void) => {
+    if (starting) return;
+    starting = true;
+    setup?.(); // (the Daily Op / an op points the match at its map and rules)
     gameMode.spectator = spectator;
     sfx.unlock();
     sfx.play("click");
-    // Full-screen where the platform allows it (Android/desktop; iOS Safari
-    // has no Fullscreen API for arbitrary elements — dvh layout covers it).
-    try {
-      await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
-    } catch {
-      /* declined or unsupported — fine */
-    }
+    await fullscreen.enter(); // (Android/desktop; iOS Safari's dvh layout covers it)
+    offMute();
     menu.remove();
     startGame();
   };
-  menu.querySelector("#play")!.addEventListener("click", () => begin(false));
+  menu.querySelector("#play")!.addEventListener("click", () => {
+    if (gameMode.mode !== "ops") return void begin(false);
+    const op = ops.selected();
+    sfx.play("click", 0.5);
+    if (!ops.locked(op)) ops.openBrief(op);
+  });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
 
   // "Rematch" from the end screen skips straight back into a game
   let rematch = false;
   try {
-    rematch = sessionStorage.getItem("battledrones.rematch") === "1";
+    const token = sessionStorage.getItem("battledrones.rematch");
+    const op = token?.startsWith("op:") ? opById(token.slice(3)) : null;
+    rematch = token === "1" || token === "spectate" || token === "daily" || !!op;
+    if (token === "spectate") gameMode.spectator = true; // another AI-vs-AI match
+    if (token === "daily") startDaily(dailyOp(today()));
+    if (op) startOp(op);
     sessionStorage.removeItem("battledrones.rematch");
   } catch {
     /* ignore */
   }
   if (rematch) {
+    offMute();
     menu.remove();
     startGame();
-    // audio needs a gesture: unlock on the first touch
-    window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
+    // audio needs a gesture: sfx.unlockOnGesture() (above) starts it on the first touch
   }
+}
+
+/** Point the next match at an op (not saved: the op fixes map, enemy and rules). */
+function startOp(op: OpDef): void {
+  // remember the pick (and the Ops tab) before the op's own map and difficulty take over
+  gameMode.opId = op.id;
+  gameMode.mode = "ops";
+  saveSettings();
+  gameMode.op = op;
+  gameMode.mapId = op.map;
+  gameMode.difficulty = op.ai && op.ai !== "survival" ? op.ai.difficulty : op.survival?.difficulty ?? "normal";
+}
+
+/** Point the next match at the Daily Op (not saved: the player's own picks stay). */
+function startDaily(op: DailyOp): void {
+  gameMode.daily = op;
+  gameMode.mapId = op.mapId;
+  gameMode.difficulty = op.difficulty;
+  gameMode.mode = "skirmish";
 }
 
 showMenu();

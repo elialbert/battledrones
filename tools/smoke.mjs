@@ -1,7 +1,8 @@
 // Headless smoke test: serves docs/ (or uses a given URL), boots the game
-// and drives the REAL input paths with taps: construct + place a Fab Plant,
-// queue a Stinger, select it on the canvas and order it around, open an
-// info card, pause/resume. Fails on any console error.
+// and drives the REAL input paths with taps: pick an opener card, construct
+// + place a building (tap moves the ghost, tapping the ghost builds), queue
+// a Stinger, select it on the canvas, save it as squad 1 and order it around,
+// open an info card, pause/resume. Fails on any console error.
 // Usage: node tools/smoke.mjs [width] [height] [--shots] [url]
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
@@ -58,7 +59,20 @@ await page.evaluate(() => localStorage.setItem("battledrones.settings", JSON.str
 await page.reload({ waitUntil: "networkidle" });
 await shot("menu");
 await page.tap("#play");
+// the opener cards hold the clock until one is picked
+await page.waitForSelector(".op-card", { timeout: 30000 });
+await page.waitForTimeout(600);
+await shot("openers");
+if ((await world(() => window.__bd.world.tick)) !== 0) fail("the sim ran before an opener was picked");
+// Air Wing leaves the Fab Plant to build by hand below
+await page.locator(".op-card[data-id=airwing]").tap();
 await page.waitForFunction(() => window.__bd?.world?.tick > 5, null, { timeout: 30000 });
+const opened = await world(() => {
+  const w = window.__bd.world;
+  const mine = (k) => [...w.units.values()].filter((u) => u.faction === "blue" && u.kind === k).length;
+  return { airpad: [...w.buildings.values()].some((b) => b.faction === "blue" && b.kind === "airpad"), wasps: mine("wasp"), harvesters: mine("harvester") };
+});
+if (!opened.airpad || opened.wasps !== 3 || opened.harvesters !== 2) fail(`Air Wing opener not applied: ${JSON.stringify(opened)}`);
 await page.waitForTimeout(500);
 await shot("start");
 
@@ -105,10 +119,19 @@ const spot = await world(() => {
 });
 if (!spot) fail("no valid Fab spot found");
 else {
+  const isPlaced = () => world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === "blue" && b.kind === "fab-plant"));
+  // on touch a tap moves the ghost there (no build yet) …
   await page.touchscreen.tap(spot.sx, spot.sy);
-  await ff(3);
-  const placed = await world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === "blue" && b.kind === "fab-plant"));
-  if (!placed) fail("tapping the map did not place the Fab Plant");
+  await page.waitForTimeout(350); // let the double-tap window lapse
+  await ff(2);
+  if (!(await isPlaced())) {
+    const at = await world(() => window.__bd.ctrl.placeAt);
+    if (!at || at.tx !== spot.tx || at.ty !== spot.ty) fail(`tapping the map did not move the ghost (placeAt=${JSON.stringify(at)})`);
+    // … and tapping the ghost builds it
+    await page.touchscreen.tap(spot.sx, spot.sy);
+    await ff(3);
+  }
+  if (!(await isPlaced())) fail("tapping the ghost did not place the Fab Plant");
 }
 await shot("placed");
 
@@ -137,7 +160,23 @@ if (sid) {
   await page.waitForTimeout(350); // let the double-tap window lapse
   const sel = await world(() => [...window.__bd.ctrl.selectedUnits]);
   if (!sel.includes(sid)) fail(`canvas tap did not select the Stinger (selected=${JSON.stringify(sel)})`);
-  await page.touchscreen.tap(pos.sx + 60, pos.sy - 60);
+  // hold squad chip 1: the selection is saved as squad 1
+  const sq = await page.locator(".sq").first().boundingBox();
+  await page.mouse.move(sq.x + sq.width / 2, sq.y + sq.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(550);
+  await page.mouse.up();
+  const squad = await world(() => window.__bd.ctrl.squads.slots[0]);
+  if (!squad.includes(sid)) fail(`holding squad chip 1 did not save the Stinger (squad=${JSON.stringify(squad)})`);
+  // tap open ground: a spot next to the Stinger that no HUD toast or banner is covering
+  const ground = await page.evaluate(({ sx, sy }) => {
+    for (const [dx, dy] of [[60, -60], [60, 60], [-60, 60], [-60, -60], [90, 0], [-90, 0]]) {
+      const el = document.elementFromPoint(sx + dx, sy + dy);
+      if (el && el.tagName === "CANVAS") return { x: sx + dx, y: sy + dy };
+    }
+    return { x: sx + 60, y: sy - 60 };
+  }, pos);
+  await page.touchscreen.tap(ground.x, ground.y);
   await ff(2);
   const order = await world((id) => window.__bd.world.units.get(id)?.order.type, sid);
   if (order !== "attackMove" && order !== "idle") fail(`ground tap gave order ${order}`);
@@ -167,7 +206,8 @@ if (await world(() => window.__bd.ctrl.paused)) fail("resume did not unpause");
 
 // 6. the AI must be doing something
 await ff(600);
-const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction === "red").length > 1);
+// (HQ + its opener factory are free: it must have built something since)
+const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction === "red").length > 2);
 if (!aiActive) fail("AI built nothing in the first minutes");
 await shot("late");
 
