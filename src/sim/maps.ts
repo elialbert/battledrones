@@ -1,6 +1,9 @@
 import { BUILDINGS } from "./balance";
 import { Terrain, type Biome, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
+import { setupSurvival, type SurvivalOptions } from "./modes/survival";
+import { applyMutators, type MutatorId } from "./rules";
+import { setupOp } from "./ops";
 
 /**
  * Skirmish maps. Every map is 2-player and point-symmetric (rotated 180°
@@ -314,6 +317,12 @@ function createClassicTerrain(w: World): void {
 export interface MatchOptions {
   /** Match seed for deterministic randomness (see rand.ts). Default: the map's seed. */
   seed?: number;
+  /** Last Stand: no red base; a wave director attacks blue instead (modes/survival.ts). */
+  survival?: SurvivalOptions;
+  /** Match mutators for both sides (rules.ts). */
+  mutators?: MutatorId[];
+  /** Ops: play this scenario (ops.ts) — its own rules, enemy, setup and goals. */
+  op?: string;
 }
 
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
@@ -337,6 +346,9 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   // starting harvester just east of each HQ (mirrored: west of red's)
   spawnUnit(w, "harvester", "blue", hx + hs + 1.5, hy + 1.5);
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
+  if (opts.mutators?.length) applyMutators(w, opts.mutators);
+  if (opts.survival) setupSurvival(w, opts.survival);
+  if (opts.op) setupOp(w, opts.op);
   return w;
 }
 

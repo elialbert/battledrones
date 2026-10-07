@@ -10,6 +10,12 @@ import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
 import { radioCue } from "../game/announcer";
 import { mountAudioToggles } from "./audio-panel";
+import { createSurvivalHud } from "./survival";
+import { NAMED_RANK, heroLine, killsLabel, stars } from "../game/heroes";
+import { showReport } from "./report";
+import { markBanned, pauseRulesHtml } from "./career";
+import { rematchToken } from "../game/mode";
+import { createOpsHud } from "./ops";
 
 export interface HudApi {
   world: World;
@@ -36,6 +42,8 @@ export interface Hud {
   ping(x: number, y: number, kind?: "hit" | "inbound"): void;
   /** A 💡 tip in the ticker. */
   hint(msg: string, ms?: number): void;
+  /** A small toast (veteran promoted / lost…); tapping it jumps to (x, y). */
+  notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -84,6 +92,8 @@ export function createHud(api: HudApi): Hud {
     <div class="topbar">
       <div class="res" id="res"><span class="gear">⚙</span><span id="scrap">0</span><span class="rate" id="rate"></span></div>
       <div class="clock" id="clock">0:00</div>
+      <div class="wavepill" id="wavepill" hidden></div>
+      <div class="opspill" id="opspill" hidden></div>
     </div>
     <div id="versus" class="versus" hidden></div>
     <div class="tl">
@@ -138,6 +148,21 @@ export function createHud(api: HudApi): Hud {
 
   const w = api.world;
   const f = () => w.factions[PLAYER];
+  // Last Stand: wave pill, call-wave chip, minimap arrow, end screen
+  const surv = w.survival
+    ? createSurvivalHud($("#wavepill"), w, { ctrl: api.ctrl, spectator: api.ctrl.spectator, centerCamera: api.centerCamera })
+    : null;
+  /** Reload straight into another match ("1", "daily", "op:<id>"). */
+  const relaunch = (token: string) => {
+    try {
+      sessionStorage.setItem("battledrones.rematch", token);
+    } catch {
+      /* ignore */
+    }
+    window.location.reload();
+  };
+  // Ops: goal pill under the clock, objectives card, end-screen stars (ui/ops.ts)
+  const ops = w.ops ? createOpsHud($("#opspill"), root, w, { rematch: relaunch }) : null;
 
   // ---------------------------------------------------------- build bar ---
   let tab: Tab = "build";
@@ -302,10 +327,19 @@ export function createHud(api: HudApi): Hud {
   // --------------------------------------------------------------- chips ---
   type Chip = { id: string; label: string; cls?: string; on: () => void; active?: boolean };
   let lastChipKey = "";
+  let lastChipShape = "";
   function renderChips(list: Chip[]): void {
     const key = list.map((c) => c.id + (c.active ? "*" : "") + c.label).join("|");
     if (key === lastChipKey) return;
     lastChipKey = key;
+    // same chips, only a label ticked (e.g. the call-wave bonus): update the
+    // text in place so a tap in progress isn't lost to a rebuilt button
+    const shape = list.map((c) => c.id + (c.active ? "*" : "")).join("|");
+    if (shape === lastChipShape && chipsEl.children.length === list.length) {
+      list.forEach((c, i) => ((chipsEl.children[i] as HTMLElement).textContent = c.label));
+      return;
+    }
+    lastChipShape = shape;
     chipsEl.innerHTML = "";
     for (const c of list) {
       const b = document.createElement("button");
@@ -351,9 +385,14 @@ export function createHud(api: HudApi): Hud {
       if (ctrl.selectedUnits.size === 1) {
         const u = w.units.get([...ctrl.selectedUnits][0]!);
         if (u) {
-          key += `:${Math.round(u.hp)}:${u.rank}`;
+          key += `:${Math.round(u.hp)}:${u.rank}:${u.kills}`;
           const st = UNITS[u.kind];
-          html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b>${st.name}${u.rank ? ` <span class="rank">${"★".repeat(u.rank)}</span>` : ""}</b>
+          // veterans earn a callsign: "★★ Viper · Lancer · 9 kills"
+          const title =
+            u.rank >= NAMED_RANK
+              ? heroLine(w, u).replace(/^(★+)/, '<span class="rank">$1</span>')
+              : `${st.name}${u.rank ? ` <span class="rank">${stars(u.rank)}</span>` : ""}${u.kills ? ` · ${killsLabel(u.kills)}` : ""}`;
+          html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
             <span class="hp">${Math.ceil(u.hp)} / ${st.hp}</span><span class="hint">${st.role}</span></div>`;
         }
       } else {
@@ -440,7 +479,7 @@ export function createHud(api: HudApi): Hud {
   } catch {
     /* storage blocked: skip the hints */
   }
-  if (api.ctrl.spectator) hintStage = 99;
+  if (api.ctrl.spectator || w.ops) hintStage = 99; // ops brief the player themselves
   const hint = (msg: string) => toast(`💡 ${msg}`, undefined, "hint", 7000);
   function tutorial(): void {
     if (hintStage >= 99) return;
@@ -494,7 +533,7 @@ export function createHud(api: HudApi): Hud {
   }
 
   function togglePause(): void {
-    if (!endEl.hidden) return;
+    if (!endEl.hidden || w.winner) return; // over (the finale is playing): nothing to pause
     api.ctrl.paused = !api.ctrl.paused;
     pauseEl.hidden = !api.ctrl.paused;
     offToggles?.();
@@ -503,7 +542,9 @@ export function createHud(api: HudApi): Hud {
     pauseEl.innerHTML = `
       <div class="panel">
         <h1>PAUSED</h1>
-        <p class="time">${api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
+        <p class="time">${ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
+        ${ops ? ops.pauseHtml() : ""}
+        ${pauseRulesHtml(w)}
         <button class="cta" id="p-resume">▶ Resume</button>
         <div id="p-sound"></div>
         <button class="cta alt" id="p-help">How to play</button>
@@ -565,6 +606,8 @@ export function createHud(api: HudApi): Hud {
       const rate = ((fs.stats.scrapHarvested - first.v) / span) * 60;
       rateEl.textContent = secs > 10 ? `+${Math.round(rate)}/m` : "";
     }
+    surv?.update();
+    ops?.update();
 
     const ctrl = api.ctrl;
     tutorial();
@@ -599,10 +642,13 @@ export function createHud(api: HudApi): Hud {
       // units with no orders, when that's not simply everyone
       const idle = army > 0 ? ctrl.idleArmy() : [];
       const showIdle = idle.length > 0 && idle.length < army;
+      // Last Stand: bring the next wave in early
+      const call = surv?.chip();
       if (army)
-        chips.push({ id: "army", label: narrow && showIdle ? "⚔ Army" : "⚔ Select army", on: () => ctrl.selectArmy() });
+        chips.push({ id: "army", label: narrow && (showIdle || call) ? "⚔ Army" : "⚔ Select army", on: () => ctrl.selectArmy() });
       if (showIdle)
         chips.push({ id: "idle", label: `💤 Idle ${idle.length}`, cls: "idle", on: () => ctrl.selectUnits(ctrl.idleArmy()) });
+      if (call) chips.push(call);
     }
     renderChips(chips);
     renderSelection();
@@ -632,6 +678,7 @@ export function createHud(api: HudApi): Hud {
       el.classList.toggle("ready", !!(pendingThis && p.ready));
       el.classList.toggle("placing", ctrl.placing === kind);
       lock.hidden = !blocked;
+      markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       if (pendingThis && !p.ready) {
         prog.hidden = false;
         const total = BUILDINGS[kind].buildTime * TICK_RATE;
@@ -659,6 +706,7 @@ export function createHud(api: HudApi): Hud {
       el.classList.toggle("locked", !!blocked);
       el.classList.toggle("poor", fs.scrap < UNITS[kind].cost);
       lock.hidden = !blocked;
+      markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       badge.hidden = queued === 0;
       if (badge.textContent !== String(queued)) badge.textContent = String(queued);
       prog.hidden = headProg < 0;
@@ -760,6 +808,7 @@ export function createHud(api: HudApi): Hud {
       mctx.arc(p.x * k, p.y * k, 4 + age * 8, 0, Math.PI * 2);
       mctx.stroke();
     }
+    surv?.drawMinimap(mctx, k, performance.now());
     const cam = api.camera.worldView;
     mctx.strokeStyle = "rgba(255,255,255,0.85)";
     mctx.lineWidth = 1.5;
@@ -767,42 +816,26 @@ export function createHud(api: HudApi): Hud {
   }
 
   function showEnd(winner: Faction): void {
-    const spec = api.ctrl.spectator;
-    const won = winner === PLAYER;
-    const title = spec ? `${winner.toUpperCase()} WINS` : won ? "VICTORY" : "DEFEAT";
-    const titleClass = spec ? (winner === "blue" ? "win" : "lose") : won ? "win" : "lose";
-    const secs = Math.round(api.matchSeconds());
-    const mm = Math.floor(secs / 60);
-    const ss = String(secs % 60).padStart(2, "0");
-    const st = (fc: Faction) => w.factions[fc].stats;
-    const row = (label: string, a: number, b: number) =>
-      `<tr><td>${label}</td><td>${Math.floor(a)}</td><td>${Math.floor(b)}</td></tr>`;
-    endEl.hidden = false;
-    endEl.innerHTML = `
-      <div class="panel">
-        <h1 class="${titleClass}">${title}</h1>
-        <p class="time">${spec ? `${api.strategies?.blue} vs ${api.strategies?.red} · ` : `vs ${api.enemy.strategy} AI (${api.enemy.difficulty}) · `}${mm}:${ss}</p>
-        <table>
-          <tr><th></th><th>${spec ? "Blue" : "You"}</th><th>${spec ? "Red" : "Enemy"}</th></tr>
-          ${row("Units built", st("blue").unitsBuilt, st("red").unitsBuilt)}
-          ${row("Units lost", st("blue").unitsLost, st("red").unitsLost)}
-          ${row("Kills", st("blue").unitsKilled, st("red").unitsKilled)}
-          ${row("Buildings lost", st("blue").buildingsLost, st("red").buildingsLost)}
-          ${row("Scrap harvested", st("blue").scrapHarvested, st("red").scrapHarvested)}
-        </table>
-        <button id="again" class="cta">↻ Rematch</button>
-        <button id="menu" class="cta alt">Main menu</button>
-      </div>`;
-    shield(endEl);
-    endEl.querySelector("#again")!.addEventListener("click", () => {
-      try {
-        sessionStorage.setItem("battledrones.rematch", "1");
-      } catch {
-        /* ignore */
-      }
-      window.location.reload();
+    const rematch = () => relaunch(rematchToken());
+    if (surv && !ops) {
+      surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => window.location.reload());
+      shield(endEl);
+      return;
+    }
+    // the after-action report (src/ui/report.ts)
+    showReport(endEl, {
+      world: w,
+      winner,
+      pov: PLAYER,
+      spectator: api.ctrl.spectator,
+      secs: Math.round(api.matchSeconds()),
+      strategies: api.strategies,
+      enemy: api.enemy,
+      onRematch: rematch,
+      onMenu: () => window.location.reload(),
+      ...(ops?.reportOpts() ?? {})
     });
-    endEl.querySelector("#menu")!.addEventListener("click", () => window.location.reload());
+    shield(endEl);
   }
 
   return {
@@ -821,6 +854,9 @@ export function createHud(api: HudApi): Hud {
     hint(msg, ms = 7000) {
       toast(`💡 ${msg}`, undefined, "hint", ms);
     },
+    notice(msg, tone, x, y) {
+      toast(msg, () => api.centerCamera(x, y), tone === "info" ? "" : tone, 3600);
+    },
     togglePause,
     destroy() {
       offAnnounce();
@@ -834,6 +870,9 @@ export function createHud(api: HudApi): Hud {
 
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
+  <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
+  <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
+  <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00, win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>

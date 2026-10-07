@@ -2,7 +2,10 @@ import { BUILDINGS, ECONOMY, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
+import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
+import { isWoundedVeteran, veteranRetreats } from "./veterans";
+import { bannedBy } from "../rules";
 import type {
   Building,
   BuildingKind,
@@ -157,13 +160,17 @@ export interface AiState {
   waveValue: number;
 }
 
-/** Pass a strategy for deterministic behaviour (tests); omit for random. */
-export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number): AiState {
+/**
+ * Pass a strategy for deterministic behaviour (tests); omit for random.
+ * `tweak` overrides parts of the personality (Ops: a commander that never
+ * attacks gets `assaultValue: Infinity, harassGroup: Infinity`).
+ */
+export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number, tweak?: Partial<Strategy>): AiState {
   const names = DIFFICULTY[difficulty].pool;
   const picked = strategy ?? names[Math.floor(Math.random() * names.length)]!;
   return {
     mode: "buildup",
-    strategy: STRATEGIES[picked],
+    strategy: tweak ? { ...STRATEGIES[picked], ...tweak } : STRATEGIES[picked],
     difficulty,
     lastDecisionTick: -1000,
     seenAir: 0,
@@ -306,7 +313,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   }
   for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
     if (pad.queue.length >= depth) continue;
-    const wantRaptors = Math.min(s.strategy.airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
+    // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
+    const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
+    const airOnly = s.strategy.airOnly || airWar;
+    const wantRaptors = Math.min(airWar ? 5 : airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
     const armySize = army.length;
     let kind: UnitKind;
     if (have("scout") < 1 && w.tick - s.lastScoutTick > 60 * TICK_RATE) {
@@ -314,8 +324,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       s.lastScoutTick = w.tick;
     }
     else if (have("raptor") < wantRaptors) kind = "raptor";
-    else if (have("mender") < Math.min(3, Math.floor(armySize / 6))) kind = "mender";
-    else if (tech && (s.strategy.airOnly ? rand(s) < 0.4 : rand(s) < 0.25 + s.seenHeavy * 0.08)) kind = "hornet";
+    else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
+      kind = "mender";
+    else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < 0.25 + s.seenHeavy * 0.08))
+      kind = "hornet";
     else if (s.strategy.heavy && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks
     else kind = "wasp";
     produce(pad, kind);
@@ -362,10 +374,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     s.waveValue = armyValue;
   }
   if (s.mode === "assault" && armyValue < Math.max(RETREAT_ARMY_VALUE, s.waveValue * 0.25)) s.mode = "buildup";
+  // Last Stand: there is no enemy base to raid or assault — defend
+  if (w.survival) s.mode = "buildup";
 
   // ======================= tactics =========================================
   const used = new Set<number>();
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
+
+  // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
+  cmds.push(...veteranRetreats(faction, army, hqC, used));
 
   // --- 1. threat response: answer unengaged intruders with counters -------
   const threats = findThreats(w, faction, myBuildings, harvesters);
@@ -434,7 +451,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       (u) => !used.has(u.id) && dist(u.x, u.y, staging.x, staging.y) <= STAGE_RADIUS
     );
     const stagedValue = value(staged);
-    const launchAt = Math.max(450, assaultAt * 0.6);
+    // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
+    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * 0.6);
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, enemyHqPos);
@@ -451,6 +469,22 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         }
       }
     }
+  }
+
+  // --- Last Stand: hold a line toward the incoming wave, engage the siege ---
+  if (w.survival) {
+    const hold = survivalHoldPoint(w, faction);
+    if (hold) {
+      const squad = idleArmy()
+        .filter((u) => (hold.engage ? u.kind !== "mortar" || dist(u.x, u.y, hold.x, hold.y) > 7 : true))
+        .filter((u) => dist(u.x, u.y, hold.x, hold.y) > (hold.engage ? 2 : STAGE_RADIUS))
+        .map((u) => u.id);
+      squad.forEach((id) => used.add(id));
+      if (squad.length > 0) cmds.push({ type: "attackMove", faction, unitIds: squad, x: hold.x, y: hold.y });
+    }
+    // strong enough for what's next and nothing on the field: bring it on
+    if (earlyCallBonus(w) > 0 && armyValue >= 1.8 * waveBudget(w.survival.difficulty, w.survival.wave + 1))
+      cmds.push({ type: "callWave", faction });
   }
 
   // --- 5. menders tag along with whoever needs them -------------------------
@@ -602,11 +636,14 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   const have = new Map<BuildingKind, number>();
   for (const b of myBuildings) have.set(b.kind, (have.get(b.kind) ?? 0) + 1);
   const order = [...s.strategy.buildOrder];
+  // Last Stand: static defences earn their keep against endless waves
+  if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
+  const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   for (let i = 0; i < s.extraProduction; i++) {
-    const air = s.strategy.airOnly || (!s.strategy.heavy && pads + (i % 2) <= fabs);
+    const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
     order.push(air ? "airpad" : "fab-plant");
   }
   const wanted = new Map<BuildingKind, number>();

@@ -1,5 +1,6 @@
 import { BUILDINGS, UNITS } from "./balance";
 import type { Building, BuildingKind, Faction, World } from "./types";
+import { rulesOf } from "./rules";
 import { inBounds } from "./world";
 
 export const enum Vis {
@@ -77,6 +78,8 @@ export function tickFog(w: World): void {
         const size = BUILDINGS[b.kind].size;
         stamp(w, fog.vis, b.tx + size / 2, b.ty + size / 2, BUILDINGS[b.kind].sight + size / 2);
       }
+    // Clear Skies mutator: everything is in sight for both sides
+    if (rulesOf(w).fogOff) fog.vis.fill(Vis.Visible);
     // memory: record enemy buildings whose footprint we can see now
     for (const b of w.buildings.values())
       if (b.faction !== f && footprintVisible(w, f, b))

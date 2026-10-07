@@ -23,6 +23,8 @@ interface UnitView {
   turret?: Phaser.GameObjects.Image;
   turretShadow?: Phaser.GameObjects.Image;
   glow?: Phaser.GameObjects.Image;
+  /** Rank 3 (elite): a pulsing gold copy of the body behind it. */
+  shimmer?: Phaser.GameObjects.Image;
   chevrons: Phaser.GameObjects.Image[];
   face: number;
   aim: number;
@@ -196,7 +198,7 @@ export class EntityRenderer {
           this.scene.tweens.add({ targets: parts, alpha: 0, scale: "*=0.9", duration: 350, onComplete: () => parts.forEach((o) => o.destroy()) });
         else parts.forEach((o) => o.destroy());
       } else {
-        for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow, ...v.chevrons]) o?.destroy();
+        for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow, v.shimmer, ...v.chevrons]) o?.destroy();
       }
       this.views.delete(id);
     }
@@ -222,6 +224,8 @@ export class EntityRenderer {
       lastFired: u.firedTick, phase: (u.id * 1.37) % (Math.PI * 2), dustT: 0,
       gx: u.x * TILE, gy: u.y * TILE, bx: u.x * TILE, by: u.y * TILE, visible: true
     };
+    // units that arrive ranked (Last Stand waves) don't pop their chevrons
+    for (let i = 0; i < u.rank; i++) v.chevrons.push(s.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(0.8));
     if (stats.turret) {
       const tf = turretFrame(u.faction, u.kind);
       const [tx, ty] = frameOrigin(tf);
@@ -255,6 +259,7 @@ export class EntityRenderer {
     v.visible = visible;
     for (const o of [v.body, v.shadow, v.turret, v.turretShadow, v.glow]) o?.setVisible(visible);
     for (const c of v.chevrons) c.setVisible(visible);
+    v.shimmer?.setVisible(visible);
     const moved = Math.hypot(gx - v.gx, gy - v.gy);
     v.gx = gx;
     v.gy = gy;
@@ -324,9 +329,25 @@ export class EntityRenderer {
     if (v.glow) v.glow.setPosition(gx, gy + 2).setAlpha(0.25 + Math.sin(this.time / 200 + v.phase) * 0.08);
 
     // veterancy chevrons float above the unit
-    while (v.chevrons.length < u.rank)
-      v.chevrons.push(this.scene.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(0.8));
+    while (v.chevrons.length < u.rank) {
+      // a promotion: the new chevron pops in
+      const c = this.scene.add.image(0, 0, "fx-chevron").setDepth(8.2).setScale(1.6);
+      this.scene.tweens.add({ targets: c, scale: 0.8, duration: 450, ease: "Back.easeOut" });
+      v.chevrons.push(c);
+    }
     v.chevrons.forEach((c, i) => c.setPosition(bx - (u.rank - 1) * 7 + i * 14, by - 30));
+    if (u.rank >= 3 && !v.shimmer)
+      v.shimmer = this.scene.add
+        .image(0, 0, ATLAS, v.body.frame.name)
+        .setOrigin(v.body.originX, v.body.originY)
+        .setTint(0xffd66e)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(v.body.depth - 0.01);
+    v.shimmer
+      ?.setPosition(bx, by)
+      .setRotation(v.face)
+      .setScale(ART_SCALE * 1.1)
+      .setAlpha(0.3 + 0.1 * Math.sin(this.time / 260 + v.phase));
 
     // ground vehicles kick up dust when moving
     if (!air && !stats.hover && moved > 0.4) {

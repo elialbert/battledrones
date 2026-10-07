@@ -26,6 +26,7 @@ import {
   terrainAt,
   tileIndex
 } from "./world";
+import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 
 // ---------------------------------------------------------- tech rules ----
 
@@ -33,6 +34,8 @@ import {
 export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind): string | null {
   const stats = BUILDINGS[kind];
   if (kind === "hq") return "Unique";
+  const banned = bannedBy(w, kind, faction);
+  if (banned) return banned;
   if (stats.requires && !stats.requires.some((k) => hasBuilding(w, faction, k)))
     return `Needs ${stats.requires.map((k) => BUILDINGS[k].name).join(" or ")}`;
   return null;
@@ -41,6 +44,8 @@ export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind):
 /** Why this unit can't be queued right now (null = it can). */
 export function unitBlocker(w: World, faction: Faction, kind: UnitKind): string | null {
   const stats = UNITS[kind];
+  const banned = bannedBy(w, kind, faction);
+  if (banned) return banned;
   if (!hasBuilding(w, faction, stats.builtAt)) return `Needs ${BUILDINGS[stats.builtAt].name}`;
   if (stats.requires && !hasBuilding(w, faction, stats.requires))
     return `Needs ${BUILDINGS[stats.requires].name}`;
@@ -156,7 +161,7 @@ export function setRally(w: World, faction: Faction, buildingId: number, x: numb
 export function tickConstruction(w: World): void {
   for (const f of Object.values(w.factions)) {
     if (!f.pending || f.pending.ready) continue;
-    if (--f.pending.remaining <= 0) f.pending.ready = true;
+    if ((f.pending.remaining -= rulesOf(w).buildSpeed) <= 0) f.pending.ready = true;
   }
 }
 
@@ -166,10 +171,11 @@ export function tickProduction(w: World): void {
     if (!head) continue;
     // a unit whose tech building was lost pauses (stays queued)
     if (UNITS[head.kind].requires && !hasBuilding(w, b.faction, UNITS[head.kind].requires!)) continue;
-    if (--head.remaining > 0) continue;
+    if ((head.remaining -= rulesOf(w).buildSpeed) > 0) continue;
     b.queue.shift();
     const spot = findSpawnSpot(w, b, head.kind);
     const u = spawnUnit(w, head.kind, b.faction, spot.x, spot.y);
+    applySpawnRank(w, u);
     const c = buildingCenter(b);
     u.facing = u.aim = Math.atan2(spot.x - c.x, -(spot.y - c.y));
     w.factions[b.faction].stats.unitsBuilt++;
@@ -276,8 +282,7 @@ export function tickTrickle(w: World): void {
   if ((w.tick + 1) % TICK_RATE !== 0) return; // once per full second
   for (const b of w.buildings.values())
     if (b.kind === "hq") {
-      const f = w.factions[b.faction];
-      f.scrap += ECONOMY.hqTrickle * f.incomeMult;
+      w.factions[b.faction].scrap += ECONOMY.hqTrickle * incomeOf(w, b.faction);
     }
 }
 
@@ -379,7 +384,7 @@ export function tickHarvest(w: World): void {
       if (moveUnitToward(w, u, d.x, d.y) || distToBuilding(home, u.x, u.y) < 1.2) {
         o.phase = "unloading";
         const c = buildingCenter(home);
-        const amount = u.cargo * w.factions[u.faction].incomeMult;
+        const amount = u.cargo * incomeOf(w, u.faction);
         w.fx.push({ type: "deposit", faction: u.faction, id: u.id, x: c.x, y: c.y, amount });
       }
     } else {
@@ -387,8 +392,9 @@ export function tickHarvest(w: World): void {
       const transfer = Math.min(perTick(ECONOMY.unloadRate), u.cargo);
       u.cargo -= transfer;
       const f = w.factions[u.faction];
-      f.scrap += transfer * f.incomeMult;
-      f.stats.scrapHarvested += transfer * f.incomeMult;
+      const mult = incomeOf(w, u.faction);
+      f.scrap += transfer * mult;
+      f.stats.scrapHarvested += transfer * mult;
       if (u.cargo <= 1e-6) {
         u.cargo = 0;
         o.phase = "toField";

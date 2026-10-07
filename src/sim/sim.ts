@@ -8,7 +8,9 @@ import {
 } from "./economy";
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
+import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement } from "./movement";
+import { tickOps } from "./ops";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
@@ -24,6 +26,8 @@ export function step(w: World, commands: Command[]): void {
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
+  if (w.survival) tickSurvival(w);
+  if (w.ops) tickOps(w);
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;
 }
@@ -69,6 +73,9 @@ function applyCommand(w: World, c: Command): void {
         u.path = null;
         u.autoTargetId = null;
       }
+      break;
+    case "callWave":
+      callWaveEarly(w, c.faction);
       break;
     default:
       applyEconomyCommand(w, c);

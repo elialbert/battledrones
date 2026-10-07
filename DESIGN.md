@@ -26,9 +26,9 @@ personalities and difficulty levels, painted art and procedural audio.
 | Decision | Choice |
 |---|---|
 | Platform | Web PWA — TypeScript, Phaser 3 (WebGL), rendered at device pixel ratio (≤ 2×) |
-| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), or AI vs AI spectator |
+| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, Last Stand waves, or the Ops campaign |
 | Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
-| Win condition | Destroy the enemy HQ |
+| Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can; Ops: the op's objective) |
 | Roster size | 11 units, 8 buildings |
 | Art | Painted top-down sprites and terrain generated with OpenAI `gpt-image-2.5-sunburst` (see ART.md) |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
@@ -146,7 +146,8 @@ triangle; air vs anti-air sits across it.
   Splash falls off from 100% to 50% at the edge.
 - **Cover.** Ground units in woods take less damage.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
-  each +15% damage, rank 3 self-repairs. Shown as gold chevrons.
+  each +15% damage, rank 3 self-repairs. Shown as gold chevrons. Ranked
+  units become heroes (see *Veteran heroes* below).
 - **Retaliation.** Idle units hit by something out of reach go after the
   attacker, and nearby idle allies join in.
 - Auto-acquire targets in range; attack-move is the default command, with
@@ -434,7 +435,9 @@ scrap piles up; forward depots at distant fields; adaptive production
 armour); defend-the-economy guard squads; threat response against
 intruders; wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
-menders escorting the army.
+menders escorting the army; wounded veterans (rank ≥ 2 under 35% HP) falling
+back to a Mender behind them or to the HQ, with an idle Mender sent to patch
+them up (`ai/veterans.ts`).
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -446,13 +449,221 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
-1. Menu: pick a map and difficulty → Play (or Watch AI vs AI).
+1. Menu: pick a mode (Skirmish | Last Stand | Ops), a map, a difficulty and
+   any mutators → Play (or watch the AI play), or play today's Daily Op; in
+   Ops, pick an op card → briefing → Start op.
 2. Both HQs pre-placed, one harvester each (it starts mining at once).
 3. Real-time play until one HQ is destroyed. Pause any time.
-4. Victory/defeat screen with stats → Rematch or Menu.
+4. The HQ kill plays as a short cinematic, then the after-action report
+   → Rematch or Menu.
 
 First-time players get four contextual hints (build a Fab, move units,
 counters, tech), plus one-time hints for squads and touch placement.
+
+### Veteran heroes, the finale and the after-action report
+
+Presentation only — the sim just counts `Unit.kills` and faction stats.
+
+- **Callsigns** (`game/heroes.ts`): every unit has one of 48 callsigns,
+  chosen by a hash of its id, skipping names its side already used this
+  match (then "Viper II"). Shown from rank 2: selection panel "★★ Viper ·
+  Lancer · 9 kills", toasts, the report.
+- **Promotions** (`game/hero-fx.ts`): a gold VETERAN / HARDENED / ELITE title
+  rises over the unit (enemies' only from rank 2, at most 8 at once) and the
+  new chevron pops; rank 3 units get a pulsing gold shimmer. Your unit
+  reaching rank 2 gets a "earned a callsign" toast; rank 3 an announcement.
+  Your named unit dying gives "✝ Viper (Lancer, 9 kills) destroyed" (one
+  toast per tick); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives
+  "🎯 Enemy ace … down".
+- **Finale** (`game/finale.ts`): when an HQ falls the render clocks (tweens,
+  sprite anims, particles, tracers) drop to 0.3×, the camera glides and
+  zooms onto the wreck (centred in the area the dock leaves free), five
+  staged blasts roll across it, then a white flash, a shake, the result
+  banner and the stinger at 1.5 s; time eases back and the report appears at
+  2.8 s. Input and pause are locked meanwhile; everything runs on the real
+  frame delta.
+- **After-action report** (`ui/report.ts`, data from `game/chronicle.ts`,
+  which samples both armies every 5 s with full information and logs every
+  death): an army-strength timeline (SVG, both sides, tap or drag for
+  values) with numbered markers for up to three moments — *first blood*,
+  the *biggest battle* (most deaths within 20 s and 10 tiles, with each
+  side's losses and where), and the *turning point* (the lead passing to the
+  other side and holding 30 s) or, if it never changed hands, when the
+  winner *pulled ahead* (≥ 1.5× and 400 up to the end); the MVP card (most
+  kills, fallen or alive) and the enemy's ace; stats with correct kill
+  counts plus any numeric stats other features add to `FactionStats`; and
+  one rule-picked tip (no anti-air vs an air force, harvesters lost, idle
+  factories, banked scrap, Titans unanswered, …). Spectators get both
+  MVPs and a one-line story per commander instead of a tip. Buttons stay
+  pinned at the bottom of the scrolling panel; landscape uses two columns.
+  `addReportSection()` lets later features add blocks (career medals).
+  The Last Stand end screen shows the run's MVP card too.
+
+### Last Stand (survival mode)
+
+A second mode for short, replayable sessions: no enemy base or economy, just
+endless themed waves against your base. The score is **waves survived**; the
+best per map and difficulty is saved on the device and shown on the menu
+(selector line and map-card badges) and on the end screen ("New record!").
+
+- **Waves** (`src/sim/modes/survival.ts`, a pure, seeded wave director called
+  from `step()` only when `World.survival` is set): the first lands at 1:35
+  (Easy 1:50, Hard 1:25), then one every 50 s (60 s after a boss). Each block
+  of five is a seeded shuffle of **Air Raid** (wasps, then hornets and
+  raptors), **Armour Column** (stingers, lancers, titans), **Artillery**
+  (mortars with escorts) and **Mixed Assault**, then a **Boss** wave (Titan
+  Spearhead, Bomber Wing or Elite Strike Force, in a seeded order). Wave 1 is
+  always a small ground wave.
+- **Budgets** grow as (240 + 228·n^1.3) scrap × difficulty (0.7 / 1 / 1.3),
+  boss waves ×1.1; units arrive at veterancy rank 1 from wave 6 and rank 2
+  from wave 12, bosses one rank higher. They are ordinary units under the
+  normal rules — no stat cheats.
+- **Spawning**: waves enter from map-edge sites (corners and edge midpoints
+  far from the HQ, each snapped to ground the HQ can be driven to from) picked
+  per wave, never the same edge twice running. At most **30** wave units live
+  at once (phone frame rate); the rest queue off-map and stream in.
+- **Marching**: a wave moves as a formation — units more than 3 tiles ahead of
+  its rear wait — until it is within 12 tiles of its objective, under fire,
+  or 50 s old. Then each unit picks targets: air raids hunt harvesters,
+  artillery shells turrets and SAMs, columns hit the nearest structure,
+  bosses go for the HQ. (Measured: strung-out waves were trivially farmed.)
+- **Announcements**: the next wave's theme is in the top-bar pill from the
+  start of its countdown ("Wave 8 · 0:42 / ✈ Air Raid"); 15 s ahead a banner
+  names it and its edge, the pill pulses red, a minimap arrow and an
+  above-the-fog map marker point at the entry. Clearing the field pays
+  60 × wave scrap ("Wave 7 cleared · +420") with a counter tip for the next
+  theme, and brings the next wave within 30 s. With the field clear, the
+  **Call wave** chip brings it now for (5 + n) scrap per second skipped.
+- **AI**: a defending commander (spectator "Watch AI defend", and the tuning
+  harness) never raids or assaults, adds turrets and SAMs to its build,
+  holds a line toward the announced edge, engages wave units it can see near
+  the base, and calls waves early when its army is ≥ 1.8× the next budget.
+- **Tuning** (`npx vite-node tools/survival.ts both all all 3`): a scripted
+  "decent phone player" survives a median of ~10 waves on Normal (8–16), ~9
+  on Hard and ~18 on Easy; the Normal Balanced AI ~15. Proving Grounds (30k
+  scrap in total) is the hardest map; the rich Dune Sea the easiest.
+
+### Career, medals, mutators and the Daily Op
+
+Reasons to come back between matches. Spectated games never count.
+
+- **Medals** (`sim/awards.ts`, pure functions of an end-of-match recap built
+  from the chronicle): ⚡ Lightning War (win < 5:00), 🛡️ Untouchable (win, no
+  building lost), 🔄 Comeback (win after your army fell to ≤ ½ of theirs and
+  800+ behind, after 1:30), 💎 Flawless (win losing ≤ 5 units), 💰 Tycoon (win
+  harvesting 2× theirs), and — in defeat too — 🎖️ Ace (one unit, 9 kills),
+  🗿 Giant Slayer (3 Titans), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
+  (defences kill 30), ☠️ Exterminator (60 kills), 🏚 Wrecking Crew (12
+  buildings); Last Stand 🏰 Holdout (10 waves) and 🗼 Unbreakable (20).
+  Thresholds were calibrated on 40 AI-vs-AI matches so a typical win earns
+  one or two and the rest are goals.
+- **Career** (`game/career.ts`, localStorage `battledrones.career`, pure math
+  + try/catch storage): XP = win 100 / loss 30 (scaled down for losses under
+  5:00) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
+  × difficulty, +25 per medal, +100 for the day's first Daily Op win. Ten
+  ranks — Cadet, Private, Corporal, Sergeant, Lieutenant, Captain, Major,
+  Colonel, General, Marshal (100 … 6,000 XP) — with chevron / bar / star
+  insignia. Three **stars** per map × difficulty: win, win under 8:00, win
+  without losing a building (classic rules only). Wins/losses, medal counts,
+  Last Stand totals (bests stay in `battledrones.laststand`) and the Daily
+  streak. Banked once when the HQ falls (`game/meta.ts settleCareer`).
+- **Menu** (`ui/career.ts`): rank badge with XP bar under the logo (tap: the
+  Career sheet — medals, star grid, Last Stand bests, rank ladder), the Daily
+  Op card, a mutator picker, ☆☆☆ on each map card for the chosen difficulty.
+  Landscape puts these in a column over the key art.
+- **End screen**: a career block heads the after-action report (and the Last
+  Stand screen): XP counts up and the bar fills, a promotion swaps the
+  insignia with a PROMOTED ribbon and glow, medals pop in one by one (NEW on
+  a first), new stars pop, the Daily streak shows. Spectators see each
+  side's medals instead.
+- **Mutators** (`sim/rules.ts`, `World.rules`, via `MatchOptions.mutators`;
+  absent = classic, read through `rulesOf(w)`): ⚡ Blitz (3,000 starting
+  scrap), 💰 Gold Rush (income ×1.5, multiplied on top of the AI's own
+  `incomeMult`), 💥 Glass Cannons (damage ×2), 🔧 Rapid Fab (build progress ×2
+  per tick), ✈️ Air War (no ground combat units, Fab Plants or SAM sites —
+  measured: with SAMs every AI-vs-AI air war drew at 25:00), 🎖️ Veterans
+  (combat units roll out at rank 1), ☀️ Clear Skies (no fog for either side).
+  Skirmish only; both sides obey them (`unitBlocker`/`buildingBlocker` say
+  "Disabled: Air War", the HUD shows ⛔). The AI picks a personality whose
+  plan survives the rules (`strategyFits`: no Rush/Ironclad in Air War) and,
+  in Air War, plays the air-only plan with more bombers and one big wave.
+  Shown in an opening banner, the pause screen and the end screen.
+- **Daily Op** (`game/daily.ts`): the local date hashes into a map, an AI
+  personality, Normal or Hard, two compatible mutators and the match seed —
+  the same match for everyone. Its own rematch, +100 XP for the first win of
+  the day, and a win streak that survives until a whole day passes without
+  a win. No stars (it is always mutated).
+- AI-vs-AI sanity (50 matches each, 25:00 cap): classic 48/50 decisive,
+  median 5.6 min; Blitz 47, Gold Rush 46, Glass Cannons 43, Rapid Fab 48
+  (median 4.2), Veterans 46, Clear Skies 47; Air War 13/20. The next 21
+  Daily Ops all finished (median 4.7 min).
+
+### Ops (a short scenario campaign)
+
+Eight handcrafted 3–7 minute missions on the existing maps and units, each
+with a twist objective and three stars: ★ complete it, ★★ and ★★★ two harder
+conditions. They teach the counter web through play and give the game a
+completion goal.
+
+- **Data, not code paths** (`sim/ops.ts`): an `OpDef` is a map, an enemy (an
+  AI commander with a fixed personality and difficulty, optionally tweaked —
+  e.g. one that never attacks — the Last Stand wave director, or nobody),
+  rules (per-side bans, a frozen economy, mutators: `World.rules` gained
+  `sideBans`, `sideIncome` and `banLabel`, so `unitBlocker`/`buildingBlocker`
+  say "Disabled in this op" and bind the AI on its side too), a `setup` that
+  pre-places buildings and units and tags what must be protected, primary
+  goals and two star conditions. `createMapWorld(map, { op })` builds it.
+- **Goals** are pure functions of the world, checked once a second by
+  `tickOps()` (called from `step()` only when `World.ops` is set): destroy the
+  HQ, destroy N of a kind, survive N seconds, survive N waves, deliver N
+  scrap, protect a tagged group (or ≥ N of a kind), within N seconds, lose at
+  most N units / of a kind / buildings. Meeting every achievement goal wins;
+  breaking a condition (time, protected group, losses) loses; an HQ kill still
+  ends it the classic way. The result sets `World.winner`, so the finale
+  (without HQ blasts when no HQ died), report and career run unchanged.
+- **The ops** (verified by `tests/ops.test.ts`: each sets up on legal ground,
+  runs, is completed with ★★+ by at least one stand-in pilot — an AI
+  commander or a scripted player from `tests/ops-pilots.ts` — and is *lost*
+  by doing nothing; `npx vite-node tools/ops.ts` prints the numbers):
+
+| # | Op | Map | Enemy | Objective | ★★ / ★★★ |
+|---|---|---|---|---|---|
+| 1 | 🌉 Bridgehead | Riverlands | Rush, Hard, bigger waves | Hold 4:00 with a bridge turret standing (forward outpost pre-placed) | lose ≤ 6 · both turrets |
+| 2 | 🌙 Harvest Moon | Dune Sea | Air Swarm, Hard, early Wasps | Deliver 10,000 scrap by 5:00 | ≤ 1 harvester lost · by 4:00 |
+| 3 | 🎯 Decapitation | Proving Grounds | Balanced, Easy, never attacks | Strike group, no production: HQ by 3:00 | lose ≤ 4 · under 2:00 |
+| 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income or harvesters: HQ by 6:00 | 4 harvesters killed · under 4:00 |
+| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants (air only), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
+| 6 | 💥 Glass Jaw | Dune Sea | Rush, Normal | Glass Cannons + Rapid Fab: HQ by 6:00 | lose no building · under 4:00 |
+| 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
+| 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
+
+- **Measured** (stand-in pilots, `tools/ops.ts`, 3 seeds): idle play loses
+  every op; the scripted pilots clear all eight every time (Bridgehead ★★–★★★
+  at 4:00, Harvest Moon ★★ ~4:05, Decapitation ★–★★ ~1:45, Frozen Assets ★★
+  ~1:50, Sky Pirates ★★ ~3:05, Glass Jaw ★★★ ~3:00, Iron Tide ★★★, Last
+  Light ★★ ~7:25); a stock Balanced AI commander clears six of the eight at
+  least once — it leaves the bridge to attack in Bridgehead and wastes its
+  fixed budget in Frozen Assets.
+- **Campaign**: the first three ops are open; every op completed opens one
+  more. Progress (best star mask, best time, attempts) lives in the career
+  (`CareerData.ops`); XP: 60 per clear, +100 the first time, +40 per new star,
+  a little for a failure. Ops award no medals, map stars or skirmish W/L.
+- **Menu** (`ui/ops.ts`): a third mode, 🎖 Ops: progress line, op cards in
+  the map-card style (number, icon, stars or 🔒), the picked op's tagline and
+  enemy; tapping the picked card or Play opens the briefing sheet (brief,
+  rules, objective, star conditions with your best, a tip, Start op; two
+  columns in landscape).
+- **In match**: a briefing banner (`op-start`); a goal pill under the clock
+  in portrait (top-left corner under the pause button in landscape, where the
+  top bar is a full row): the objective and its clock, the other conditions,
+  and three live stars (gold while the condition holds, struck out when
+  lost). Tapping it opens the objectives card. "★★ lost" / "★★★ secured"
+  toasts, a one-minute call-out (`op-timer`), the camera opens on the action
+  (`OpDef.focus`). No tutorial hints in ops. The pause screen lists the goals.
+- **End screen**: "OP COMPLETE" / "OP FAILED" heads the after-action report,
+  with the reason, big stars (new ones pop), the star conditions, your best,
+  "New op unlocked", the op's tip after a failure, and Next op / Retry / Main
+  menu. Rematch tokens are `op:<id>`.
 
 ## Controls & UI (mobile-first, full-screen)
 
@@ -560,12 +771,17 @@ src/
     world.ts        # entities, tile grid, occupancy, passability
     balance.ts      # every tunable number: units, buildings, terrain, damage table
     maps.ts         # the 5 maps (seeded painter) + createMapWorld
+    modes/survival.ts # Last Stand wave director (pure, seeded)
+    rules.ts        # match mutators (World.rules) and their hooks
+    ops.ts          # the Ops campaign: op definitions, goals, tickOps
+    awards.ts       # medals from an end-of-match recap (pure)
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
     placement.ts    # why a spot can't be built on, and a suggested spot
     ai/commander.ts # the enemy commander: strategies, difficulty
+    ai/veterans.ts  # wounded veterans fall back to a Mender or the HQ
   game/       # Phaser: scene, camera, input, rendering
     render/         # world-view (terrain, piles, fog), entities, fx, juice-view
     juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
@@ -581,7 +797,12 @@ src/
     squads.ts       # squad (control group) rules (tested)
     advisor.ts      # counter advisor + idle-factory watch (tested)
     placement-view.ts # placement ghost: suggested spot, touch move/drag/confirm
-  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges), menu styles
+    heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
+    chronicle.ts    # match recorder + story analysis for the report
+    finale.ts       # the cinematic HQ kill
+    career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
+    ops.ts          # Ops narration: briefing banner, countdowns, star notices
+  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```
@@ -597,5 +818,6 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 ## Explicitly out of scope (for now)
 
 - Online multiplayer (the deterministic command-driven sim keeps the door
-  open), campaigns, map editor, replays, saves mid-match.
-- Upgrades research, superweapons, walls.
+  open), a story campaign (Ops are standalone missions), map editor,
+  replays, saves mid-match.
+- Upgrades research, walls.

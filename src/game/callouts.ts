@@ -327,6 +327,13 @@ export class BattleCallouts {
     const w = h.world;
     if (w.winner) {
       this.ended = true;
+      // an op that ends on its objective is narrated by its own op-complete /
+      // op-failed banner (spoken like any banner), so say nothing over it
+      if (w.ops?.result?.byGoal) return;
+      if (w.survival && !h.spectator) {
+        this.say({ key: "defeat", text: "Base overrun. The HQ has fallen.", priority: 0, tone: "bad", caption: false }, t);
+        return;
+      }
       const text = h.spectator
         ? `${SIDE[w.winner]} wins the battle`
         : w.winner === h.player

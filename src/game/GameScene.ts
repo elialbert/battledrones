@@ -25,6 +25,12 @@ import { voices, type VoiceHooks } from "./voices";
 import { Announcer } from "./announcer";
 import { Awareness } from "./awareness-view";
 import { planTicks } from "./awareness";
+import { SurvivalPresenter, finishRun } from "./survival";
+import { chronicleOf, type Chronicle } from "./chronicle";
+import { Finale, finaleZoom, freeAreaOffset } from "./finale";
+import { HeroPresenter } from "./hero-fx";
+import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
+import { OpsPresenter } from "./ops";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { CombatJuice } from "./render/juice-view";
@@ -47,6 +53,15 @@ export class GameScene extends Phaser.Scene {
   ctrl!: Controller;
   private ai!: AiState;
   private blueAi: AiState | null = null;
+  /** Last Stand banners and spawn marker (null in skirmish). */
+  private survival: SurvivalPresenter | null = null;
+  /** Veteran promotions/deaths, the match record, and the HQ-kill cinematic. */
+  private heroes!: HeroPresenter;
+  private chronicle!: Chronicle;
+  private finale: Finale | null = null;
+  private finaleAt: { x: number; y: number; size: number } | null = null;
+  /** Ops: briefing banner, countdowns and star notices (null outside ops). */
+  private ops: OpsPresenter | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
@@ -110,10 +125,20 @@ export class GameScene extends Phaser.Scene {
 
     this.world = createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    if (this.world.survival)
+      this.survival = new SurvivalPresenter(this.world, {
+        mapId: gameMode.mapId,
+        difficulty: this.world.survival.difficulty,
+        spectator: gameMode.spectator || !!this.world.ops, // (no Last Stand records in an op)
+        ping: (x, y) => this.hud?.ping(x, y),
+        gfx: this.add.graphics().setDepth(10.5)
+      });
     // spectating pits two Normal commanders against each other
-    this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
+    // mutators / the Daily Op decide which personalities can play (meta.ts)
+    const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
+    this.ai = opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
-      this.blueAi = createAiState(undefined, "normal", (Math.random() * 1e9) | 0);
+      this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
@@ -168,9 +193,18 @@ export class GameScene extends Phaser.Scene {
       hint: (id, msg) => this.command.hint(id, msg),
       handoff: (p) => this.gest.down(p, performance.now())
     });
+    this.chronicle = chronicleOf(this.world);
+    this.heroes = new HeroPresenter(this, this.world, {
+      dpr: this.dpr,
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      seesPoint: (x, y) => this.seesPoint(x, y),
+      unitPos: (id) => this.entities.pos(id),
+      notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
+    });
 
     const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
-    const c = focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 };
+    const c = gameMode.op?.focus ?? (focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 });
     cam.setZoom(DEFAULT_ZOOM * this.dpr);
     this.clampZoom();
     cam.centerOn(c.x * TILE, c.y * TILE);
@@ -193,9 +227,9 @@ export class GameScene extends Phaser.Scene {
       zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => this.simSeconds,
       strategies: this.blueAi
-        ? { blue: this.blueAi.strategy.label, red: this.ai.strategy.label }
+        ? { blue: this.blueAi.strategy.label, red: this.survival ? "the waves" : this.ai.strategy.label }
         : null,
-      enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty },
+      enemy: { strategy: this.survival ? "Last Stand" : this.ai.strategy.label, difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null
     });
 
@@ -218,6 +252,8 @@ export class GameScene extends Phaser.Scene {
       this.hud.destroy();
       this.radio.destroy();
     });
+    window.setTimeout(() => announceRules(this.world), 1200); // Daily Op / mutators banner
+    if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -309,11 +345,13 @@ export class GameScene extends Phaser.Scene {
     }
     this.ctrl.prune();
     const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
-    this.worldView.update(delta, this.ctrl.showFog);
-    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
+    this.finale?.update(delta);
+    const slow = this.finale?.timeScale ?? 1;
+    this.worldView.update(delta * slow, this.ctrl.showFog);
+    this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta * slow);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
-    this.fx.update(this.ctrl.paused ? 0 : delta);
-    this.juice.update(this.ctrl.paused ? 0 : delta);
+    this.fx.update(this.ctrl.paused ? 0 : delta * slow);
+    this.juice.update(this.ctrl.paused ? 0 : delta * slow);
     this.place.update(delta);
     this.drawOverlay(alpha);
     this.hud.update();
@@ -330,11 +368,64 @@ export class GameScene extends Phaser.Scene {
     if (this.world.winner && !this.ended) {
       this.ended = true;
       const won = this.world.winner === PLAYER;
-      // the score resolves into a fanfare / lament; the SFX jingle covers music-off
-      if (!music.finale(won || gameMode.spectator ? "victory" : "defeat") && !gameMode.spectator)
-        sfx.play(won ? "victory" : "defeat");
-      this.time.delayedCall(1400, () => this.hud.showEnd(this.world.winner!));
+      // Last Stand always ends in defeat; a new record still gets the fanfare
+      const run = this.survival && !gameMode.spectator && !this.world.ops ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
+      this.chronicle.finish();
+      settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
+      this.playFinale(() => {
+        // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
+        const outcome = won || run?.isNew || gameMode.spectator ? "victory" : "defeat";
+        if (!music.finale(outcome) && !gameMode.spectator) sfx.play(outcome);
+      });
     }
+  }
+
+  /**
+   * The HQ kill: slow motion, a camera glide onto the wreck, rolling blasts,
+   * a white flash with the result line, then the after-action report.
+   */
+  private playFinale(stinger: () => void): void {
+    const winner = this.world.winner!;
+    // an op that ended on its objective has no HQ wreck: look where it was decided, skip the blasts
+    const opEnd = this.world.ops?.result;
+    const at = (opEnd?.byGoal ? { x: opEnd.x, y: opEnd.y, size: 3 } : null) ??
+      this.finaleAt ?? { x: this.world.width / 2, y: this.world.height / 2, size: 3 };
+    const spec = gameMode.spectator;
+    const won = winner === PLAYER;
+    this.glide = null;
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    const zoom = finaleZoom(this.cameras.main.zoom, DEFAULT_ZOOM * this.dpr);
+    const free = freeAreaOffset();
+    this.finale = new Finale({
+      scene: this,
+      fx: this.fx,
+      ...at,
+      blasts: !opEnd?.byGoal,
+      shiftX: (free.x * this.dpr) / this.clampedZoom(zoom),
+      shiftY: (free.y * this.dpr) / this.clampedZoom(zoom),
+      onFlash: () => {
+        stinger();
+        const loser = winner === "blue" ? "Red" : "Blue";
+        announce(
+          this.ops
+            ? this.ops.endAnnouncement()
+            : this.survival
+            ? { key: "base-overrun", text: "Base overrun", sub: "The HQ has fallen", tone: "bad", priority: 0, x: at.x, y: at.y }
+            : spec
+              ? { key: "hq-destroyed", text: `${loser} HQ destroyed`, sub: `${loser === "Red" ? "Blue" : "Red"} wins`, tone: "epic", priority: 0, x: at.x, y: at.y }
+              : won
+                ? { key: "victory", text: "Enemy HQ destroyed", sub: "Victory", tone: "epic", priority: 0, x: at.x, y: at.y }
+                : { key: "defeat", text: "Our HQ has fallen", sub: "Defeat", tone: "bad", priority: 0, x: at.x, y: at.y }
+        );
+      },
+      onDone: () => {
+        this.finale = null;
+        this.hud.showEnd(winner);
+      }
+    });
+    this.zoomBy(zoom / this.targetZoom);
   }
 
   // ------------------------------------------------------------- sim glue --
@@ -358,6 +449,9 @@ export class GameScene extends Phaser.Scene {
     this.radio.events(this.world.fx, this.simSeconds);
     voices.events(this.world.fx, this.voiceHooks);
     this.command.events(this.world.fx, this.simSeconds);
+    this.ops?.tick();
+    this.chronicle.tick();
+    this.heroes.flush();
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
@@ -369,6 +463,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleFx(ev: FxEvent): void {
+    this.chronicle.onFx(ev);
+    this.heroes.handleFx(ev);
+    if (ev.type === "death" && ev.buildingKind === "hq")
+      this.finaleAt = { x: ev.x, y: ev.y, size: BUILDINGS.hq.size };
+    if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
       case "shot": {
@@ -544,6 +643,7 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.survival?.drawOverlay((css) => this.px(css), this.time.now);
     this.drawPlacement(g);
 
     if (this.boxRect) {
@@ -674,6 +774,7 @@ export class GameScene extends Phaser.Scene {
       button: (p.event as PointerEvent)?.button ?? 0
     });
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
+      if (this.finale) return; // the camera belongs to the cinematic now
       this.glide = null; // touching the map stops any glide
       if (this.place.down(toPointer(p))) return; // a finger on the ghost drags it
       this.gest.down(toPointer(p), performance.now());
