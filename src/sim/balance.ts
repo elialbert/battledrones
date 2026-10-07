@@ -317,11 +317,11 @@ export const SALVAGE = {
 export const POWERS = {
   meterMax: 100,
   /** Meter per second, always. */
-  passive: 0.1,
+  passive: 0.035,
   /** Meter per scrap of your own units and buildings destroyed (comeback-weighted). */
-  perScrapLost: 0.02,
+  perScrapLost: 0.008,
   /** Meter per scrap of enemy units and buildings you destroy. */
-  perScrapKilled: 0.007,
+  perScrapKilled: 0.002,
   barrage: {
     cost: 60, cooldown: 45, telegraph: 2.5,
     /** Shells, the seconds between them, and their scatter (tiles) around the aim point. */
@@ -347,7 +347,7 @@ export const POWERS = {
   },
   hammer: {
     /** Comes online for both sides at this match time (seconds), then recharges. */
-    unlock: 6 * 60, cooldown: 120, telegraph: 3,
+    unlock: 6 * 60, cooldown: 150, telegraph: 3,
     radius: 2.5,
     /** Units: this × (1 − 0.5·d/r), any armour, ground or air. */
     unitDamage: 260,
@@ -374,11 +374,11 @@ export const OBJECTIVES = {
     /** Points per second the bar drifts back to its rest (owned: full, neutral: 0) with nobody there. */
     settle: 2,
     /** Scrap per second to the owner (× its income multiplier). */
-    income: 3,
+    income: 1.5,
     /** The owner sees this far (tiles) around the relay. */
     sight: 7,
     /** Command meter per second to the owner (powers.ts). */
-    charge: 0.1
+    charge: 0.06
   },
   drops: {
     /** Seconds into the match the first drop lands; then one every `every` seconds. */
@@ -392,7 +392,7 @@ export const OBJECTIVES = {
     claimRadius: 0.8,
     /** Reward weights (both crates of a drop share the roll). */
     weights: { scrap: 38, veterans: 20, repair: 15, charge: 17, unit: 10 } as Record<string, number>,
-    scrap: 300,
+    scrap: 200,
     /** Veterans: +1 rank to the claimer and its allies this close. */
     veteranRadius: 3,
     /** Field Repair: own units this close are healed this share of their max HP. */

@@ -246,7 +246,7 @@ describe("drop pod", () => {
 });
 
 describe("Sky Hammer", () => {
-  it("unlocks for both sides at 6:00, then recharges every ~2 minutes", () => {
+  it("unlocks for both sides at 6:00, then recharges on its own timer", () => {
     const w = arena();
     reveal(w, "blue");
     const unlock = POWERS.hammer.unlock * TICK_RATE;
@@ -356,7 +356,8 @@ describe("AI and calldowns", () => {
 
   it("uses calldowns in a full AI-vs-AI match, legally, and Easy never shells", () => {
     const fired: Record<Faction, Record<string, number>> = { blue: {}, red: {} };
-    const seed = 1001;
+    // (a match long enough for both sides to need them: with seed 1001 the Easy Rush wins by 5:30 without one)
+    const seed = 1002;
     const w = createMapWorld("riverlands", {
       seed,
       openers: { blue: pickAiOpener("rush", seed, "blue"), red: pickAiOpener("balanced", seed, "red") }

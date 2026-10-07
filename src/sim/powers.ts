@@ -10,7 +10,7 @@ import { distToBuilding, hasBuilding, hqOf, inBounds, moveClassOf, passable, spa
  * slowly on its own and mostly from losses, spent on three map-targeted
  * powers — Barrage, EMP, Drop Pod — each with its own cooldown. The Sky
  * Hammer is separate: it comes online for both sides at 6:00 and recharges
- * every two minutes, the late-game pressure that ends stalemates.
+ * every two and a half minutes, the late-game pressure that ends stalemates.
  *
  * Every calldown is telegraphed: `World.powers.active` (and the "calldown"
  * FxEvent) is public, so both sides see the reticle through the fog and can

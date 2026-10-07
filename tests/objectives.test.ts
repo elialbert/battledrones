@@ -336,7 +336,7 @@ describe("crate rewards", () => {
   }
   const claimed = (w: World) => w.fx.find((e) => e.type === "crateClaimed") as Extract<FxEvent, { type: "crateClaimed" }>;
 
-  it("scrap: +300 × the claimer's income multiplier", () => {
+  it("scrap: the drop's scrap × the claimer's income multiplier", () => {
     const { w, c } = crateWorld("scrap");
     w.factions.blue.incomeMult = 0.75;
     const s0 = w.factions.blue.scrap;

@@ -16,8 +16,8 @@ import type { AiMode, AiState, Difficulty } from "./commander";
 const REACTION: Record<Difficulty, number> = { easy: 1.1, normal: 0.6, hard: 0.4 };
 /** How far (tiles) a unit runs from a reticle's centre direction. */
 const DODGE_DIST = 4;
-/** Visible ground clump worth barraging (scrap within the shell spread). */
-const BARRAGE_MIN = 450;
+/** Visible ground clump worth barraging (scrap within the shell spread): rarer, bigger hits leave charge for EMPs and pods. */
+const BARRAGE_MIN = 800;
 const BARRAGE_SPREAD = 2.2;
 /** Clump worth a Sky Hammer before the AI settles for buildings. */
 const HAMMER_CLUMP = 700;

@@ -16,7 +16,8 @@ personalities and difficulty levels, painted art and procedural audio.
    identifiable on a 6" screen. Big touch targets, high-contrast sprites,
    minimal chrome.
 2. **A full match in a coffee break.** Target match length ~10 minutes
-   against a human (AI-vs-AI games settle in 5–8).
+   against a human (AI-vs-AI games settle in a median of ~8½; see Balance
+   & pacing).
 3. **Air vs ground is the core tension.** The rock-paper-scissors between
    flying and ground drones is what makes this game *Battle Drones* and not
    a generic RTS. Every roster and map decision should feed it.
@@ -91,7 +92,7 @@ and skirt mud. Air units fly straight over everything.
 - Starting stockpile: 600 scrap and one harvester, plus the side's opener
   (below) — so in practice two or three harvesters and a factory.
 - **Battlefield salvage** (below): wrecks are the second income stream,
-  ~18% of all scrap earned in AI-vs-AI play.
+  ~20% of all scrap earned in AI-vs-AI play.
 
 ### Battlefield salvage
 
@@ -221,17 +222,18 @@ triangle; air vs anti-air sits across it.
 ### Commander calldowns
 
 Once an army is sent, the commander still has moves: a **Command meter**
-(⚡, 0–100) fills slowly on its own and mostly from *losses* (0.1/s; 0.02
-per scrap of your own units and buildings destroyed, 0.007 per scrap you
-destroy), and pays for three map-targeted calldowns, each on its own
-cooldown. Numbers live in `POWERS` in `balance.ts`.
+(⚡, 0–100) fills slowly on its own and mostly from *losses* (0.035/s;
+0.008 per scrap of your own units and buildings destroyed, 0.002 per scrap
+you destroy; +0.06/s per Uplink held), and pays for three map-targeted
+calldowns, each on its own cooldown — about one meter power every two
+minutes in a typical match. Numbers live in `POWERS` in `balance.ts`.
 
 | Power | Charge / cooldown | Warning | Effect |
 |---|---|---|---|
 | **Barrage** | 60 / 45 s | 2.5 s | 3 shells over 0.6 s, seeded scatter ±0.9 tiles, 170 explosive splash r 2 each (ground units and buildings) |
 | **EMP** | 40 / 40 s | 0.8 s | Enemy units and buildings within 3 tiles freeze for 4 s: no moving, firing, healing or production |
 | **Drop Pod** | 70 / 60 s | 2 s | 2 Stingers + a Flak Crawler (2 Lancers + Flak with a Tech Lab) land on open ground you can *see*; a light 60-damage thump under the pod |
-| **Sky Hammer** | — / 120 s | 3 s | Online for both sides at 6:00. Units within 2.5 tiles take 260 × (1 − 0.5·d/r), air included; buildings a flat 700 (an HQ loses 22%) |
+| **Sky Hammer** | — / 150 s | 3 s | Online for both sides at 6:00. Units within 2.5 tiles take 260 × (1 − 0.5·d/r), air included; buildings a flat 700 (an HQ loses 22%) |
 
 - **Same rules for both sides.** One `calldown` command, validated by
   `calldownBlocker` (charge, cooldown, the HQ alive, an *explored* target —
@@ -263,12 +265,13 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
 - **AI:** a per-tick dodge reflex (before the decision gate) moves every
   unit inside an enemy reticle ~4 tiles out after 1.1 / 0.6 / 0.4 s
   (Easy / Normal / Hard) — if there's still time. It Barrages the best
-  visible ground clump worth ≥ 450 (Easy never), answers a superior force
+  visible ground clump worth ≥ 800 (Easy never), answers a superior force
   at its base or mining line with a Drop Pod (else an EMP), EMPs turrets in
   front of an assault from surplus charge, pods in reinforcements only when
   a fight away from home hangs in the balance, and aims the Sky Hammer at a
   clump worth ≥ 700, else the best production-building hit, else the HQ.
-- **Measured** (AI-vs-AI round robin with openers, 5 maps × 30 pairings ×
+- **Measured when it shipped** (before the balance pass cut the meter's
+  income to about a third; AI-vs-AI round robin with openers, 5 maps × 30 pairings ×
   2 seeds, 300 games, before → after): 25-minute draws 17 → 1; median
   length 5.7 → 6.0 min, mean 7.8 → 7.3, p90 15.9 → 12.1; the side ahead by
   200+ value at 2:00 / 3:00 / 4:00 went on to win 84 / 88 / 90% → 80 / 84 /
@@ -296,8 +299,8 @@ rules in `src/sim/objectives.ts`):
   harvesters not at all, capped at 4 units (neutral → held in ~7 s, a full
   flip ~14 s). With both sides inside the bar freezes; abandoned, it drifts
   back to its holder (or to neutral). The holder loses it the moment the
-  bar is pushed back to neutral. Holding one pays **3 scrap/s** (× income
-  multiplier), sees 7 tiles round it through the fog and adds **0.1/s** to
+  bar is pushed back to neutral. Holding one pays **1.5 scrap/s** (× income
+  multiplier), sees 7 tiles round it through the fog and adds **0.06/s** to
   the ⚡ meter. Uplinks are not buildings: nothing occupies their tiles or
   can shoot them (no building may be placed on the platform), so combat
   never sees them.
@@ -307,7 +310,7 @@ rules in `src/sim/objectives.ts`):
   same site twice running) and **announced to both sides 10 s ahead**. The
   first non-harvester unit within 0.8 tiles of a landed crate claims it
   (nearest wins); a crate nobody claims burns out after 45 s. Rewards,
-  weighted: **+300 scrap** (38%), **Veterans** (+1 rank to the claimer and
+  weighted: **+200 scrap** (38%), **Veterans** (+1 rank to the claimer and
   allies within 3, 20%), **Field Repair** (own units within 4 heal half
   their HP, 15%), **+40 ⚡ charge** (17%) and the rare **free veteran
   Lancer** (10%). A kit that would do nothing (no one hurt, the meter full)
@@ -336,7 +339,8 @@ rules in `src/sim/objectives.ts`):
   what a crate holds before claiming it. Boom only contests its own
   flank, Ironclad leans to the centre; Easy takes neutral relays but never
   comes for yours, and only races crates near its own units.
-- **Measured** (AI-vs-AI, 5 maps × 6 personality pairings × 2 seeds,
+- **Measured when it shipped** (with 3 scrap/s Uplinks and +300 crates,
+  before the balance pass; AI-vs-AI, 5 maps × 6 personality pairings × 2 seeds,
   openers on, Normal, before → after): combat-unit deaths in the middle
   40% of the HQ-HQ line 13% → 27% (first 5 min 13% → 28%); draws 0 → 0 of
   60; median length 5.1 → 5.5 min, p90 12.1 → 7.6; about 3 Uplink captures
@@ -364,11 +368,11 @@ emits ordinary commands. Six personalities, picked at random each match:
 | Strategy | Plan |
 |---|---|
 | Balanced | Factory, airpad, tech; steady macro |
-| Rush | Two factories early, attacks at half the usual army size |
+| Rush | Two factories early, Stinger raids in packs of five, the earliest and smallest waves |
 | Air Swarm | Airpad first, wasp raids, bombers later |
 | Boom | Greedy economy, forward depot, huge late push |
 | Skyforce | Air force first; the Fab Plant only guards home |
-| Ironclad | Rushes the Tech Lab for Titans, Lancers and Mortars |
+| Ironclad | Tech Lab right after its first turret: Titans, Lancers and Mortars |
 
 Behaviours: build orders with reactive SAM sites and extra factories when
 scrap piles up; forward depots at distant fields; adaptive production
@@ -376,8 +380,11 @@ scrap piles up; forward depots at distant fields; adaptive production
 armour); defend-the-economy guard squads; threat response against
 intruders; home defence (a force at the HQ that outguns the home guard
 recalls the army from raids and waves — openers make 1:00 pushes real);
-wasp raids that avoid remembered anti-air; staged assault waves
-that go for harvesters, then production, then defences, then the HQ;
+wasp raids that avoid remembered anti-air; staged assault waves —
+launched once three quarters of the personality's assault threshold has
+gathered at the staging point, so a big wave goes, then there is a lull
+while the next gathers (the bar drops 6% a minute after 7:00) — that go
+for harvesters, then production, then defences, then the HQ;
 menders escorting the army; commander calldowns and a reflex for
 dodging the enemy's (see Commander calldowns); salvage sweeps once a fight near home is
 over (idle ground units within 8 tiles go for visible, cooled wrecks that
@@ -392,7 +399,93 @@ menu, never hidden). Each difficulty also picks from its own pool of
 personalities: AI-vs-AI tournaments (`tools/balance.ts matches`) show
 Ironclad, Boom and Balanced are the strongest, so Easy draws from Balanced,
 Rush, Air Swarm and Skyforce, and Hard from Balanced, Air Swarm, Boom and
-Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
+Ironclad. AI-vs-AI games settle in a median of ~8½ minutes.
+
+### Balance & pacing
+
+With openers, longer fights, salvage, calldowns and objectives all in, one
+pass retuned the numbers together against measured targets. Before it,
+the AI sent a wave every time 500–1,200 scrap had gathered, so both sides
+sat in assault mode from about 2:00 and a match was usually one unbroken
+brawl from the first crate race to the last HQ; the side ahead at 4:00 won
+90% of the time.
+
+What changed (numbers only, plus AI thresholds):
+
+- **AI waves** launch once 75% of the assault threshold has gathered at
+  the staging point (was 60%): bigger waves with a lull between them. Assault
+  thresholds: Balanced 1700, Rush 1400, Air Swarm 1700, Boom 2000,
+  Skyforce 2000, Ironclad 1500 (were 1400 / 800 / 1200 / 2000 / 1300 / 1800);
+  Ironclad builds a turret before its Tech Lab; Rush raids in packs of five
+  (was three); the late-game discount on the threshold starts at 7:00
+  (was 9:00).
+- **Calldowns:** the meter earns 0.035/s, 0.008 per scrap lost and 0.002
+  per scrap killed (was 0.1 / 0.02 / 0.007); the Sky Hammer recharges in
+  150 s (was 120); the AI Barrages clumps worth ≥ 800 (was 450), which
+  leaves charge for EMPs and Drop Pods.
+- **Objectives:** an Uplink pays 1.5 scrap/s and 0.06 ⚡/s (was 3 / 0.1);
+  a scrap crate holds 200 (was 300). Objectives pay whoever already holds the
+  field. Single-lever tests showed they were the biggest snowball
+  amplifier (switching them off took the 4:00 leader from 87% to 75%, but
+  mid-map deaths fell from 26% to 13%), so they now pay less and still pull
+  armies into the middle.
+- Unit stats are unchanged, so the duel matrix and counter web are exactly
+  as before.
+
+Measured with `tools/pacing.ts`: AI vs AI, Normal, each AI on its own
+opener, Uplinks and drops on, every ordered pair of distinct personalities
+on all 5 maps × 8 match seeds (1,200 matches per column), 25-minute cap.
+The original-game column is the same measurement run against a checkout of
+187e23a, which had no openers or objectives.
+
+| | Original (187e23a) | Before the pass | After |
+|---|---|---|---|
+| 25-minute draws | 14% | 0% | 0.8% |
+| Decided match length, median (p10–p90) | 5:51 (4:01–16:52) | 6:03 (4:31–11:34) | **8:43** (5:22–17:18) |
+| First combat-unit death, median | 1:47 | 1:13 | 1:18 |
+| Big fights (≥ 1000 scrap destroyed) per decided match: median / mean / share with ≥ 3 | 2 / 3.0 / 34% | 2 / 2.0 / 22% | **3 / 3.5 / 51%** |
+| Side ahead by > 200 value at 2:00 / 3:00 / 4:00 went on to win | 82 / 86 / 89% | 83 / 89 / 90% | **67 / 75 / 78%** |
+| Lead changes per match (300 deadband), mean; winner had been 800+ behind | 1.6; 24% | 1.3; 27% | 2.2; **46%** |
+| Unit deaths in the middle 40% of the HQ–HQ line | 12% | 23% | **29%** |
+| Calldowns per AI per match, median (mean) | — | 8 (9.8) | **7 (7.5)**: Barrage 1.9, EMP 2.6, Drop Pod 0.7, Sky Hammer 2.3 |
+| Matches where an Uplink changed hands | — | 69% | 84% |
+| Landed supply crates claimed | — | 99% | 99% |
+| Personality win rates (Balanced / Rush / Air Swarm / Boom / Skyforce / Ironclad) | 55 / 16 / 28 / 69 / 7 / 83% | 55 / 24 / 36 / 81 / 13 / 91% | 54 / 30 / 35 / 71 / 37 / 71% |
+
+How to read it:
+
+- Fighting is now nearly continuous from the first crate race. The
+  big-fight count merges any run of 10 s windows with 300+ destroyed, so a
+  three-minute brawl counts once. Short games, mostly the lopsided
+  personality pairings, still show one or two.
+- The long tail is the air-versus-anti-air pairings (Skyforce, Air Swarm),
+  most often on Ashlands. The Sky Hammer and the 7:00 threshold discount
+  keep draws under 1%.
+- There is a red-side edge on Ashlands: red wins about 70% of mirror
+  matches there (same personality on both sides), in the original game and
+  now. The other maps are 50/50. Longer games make it show up more: red
+  won 61% of the decided Ashlands games above and 54% overall. The map
+  itself is exactly point-symmetric, and neither the side a factory's units
+  exit from nor the AI's building placement explains it. It is still open.
+
+**A scripted player against the Normal AI.** The design panel's
+`human.ts` builds Fab → harvesters → Airpad → Turret → Tech Lab,
+attack-moves at 8 units and ignores Uplinks, crates and calldowns. Over 30
+games per opener (5 maps × 6 personalities) it was never flattened early:
+
+- Its earliest loss came at 3:08 and losses averaged about 5:00. Before
+  the pass they averaged 4:27–4:46, and 6:09 in the original game.
+- The first enemy unit reached its base or harvesters at a median of
+  1:53–2:13 (the earliest at 0:55, just after the AI's 45 s raid grace),
+  up from 1:12–1:44 before the pass.
+- It wins less than before: 11 of 90 games, against 18 of 90 before the
+  pass and 10 of 30 in the original game. A patient version that waits for
+  14 units and fires calldowns like the AI won 16 of 90. Against Easy it
+  wins about half its games.
+
+The AI now uses mechanics the script ignores, so a real player who
+contests Uplinks and crates should do better. The script's win rate is a
+floor, not a target.
 
 ### Match flow
 
@@ -520,7 +613,7 @@ src/
     audio.ts        # procedural WebAudio sound effects
   ui/         # DOM HUD (incl. the calldown buttons, ui/powers.ts; objectives pill, ui/objectives.ts), menu styles
 art/          # image generation + processing pipeline (Python)
-tools/        # map export, balance harness, smoke test, screenshot tour
+tools/        # map export, balance harness, pacing panel, smoke test, screenshot tour
 ```
 
 - **Fixed-timestep simulation** (10 ticks/sec) decoupled from rendering
