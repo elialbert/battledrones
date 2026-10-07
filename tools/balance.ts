@@ -81,6 +81,7 @@ function matches(): void {
   let n = 0;
   let salvaged = 0;
   let harvested = 0;
+  const calls: Record<string, number> = {};
   const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
@@ -97,6 +98,7 @@ function matches(): void {
         for (const f of ["blue", "red"] as const) {
           salvaged += w.factions[f].stats.scrapSalvaged;
           harvested += w.factions[f].stats.scrapHarvested;
+          for (const [k, v] of Object.entries(w.powers.fired[f])) calls[k] = (calls[k] ?? 0) + v;
         }
         for (const u of w.units.values()) built[u.kind] = (built[u.kind] ?? 0) + 1;
         process.stdout.write(`${map.id} ${names[i]} vs ${names[j]}: ${winner} @ ${min.toFixed(1)}m\n`);
@@ -107,6 +109,12 @@ function matches(): void {
   console.log(`draws ${draws}/${n}, mean length ${(totalMin / n).toFixed(1)} min`);
   console.log(
     `salvage ${(salvaged / n).toFixed(0)} scrap per match (${((100 * salvaged) / Math.max(1, salvaged + harvested)).toFixed(1)}% of income)`
+  );
+  const totalCalls = Object.values(calls).reduce((a, b) => a + b, 0);
+  console.log(
+    `calldowns ${(totalCalls / n / 2).toFixed(1)} per AI per match (${Object.entries(calls)
+      .map(([k, v]) => `${k} ${(v / n / 2).toFixed(1)}`)
+      .join(", ")})`
   );
   console.log("units alive at match end:", built);
 }

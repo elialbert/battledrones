@@ -258,6 +258,51 @@ export type FxEvent =
       wreckId: number;
       /** The collecting unit (or the building placed on top of the wreck). */
       collectorId: number;
+    }
+  | {
+      /**
+       * A commander calldown was fired (powers.ts). Public: both sides see
+       * the telegraph through the fog. It lands at `landTick`.
+       */
+      type: "calldown";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      landTick: number;
+    }
+  | {
+      /**
+       * A calldown landed: one per Barrage shell; the EMP pulse; the Drop
+       * Pod touching down (`unitIds` = its crew); the Sky Hammer strike.
+       * `hits` = enemy units and buildings it damaged or stunned.
+       */
+      type: "calldownImpact";
+      id: number;
+      faction: Faction;
+      power: PowerKind;
+      x: number;
+      y: number;
+      radius: number;
+      hits: number;
+      unitIds: number[];
+    }
+  | {
+      /** EMP: these entities (of `faction`) can't move, fire or produce until `until`. */
+      type: "stun";
+      faction: Faction;
+      ids: number[];
+      x: number;
+      y: number;
+      until: number;
+    }
+  | {
+      /** A power just came online for `faction` (the Sky Hammer at 6:00). */
+      type: "powerOnline";
+      faction: Faction;
+      power: PowerKind;
     };
 
 /**
@@ -284,6 +329,36 @@ export interface Wreck {
   hot: number;
 }
 
+/** Commander calldowns (powers.ts): three on the Command meter plus the late-game Sky Hammer. */
+export type PowerKind = "barrage" | "emp" | "droppod" | "hammer";
+
+/** A calldown in flight: telegraphed from `startTick`, landing at `landTick`. */
+export interface Calldown {
+  id: number;
+  faction: Faction;
+  power: PowerKind;
+  x: number;
+  y: number;
+  radius: number;
+  startTick: number;
+  landTick: number;
+  /** Barrage: where and when each shell lands (seeded scatter). */
+  shells: { x: number; y: number; tick: number }[];
+}
+
+export interface PowerState {
+  /** Command meter per side, 0–POWERS.meterMax. */
+  meter: Record<Faction, number>;
+  /** Tick each power is next usable, per side (the Sky Hammer starts locked). */
+  readyAt: Record<Faction, Record<PowerKind, number>>;
+  /** Telegraphed calldowns not yet resolved (public information). */
+  active: Calldown[];
+  /** EMP'd entity id → tick the stun wears off. */
+  stunned: Map<number, number>;
+  /** Calldowns fired per side and power (stats). */
+  fired: Record<Faction, Record<PowerKind, number>>;
+}
+
 import type { FactionFog } from "./fog";
 
 export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
@@ -303,6 +378,8 @@ export interface World {
   projectiles: Projectile[];
   /** Salvageable wrecks on the field, oldest first. */
   wrecks: Wreck[];
+  /** Commander meters, cooldowns, calldowns in flight and EMP stuns (powers.ts). */
+  powers: PowerState;
   factions: Record<Faction, FactionState>;
   /** null while the match runs; the winning faction once an HQ dies. */
   winner: Faction | null;
@@ -331,4 +408,5 @@ export type Command =
   | { type: "cancelBuilding"; faction: Faction }
   | { type: "placeBuilding"; faction: Faction; tx: number; ty: number }
   | { type: "sell"; faction: Faction; buildingId: number }
-  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number };
+  | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
+  | { type: "calldown"; faction: Faction; power: PowerKind; x: number; y: number };

@@ -9,6 +9,7 @@ import {
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { tickMovement } from "./movement";
+import { applyCalldown, chargePowers, tickPowers } from "./powers";
 import { tickSalvage } from "./salvage";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
@@ -22,10 +23,12 @@ export function step(w: World, commands: Command[]): void {
   tickProduction(w);
   tickHarvest(w);
   tickTrickle(w);
+  tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
   tickMovement(w, engaged);
   cleanupDeaths(w);
   tickSalvage(w);
+  chargePowers(w); // Command meters fill from this tick's losses
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;
 }
@@ -71,6 +74,9 @@ function applyCommand(w: World, c: Command): void {
         u.path = null;
         u.autoTargetId = null;
       }
+      break;
+    case "calldown":
+      applyCalldown(w, c);
       break;
     default:
       applyEconomyCommand(w, c);

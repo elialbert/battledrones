@@ -4,6 +4,7 @@ import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScr
 import { isVisible, knownBuildings } from "../fog";
 import { findPath } from "../movement";
 import { planSalvage } from "./salvage";
+import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import type {
   Building,
   BuildingKind,
@@ -214,10 +215,12 @@ function rand(s: AiState): number {
 export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const diff = DIFFICULTY[s.difficulty];
   w.factions[faction].incomeMult = diff.incomeMult;
-  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return [];
+  // calldown reflex: scatter from enemy reticles every tick, not just on decision passes
+  const reflex = w.winner ? [] : dodgeCalldowns(w, faction, s);
+  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return reflex;
   s.lastDecisionTick = w.tick;
 
-  const cmds: Command[] = [];
+  const cmds: Command[] = reflex;
   const hq = hqOf(w, faction);
   if (!hq) return cmds;
   const f = w.factions[faction];
@@ -369,7 +372,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (s.mode === "assault" && armyValue < Math.max(RETREAT_ARMY_VALUE, s.waveValue * 0.25)) s.mode = "buildup";
 
   // ======================= tactics =========================================
-  const used = new Set<number>();
+  const used = new Set<number>(dodgingUnits(w, s)); // units running from a reticle stay put
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
 
   // --- 1. threat response: answer unengaged intruders with counters -------
@@ -486,6 +489,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       army, harvesters, buildings: myBuildings, used, threatened: raidValue >= HOME_ALARM_VALUE, assault: s.mode === "assault"
     })
   );
+
+  // --- 4c. commander calldowns (ai/powers.ts) ------------------------------
+  cmds.push(...planCalldowns(w, faction, s, { mode: s.mode, hqC, guardPoint, enemyHqPos, army, threats }));
 
   // --- 5. menders tag along with whoever needs them -------------------------
   for (const m of mine.filter((u) => u.kind === "mender" && u.order.type === "idle" && !used.has(u.id))) {

@@ -218,6 +218,69 @@ triangle; air vs anti-air sits across it.
 - Auto-acquire targets in range; attack-move is the default command, with
   a "Move only" chip for retreats.
 
+### Commander calldowns
+
+Once an army is sent, the commander still has moves: a **Command meter**
+(⚡, 0–100) fills slowly on its own and mostly from *losses* (0.1/s; 0.02
+per scrap of your own units and buildings destroyed, 0.007 per scrap you
+destroy), and pays for three map-targeted calldowns, each on its own
+cooldown. Numbers live in `POWERS` in `balance.ts`.
+
+| Power | Charge / cooldown | Warning | Effect |
+|---|---|---|---|
+| **Barrage** | 60 / 45 s | 2.5 s | 3 shells over 0.6 s, seeded scatter ±0.9 tiles, 170 explosive splash r 2 each (ground units and buildings) |
+| **EMP** | 40 / 40 s | 0.8 s | Enemy units and buildings within 3 tiles freeze for 4 s: no moving, firing, healing or production |
+| **Drop Pod** | 70 / 60 s | 2 s | 2 Stingers + a Flak Crawler (2 Lancers + Flak with a Tech Lab) land on open ground you can *see*; a light 60-damage thump under the pod |
+| **Sky Hammer** | — / 120 s | 3 s | Online for both sides at 6:00. Units within 2.5 tiles take 260 × (1 − 0.5·d/r), air included; buildings a flat 700 (an HQ loses 22%) |
+
+- **Same rules for both sides.** One `calldown` command, validated by
+  `calldownBlocker` (charge, cooldown, the HQ alive, an *explored* target —
+  a *visible*, ground-passable one for the pod) for the player and the AI
+  alike. Calldowns only hurt the enemy; kills are credited to the firing
+  side (its HQ is the killer, so faction stats count them; no unit XP).
+- **Every calldown is telegraphed, publicly.** `World.powers.active` and the
+  `calldown` FxEvent are visible to both sides through the fog: a reticle
+  shrinks to the moment of impact, so landing one and dodging one are both
+  skill moments. EMP + Barrage is a real combo (frozen units can't dodge).
+- **Looks and sounds:** red reticles and an air-raid siren for the enemy's
+  (loud when it threatens your stuff, with a tap-to-jump toast and a
+  minimap ping if it's off-screen); gold / cyan / blue for yours, with a
+  radio chirp. Shells streak in, the EMP throws a blue-white shockwave and
+  leaves frozen things crackling, pods fall in a flame trail and burst open
+  in a ring of dust, and the Sky Hammer charges a lance from orbit (rising
+  hum) before a beam, a white-out flash and a rolling boom. The camera
+  shakes when it lands on screen. Banners: "Sky Hammer online" at 6:00,
+  "Enemy Sky Hammer inbound!" (tap to jump), "Direct hit!" when one of
+  yours kills 3+ units or 700+ scrap.
+- **HUD:** four round 52 px buttons on the right edge (a 2×2 block beside
+  the sidebar on landscape phones) under the ⚡ meter, each with a conic
+  ring — charge in the power's colour, cooldown in white — and its cost,
+  cooldown seconds or the Sky Hammer's unlock countdown. Tap a ready one to
+  arm it ("Tap map: Barrage ✕" chip, radius preview under the pointer /
+  finger, grey with ✕ where it can't go), tap the map to fire; an illegal
+  tap explains why. Long-press for details. Reticles show on the minimap;
+  the end screen counts calldowns.
+- **AI:** a per-tick dodge reflex (before the decision gate) moves every
+  unit inside an enemy reticle ~4 tiles out after 1.1 / 0.6 / 0.4 s
+  (Easy / Normal / Hard) — if there's still time. It Barrages the best
+  visible ground clump worth ≥ 450 (Easy never), answers a superior force
+  at its base or mining line with a Drop Pod (else an EMP), EMPs turrets in
+  front of an assault from surplus charge, pods in reinforcements only when
+  a fight away from home hangs in the balance, and aims the Sky Hammer at a
+  clump worth ≥ 700, else the best production-building hit, else the HQ.
+- **Measured** (AI-vs-AI round robin with openers, 5 maps × 30 pairings ×
+  2 seeds, 300 games, before → after): 25-minute draws 17 → 1; median
+  length 5.7 → 6.0 min, mean 7.8 → 7.3, p90 15.9 → 12.1; the side ahead by
+  200+ value at 2:00 / 3:00 / 4:00 went on to win 84 / 88 / 90% → 80 / 84 /
+  86%; games where a clear leader lost the lead 11 → 15. About 8.7
+  calldowns per AI per match (median 7: Barrage 4.1, EMP 2.7, Sky Hammer
+  1.3, Drop Pod 0.7), 56% fired by the side that was behind. The design
+  panel's prototypes had burst powers *feeding* the snowball; here the
+  meter is loss-weighted and damage telegraphed, and one rule mattered:
+  free Drop Pod units for a wave that is already winning pushed the
+  2:00–4:00 leader's win rate *up* 2–3 points, so the AI only reinforces a
+  contested fight.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -247,7 +310,8 @@ intruders; home defence (a force at the HQ that outguns the home guard
 recalls the army from raids and waves — openers make 1:00 pushes real);
 wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
-menders escorting the army; salvage sweeps once a fight near home is
+menders escorting the army; commander calldowns and a reflex for
+dodging the enemy's (see Commander calldowns); salvage sweeps once a fight near home is
 over (idle ground units within 8 tiles go for visible, cooled wrecks that
 no visible enemy or known turret covers, and harvesters with a light load
 detour to a wreck within 3 tiles — never into the enemy for loot; diverted
@@ -269,6 +333,8 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
    the factory site, clear of the HUD. Spectated AIs pick instantly.
 3. The pick rolls out (factory, units, harvesters already mining) and
    the clock starts. Real-time play until one HQ is destroyed. Pause any time.
+   Calldowns charge from the first losses; at 6:00 the Sky Hammer comes
+   online for both sides, so a stalemate can't last.
 4. Victory/defeat screen with stats → Rematch (back to the cards) or Menu.
 
 First-time players get contextual hints (command your opener units — or
@@ -332,14 +398,18 @@ DOM overlaid on the canvas, re-flowing by orientation:
   income rate and clock top-left.
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
+- **Calldown buttons:** the ⚡ meter and four round power buttons, right
+  edge and vertically centred in portrait; a 2×2 block under the minimap,
+  beside the sidebar, on landscape phones.
 - Toasts for "building ready", attacks (tap to jump there) and hints;
   minimap pings where you're being hit.
 
 ### Minimap
 
 Painted-map thumbnail under the fog, resource fields, salvageable wrecks
-(gold dots), buildings and unit blips (fog-respecting), attack pings and
-the camera frame.
+(gold dots), buildings and unit blips (fog-respecting), calldown reticles
+(red = enemy, gold = yours, shown through the fog), attack pings and the
+camera frame.
 
 ## Art
 
@@ -364,12 +434,14 @@ src/
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
     salvage.ts      # battlefield wrecks: spawn, cool, pick-up, burn-out
+    powers.ts       # command meter, calldowns (Barrage/EMP/Drop Pod), Sky Hammer, EMP stuns
     ai/commander.ts # the enemy commander: strategies, difficulty
     ai/salvage.ts   # the commander's wreck sweeps
+    ai/powers.ts    # the commander's calldowns and its dodge reflex
   game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx, wrecks
+    render/         # world-view (terrain, piles, fog), entities, fx, wrecks, powers (reticles, strikes)
     audio.ts        # procedural WebAudio sound effects
-  ui/         # DOM HUD, menu styles
+  ui/         # DOM HUD (incl. the calldown buttons, ui/powers.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```
@@ -386,5 +458,6 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 
 - Online multiplayer (the deterministic command-driven sim keeps the door
   open), campaigns, map editor, replays, saves mid-match.
-- Upgrades research, superweapons, walls, control groups.
+- Upgrades research, buildable superweapons (the Sky Hammer is a timed
+  HQ power), walls, control groups.
 - Music (sound effects only).

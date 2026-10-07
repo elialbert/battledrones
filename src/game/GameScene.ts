@@ -26,9 +26,11 @@ import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
 import { WreckRenderer } from "./render/wrecks";
+import { PowerRenderer } from "./render/powers";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
 import { showOpenerPicker } from "../ui/openers";
+import { createPowerPanel, type PowerPanel } from "../ui/powers";
 import { fitZoom, frameCentre, hudInsets, startBox } from "./framing";
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -53,6 +55,9 @@ export class GameScene extends Phaser.Scene {
   private entities!: EntityRenderer;
   private fx!: Fx;
   private wrecks!: WreckRenderer;
+  /** Commander calldowns: reticles/effects, and the HUD buttons + targeting. */
+  private powerFx!: PowerRenderer;
+  private powerUi?: PowerPanel;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -143,6 +148,17 @@ export class GameScene extends Phaser.Scene {
       dpr: this.dpr,
       hint: (msg, x, y) => this.hud.hint(msg, x, y)
     });
+    this.powerFx = new PowerRenderer(this, this.world, this.fx, {
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      pos: (id) => this.entities.pos(id),
+      isShown: (id) => this.entities.isShown(id),
+      alert: (msg, x, y) => this.hud.alert(msg, x, y),
+      ping: (x, y) => this.hud.ping(x, y)
+    });
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -170,6 +186,8 @@ export class GameScene extends Phaser.Scene {
       zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => this.simSeconds,
       wrecks: () => this.wrecks.dots(),
+      targetChip: () => this.powerUi?.chip() ?? null,
+      calldowns: () => this.powerFx.rings(),
       strategies: this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label} · ${OPENERS[openers.blue!].name}`,
@@ -180,6 +198,18 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    const powerUi = createPowerPanel({
+      world: this.world,
+      ctrl: this.ctrl,
+      notify: (msg, tone) => this.hud.notify(msg, tone),
+      hint: (msg) => this.hud.hint(msg),
+      viewCentre: () => ({ x: cam.midPoint.x / TILE, y: cam.midPoint.y / TILE })
+    });
+    this.powerUi = powerUi;
+    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      powerUi.destroy();
+      this.powerFx.destroy();
+    });
     if (focus) this.frameStart();
     if (this.holdStart) {
       const picker = showOpenerPicker({
@@ -312,10 +342,12 @@ export class GameScene extends Phaser.Scene {
     this.worldView.update(delta, this.ctrl.showFog);
     this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
     this.wrecks.sync(this.ctrl.paused ? 0 : delta);
+    this.powerFx.sync(this.ctrl.paused ? 0 : delta, alpha, this.powerUi?.preview() ?? null);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
     this.fx.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
+    this.powerUi?.update();
 
     if (this.world.winner && !this.ended) {
       this.ended = true;
@@ -342,6 +374,7 @@ export class GameScene extends Phaser.Scene {
     for (const ev of this.world.fx) {
       this.handleFx(ev);
       this.wrecks.onFx(ev);
+      this.powerFx.onFx(ev);
     }
     const fb = this.ctrl.lastFeedback;
     if (fb) {
@@ -609,6 +642,7 @@ export class GameScene extends Phaser.Scene {
     this.gest = new GestureRecognizer({
       onTap: (sx, sy) => {
         const p = this.worldAt(sx, sy);
+        if (this.powerUi?.tapWorld(p.x, p.y)) return; // an armed calldown fires here
         this.ctrl.tapWorld(p.x, p.y, hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee));
       },
       onDoubleTap: (sx, sy) => {
@@ -663,6 +697,7 @@ export class GameScene extends Phaser.Scene {
         this.targetZoom = cam.zoom; // pinch is immediate; keep target in sync
       },
       onRightClick: (sx, sy) => {
+        if (this.powerUi?.targeting) return this.powerUi.cancel();
         const p = this.worldAt(sx, sy);
         let hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         // right-click never re-selects; own entities count as ground
@@ -688,6 +723,14 @@ export class GameScene extends Phaser.Scene {
       this.gest.down(toPointer(p), performance.now());
     });
     this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.gest.move(toPointer(p), performance.now()));
+    // an armed calldown's preview follows the mouse, or the finger on the map
+    const aim = (p: Phaser.Input.Pointer) => {
+      if (!this.powerUi?.targeting) return;
+      const q = this.worldAt(p.x / this.dpr, p.y / this.dpr);
+      this.powerUi.aim(q.x, q.y);
+    };
+    this.input.on("pointermove", aim);
+    this.input.on("pointerdown", aim);
     const up = (p: Phaser.Input.Pointer) => this.gest.up(toPointer(p), performance.now());
     this.input.on("pointerup", up);
     this.input.on("pointerupoutside", up);
@@ -695,6 +738,7 @@ export class GameScene extends Phaser.Scene {
       this.gest.wheel(dy, p.x / this.dpr, p.y / this.dpr)
     );
     this.input.keyboard?.on("keydown-ESC", () => {
+      this.powerUi?.cancel();
       this.ctrl.placing = null;
       this.ctrl.clearSelection();
     });

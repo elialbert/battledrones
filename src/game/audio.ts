@@ -9,7 +9,8 @@ export type SfxName =
   | "cannon" | "heavy" | "mg" | "flak" | "rocket" | "missile" | "laser" | "shell" | "bomb"
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
   | "victory" | "defeat"
-  | "coin";
+  | "coin"
+  | "siren" | "emp" | "pod" | "hammer" | "charge" | "uplink";
 
 const MUTE_KEY = "battledrones.muted";
 
@@ -84,7 +85,8 @@ class Sfx {
 
 const GAP: Partial<Record<SfxName, number>> = {
   mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
-  coin: 0.07
+  coin: 0.07,
+  siren: 1.6, emp: 0.25, pod: 0.3, hammer: 0.6, charge: 1, uplink: 0.2
 };
 
 type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer) => number;
@@ -226,6 +228,94 @@ const RECIPES: Record<SfxName, Recipe> = {
     tone(c, o, t, "square", 1318, 1318, 0.06, 0.07);
     tone(c, o, t, "sine", 1976, 2100, 0.16, 0.16, 0.055);
     return 0.24;
+  },
+  // ---- commander calldowns (powers) ----
+  // air-raid wail: two detuned saws sweeping up and down, softened
+  siren: (c, o, t) => {
+    const f = c.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = 1700;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.11, t + 0.12);
+    g.gain.setValueAtTime(0.11, t + 1.75);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.1);
+    f.connect(g).connect(o);
+    for (const detune of [0, 7]) {
+      const osc = c.createOscillator();
+      osc.type = "sawtooth";
+      osc.detune.value = detune * 10;
+      osc.frequency.setValueAtTime(430, t);
+      osc.frequency.linearRampToValueAtTime(880, t + 0.55);
+      osc.frequency.linearRampToValueAtTime(470, t + 1.05);
+      osc.frequency.linearRampToValueAtTime(880, t + 1.6);
+      osc.frequency.linearRampToValueAtTime(520, t + 2.1);
+      osc.connect(f);
+      osc.start(t);
+      osc.stop(t + 2.15);
+    }
+    return 2.15;
+  },
+  // electric discharge: falling zap, crackle and a low thump
+  emp: (c, o, t, n) => {
+    tone(c, o, t, "square", 2600, 70, 0.38, 0.12);
+    tone(c, o, t, "sawtooth", 1300, 40, 0.3, 0.08, 0.03);
+    noiseBurst(c, o, t, n, 0.45, "highpass", 3200, 0.45);
+    noiseBurst(c, o, t + 0.12, n, 0.3, "bandpass", 5200, 0.25);
+    tone(c, o, t, "sine", 130, 38, 0.45, 0.7);
+    return 0.55;
+  },
+  // pod touchdown: heavy thud, metal clang, dust hiss
+  pod: (c, o, t, n) => {
+    tone(c, o, t, "sine", 95, 30, 0.42, 1);
+    noiseBurst(c, o, t, n, 0.5, "lowpass", 1400, 0.7, 120);
+    tone(c, o, t + 0.05, "triangle", 620, 590, 0.35, 0.12);
+    tone(c, o, t + 0.05, "triangle", 931, 900, 0.3, 0.06);
+    noiseBurst(c, o, t + 0.1, n, 0.6, "bandpass", 2400, 0.18, 600);
+    return 0.75;
+  },
+  // orbital strike: a crack, then a long rolling boom
+  hammer: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.18, "highpass", 2500, 0.9);
+    noiseBurst(c, o, t, n, 1.8, "lowpass", 1500, 1, 40);
+    noiseBurst(c, o, t + 0.2, n, 1.4, "lowpass", 600, 0.8, 50);
+    tone(c, o, t, "sine", 70, 18, 1.6, 1);
+    tone(c, o, t + 0.05, "sine", 48, 16, 1.4, 0.8);
+    return 1.85;
+  },
+  // Sky Hammer telegraph: a rising charge-up hum with a tremble
+  charge: (c, o, t) => {
+    const osc = c.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(70, t);
+    osc.frequency.exponentialRampToValueAtTime(420, t + 2.8);
+    const f = c.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.setValueAtTime(300, t);
+    f.frequency.exponentialRampToValueAtTime(2400, t + 2.8);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 2.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.95);
+    const lfo = c.createOscillator();
+    lfo.frequency.setValueAtTime(6, t);
+    lfo.frequency.linearRampToValueAtTime(22, t + 2.8);
+    const depth = c.createGain();
+    depth.gain.value = 0.05;
+    lfo.connect(depth).connect(g.gain);
+    osc.connect(f).connect(g).connect(o);
+    osc.start(t);
+    lfo.start(t);
+    osc.stop(t + 3);
+    lfo.stop(t + 3);
+    return 3;
+  },
+  // your calldown is away: a radio chirp
+  uplink: (c, o, t) => {
+    tone(c, o, t, "square", 1180, 1180, 0.05, 0.07);
+    tone(c, o, t, "square", 1580, 1580, 0.07, 0.07, 0.07);
+    tone(c, o, t, "sine", 2360, 2600, 0.12, 0.06, 0.14);
+    return 0.28;
   }
 };
 

@@ -304,3 +304,54 @@ export const SALVAGE = {
   /** Most wrecks on the field at once; past that the oldest burns out. */
   maxWrecks: 60
 };
+
+/**
+ * Commander calldowns (powers.ts). A Command meter per side (0–100) fills
+ * slowly on its own and mostly from losses, and pays for three telegraphed,
+ * map-targeted powers; the Sky Hammer is a separate late-game strike that
+ * comes online for both sides at 6:00. Every telegraph is public (both
+ * sides see it through the fog), so landing one and dodging one are both
+ * skill moments. Damage stays modest and cooldowns long: burst powers fed
+ * the snowball in the design panel's prototypes.
+ */
+export const POWERS = {
+  meterMax: 100,
+  /** Meter per second, always. */
+  passive: 0.1,
+  /** Meter per scrap of your own units and buildings destroyed (comeback-weighted). */
+  perScrapLost: 0.02,
+  /** Meter per scrap of enemy units and buildings you destroy. */
+  perScrapKilled: 0.007,
+  barrage: {
+    cost: 60, cooldown: 45, telegraph: 2.5,
+    /** Shells, the seconds between them, and their scatter (tiles) around the aim point. */
+    shells: 3, shellGap: 0.3, scatter: 0.9,
+    damage: 170, splash: 2,
+    /** Reticle size: the area any shell can reach. */
+    radius: 2.9
+  },
+  emp: {
+    cost: 40, cooldown: 40, telegraph: 0.8,
+    radius: 3,
+    /** Seconds stunned units can't move or fire and buildings can't fire or produce. */
+    stun: 4
+  },
+  droppod: {
+    cost: 70, cooldown: 60, telegraph: 2,
+    radius: 1.2,
+    /** Light impact on enemy ground units right under the pod. */
+    damage: 60,
+    units: ["stinger", "stinger", "flak-crawler"] as UnitKind[],
+    /** With a Tech Lab standing. */
+    techUnits: ["lancer", "lancer", "flak-crawler"] as UnitKind[]
+  },
+  hammer: {
+    /** Comes online for both sides at this match time (seconds), then recharges. */
+    unlock: 6 * 60, cooldown: 120, telegraph: 3,
+    radius: 2.5,
+    /** Units: this × (1 − 0.5·d/r), any armour, ground or air. */
+    unitDamage: 260,
+    /** Buildings whose footprint is in the radius: flat (an HQ loses ~22%). */
+    buildingDamage: 700
+  }
+};

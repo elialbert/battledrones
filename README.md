@@ -14,6 +14,10 @@ installable as a PWA.
 - **Battlefield salvage**: destroyed vehicles and downed drones leave
   burning wrecks worth 30% of their cost — roll any ground unit over one
   to scoop up the scrap. Hold the field after a fight and it pays.
+- **Commander calldowns**: a meter that fills mostly from your losses pays
+  for a Barrage, an EMP or a Drop Pod — tap the button, tap the map — and
+  at 6:00 both sides get the **Sky Hammer** orbital strike. Every strike is
+  telegraphed with a public warning circle: land yours, dodge theirs.
 - **11 units** across a real counter web: Stinger light tanks, Flak
   Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet

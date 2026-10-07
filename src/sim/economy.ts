@@ -1,5 +1,6 @@
 import { BUILDINGS, ECONOMY, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { moveUnitToward } from "./movement";
+import { isStunned } from "./powers";
 import {
   Terrain,
   type Building,
@@ -164,6 +165,7 @@ export function tickProduction(w: World): void {
   for (const b of w.buildings.values()) {
     const head = b.queue[0];
     if (!head) continue;
+    if (isStunned(w, b.id)) continue; // EMP'd: production paused
     // a unit whose tech building was lost pauses (stays queued)
     if (UNITS[head.kind].requires && !hasBuilding(w, b.faction, UNITS[head.kind].requires!)) continue;
     if (--head.remaining > 0) continue;
@@ -300,6 +302,7 @@ function dockPoint(b: Building, x: number, y: number): { x: number; y: number } 
 export function tickHarvest(w: World): void {
   for (const u of w.units.values()) {
     if (u.order.type !== "harvest") continue;
+    if (isStunned(w, u.id)) continue; // EMP'd: frozen in place
     const o = u.order;
     const perTick = (rate: number) => rate / TICK_RATE;
 

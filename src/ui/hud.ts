@@ -22,6 +22,10 @@ export interface HudApi {
   enemy: { strategy: string; difficulty: string };
   /** Battlefield wrecks the player knows about (tiles), drawn as gold minimap dots. */
   wrecks?: () => { x: number; y: number }[];
+  /** While a calldown is armed: the "Tap map: …" chip and its cancel (powers). */
+  targetChip?: () => { label: string; cancel(): void } | null;
+  /** Calldown reticles in flight (tiles), drawn as rings on the minimap. */
+  calldowns?: () => { x: number; y: number; r: number; enemy: boolean }[];
 }
 
 export interface Hud {
@@ -31,6 +35,8 @@ export interface Hud {
   ping(x: number, y: number): void;
   /** A 💡 tip toast; tapping it jumps the camera to (x, y). */
   hint(msg: string, x?: number, y?: number): void;
+  /** A plain short toast (e.g. why a calldown can't fire). */
+  notify(msg: string, tone?: "bad" | "good"): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -559,7 +565,11 @@ export function createHud(api: HudApi): Hud {
     tutorial();
     // chips
     const chips: Chip[] = [];
-    if (ctrl.placing) {
+    const armed = api.targetChip?.();
+    if (armed) {
+      chips.push({ id: "target", label: armed.label, cls: "info", on: () => {} });
+      chips.push({ id: "untarget", label: "✕", cls: "warn", on: () => armed.cancel() });
+    } else if (ctrl.placing) {
       chips.push({ id: "placing", label: `Tap map to place ${BUILDINGS[ctrl.placing].name}`, cls: "info", on: () => {} });
       chips.push({ id: "cancel", label: "✕", cls: "warn", on: () => (ctrl.placing = null) });
     } else if (ctrl.selectedUnits.size > 0 && !ctrl.spectator) {
@@ -714,6 +724,14 @@ export function createHud(api: HudApi): Hud {
       }
       mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
     }
+    // calldown reticles in flight (public: shown through the fog)
+    for (const c of api.calldowns?.() ?? []) {
+      mctx.strokeStyle = c.enemy ? "#ff3b30" : "#ffd23f";
+      mctx.lineWidth = 2;
+      mctx.beginPath();
+      mctx.arc(c.x * k, c.y * k, Math.max(4, c.r * k), 0, Math.PI * 2);
+      mctx.stroke();
+    }
     // alert pings
     const now = api.matchSeconds();
     for (let i = pings.length - 1; i >= 0; i--) {
@@ -744,6 +762,7 @@ export function createHud(api: HudApi): Hud {
     const mm = Math.floor(secs / 60);
     const ss = String(secs % 60).padStart(2, "0");
     const st = (fc: Faction) => w.factions[fc].stats;
+    const fired = (fc: Faction) => Object.values(w.powers.fired[fc]).reduce((a, b) => a + b, 0);
     const row = (label: string, a: number, b: number) =>
       `<tr><td>${label}</td><td>${Math.floor(a)}</td><td>${Math.floor(b)}</td></tr>`;
     endEl.hidden = false;
@@ -759,6 +778,7 @@ export function createHud(api: HudApi): Hud {
           ${row("Buildings lost", st("blue").buildingsLost, st("red").buildingsLost)}
           ${row("Scrap harvested", st("blue").scrapHarvested, st("red").scrapHarvested)}
           ${row("Salvaged", st("blue").scrapSalvaged, st("red").scrapSalvaged)}
+          ${row("Calldowns", fired("blue"), fired("red"))}
         </table>
         <button id="again" class="cta">↻ Rematch</button>
         <button id="menu" class="cta alt">Main menu</button>
@@ -787,6 +807,9 @@ export function createHud(api: HudApi): Hud {
     hint(msg, x, y) {
       toast(`💡 ${msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", 7000);
     },
+    notify(msg, tone) {
+      toast(msg, undefined, tone ?? "", tone === "bad" ? 2200 : 4200);
+    },
     togglePause,
     destroy() {
       offAnnounce();
@@ -800,6 +823,7 @@ export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Openers</h3><p>Every match starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost for a minute: roll any ground unit over one to salvage it.</p>
+  <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every 2 minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>
