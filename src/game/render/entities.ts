@@ -14,6 +14,7 @@ import {
   unitFrame
 } from "../assets";
 import { AIR_LIFT, type Fx } from "./fx";
+import { FlashClock, JUICE } from "../juice";
 
 interface UnitView {
   kind: "unit";
@@ -35,6 +36,8 @@ interface UnitView {
   bx: number;
   by: number;
   visible: boolean;
+  /** Body/turret currently drawn as a white hit-flash silhouette. */
+  flashing?: boolean;
 }
 
 interface BuildingView {
@@ -69,6 +72,7 @@ export class EntityRenderer {
   private views = new Map<number, View>();
   private sold = new Set<number>();
   private time = 0;
+  private flashes = new FlashClock();
 
   constructor(
     private scene: Phaser.Scene,
@@ -126,6 +130,36 @@ export class EntityRenderer {
     if (v.kind === "unit" && v.turret) v.aim = angle;
     else if (v.kind === "unit") v.face = v.aim = angle;
     else v.face = angle;
+  }
+
+  /**
+   * A hit landed on a visible entity: units flash a white silhouette (body
+   * and turret), buildings a brief warm glow. Throttled per entity so
+   * sustained fire flickers instead of strobing.
+   */
+  hitFlash(id: number): void {
+    const v = this.views.get(id);
+    if (!v || !v.visible) return;
+    // wall-clock timing: a flash still ends if the game is paused mid-blink
+    const now = performance.now();
+    if (v.kind === "unit") {
+      this.flashes.hit(id, now);
+      return;
+    }
+    if (!this.flashes.hit(id, now, JUICE.buildingFlashMs, JUICE.buildingFlashGapMs)) return;
+    for (const src of [v.body, v.head]) {
+      if (!src) continue;
+      const glow = this.scene.add
+        .image(src.x, src.y, ATLAS, src.frame.name)
+        .setOrigin(src.originX, src.originY)
+        .setScale(src.scaleX, src.scaleY)
+        .setRotation(src.rotation)
+        .setDepth(src.depth + 0.005)
+        .setTint(0xffe2c0)
+        .setAlpha(0.6)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.scene.tweens.add({ targets: glow, alpha: 0, duration: JUICE.buildingFlashMs, onComplete: () => glow.destroy() });
+    }
   }
 
   // ------------------------------------------------------------- sync ---
@@ -225,6 +259,15 @@ export class EntityRenderer {
     v.gx = gx;
     v.gy = gy;
     if (!visible) return;
+    const flashing = this.flashes.active(u.id, performance.now());
+    if (flashing !== (v.flashing ?? false)) {
+      v.flashing = flashing;
+      for (const o of [v.body, v.turret]) {
+        if (!o) continue;
+        if (flashing) o.setTintFill(0xffffff);
+        else o.clearTint();
+      }
+    }
 
     v.face += angleDelta(v.face, u.facing) * turnK;
     if (stats.turret) {

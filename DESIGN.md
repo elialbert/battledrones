@@ -150,6 +150,40 @@ triangle; air vs anti-air sits across it.
 - Auto-acquire targets in range; attack-move is the default command, with
   a "Move only" chip for retreats.
 
+### Combat readability & feedback ("juice")
+
+Fights must read at a glance on a phone (units die ~3.7 s after first
+being hit), and kills, losses and income must each feel distinct. Rules in
+`src/game/juice.ts` (engine-free, unit-tested), drawn by
+`src/game/render/juice-view.ts`:
+
+- **Hit flash:** a hit unit flashes a white silhouette (hull and turret)
+  for 70 ms, at most once per 120 ms per unit; buildings get a warm
+  additive glow (100 ms, once per 280 ms) so a siege flickers rather than
+  strobes. Wall-clock timed, so pausing never freezes a unit white.
+- **Health bars:** recently lost HP stays as a pale chunk for 300 ms, then
+  drains at 1.5× max HP/s (a new burst only re-arms the hold once the trail
+  has caught up). Enemy bars brighten as HP falls and blink at 2 Hz below
+  25%. Bars snap to device pixels, keep a 22 CSS px minimum width, and stay
+  4 CSS px tall at every zoom.
+- **Team ground rings:** any unit that fired or was hit in the last 3 s
+  sits on a thin blue/red ellipse (fading over its last second), so mixed
+  clumps read even at the default zoom. Aircraft rings sit under the craft.
+- **Deaths:** small hulls get a smaller fireball and glow (Titans and
+  Hornets keep their big one); impacts are trimmed so explosions stop
+  hiding the clump. An expanding ring in the victim's colour says whose
+  unit just died. Camera shake only for deaths the player can see inside
+  the camera view, scaled by what died (stinger ≈ 1 px, HQ biggest).
+- **Sound:** a bright two-note *kill* "ting" on enemy deaths you can see; a
+  low *lost* power-down for your own units (quieter and throttled when off
+  screen). Both may use two voices reserved above the 14-voice battle cap.
+  Losing a building buzzes the phone (`navigator.vibrate(20)`, Android).
+- **Economy:** each delivery pops a gold "+100" over the drop-off with a
+  coin blip; deliveries within 2.5 s of each other climb a pentatonic
+  scale, and arrivals at one drop-off within 400 ms merge into one label.
+  The scrap pill bumps on income and flashes red when you spend.
+- Spectators get the visuals for both sides but no kill/loss/coin cues.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -256,7 +290,8 @@ DOM overlaid on the canvas, re-flowing by orientation:
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
 - Toasts for "building ready", attacks (tap to jump there) and hints;
-  minimap pings where you're being hit.
+  minimap pings where you're being hit. The scrap pill bumps when a
+  harvester delivers and flashes red when scrap is spent.
 
 ### Minimap
 
@@ -287,7 +322,8 @@ src/
     fog.ts          # per-side visibility maps + building memory
     ai/commander.ts # the enemy commander: strategies, difficulty
   game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx
+    render/         # world-view (terrain, piles, fog), entities, fx, juice-view
+    juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
     audio.ts        # procedural WebAudio sound effects
   ui/         # DOM HUD, menu styles
 art/          # image generation + processing pipeline (Python)

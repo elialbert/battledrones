@@ -23,6 +23,7 @@ import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
+import { CombatJuice } from "./render/juice-view";
 import { WorldView } from "./render/world-view";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
@@ -48,6 +49,7 @@ export class GameScene extends Phaser.Scene {
   private worldView!: WorldView;
   private entities!: EntityRenderer;
   private fx!: Fx;
+  private juice!: CombatJuice;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -119,6 +121,12 @@ export class GameScene extends Phaser.Scene {
       (b) => this.buildingShown(b),
       (f) => f === PLAYER || !this.ctrl.showFog
     );
+    this.juice = new CombatJuice(this, {
+      world: this.world, entities: this.entities, fx: this.fx, player: PLAYER, spectator: gameMode.spectator,
+      sees: (x, y) => this.seesPoint(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      px: (css) => this.px(css)
+    });
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -240,6 +248,7 @@ export class GameScene extends Phaser.Scene {
     this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
     this.fx.update(this.ctrl.paused ? 0 : delta);
+    this.juice.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
 
@@ -266,6 +275,7 @@ export class GameScene extends Phaser.Scene {
 
   private afterTick(): void {
     for (const ev of this.world.fx) this.handleFx(ev);
+    this.juice.events(this.world.fx);
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
@@ -426,7 +436,7 @@ export class GameScene extends Phaser.Scene {
       const p = this.entities.pos(u.id);
       if (!p) continue;
       const bw = Math.max(34, UNITS[u.kind].radius * TILE * 2);
-      this.healthBar(g, p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 14, bw, u.hp / max, u.faction === PLAYER);
+      this.healthBar(g, u.id, p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 14, bw, u.hp / max, u.faction === PLAYER);
       if (u.kind === "harvester" && u.faction === PLAYER && selected) {
         const k = u.cargo / ECONOMY.harvesterCapacity;
         g.fillStyle(0x10141c, 0.8).fillRect(p.x - bw / 2, p.y - UNITS[u.kind].radius * TILE - 7, bw, 4);
@@ -438,7 +448,7 @@ export class GameScene extends Phaser.Scene {
       const size = BUILDINGS[b.kind].size;
       if (!this.entities.isShown(b.id)) continue;
       if (b.hp < max || this.ctrl.selectedBuilding === b.id)
-        this.healthBar(g, b.tx * TILE + 6, b.ty * TILE - 4, size * TILE - 12, b.hp / max, b.faction === PLAYER);
+        this.healthBar(g, b.id, b.tx * TILE + 6, b.ty * TILE - 4, size * TILE - 12, b.hp / max, b.faction === PLAYER);
       // production progress along the bottom edge of our factories
       const head = b.queue[0];
       if (head && b.faction === PLAYER) {
@@ -494,24 +504,17 @@ export class GameScene extends Phaser.Scene {
     g.lineStyle(this.px(2), ok ? 0x37d67a : 0xe25555, 0.9).strokeRect(tx * TILE, ty * TILE, size * TILE, size * TILE);
   }
 
+  /** Damage-trail health bar (see render/juice-view.ts). */
   private healthBar(
     g: Phaser.GameObjects.Graphics,
+    id: number,
     x: number,
     y: number,
     width: number,
     ratio: number,
     friendly: boolean
   ): void {
-    const h = Math.max(5, this.px(4));
-    g.fillStyle(0x0a0d14, 0.85).fillRect(x - 1, y - 1, width + 2, h + 2);
-    const col = friendly
-      ? ratio > 0.6 ? 0x53d769 : ratio > 0.3 ? 0xf2c14e : 0xf06a4a
-      : 0xe25555;
-    g.fillStyle(col, 1).fillRect(x, y, Math.max(0, width * ratio), h);
-    // segment ticks make big health pools readable at a glance
-    const segs = Math.min(10, Math.round(width / 10));
-    g.fillStyle(0x0a0d14, 0.5);
-    for (let i = 1; i < segs; i++) g.fillRect(x + (width * i) / segs, y, 1, h);
+    this.juice.healthBar(g, id, x, y, width, ratio, friendly);
   }
 
   // --------------------------------------------------------------- input ---

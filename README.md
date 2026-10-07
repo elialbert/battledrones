@@ -26,6 +26,10 @@ installable as a PWA.
 - Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
   at device resolution with turrets that track their targets, shadows,
   particles, smooth fog of war — and fully synthesised sound effects.
+- Punchy, readable fights: hit flashes, damage-trail health bars, team
+  rings under units in combat, kill and loss cues that sound different,
+  on-screen-only camera shake, and gold "+100" pops with a rising coin
+  chime when your harvesters deliver.
 
 ## Development
 

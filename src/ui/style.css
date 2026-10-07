@@ -1189,3 +1189,39 @@ button {
     min-height: 40px;
   }
 }
+
+/* ------------------------------------------- scrap pill income / spend --- */
+/* render/juice-view.ts restarts these one-shot animations on the #res pill */
+.res {
+  transform-origin: 20% 50%;
+}
+.res.bump {
+  animation: res-bump 260ms ease-out;
+}
+.res.spend {
+  animation: res-spend 320ms ease-out;
+}
+@keyframes res-bump {
+  0% { transform: scale(1); }
+  35% {
+    transform: scale(1.13);
+    box-shadow: 0 0 14px rgba(255, 214, 110, 0.55);
+    border-color: rgba(255, 214, 110, 0.8);
+  }
+  100% { transform: scale(1); }
+}
+@keyframes res-spend {
+  0% {
+    color: #ff8a7a;
+    border-color: rgba(255, 106, 90, 0.85);
+    box-shadow: 0 0 12px rgba(255, 90, 74, 0.45);
+    transform: scale(0.95);
+  }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .res.bump,
+  .res.spend {
+    animation-duration: 1ms;
+  }
+}

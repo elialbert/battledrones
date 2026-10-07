@@ -8,7 +8,8 @@
 export type SfxName =
   | "cannon" | "heavy" | "mg" | "flak" | "rocket" | "missile" | "laser" | "shell" | "bomb"
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
-  | "victory" | "defeat";
+  | "victory" | "defeat"
+  | "kill" | "lost" | "coin";
 
 const MUTE_KEY = "battledrones.muted";
 
@@ -60,20 +61,24 @@ class Sfx {
     }
   }
 
-  /** Play a sound at volume `vol` (0–1, already distance-attenuated by the caller). */
-  play(name: SfxName, vol = 1): void {
+  /**
+   * Play a sound at volume `vol` (0–1, already distance-attenuated by the
+   * caller). `pitch` scales the recipe's frequencies where it supports it.
+   */
+  play(name: SfxName, vol = 1, pitch = 1): void {
     const ctx = this.ctx;
     if (!ctx || !this.master || this.muted || vol < 0.03) return;
     const now = ctx.currentTime;
     const minGap = GAP[name] ?? 0.05;
     if (now - (this.last.get(name) ?? -1) < minGap) return;
-    if (this.voices > 14) return;
+    // feedback cues keep two reserved voices so a loud battle can't swallow them
+    if (this.voices > (PRIORITY.has(name) ? 16 : 14)) return;
     this.last.set(name, now);
     const out = ctx.createGain();
     out.gain.value = vol;
     out.connect(this.master);
     this.voices++;
-    const dur = RECIPES[name](ctx, out, now, this.noise!);
+    const dur = RECIPES[name](ctx, out, now, this.noise!, pitch);
     setTimeout(() => {
       this.voices--;
       out.disconnect();
@@ -82,10 +87,14 @@ class Sfx {
 }
 
 const GAP: Partial<Record<SfxName, number>> = {
-  mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02
+  mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
+  kill: 0.08, lost: 0.08, coin: 0.1
 };
 
-type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer) => number;
+/** Short feedback cues that may use the reserved voices above the battle cap. */
+const PRIORITY = new Set<SfxName>(["kill", "lost", "coin", "alert"]);
+
+type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer, pitch: number) => number;
 
 function noiseBurst(
   ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer,
@@ -218,6 +227,39 @@ const RECIPES: Record<SfxName, Recipe> = {
   defeat: (c, o, t) => {
     [392, 330, 262, 196].forEach((f, i) => tone(c, o, t, "triangle", f, f * 0.98, 0.4, 0.25, i * 0.2));
     return 1.2;
+  },
+  // an enemy died where you can see it: a bright two-note "ting" over a metal crunch
+  kill: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.06, "highpass", 2600, 0.25);
+    tone(c, o, t, "sine", 1600, 1580, 0.09, 0.17);
+    tone(c, o, t, "sine", 2400, 2380, 0.13, 0.15, 0.04);
+    return 0.2;
+  },
+  // one of yours died: a low power-down whine
+  lost: (c, o, t) => {
+    const osc = c.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(420, t);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.35);
+    const f = c.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = 900;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.24, t + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
+    osc.connect(f).connect(g).connect(o);
+    osc.start(t);
+    osc.stop(t + 0.38);
+    tone(c, o, t, "sine", 210, 45, 0.34, 0.2);
+    return 0.4;
+  },
+  // scrap delivered: a coin blip whose pitch climbs on a delivery streak
+  coin: (c, o, t, _n, p) => {
+    tone(c, o, t, "triangle", 1320 * p, 1320 * p, 0.06, 0.1);
+    tone(c, o, t, "triangle", 1760 * p, 1760 * p, 0.14, 0.1, 0.04);
+    tone(c, o, t, "sine", 3520 * p, 3520 * p, 0.08, 0.025, 0.04);
+    return 0.2;
   }
 };
 

@@ -157,12 +157,13 @@ export class Fx {
     }
   }
 
-  private flash(x: number, y: number, scale: number, tint: number): void {
+  private flash(x: number, y: number, scale: number, tint: number, alpha = 1): void {
     const img = this.scene.add
       .image(x, y, "fx-glow")
       .setDepth(7.7)
       .setScale(scale)
       .setTint(tint)
+      .setAlpha(alpha)
       .setBlendMode(Phaser.BlendModes.ADD);
     this.scene.tweens.add({ targets: img, alpha: 0, scale: scale * 1.4, duration: 90, onComplete: () => img.destroy() });
   }
@@ -222,13 +223,17 @@ export class Fx {
 
   private impact(x: number, y: number, size: number, air: boolean): void {
     this.sparks.emitParticleAt(x, y, Math.round(3 + size * 4));
-    if (size > 0.4) this.boom(x, y, size * 0.8, air, false);
+    if (size > 0.4) this.boom(x, y, size * 0.6, air, false, 1, 0.7);
     else this.flash(x, y, size * 1.2, 0xffc26a);
     if (!air && size > 0.3) this.dustE.emitParticleAt(x, y, 1);
   }
 
-  /** Animated fireball + fire/smoke/debris particles. */
-  private boom(x: number, y: number, size: number, air: boolean, decal: boolean): void {
+  /**
+   * Animated fireball + fire/smoke/debris particles. `flashK`/`flashA` size
+   * the additive glow: small deaths and impacts keep it modest so the
+   * fight underneath stays readable; building deaths keep the full bloom.
+   */
+  private boom(x: number, y: number, size: number, air: boolean, decal: boolean, flashK = 1.5, flashA = 1): void {
     const s = this.scene.add
       .sprite(x, y, ATLAS, "explosion/0")
       .setDepth(air ? 7.8 : 7)
@@ -236,9 +241,10 @@ export class Fx {
       .setRotation(Math.random() * Math.PI * 2);
     s.play("boom");
     s.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => s.destroy());
-    this.flash(x, y, size * 1.5, 0xffa640);
-    this.fire.emitParticleAt(x, y, Math.round(3 + size * 5));
-    this.smoke.emitParticleAt(x, y, Math.round(1 + size * 3));
+    this.flash(x, y, size * flashK, 0xffa640, flashA);
+    // fewer additive fire puffs for small booms: they pile up into a white blob over the fight
+    this.fire.emitParticleAt(x, y, Math.round(size < 1 ? 1 + size * 4 : 3 + size * 5));
+    this.smoke.emitParticleAt(x, y, Math.round(size < 1 ? size * 2 : 1 + size * 3));
     if (decal && !air) this.decal(x, y, size);
   }
 
@@ -253,10 +259,11 @@ export class Fx {
         this.scene.time.delayedCall(i * 110, () => this.boom(x + ox, y + oy, 1.2 + Math.random() * 0.8, false, i === 0));
       }
       this.debris.emitParticleAt(x, y, 14);
-      this.scene.cameras.main.shake(350, 0.006);
+      // camera shake is decided by render/juice-view.ts (on-screen deaths only)
       this.sound("bigExplosion", x, y);
     } else if (ev.kind === "unit") {
-      this.boom(x, y, 0.8 + ev.size, ev.air, true);
+      // small hulls pop smaller; Titans and Hornets keep their big fireball
+      this.boom(x, y, ev.size >= 1 ? 0.8 + ev.size : 0.5 + ev.size * 0.85, ev.air, true, 0.9, 0.85);
       this.debris.emitParticleAt(x, y, 6);
       this.sound("explosion", x, y, 0.9);
       if (ev.air) {
@@ -266,7 +273,7 @@ export class Fx {
         });
       }
     } else {
-      this.boom(x, y, 0.5 + ev.size * 0.7, false, true);
+      this.boom(x, y, 0.5 + ev.size * 0.7, false, true, 1.1, 0.8);
       this.sound("explosion", x, y, 0.7);
     }
   }
