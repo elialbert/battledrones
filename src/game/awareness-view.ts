@@ -178,6 +178,19 @@ export class Awareness {
     };
   }
 
+  /** Middle of the visible battlefield (tiles), clear of the HUD. */
+  viewCentre(): { x: number; y: number } {
+    const p = this.ui.layout().play;
+    return this.toWorld((p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
+  }
+
+  /** Is tile point (x, y) at least `margin` CSS px inside the visible battlefield? */
+  inPlay(x: number, y: number, margin = 0): boolean {
+    const p = this.ui.layout().play;
+    const s = this.toScreen(x, y);
+    return s.x >= p.x0 + margin && s.x <= p.x1 - margin && s.y >= p.y0 + margin && s.y <= p.y1 - margin;
+  }
+
   /** Glide the camera so (x, y) sits in the middle of the visible battlefield. */
   glideTo(x: number, y: number): void {
     const p = this.ui.layout().play;

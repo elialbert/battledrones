@@ -1717,3 +1717,319 @@ button {
     line-clamp: 3;
   }
 }
+
+/* ======================================================== command UX === */
+/* src/ui/command.ts: squad chips at the head of the chip row, build-advisor
+   badges; src/game/placement-view.ts: the ✓ Place chip. */
+.chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+@media (orientation: landscape) {
+  .chiprow {
+    justify-content: flex-end;
+  }
+}
+.squads {
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+.sq {
+  position: relative;
+  pointer-events: auto;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 11px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel);
+  color: var(--text);
+  overflow: hidden;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.sq .sqn {
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  font-size: 10px;
+  font-weight: 900;
+  color: var(--dim);
+  line-height: 1;
+  z-index: 2;
+}
+.sq .sqi {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 31px;
+  height: 31px;
+  transform: translateX(-50%);
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+  pointer-events: none;
+}
+.sq .sqc {
+  position: absolute;
+  right: 3px;
+  bottom: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+  z-index: 2;
+}
+.sq .sqhp {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 2px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.sq .sqhp > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #5be37f;
+  transition: width 0.2s;
+}
+.sq .sqhp > i.mid { background: #ffc24a; }
+.sq .sqhp > i.low { background: #ff5a4a; }
+.sq .sqarm {
+  position: absolute;
+  inset: 0;
+  background: rgba(126, 242, 155, 0.28);
+  transform: scaleY(0);
+  transform-origin: 50% 100%;
+  pointer-events: none;
+}
+.sq.arming .sqarm {
+  animation: sqArm 0.4s linear forwards;
+}
+@keyframes sqArm {
+  to { transform: scaleY(1); }
+}
+/* empty slot: a dashed outline with the number big and a "+" */
+.sq.empty {
+  border-style: dashed;
+  background: rgba(9, 13, 21, 0.55);
+}
+.sq.empty .sqn {
+  left: 0;
+  right: 0;
+  top: 9px;
+  font-size: 17px;
+  text-align: center;
+}
+.sq.empty .sqhp {
+  display: none;
+}
+.sq.empty::after {
+  content: "+";
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--dim);
+}
+.sq.on {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green) inset, 0 0 8px rgba(126, 242, 155, 0.35);
+}
+.sq.on .sqn {
+  color: var(--green);
+}
+/* a member is being hit: red at once (the pulse only modulates the glow) */
+.sq.hurt {
+  border-color: #ff5a4a;
+  background: #3a1414;
+  box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 12px rgba(255, 90, 74, 0.75);
+  animation: sqHurt 0.45s ease-in-out infinite alternate;
+}
+.sq.hurt .sqn {
+  color: #ffb3a6;
+}
+@keyframes sqHurt {
+  to { box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 4px rgba(255, 90, 74, 0.3); background: #241016; }
+}
+.sq.saved {
+  animation: sqSaved 0.35s ease-out;
+}
+@keyframes sqSaved {
+  0% { transform: scale(1.18); background: #1e4d33; border-color: var(--green); }
+  100% { transform: scale(1); }
+}
+.sq:active {
+  transform: scale(0.95);
+}
+
+/* placement: build here / why not */
+.chip.place.go {
+  color: #0d1a12;
+  background: #4fdc86;
+  border-color: #7ef29b;
+  box-shadow: 0 0 12px rgba(79, 220, 134, 0.45);
+}
+.chip.place.go:active {
+  background: #3bbf70;
+}
+.chip.place.bad {
+  color: #ffb3a6;
+  border-color: rgba(255, 110, 90, 0.7);
+}
+.chip.nope {
+  animation: chipNope 0.26s ease-in-out;
+}
+@keyframes chipNope {
+  20% { transform: translateX(-5px); }
+  50% { transform: translateX(5px); }
+  80% { transform: translateX(-3px); }
+}
+.chip.idle {
+  color: #ffd27a;
+}
+
+/* build advisor: ⚔ on build options that counter enemies you've seen */
+.bb.counter {
+  border-color: #ffb84a;
+  box-shadow: 0 0 0 1px rgba(255, 184, 74, 0.55) inset;
+}
+.bb.counter::before {
+  content: "⚔";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffb84a;
+  color: #1a1205;
+  font-size: 12.5px;
+  font-weight: 900;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 6px rgba(255, 184, 74, 0.7);
+}
+.bb.counter.fresh {
+  animation: ctrGlow 0.6s ease-in-out infinite alternate;
+}
+@keyframes ctrGlow {
+  from { box-shadow: 0 0 0 1px rgba(255, 184, 74, 0.55) inset, 0 0 4px rgba(255, 184, 74, 0.2); }
+  to { box-shadow: 0 0 0 1px #ffb84a inset, 0 0 16px rgba(255, 184, 74, 0.85); }
+}
+.bb.counter.locked::before {
+  opacity: 0.6;
+}
+/* a ready building's PLACE label wins over the counter glow */
+.bb.ready.counter {
+  border-color: #37d67a;
+}
+.card .ctr {
+  color: #ffc56a;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+/* tab notes: "idle" factory, ⚔ counters on another tab */
+.tab .tnotes {
+  position: absolute;
+  top: -6px;
+  left: 3px;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+}
+.tab .tidle {
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #ffb84a;
+  color: #1a1205;
+  font-size: 9.5px;
+  font-weight: 900;
+  line-height: 16px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  box-shadow: 0 0 6px rgba(255, 184, 74, 0.6);
+  animation: tabIdle 1.1s ease-in-out infinite alternate;
+}
+@keyframes tabIdle {
+  to { box-shadow: 0 0 12px rgba(255, 184, 74, 0.95); }
+}
+.tab .tctr {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffb84a;
+  color: #1a1205;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 16px;
+  text-align: center;
+}
+/* landscape tabs are icon-only and narrow: ⚔ on the top-left corner, "idle" under the tab */
+@media (orientation: landscape) {
+  .tab .tnotes {
+    inset: 0;
+  }
+  .tab .tidle {
+    position: absolute;
+    left: 50%;
+    bottom: -7px;
+    transform: translateX(-50%);
+    height: 13px;
+    padding: 0 4px;
+    font-size: 8px;
+    line-height: 13px;
+  }
+  .tab .tctr {
+    position: absolute;
+    left: -4px;
+    top: -5px;
+    width: 15px;
+    height: 15px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bb.counter.fresh,
+  .tab .tidle,
+  .sq.hurt {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+    animation-fill-mode: forwards;
+  }
+}
+/* 360–379 px phones: a little tighter so squads + Stop + Move + ✕ stay on one row */
+@media (orientation: portrait) and (max-width: 379px) {
+  .ctx {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .chiprow {
+    gap: 5px;
+  }
+  .chips {
+    gap: 5px;
+  }
+  .chip {
+    padding: 6px 11px;
+  }
+  .sq {
+    width: 40px;
+  }
+}

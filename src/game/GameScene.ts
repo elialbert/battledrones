@@ -9,10 +9,8 @@ import type { Building, FxEvent, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import {
-  ART_SCALE,
   ATLAS,
   TILE,
-  buildingFrame,
   loadAssets,
   setSpriteMeta,
   type SpriteMeta
@@ -33,6 +31,8 @@ import { CombatJuice } from "./render/juice-view";
 import { WorldView } from "./render/world-view";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
+import { PlacementView } from "./placement-view";
+import { CommandUi } from "../ui/command";
 
 const TICK_MS = 1000 / TICK_RATE;
 /** Logical (CSS-pixel) zoom range; the camera zoom also includes the DPR. */
@@ -51,7 +51,10 @@ export class GameScene extends Phaser.Scene {
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
   private overlay!: Phaser.GameObjects.Graphics;
-  private ghost!: Phaser.GameObjects.Image;
+  /** Building placement: ghost, suggested spot, touch move/drag/confirm. */
+  private place!: PlacementView;
+  /** Squad chips, counter/idle advisor badges. */
+  private command!: CommandUi;
   private worldView!: WorldView;
   private entities!: EntityRenderer;
   private fx!: Fx;
@@ -157,7 +160,14 @@ export class GameScene extends Phaser.Scene {
       inView: (x, y) => this.seesPoint(x, y) && inView(x, y)
     };
     this.overlay = this.add.graphics().setDepth(8);
-    this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
+    this.place = new PlacementView({
+      scene: this, world: this.world, ctrl: this.ctrl, dpr: this.dpr,
+      viewCentre: () => this.aware.viewCentre(),
+      inView: (x, y) => this.aware.inPlay(x, y, 40),
+      glideTo: (x, y) => this.aware.glideTo(x, y),
+      hint: (id, msg) => this.command.hint(id, msg),
+      handoff: (p) => this.gest.down(p, performance.now())
+    });
 
     const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
     const c = focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 };
@@ -185,7 +195,8 @@ export class GameScene extends Phaser.Scene {
       strategies: this.blueAi
         ? { blue: this.blueAi.strategy.label, red: this.ai.strategy.label }
         : null,
-      enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
+      enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty },
+      cardNote: (k) => this.command?.cardNote(k) ?? null
     });
 
     this.aware = new Awareness({
@@ -194,8 +205,15 @@ export class GameScene extends Phaser.Scene {
       sees: (x, y) => this.seesPoint(x, y),
       pulse: (x, y, c) => this.fx.pulse(x * TILE, y * TILE, c, 1.4)
     });
+    this.command = new CommandUi({
+      root: document.getElementById("hud")!, world: this.world, ctrl: this.ctrl, spectator: gameMode.spectator,
+      glideTo: (x, y) => this.aware.glideTo(x, y),
+      tip: (msg, ms) => this.hud.hint(msg, ms)
+    });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.command.destroy();
+      this.place.destroy();
       this.aware.destroy();
       this.hud.destroy();
       this.radio.destroy();
@@ -212,6 +230,8 @@ export class GameScene extends Phaser.Scene {
       radio: this.radio,
       voices,
       aware: this.aware,
+      place: this.place,
+      command: this.command,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
@@ -294,8 +314,10 @@ export class GameScene extends Phaser.Scene {
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
     this.fx.update(this.ctrl.paused ? 0 : delta);
     this.juice.update(this.ctrl.paused ? 0 : delta);
+    this.place.update(delta);
     this.drawOverlay(alpha);
     this.hud.update();
+    this.command.update();
     this.aware.update(delta, this.ctrl.paused);
     voices.watchSelection(this.ctrl.selectedUnits, this.world);
     this.radio.update(delta, this.ctrl.paused);
@@ -335,6 +357,7 @@ export class GameScene extends Phaser.Scene {
     this.aware.events(this.world.fx, this.simSeconds);
     this.radio.events(this.world.fx, this.simSeconds);
     voices.events(this.world.fx, this.voiceHooks);
+    this.command.events(this.world.fx, this.simSeconds);
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
@@ -536,33 +559,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawPlacement(g: Phaser.GameObjects.Graphics): void {
-    const kind = this.ctrl.placing;
-    if (!kind || !this.world.factions[PLAYER].pending?.ready) {
-      this.ghost.setVisible(false);
-      return;
-    }
-    const w = this.world;
-    // build-radius hint around our buildings
-    for (const b of w.buildings.values()) {
-      if (b.faction !== PLAYER) continue;
-      const c = buildingCenter(b);
-      const size = BUILDINGS[b.kind].size;
-      g.fillStyle(0x7ef29b, 0.05).fillCircle(c.x * TILE, c.y * TILE, (ECONOMY.buildRadius + size / 2) * TILE);
-    }
-    const size = BUILDINGS[kind].size;
-    const pointer = this.input.activePointer;
-    const wp = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const tx = Math.round(wp.x / TILE - size / 2);
-    const ty = Math.round(wp.y / TILE - size / 2);
-    const ok = canPlaceBuilding(w, PLAYER, kind, tx, ty);
-    this.ghost
-      .setVisible(true)
-      .setFrame(buildingFrame(PLAYER, kind))
-      .setScale(ART_SCALE)
-      .setPosition((tx + size / 2) * TILE, (ty + size / 2) * TILE)
-      .setTint(ok ? 0xb8ffc8 : 0xff8080);
-    g.fillStyle(ok ? 0x37d67a : 0xe25555, 0.25).fillRect(tx * TILE, ty * TILE, size * TILE, size * TILE);
-    g.lineStyle(this.px(2), ok ? 0x37d67a : 0xe25555, 0.9).strokeRect(tx * TILE, ty * TILE, size * TILE, size * TILE);
+    this.place.draw(g, (css) => this.px(css));
   }
 
   /** Damage-trail health bar (see render/juice-view.ts). */
@@ -594,11 +591,13 @@ export class GameScene extends Phaser.Scene {
   private setupInput(): void {
     const cam = this.cameras.main;
     this.gest = new GestureRecognizer({
-      onTap: (sx, sy) => {
+      onTap: (sx, sy, type) => {
+        if (this.place.tap(sx, sy, type)) return; // placing: move the ghost / build
         const p = this.worldAt(sx, sy);
         this.ctrl.tapWorld(p.x, p.y, hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee));
       },
       onDoubleTap: (sx, sy) => {
+        if (this.place.tap(sx, sy)) return; // 2nd tap lands on the ghost it just moved: build
         const p = this.worldAt(sx, sy);
         const hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         if (hit.kind !== "ownUnit") return;
@@ -650,6 +649,10 @@ export class GameScene extends Phaser.Scene {
         this.targetZoom = cam.zoom; // pinch is immediate; keep target in sync
       },
       onRightClick: (sx, sy) => {
+        if (this.ctrl.placing) {
+          this.ctrl.placing = null; // right-click cancels placement
+          return;
+        }
         const p = this.worldAt(sx, sy);
         let hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         // right-click never re-selects; own entities count as ground
@@ -672,10 +675,15 @@ export class GameScene extends Phaser.Scene {
     });
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
       this.glide = null; // touching the map stops any glide
+      if (this.place.down(toPointer(p))) return; // a finger on the ghost drags it
       this.gest.down(toPointer(p), performance.now());
     });
-    this.input.on("pointermove", (p: Phaser.Input.Pointer) => this.gest.move(toPointer(p), performance.now()));
-    const up = (p: Phaser.Input.Pointer) => this.gest.up(toPointer(p), performance.now());
+    this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
+      if (!this.place.move(toPointer(p))) this.gest.move(toPointer(p), performance.now());
+    });
+    const up = (p: Phaser.Input.Pointer) => {
+      if (!this.place.up(toPointer(p))) this.gest.up(toPointer(p), performance.now());
+    };
     this.input.on("pointerup", up);
     this.input.on("pointerupoutside", up);
     this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) =>
@@ -687,7 +695,12 @@ export class GameScene extends Phaser.Scene {
     });
     this.cursors = this.input.keyboard?.createCursorKeys();
     this.wasd = this.input.keyboard?.addKeys("W,A,S,D") as typeof this.wasd;
+    // Phaser re-dispatches its whole key queue when several key events land in one frame
+    // (a modifier combo like Ctrl+1): act on each DOM event once
+    const handled = new WeakSet<KeyboardEvent>();
     this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
+      if (handled.has(e)) return;
+      handled.add(e);
       if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
       else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);
       else if (e.key === "p" || e.key === " ") this.hud.togglePause();
@@ -695,6 +708,12 @@ export class GameScene extends Phaser.Scene {
       else if (e.key === "Delete") this.ctrl.sellSelected();
       else if (e.key === ".") this.aware.cycleSpeed();
       else if (e.key === "j") this.aware.jump();
+      else if (/^Digit[1-3]$/.test(e.code)) {
+        // squads: 1–3 select (twice: fly there); Ctrl/Cmd/Shift + 1–3 save
+        const save = e.ctrlKey || e.metaKey || e.shiftKey;
+        if (save) e.preventDefault();
+        this.command.key(Number(e.code.slice(5)) - 1, save);
+      }
     });
   }
 

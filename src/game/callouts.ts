@@ -33,6 +33,9 @@ export interface RadioLine {
   caption: boolean;
 }
 
+/** Outside cues the HUD and input can send the radio. */
+export type RadioCueKey = "no-scrap" | "cant-build";
+
 export const CALLOUTS = {
   /** Per-line cooldowns, sim seconds. */
   cooldownS: {
@@ -47,7 +50,8 @@ export const CALLOUTS = {
     "structure-lost": 15,
     "structure-killed": 15,
     promoted: 25,
-    "no-scrap": 8
+    "no-scrap": 8,
+    "cant-build": 8
   } as Record<string, number>,
   /** "Squad lost": this many own unit deaths within the window. */
   squadDeaths: 3,
@@ -155,11 +159,13 @@ export class BattleCallouts {
     this.airSeen[f] = t;
   }
 
-  /** An outside cue (HUD): "no-scrap". */
-  cue(key: "no-scrap", t: number): void {
+  /** An outside cue (HUD): "no-scrap", or "cant-build" for a refused placement. */
+  cue(key: RadioCueKey, t: number): void {
     if (this.h.spectator || this.ended) return;
     if (key === "no-scrap" && this.ready("no-scrap", t))
       this.say({ key, text: "Insufficient scrap", priority: 3, tone: "info", caption: false }, t);
+    if (key === "cant-build" && this.ready("cant-build", t))
+      this.say({ key, text: "Cannot build there", priority: 3, tone: "info", caption: false }, t);
   }
 
   // ------------------------------------------------------------- helpers --

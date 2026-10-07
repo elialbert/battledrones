@@ -22,6 +22,8 @@ export interface HudApi {
   /** Spectator mode: the two AI strategy names, else null. */
   strategies: { blue: string; red: string } | null;
   enemy: { strategy: string; difficulty: string };
+  /** Extra info-card line for a build option (the counter advisor). */
+  cardNote?(kind: UnitKind | BuildingKind): string | null;
 }
 
 export interface Hud {
@@ -32,6 +34,8 @@ export interface Hud {
   radio(msg: string, tone: string, x?: number, y?: number): void;
   /** A minimap ping; "inbound" is a bigger amber pulse for an approaching raid. */
   ping(x: number, y: number, kind?: "hit" | "inbound"): void;
+  /** A 💡 tip in the ticker. */
+  hint(msg: string, ms?: number): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -157,6 +161,7 @@ export function createHud(api: HudApi): Hud {
   const makeButton = (key: string, kind: string, cost: number, name: string, onTap: () => void, onInfo: () => void) => {
     const b = document.createElement("button");
     b.className = "bb";
+    b.dataset.key = key;
     b.innerHTML = `
       <img class="ic" src="${icon(kind)}" alt="" draggable="false" />
       <span class="nm">${name}</span>
@@ -268,6 +273,7 @@ export function createHud(api: HudApi): Hud {
       if (u.heal) rows.push(`<tr><td>Repair</td><td colspan="3">${u.heal} HP/s</td></tr>`);
       rows.push(`<tr><td>Built at</td><td colspan="3">${BUILDINGS[u.builtAt].name}${u.requires ? ` + ${BUILDINGS[u.requires].name}` : ""}</td></tr>`);
     }
+    const note = api.cardNote?.(kind) ?? null;
     const queuedHere = isUnit
       ? unitProducers(kind as UnitKind).reduce((n, b) => n + b.queue.filter((q) => q.kind === kind).length, 0)
       : 0;
@@ -276,6 +282,7 @@ export function createHud(api: HudApi): Hud {
       <button class="x" id="card-x">✕</button></div>
       <table>${rows.join("")}</table>
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
+      ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
       ${!isUnit && f().pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;
@@ -303,6 +310,7 @@ export function createHud(api: HudApi): Hud {
     for (const c of list) {
       const b = document.createElement("button");
       b.className = `chip ${c.cls ?? ""} ${c.active ? "active" : ""}`;
+      b.dataset.id = c.id;
       b.textContent = c.label;
       b.addEventListener("click", () => {
         sfx.play("click", 0.5);
@@ -327,9 +335,11 @@ export function createHud(api: HudApi): Hud {
           return `<button class="qi" data-i="${i}" data-kind="${it.kind}"><img src="${icon(it.kind)}" alt=""/><span class="qp" style="height:${Math.round(k * 100)}%"></span></button>`;
         });
         key = `b${b.id}:${Math.round(b.hp)}:${b.queue.map((x) => x.kind + Math.round(x.remaining / 5)).join(",")}`;
+        // producers say how to set a rally point here (it used to be a chip; the row needs the room)
+        const rally = b.kind === "hq" || b.kind === "fab-plant" || b.kind === "airpad";
         html = `<img class="pi" src="${icon(b.kind)}" alt=""/><div class="pt"><b>${st.name}</b>
           <span class="hp">${Math.ceil(b.hp)} / ${st.hp}</span>
-          ${b.queue.length ? `<div class="queue">${q.join("")}</div>` : `<span class="hint">${st.role}</span>`}</div>`;
+          ${b.queue.length ? `<div class="queue">${q.join("")}</div>` : `<span class="hint">${rally && !ctrl.spectator ? "Tap the map to set a rally point" : st.role}</span>`}</div>`;
       }
     } else if (ctrl.selectedUnits.size > 0) {
       const counts = new Map<UnitKind, number>();
@@ -560,13 +570,20 @@ export function createHud(api: HudApi): Hud {
     tutorial();
     // chips
     const chips: Chip[] = [];
+    // phones narrower than this get short chip labels so the squad chips fit on one row
+    const narrow = window.innerWidth < 400;
     if (ctrl.placing) {
-      chips.push({ id: "placing", label: `Tap map to place ${BUILDINGS[ctrl.placing].name}`, cls: "info", on: () => {} });
+      // the ghost's spot: build it here, or why not (src/game/placement-view.ts)
+      const why = ctrl.placementProblem();
+      chips.push({
+        id: "place", label: why ? `⚠ ${why}` : `✓ Place ${BUILDINGS[ctrl.placing].name}`,
+        cls: why ? "place bad" : "place go", on: () => ctrl.commitPlacement()
+      });
       chips.push({ id: "cancel", label: "✕", cls: "warn", on: () => (ctrl.placing = null) });
     } else if (ctrl.selectedUnits.size > 0 && !ctrl.spectator) {
       chips.push({ id: "stop", label: "■ Stop", on: () => ctrl.stopSelected() });
       chips.push({
-        id: "move", label: "➜ Move only", active: ctrl.forceMove,
+        id: "move", label: narrow ? "➜ Move" : "➜ Move only", active: ctrl.forceMove,
         on: () => (ctrl.forceMove = !ctrl.forceMove)
       });
       chips.push({ id: "clear", label: "✕", on: () => ctrl.clearSelection() });
@@ -576,12 +593,16 @@ export function createHud(api: HudApi): Hud {
         const refund = Math.floor(BUILDINGS[b.kind].cost * ECONOMY.sellRefund * (b.hp / BUILDINGS[b.kind].hp));
         chips.push({ id: "sell", label: `$ Sell +${refund}`, cls: "warn", on: () => ctrl.sellSelected() });
       }
-      if (b && (b.kind === "hq" || b.kind === "fab-plant" || b.kind === "airpad"))
-        chips.push({ id: "rally", label: "Tap map: rally point", cls: "info", on: () => {} });
       chips.push({ id: "clear", label: "✕", on: () => ctrl.clearSelection() });
     } else if (!ctrl.spectator) {
-      const army = [...w.units.values()].some((u) => u.faction === PLAYER && u.kind !== "harvester");
-      if (army) chips.push({ id: "army", label: "⚔ Select army", on: () => ctrl.selectArmy() });
+      const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+      // units with no orders, when that's not simply everyone
+      const idle = army > 0 ? ctrl.idleArmy() : [];
+      const showIdle = idle.length > 0 && idle.length < army;
+      if (army)
+        chips.push({ id: "army", label: narrow && showIdle ? "⚔ Army" : "⚔ Select army", on: () => ctrl.selectArmy() });
+      if (showIdle)
+        chips.push({ id: "idle", label: `💤 Idle ${idle.length}`, cls: "idle", on: () => ctrl.selectUnits(ctrl.idleArmy()) });
     }
     renderChips(chips);
     renderSelection();
@@ -591,7 +612,7 @@ export function createHud(api: HudApi): Hud {
     if (p?.ready && lastReady !== p.kind && !ctrl.spectator) {
       lastReady = p.kind;
       sfx.play("ready");
-      toast(`${BUILDINGS[p.kind].name} ready — tap it, then the map`, () => {
+      toast(`${BUILDINGS[p.kind].name} ready — tap here to place it`, () => {
         ctrl.placing = p.kind;
       }, "good");
       if (tab !== "build") {
@@ -797,6 +818,9 @@ export function createHud(api: HudApi): Hud {
     ping(x, y, kind) {
       if (pings.length < 12 || kind === "inbound") pings.push({ x, y, t: api.matchSeconds(), kind });
     },
+    hint(msg, ms = 7000) {
+      toast(`💡 ${msg}`, undefined, "hint", ms);
+    },
     togglePause,
     destroy() {
       offAnnounce();
@@ -811,8 +835,9 @@ export function createHud(api: HudApi): Hud {
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
-  <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
-  <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>
+  <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
+  <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
+  <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them.</p>

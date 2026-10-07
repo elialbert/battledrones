@@ -50,6 +50,13 @@ installable as a PWA.
   winning the fight on screen, and alerts sit in a slim ticker instead of
   over the battlefield. Play at 1×, 1.5× or 2× (4× when watching), or hold
   the clock to fast-forward.
+- **Thumb-friendly command.** Three squad chips: hold to save a group, tap
+  to select it, double-tap to fly there; each shows its unit, count and
+  health and flashes red when hit (keys 1–3). Build buttons glow with ⚔
+  when they counter enemies you've seen ("Counters Wasps (seen ×4)"), tabs
+  flag an idle factory, and building placement on a phone puts the ghost
+  on a good spot for you: tap or drag to move it, tap it to build, and a
+  bad spot tells you why.
 
 ## Development
 

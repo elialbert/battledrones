@@ -17,7 +17,7 @@
 import type { Faction, FxEvent, World } from "../sim/types";
 import { onAnnounce, announce, type Announcement, type AnnounceTone } from "./announce";
 import { sfx } from "./audio";
-import { BattleCallouts, RadioQueue, speakable, type RadioLine } from "./callouts";
+import { BattleCallouts, RadioQueue, speakable, type RadioCueKey, type RadioLine } from "./callouts";
 
 /** Speech voice settings. */
 export const SPEECH = {
@@ -280,8 +280,8 @@ export interface RadioLogEntry {
 
 let active: Announcer | null = null;
 
-/** Outside cues for the announcer (the HUD's "not enough scrap"). */
-export function radioCue(key: "no-scrap"): void {
+/** Outside cues for the announcer (the HUD's "not enough scrap", a refused placement). */
+export function radioCue(key: RadioCueKey): void {
   active?.cue(key);
 }
 
@@ -324,7 +324,7 @@ export class Announcer {
     this.callouts.events(fx, t);
   }
 
-  cue(key: "no-scrap"): void {
+  cue(key: RadioCueKey): void {
     this.callouts.cue(key, this.simT);
   }
 

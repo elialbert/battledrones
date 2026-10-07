@@ -15,7 +15,8 @@ export type SfxName =
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
   | "victory" | "defeat"
   | "kill" | "lost" | "coin"
-  | "inbound";
+  | "inbound"
+  | "deny" | "squad";
 
 export type AudioChannel = "sfx" | "music" | "voice";
 
@@ -275,7 +276,8 @@ const DUCKS: Partial<Record<SfxName, [number, number]>> = {
 
 const GAP: Partial<Record<SfxName, number>> = {
   mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
-  kill: 0.08, lost: 0.08, coin: 0.1, inbound: 2
+  kill: 0.08, lost: 0.08, coin: 0.1, inbound: 2,
+  deny: 0.25, squad: 0.1
 };
 
 /** Weapon and impact sounds: these thin out at faster game speeds (setTempo). */
@@ -458,6 +460,18 @@ const RECIPES: Record<SfxName, Recipe> = {
       tone(c, o, t, "triangle", 440, 990, 0.24, 0.14, i * 0.28);
     }
     return 0.56;
+  },
+  // that can't go there: a short low buzz (placement refused)
+  deny: (c, o, t) => {
+    tone(c, o, t, "square", 140, 132, 0.12, 0.11);
+    tone(c, o, t, "square", 147, 140, 0.12, 0.05);
+    return 0.14;
+  },
+  // squad saved: two quick rising chirps
+  squad: (c, o, t) => {
+    tone(c, o, t, "triangle", 880, 1320, 0.07, 0.16);
+    tone(c, o, t, "triangle", 1320, 1980, 0.09, 0.14, 0.07);
+    return 0.18;
   }
 };
 

@@ -1,7 +1,8 @@
 // Headless smoke test: serves docs/ (or uses a given URL), boots the game
-// and drives the REAL input paths with taps: construct + place a Fab Plant,
-// queue a Stinger, select it on the canvas and order it around, open an
-// info card, pause/resume. Fails on any console error.
+// and drives the REAL input paths with taps: construct + place a Fab Plant
+// (tap moves the ghost, tapping the ghost builds), queue a Stinger, select
+// it on the canvas, save it as squad 1 and order it around, open an info
+// card, pause/resume. Fails on any console error.
 // Usage: node tools/smoke.mjs [width] [height] [--shots] [url]
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
@@ -105,10 +106,19 @@ const spot = await world(() => {
 });
 if (!spot) fail("no valid Fab spot found");
 else {
+  const isPlaced = () => world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === "blue" && b.kind === "fab-plant"));
+  // on touch a tap moves the ghost there (no build yet) …
   await page.touchscreen.tap(spot.sx, spot.sy);
-  await ff(3);
-  const placed = await world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === "blue" && b.kind === "fab-plant"));
-  if (!placed) fail("tapping the map did not place the Fab Plant");
+  await page.waitForTimeout(350); // let the double-tap window lapse
+  await ff(2);
+  if (!(await isPlaced())) {
+    const at = await world(() => window.__bd.ctrl.placeAt);
+    if (!at || at.tx !== spot.tx || at.ty !== spot.ty) fail(`tapping the map did not move the ghost (placeAt=${JSON.stringify(at)})`);
+    // … and tapping the ghost builds it
+    await page.touchscreen.tap(spot.sx, spot.sy);
+    await ff(3);
+  }
+  if (!(await isPlaced())) fail("tapping the ghost did not place the Fab Plant");
 }
 await shot("placed");
 
@@ -137,6 +147,14 @@ if (sid) {
   await page.waitForTimeout(350); // let the double-tap window lapse
   const sel = await world(() => [...window.__bd.ctrl.selectedUnits]);
   if (!sel.includes(sid)) fail(`canvas tap did not select the Stinger (selected=${JSON.stringify(sel)})`);
+  // hold squad chip 1: the selection is saved as squad 1
+  const sq = await page.locator(".sq").first().boundingBox();
+  await page.mouse.move(sq.x + sq.width / 2, sq.y + sq.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(550);
+  await page.mouse.up();
+  const squad = await world(() => window.__bd.ctrl.squads.slots[0]);
+  if (!squad.includes(sid)) fail(`holding squad chip 1 did not save the Stinger (squad=${JSON.stringify(squad)})`);
   await page.touchscreen.tap(pos.sx + 60, pos.sy - 60);
   await ff(2);
   const order = await world((id) => window.__bd.world.units.get(id)?.order.type, sid);

@@ -105,8 +105,9 @@ and skirt mud. Air units fly straight over everything.
 | **Radar** | Reveals a 13-tile radius through the fog. 1×1. | — |
 
 C&C build flow: pick a structure → it constructs on a timer → tap it again
-and tap a valid spot within 6 tiles of your base. One construction at a
-time. Buildings can be **sold** for 50% (scaled by health).
+and place it on a valid spot within 6 tiles of your base (see "Command UX"
+below). One construction at a time. Buildings can be **sold** for 50%
+(scaled by health).
 
 ### Units (11)
 
@@ -363,6 +364,49 @@ enemies you can currently see.
   While a banner shows only the newest line stays. Big moments remain
   `announce()` banners.
 
+### Command UX: squads, build advisor, placement
+
+Commanding on a phone shouldn't be a chore. Rules in engine-free, tested
+modules (`src/game/squads.ts`, `src/game/advisor.ts`, `src/sim/placement.ts`);
+widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
+
+- **Squads** (control groups for thumbs): three 42 px chips at the head of
+  the chip row. Hold one (400 ms, with a fill, a buzz and a chirp) to save
+  the selection; tap to select it; tap twice within 400 ms to glide the
+  camera to the member nearest the squad's middle. Each chip shows the most
+  common unit's icon (ties: the pricier kind), a count and a health bar
+  (Σ HP / Σ max), and glows red for 1 s whenever a member is hit. A unit is
+  in at most one squad; holding a chip with nothing selected clears it. A
+  one-time hint teaches the gesture the first time two or more combat
+  units are selected.
+- **Counter advisor:** remembers the enemy units you have actually seen
+  (standing on tiles you see right now; scouts and harvesters ignored),
+  each for 60 s after its last sighting, plus enemy Turrets and SAM Sites
+  from the fog memory. A build button whose counters (from the duel matrix:
+  Flak → Wasps, Raptors, Hornets, Menders; Stingers → Flak, Mortars,
+  Lancers; Titans → Stingers, Flak, Mortars; Lancers → Titans; Wasps →
+  Stingers, Mortars, Titans, Lancers; Raptors → Wasps, Hornets, Menders;
+  Hornets → Titans, Mortars; Mortars → Turrets, SAMs; SAM Site → Hornets,
+  Wasps) have been seen at least twice gets an amber ⚔ corner (pulsing for
+  its first 6 s), and its tab a ⚔ dot, until your own force of that kind
+  (built + queued) is worth 75% of what it counters. The long-press card
+  says "Counters Wasps (seen ×4)". It is advisory: the same fog-limited
+  knowledge the AI adapts its production to.
+- **Idle factories:** a Fab Plant or Airpad with an empty queue for 6 s
+  while you can afford its cheapest combat unit puts a pulsing amber
+  **IDLE** tag on the Vehicles or Aircraft tab.
+- **Placement on touch:** tapping a ready structure drops the ghost on the
+  best valid spot near the middle of the view (closest to it, avoiding
+  spots that would wall a lane shut), gliding there if it's off screen; the
+  build-range zone is tinted and outlined. A tap on the map moves the ghost
+  (snapping one tile onto a valid spot when that's all it takes), dragging
+  the ghost slides it, and tapping the ghost or **✓ Place X** builds. A bad
+  spot says why above the ghost and on the chip — *Too far from base*,
+  *Blocked*, *Unit in the way*, *Not on water / rock / mud / lava…* — and
+  trying to build there shakes the ghost with a low buzz and the radio's
+  "Cannot build there". The ghost draws above the fog. A mouse keeps
+  one-click placement.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -408,7 +452,7 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 4. Victory/defeat screen with stats → Rematch or Menu.
 
 First-time players get four contextual hints (build a Fab, move units,
-counters, tech).
+counters, tech), plus one-time hints for squads and touch placement.
 
 ## Controls & UI (mobile-first, full-screen)
 
@@ -441,6 +485,9 @@ accidental browser gestures:
 | Two-finger drag / pinch | Anywhere | Pan / zoom |
 | Tap / drag | Minimap | Jump / scrub the camera |
 | Long-press | Build button | Info card: stats, counters, cancel queued |
+| Tap | Map, while placing | Move the ghost there (no build yet) |
+| Tap / drag | The ghost | Build it / slide it |
+| Long-press / tap / double-tap | Squad chip 1–3 | Save the selection / select the squad / fly the camera there |
 
 Disambiguation: a touch is a *tap* if it moves < 8 px and lasts < 250 ms;
 movement beyond the slop radius before the long-press timer fires commits
@@ -448,16 +495,24 @@ to *pan*; after the timer fires it commits to *box-select*. Hit-testing
 uses an enlarged (≥ 24 CSS px) radius, and aircraft are tested where they
 are drawn (lifted above their shadows).
 
-Context **chips** above the build bar: Stop / Move only / deselect for
-units; Sell (+refund) / rally hint for buildings; "Select army" when
-nothing is selected; placement hint + cancel while placing.
+Context **chips** above the build bar, after the three squad chips: Stop /
+Move only / deselect for units; Sell (+refund) for buildings (producers
+show "Tap the map to set a rally point" in the selection panel instead of a
+chip); "Select army" and "💤 Idle N" when nothing is selected;
+"✓ Place X" (or why not) + cancel while placing. Under 400 px wide the
+labels shorten ("Move", "Army") so everything stays on one row down to
+360 px.
 
 ### Mouse & keyboard
 
 Left-click select, left-drag box-select, right-click command, wheel zoom,
 middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
-Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action.
-Hold the clock to fast-forward. Right-click a build button for its card.
+Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action,
+1–3 select a squad (twice quickly: fly there), Ctrl/Cmd/Shift+1–3 save
+one (Shift for browsers that keep Ctrl+digit for tabs). While placing, the
+ghost follows the mouse, a click builds and a right-click cancels. Hold
+the clock to fast-forward. Right-click a build button for its card, or a
+squad chip to save into it.
 
 ### HUD layout — portrait and landscape both first-class
 
@@ -509,6 +564,7 @@ src/
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
+    placement.ts    # why a spot can't be built on, and a suggested spot
     ai/commander.ts # the enemy commander: strategies, difficulty
   game/       # Phaser: scene, camera, input, rendering
     render/         # world-view (terrain, piles, fog), entities, fx, juice-view
@@ -522,7 +578,10 @@ src/
     announcer.ts    # radio announcer: squelch + speechSynthesis / radio code
     awareness.ts    # game speed, hotspots, inbound warnings, battle meter rules (tested)
     awareness-view.ts # wires them to the camera, HUD, radio; camera glide
-  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter), menu styles
+    squads.ts       # squad (control group) rules (tested)
+    advisor.ts      # counter advisor + idle-factory watch (tested)
+    placement-view.ts # placement ghost: suggested spot, touch move/drag/confirm
+  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```
@@ -539,4 +598,4 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 
 - Online multiplayer (the deterministic command-driven sim keeps the door
   open), campaigns, map editor, replays, saves mid-match.
-- Upgrades research, superweapons, walls, control groups.
+- Upgrades research, superweapons, walls.
