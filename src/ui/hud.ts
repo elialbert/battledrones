@@ -26,6 +26,8 @@ export interface HudApi {
   targetChip?: () => { label: string; cancel(): void } | null;
   /** Calldown reticles in flight (tiles), drawn as rings on the minimap. */
   calldowns?: () => { x: number; y: number; r: number; enemy: boolean }[];
+  /** Extra minimap marks (map objectives), drawn over the unit blips; k = minimap px per tile. */
+  minimapOverlay?: (ctx: CanvasRenderingContext2D, k: number) => void;
 }
 
 export interface Hud {
@@ -552,7 +554,8 @@ export function createHud(api: HudApi): Hud {
       lastClock = clock;
       clockEl.textContent = clock;
       // income over the last 60 s of harvesting and salvage
-      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged;
+      const os = w.objectives.stats[PLAYER];
+      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged + os.uplinkScrap + os.crateScrap;
       incomeWindow.push({ t: secs, v: earned });
       while (incomeWindow.length > 1 && secs - incomeWindow[0]!.t > 60) incomeWindow.shift();
       const first = incomeWindow[0]!;
@@ -724,6 +727,7 @@ export function createHud(api: HudApi): Hud {
       }
       mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
     }
+    api.minimapOverlay?.(mctx, k); // Uplinks and supply crates (render/objectives.ts)
     // calldown reticles in flight (public: shown through the fog)
     for (const c of api.calldowns?.() ?? []) {
       mctx.strokeStyle = c.enemy ? "#ff3b30" : "#ffd23f";
@@ -763,6 +767,7 @@ export function createHud(api: HudApi): Hud {
     const ss = String(secs % 60).padStart(2, "0");
     const st = (fc: Faction) => w.factions[fc].stats;
     const fired = (fc: Faction) => Object.values(w.powers.fired[fc]).reduce((a, b) => a + b, 0);
+    const objScrap = (fc: Faction) => w.objectives.stats[fc].uplinkScrap + w.objectives.stats[fc].crateScrap;
     const row = (label: string, a: number, b: number) =>
       `<tr><td>${label}</td><td>${Math.floor(a)}</td><td>${Math.floor(b)}</td></tr>`;
     endEl.hidden = false;
@@ -779,6 +784,7 @@ export function createHud(api: HudApi): Hud {
           ${row("Scrap harvested", st("blue").scrapHarvested, st("red").scrapHarvested)}
           ${row("Salvaged", st("blue").scrapSalvaged, st("red").scrapSalvaged)}
           ${row("Calldowns", fired("blue"), fired("red"))}
+          ${w.objectives.uplinks.length > 0 ? row("Uplinks + crates", objScrap("blue"), objScrap("red")) : ""}
         </table>
         <button id="again" class="cta">↻ Rematch</button>
         <button id="menu" class="cta alt">Main menu</button>
@@ -824,6 +830,7 @@ export const HELP_HTML = `
   <h3>Openers</h3><p>Every match starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every 2 minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
+  <h3>Objectives</h3><p>📡 <b>Uplinks</b> sit in the contested middle of every map: park units in the ring to fill its bar (aircraft count half, harvesters not at all; with both sides inside it freezes). Holding one pays 3 scrap/s, lights up the fog around it and charges your ⚡ meter. 📦 <b>Supply drops</b> land in pairs from 1:30, every 75 s, announced 10 s ahead to both sides: the first unit to reach a crate takes it (scrap, Veterans, Field Repair, ⚡ charge, or a rare free Lancer). Unclaimed crates burn out after 45 s.</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>

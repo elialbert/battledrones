@@ -150,7 +150,15 @@ if (sid) {
   await page.waitForTimeout(350); // let the double-tap window lapse
   const sel = await world(() => [...window.__bd.ctrl.selectedUnits]);
   if (!sel.includes(sid)) fail(`canvas tap did not select the Stinger (selected=${JSON.stringify(sel)})`);
-  await page.touchscreen.tap(pos.sx + 60, pos.sy - 60);
+  // tap open ground: a spot next to the Stinger that no HUD toast or banner is covering
+  const ground = await page.evaluate(({ sx, sy }) => {
+    for (const [dx, dy] of [[60, -60], [60, 60], [-60, 60], [-60, -60], [90, 0], [-90, 0]]) {
+      const el = document.elementFromPoint(sx + dx, sy + dy);
+      if (el && el.tagName === "CANVAS") return { x: sx + dx, y: sy + dy };
+    }
+    return { x: sx + 60, y: sy - 60 };
+  }, pos);
+  await page.touchscreen.tap(ground.x, ground.y);
   await ff(2);
   const order = await world((id) => window.__bd.world.units.get(id)?.order.type, sid);
   if (order !== "attackMove" && order !== "idle") fail(`ground tap gave order ${order}`);

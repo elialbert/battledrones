@@ -281,6 +281,74 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
   2:00–4:00 leader's win rate *up* 2–3 points, so the AI only reinforces a
   contested fight.
 
+### Map objectives: Uplinks and supply drops
+
+Without a reason to be there, 85% of the fighting happened at a base and
+only 13% of unit deaths in the middle 40% of the HQ-to-HQ line. Two things
+now pull armies into the middle (numbers in `OBJECTIVES` in `balance.ts`,
+rules in `src/sim/objectives.ts`):
+
+- **📡 Uplink relays**, 2–3 per map at contested, mirrored spots:
+  Riverlands' centre bridge and both fords; the open flanks of Dune Sea
+  and Proving Grounds; the two lanes round Frostbite's frozen sea; the outer
+  plateaus of Ashlands. Units inside the 2.5-tile ring push its capture bar
+  (−100…100) toward their side: 3.5 points/s per unit, aircraft half,
+  harvesters not at all, capped at 4 units (neutral → held in ~7 s, a full
+  flip ~14 s). With both sides inside the bar freezes; abandoned, it drifts
+  back to its holder (or to neutral). The holder loses it the moment the
+  bar is pushed back to neutral. Holding one pays **3 scrap/s** (× income
+  multiplier), sees 7 tiles round it through the fog and adds **0.1/s** to
+  the ⚡ meter. Uplinks are not buildings: nothing occupies their tiles or
+  can shoot them (no building may be placed on the platform), so combat
+  never sees them.
+- **📦 Supply drops**: the first lands at 1:30, then one every 75 s, each a
+  **mirrored pair** of crates (one per side of the map, same reward: fair)
+  at one of three drop sites per map, chosen by the seeded RNG (never the
+  same site twice running) and **announced to both sides 10 s ahead**. The
+  first non-harvester unit within 0.8 tiles of a landed crate claims it
+  (nearest wins); a crate nobody claims burns out after 45 s. Rewards,
+  weighted: **+300 scrap** (38%), **Veterans** (+1 rank to the claimer and
+  allies within 3, 20%), **Field Repair** (own units within 4 heal half
+  their HP, 15%), **+40 ⚡ charge** (17%) and the rare **free veteran
+  Lancer** (10%). A kit that would do nothing (no one hurt, the meter full)
+  is stripped for up to 150 scrap instead.
+- **Looks:** a neutral relay platform (generated art) whose dish idles on a
+  slow scan, turns for its holder and spins up while being taken; a dashed
+  capture ring and a bar round the platform in team colours, shown through
+  the fog (holders are public). A crate shows a gold landing marker and a
+  light pillar the moment it's announced (through the fog), drops the last
+  2.5 s under a striped parachute that sags away as it lands, then glints
+  with a burn-out ring; claiming it pops the reward in gold ("VETERANS ×3",
+  "+300", "FREE LANCER!"). Banners: "Supply drop inbound" / "Rare supply
+  drop!" (tap to jump to your side's crate), "Uplink captured", "Uplink
+  lost"; an "Uplink under attack!" toast when the enemy starts pushing one
+  of yours off-screen. Sounds: a data-burst chime, a dying-signal fall, a
+  transport drone and a reward fanfare.
+- **AI** (`ai/objectives.ts`): from 0:20 it sends a squad worth ≥ 400 (or
+  1.3× the visible enemy there) to the best Uplink it doesn't hold —
+  nearest its own side first; mid-assault only if the army is 2.5× the
+  squad — keeps the squad on the ring until the bar is full, then parks
+  its cheapest unit there as a garrison. Enemies near a held Uplink count
+  as threats, so the threat response defends it. Every announced crate gets
+  the nearest free units that can make it before it burns out (straight
+  race while it's quiet, attack-move if enemies are there), never more
+  than it'd feed and never drones into known anti-air. It never looks at
+  what a crate holds before claiming it. Boom only contests its own
+  flank, Ironclad leans to the centre; Easy takes neutral relays but never
+  comes for yours, and only races crates near its own units.
+- **Measured** (AI-vs-AI, 5 maps × 6 personality pairings × 2 seeds,
+  openers on, Normal, before → after): combat-unit deaths in the middle
+  40% of the HQ-HQ line 13% → 27% (first 5 min 13% → 28%); draws 0 → 0 of
+  60; median length 5.1 → 5.5 min, p90 12.1 → 7.6; about 3 Uplink captures
+  and 8–10 crates claimed per match, objectives ≈ 9% of all scrap earned.
+  The side ahead by 200+ assets at 2:00 / 3:00 / 4:00 went on to win
+  92 / 93 / 92% → 86 / 96 / 98%: objectives open the early game up but pay
+  whoever controls the field, so later leads hold. The full round robin
+  (`tools/balance.ts matches`, 150 games) keeps the personality spread
+  where it was (Ironclad 92 → 90%, Boom 72 → 78%, Rush 24 → 18%, Skyforce
+  16 → 22%) with no draws. Before the mid-assault squads, the AI
+  sat on its first relay (2.5 flips per match → 4.3 with them).
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -315,7 +383,8 @@ dodging the enemy's (see Commander calldowns); salvage sweeps once a fight near 
 over (idle ground units within 8 tiles go for visible, cooled wrecks that
 no visible enemy or known turret covers, and harvesters with a light load
 detour to a wreck within 3 tiles — never into the enemy for loot; diverted
-harvesters die no more often than mining ones).
+harvesters die no more often than mining ones); map objectives (capture
+squads, Uplink garrisons, crate races — see Map objectives).
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -333,8 +402,9 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
    the factory site, clear of the HUD. Spectated AIs pick instantly.
 3. The pick rolls out (factory, units, harvesters already mining) and
    the clock starts. Real-time play until one HQ is destroyed. Pause any time.
-   Calldowns charge from the first losses; at 6:00 the Sky Hammer comes
-   online for both sides, so a stalemate can't last.
+   Calldowns charge from the first losses; Uplinks are there to take from
+   the start and the first supply drop lands at 1:30; at 6:00 the Sky
+   Hammer comes online for both sides, so a stalemate can't last.
 4. Victory/defeat screen with stats → Rematch (back to the cards) or Menu.
 
 First-time players get contextual hints (command your opener units — or
@@ -398,6 +468,10 @@ DOM overlaid on the canvas, re-flowing by orientation:
   income rate and clock top-left.
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
+- **Objectives pill** beside the clock: a 📡 pip per Uplink in its
+  holder's colour (yours nearest first; pulsing while it's being taken)
+  and the 📦 drop timer (next drop, gold while one is inbound, then how
+  long landed crates have left).
 - **Calldown buttons:** the ⚡ meter and four round power buttons, right
   edge and vertically centred in portrait; a 2×2 block under the minimap,
   beside the sidebar, on landscape phones.
@@ -407,7 +481,8 @@ DOM overlaid on the canvas, re-flowing by orientation:
 ### Minimap
 
 Painted-map thumbnail under the fog, resource fields, salvageable wrecks
-(gold dots), buildings and unit blips (fog-respecting), calldown reticles
+(gold dots), buildings and unit blips (fog-respecting), Uplink diamonds in
+their holder's colour and blinking supply crates (public), calldown reticles
 (red = enemy, gold = yours, shown through the fog), attack pings and the
 camera frame.
 
@@ -435,13 +510,15 @@ src/
     fog.ts          # per-side visibility maps + building memory
     salvage.ts      # battlefield wrecks: spawn, cool, pick-up, burn-out
     powers.ts       # command meter, calldowns (Barrage/EMP/Drop Pod), Sky Hammer, EMP stuns
+    objectives.ts   # Uplink capture bars and income, supply drops and crate rewards
     ai/commander.ts # the enemy commander: strategies, difficulty
     ai/salvage.ts   # the commander's wreck sweeps
     ai/powers.ts    # the commander's calldowns and its dodge reflex
+    ai/objectives.ts # capture squads, Uplink garrisons, crate races
   game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx, wrecks, powers (reticles, strikes)
+    render/         # world-view (terrain, piles, fog), entities, fx, wrecks, powers (reticles, strikes), objectives
     audio.ts        # procedural WebAudio sound effects
-  ui/         # DOM HUD (incl. the calldown buttons, ui/powers.ts), menu styles
+  ui/         # DOM HUD (incl. the calldown buttons, ui/powers.ts; objectives pill, ui/objectives.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```

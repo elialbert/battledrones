@@ -9,6 +9,7 @@ import {
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { tickMovement } from "./movement";
+import { tickObjectives } from "./objectives";
 import { applyCalldown, chargePowers, tickPowers } from "./powers";
 import { tickSalvage } from "./salvage";
 import type { Command, World } from "./types";
@@ -28,6 +29,7 @@ export function step(w: World, commands: Command[]): void {
   tickMovement(w, engaged);
   cleanupDeaths(w);
   tickSalvage(w);
+  tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)
   chargePowers(w); // Command meters fill from this tick's losses
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;

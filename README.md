@@ -14,6 +14,11 @@ installable as a PWA.
 - **Battlefield salvage**: destroyed vehicles and downed drones leave
   burning wrecks worth 30% of their cost — roll any ground unit over one
   to scoop up the scrap. Hold the field after a fight and it pays.
+- **Fight for the middle**: capturable 📡 **Uplink relays** on every map
+  pay scrap, light up the fog and charge your calldowns while you hold
+  them, and from 1:30 a pair of 📦 **supply drops** parachutes in every
+  75 s, announced to both sides 10 s ahead: first unit there takes it
+  (scrap, Veterans, Field Repair, ⚡ charge, or a rare free Lancer).
 - **Commander calldowns**: a meter that fills mostly from your losses pays
   for a Barrage, an EMP or a Drop Pod — tap the button, tap the map — and
   at 6:00 both sides get the **Sky Hammer** orbital strike. Every strike is
@@ -46,7 +51,7 @@ npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into docs/
 npm run smoke          # headless Playwright test of the real touch flow (against docs/)
 npm run balance duels  # cost-equal unit duel matrix
-npm run balance matches [map]   # AI-vs-AI round robin (with openers; --classic for none)
+npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives)
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects

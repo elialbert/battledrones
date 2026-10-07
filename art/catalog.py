@@ -222,6 +222,46 @@ pair(
     "seen from above.",
     kind="building",
 )
+# --- map objectives (neutral: no team colour, the engine draws the owner's ring) ---
+
+NEUTRAL = (
+    "Game art for a modern top-down real-time strategy game about autonomous battle drones. "
+    "Strictly top-down orthographic view, camera looking straight down from directly above "
+    "(no perspective, no isometric angle, no side view, no tilt). Semi-realistic hand-painted "
+    "sci-fi military style with crisp hard edges, a bold readable silhouette and rich detail "
+    "that still reads when shown small on a phone. Soft studio lighting from the upper left. "
+    "This object is NEUTRAL and belongs to no army: weathered gunmetal and dark graphite "
+    "armor with hazard-yellow and black safety stripes and warm amber lights. Absolutely NO "
+    "blue and NO red anywhere. No text, letters, numbers, logos, emblems or symbols anywhere."
+)
+
+A["uplink"] = dict(
+    prompt=(
+        "A capturable battlefield uplink relay station that any army can seize. "
+        f"{PAIR} LEFT: the round flat armored relay platform ALONE, a low circular deck like a "
+        "landing pad, ringed by a raised steel rim with hazard-yellow and black chevron "
+        "stripes, four small equipment cabinets with amber beacon lights evenly spaced around "
+        "the rim, cable trunks running inward, and an empty circular mount in the exact centre "
+        "(no antenna). RIGHT: the matching rotating relay antenna head ALONE: a compact armored "
+        "hub carrying one wide curved satellite dish and two slim antenna spikes, seen from "
+        f"directly above. {NEUTRAL} {ISOLATED}"
+    ),
+    size="1536x1024",
+    quality="high",
+    transparent=True,
+)
+A["supply-crate"] = dict(
+    prompt=(
+        "An air-dropped military supply crate seen from directly above: a sturdy square armored "
+        "cargo container with reinforced dark corner brackets, bold hazard-yellow and black "
+        "striped edges, a grid of lashing straps across the lid, four amber beacon lights on "
+        f"the corners and lifting lugs. Compact and chunky, perfectly square. {NEUTRAL} {ISOLATED}"
+    ),
+    size="1024x1024",
+    quality="high",
+    transparent=True,
+)
+
 A["rubble"] = dict(
     prompt=(
         "Top-down game sprite sheet of FOUR separate destroyed-building rubble piles arranged "

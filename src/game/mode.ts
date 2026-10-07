@@ -13,9 +13,10 @@ export const gameMode = {
  * The sim setup for the next match, built from the menu choices. A fresh
  * random seed per match (render side, so Math.random is fine here) keeps
  * seeded events varied while each match stays internally deterministic.
+ * Skirmishes play with the map objectives (Uplinks, supply drops).
  */
 export function matchOptions(): MatchOptions {
-  return { seed: (Math.random() * 0x7fffffff) | 0 };
+  return { seed: (Math.random() * 0x7fffffff) | 0, objectives: true };
 }
 
 const KEY = "battledrones.settings";

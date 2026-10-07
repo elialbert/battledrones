@@ -1,5 +1,6 @@
 import { BUILDINGS, ECONOMY, TERRAIN, UNITS } from "./balance";
 import { createFog } from "./fog";
+import { createObjectiveState } from "./objectives";
 import { createPowerState } from "./powers";
 import {
   Terrain,
@@ -33,6 +34,7 @@ export function createWorld(width: number, height: number): World {
     projectiles: [],
     wrecks: [],
     powers: createPowerState(),
+    objectives: createObjectiveState(),
     factions: { blue: newFaction(), red: newFaction() },
     winner: null,
     fx: [],

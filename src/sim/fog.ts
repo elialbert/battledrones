@@ -1,4 +1,4 @@
-import { BUILDINGS, UNITS } from "./balance";
+import { BUILDINGS, OBJECTIVES, UNITS } from "./balance";
 import type { Building, BuildingKind, Faction, World } from "./types";
 import { inBounds } from "./world";
 
@@ -77,6 +77,8 @@ export function tickFog(w: World): void {
         const size = BUILDINGS[b.kind].size;
         stamp(w, fog.vis, b.tx + size / 2, b.ty + size / 2, BUILDINGS[b.kind].sight + size / 2);
       }
+    for (const l of w.objectives.uplinks)
+      if (l.owner === f) stamp(w, fog.vis, l.x, l.y, OBJECTIVES.uplink.sight); // a held Uplink sees around it
     // memory: record enemy buildings whose footprint we can see now
     for (const b of w.buildings.values())
       if (b.faction !== f && footprintVisible(w, f, b))

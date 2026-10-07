@@ -1,0 +1,85 @@
+import { TICK_RATE } from "../sim/balance";
+import { dropLandTick } from "../sim/objectives";
+import type { Faction, World } from "../sim/types";
+import { buildingCenter, hqOf } from "../sim/world";
+
+/**
+ * The top-bar objectives pill, beside the clock: one pip per Uplink in its
+ * holder's colour (nearest to your base first; pulsing while someone is
+ * capturing it), then the supply-drop timer — the next drop's countdown,
+ * gold while one is inbound, and how long landed crates have left.
+ */
+
+export interface ObjectivePill {
+  update(): void;
+  destroy(): void;
+}
+
+const clock = (ticks: number) => {
+  const s = Math.max(0, Math.ceil(ticks / TICK_RATE));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+export function createObjectivePill(world: World, player: Faction, spectator: boolean): ObjectivePill | null {
+  const o = world.objectives;
+  const bar = document.querySelector<HTMLElement>("#hud .topbar");
+  if (!bar || (o.uplinks.length === 0 && o.dropSites.length === 0)) return null;
+  const el = document.createElement("div");
+  el.className = "objpill";
+  el.innerHTML = `<span class="ol" title="Uplinks"><b>📡</b><span class="pips"></span></span><span class="od" title="Supply drops"></span>`;
+  bar.appendChild(el);
+  const pipsEl = el.querySelector<HTMLElement>(".pips")!;
+  const dropEl = el.querySelector<HTMLElement>(".od")!;
+  if (o.uplinks.length === 0) el.querySelector<HTMLElement>(".ol")!.hidden = true;
+  if (o.dropSites.length === 0) dropEl.hidden = true;
+  // pips run from our side of the map to theirs
+  const hq = hqOf(world, spectator ? "blue" : player);
+  const home = hq ? buildingCenter(hq) : { x: 0, y: world.height };
+  const order = [...o.uplinks].sort(
+    (a, b) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b.x - home.x, b.y - home.y)
+  );
+  let lastPips = "";
+  let lastDrop = "";
+
+  function update(): void {
+    const pips = order
+      .map((l) => `${l.owner ?? "none"}${l.pushing || l.contested ? "*" : ""}`)
+      .join(",");
+    if (pips !== lastPips) {
+      lastPips = pips;
+      pipsEl.innerHTML = order
+        .map((l) => `<i class="pip ${l.owner ?? ""} ${l.pushing || l.contested ? "busy" : ""}"></i>`)
+        .join("");
+      const held = o.uplinks.filter((l) => l.owner === player).length;
+      el.title = `Uplinks: you hold ${held} of ${o.uplinks.length}`;
+    }
+    if (o.dropSites.length === 0) return;
+    let text: string;
+    let cls: string;
+    const landed = o.crates.filter((c) => world.tick >= c.landTick);
+    const inbound = o.crates.filter((c) => world.tick < c.landTick);
+    if (inbound.length > 0) {
+      text = `📦 ${clock(inbound[0]!.landTick - world.tick)}`;
+      cls = "od hot";
+    } else if (landed.length > 0) {
+      const left = Math.min(...landed.map((c) => c.expireTick - world.tick));
+      text = `📦×${landed.length} ${clock(left)}`;
+      cls = "od live";
+    } else {
+      // the next drop's landing (it's announced 10 s before)
+      text = `📦 ${clock(dropLandTick(o.drops) - world.tick)}`;
+      cls = "od";
+    }
+    const key = text + cls;
+    if (key !== lastDrop) {
+      lastDrop = key;
+      dropEl.textContent = text;
+      dropEl.className = cls;
+    }
+  }
+  update();
+  return {
+    update,
+    destroy: () => el.remove()
+  };
+}

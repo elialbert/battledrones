@@ -10,7 +10,8 @@ export type SfxName =
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
   | "victory" | "defeat"
   | "coin"
-  | "siren" | "emp" | "pod" | "hammer" | "charge" | "uplink";
+  | "siren" | "emp" | "pod" | "hammer" | "charge" | "uplink"
+  | "capture" | "lost" | "drop" | "crate";
 
 const MUTE_KEY = "battledrones.muted";
 
@@ -86,7 +87,8 @@ class Sfx {
 const GAP: Partial<Record<SfxName, number>> = {
   mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
   coin: 0.07,
-  siren: 1.6, emp: 0.25, pod: 0.3, hammer: 0.6, charge: 1, uplink: 0.2
+  siren: 1.6, emp: 0.25, pod: 0.3, hammer: 0.6, charge: 1, uplink: 0.2,
+  capture: 0.8, lost: 0.8, drop: 2, crate: 0.3
 };
 
 type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer) => number;
@@ -316,6 +318,51 @@ const RECIPES: Record<SfxName, Recipe> = {
     tone(c, o, t, "square", 1580, 1580, 0.07, 0.07, 0.07);
     tone(c, o, t, "sine", 2360, 2600, 0.12, 0.06, 0.14);
     return 0.28;
+  },
+  // ---- map objectives ----
+  // Uplink taken: a bright rising data-burst arpeggio over a soft swell
+  capture: (c, o, t) => {
+    [587, 880, 1175, 1760].forEach((f, i) => tone(c, o, t, "square", f, f, 0.07, 0.06, i * 0.06));
+    tone(c, o, t, "triangle", 440, 880, 0.5, 0.12);
+    tone(c, o, t + 0.24, "sine", 1760, 1760, 0.35, 0.08);
+    return 0.62;
+  },
+  // Uplink lost: the signal dies, a falling, crackling two-tone
+  lost: (c, o, t, n) => {
+    tone(c, o, t, "square", 988, 494, 0.32, 0.07);
+    tone(c, o, t + 0.18, "square", 740, 247, 0.4, 0.07);
+    noiseBurst(c, o, t + 0.1, n, 0.45, "bandpass", 2600, 0.12, 700);
+    return 0.62;
+  },
+  // supply drop inbound: a transport's engine drone sweeping overhead, then a radio chirp
+  drop: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 1.6, "bandpass", 260, 0.35, 900);
+    const osc = c.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(92, t);
+    osc.frequency.linearRampToValueAtTime(118, t + 0.8);
+    osc.frequency.linearRampToValueAtTime(84, t + 1.6);
+    const f = c.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.value = 520;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.14, t + 0.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.6);
+    osc.connect(f).connect(g).connect(o);
+    osc.start(t);
+    osc.stop(t + 1.65);
+    tone(c, o, t + 1.2, "square", 1320, 1320, 0.06, 0.06);
+    tone(c, o, t + 1.29, "square", 1760, 1760, 0.09, 0.06);
+    return 1.65;
+  },
+  // crate claimed: latches pop, then a sparkly reward fanfare
+  crate: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.08, "highpass", 3000, 0.25);
+    tone(c, o, t, "triangle", 330, 300, 0.12, 0.25);
+    [784, 988, 1175, 1568].forEach((f, i) => tone(c, o, t, "triangle", f, f, 0.16, 0.16, 0.06 + i * 0.07));
+    tone(c, o, t + 0.34, "sine", 2349, 2600, 0.3, 0.07);
+    return 0.66;
   }
 };
 

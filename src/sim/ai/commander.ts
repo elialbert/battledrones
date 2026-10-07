@@ -1,9 +1,10 @@
-import { BUILDINGS, ECONOMY, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
 import { findPath } from "../movement";
 import { planSalvage } from "./salvage";
+import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import type {
   Building,
@@ -415,6 +416,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
     }
   }
+  // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
+  for (const id of objectiveHolds(w, faction, s)) used.add(id);
 
   // --- 2. economy guard: a share of the army holds the mining line --------
   const guardShare = s.mode === "assault" ? 0.15 : 0.35;
@@ -437,6 +440,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (squad.length > 0)
       cmds.push({ type: "attackMove", faction, unitIds: squad, x: guardPoint.x, y: guardPoint.y });
   }
+
+  // --- 2b. map objectives: take Uplinks, hold them, race for supply crates --
+  const enemyHomeGuess = knownBuildings(w, faction).find((b) => b.kind === "hq");
+  cmds.push(
+    ...planObjectives(w, faction, s, {
+      mode: s.mode, hqC, guardPoint, guardNeed: guardShare * armyValue, army, used,
+      threatened: raidValue >= HOME_ALARM_VALUE,
+      enemyHqPos: enemyHomeGuess ? { x: enemyHomeGuess.tx + 1.5, y: enemyHomeGuess.ty + 1.5 } : mirror(w, hqC.x, hqC.y)
+    })
+  );
 
   // --- 3/4. offence by mode -----------------------------------------------
   const enemyHq = knownBuildings(w, faction).find((b) => b.kind === "hq");
@@ -609,7 +622,10 @@ function findThreats(
       return dist(u.x, u.y, c.x, c.y) <= DEFENSE_RADIUS;
     });
     const nearHarvester = harvesters.some((h) => dist(u.x, u.y, h.x, h.y) <= 6);
-    if (nearBuilding || nearHarvester)
+    const nearUplink = w.objectives.uplinks.some(
+      (l) => l.owner === faction && dist(u.x, u.y, l.x, l.y) <= OBJECTIVES.uplink.radius + 2
+    );
+    if (nearBuilding || nearHarvester || nearUplink)
       out.push({ id: u.id, x: u.x, y: u.y, kind: u.kind, domain: UNITS[u.kind].domain });
   }
   return out;

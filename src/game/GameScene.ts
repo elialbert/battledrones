@@ -27,10 +27,12 @@ import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
 import { WreckRenderer } from "./render/wrecks";
 import { PowerRenderer } from "./render/powers";
+import { ObjectiveRenderer } from "./render/objectives";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
 import { showOpenerPicker } from "../ui/openers";
 import { createPowerPanel, type PowerPanel } from "../ui/powers";
+import { createObjectivePill, type ObjectivePill } from "../ui/objectives";
 import { fitZoom, frameCentre, hudInsets, startBox } from "./framing";
 
 const TICK_MS = 1000 / TICK_RATE;
@@ -58,6 +60,9 @@ export class GameScene extends Phaser.Scene {
   /** Commander calldowns: reticles/effects, and the HUD buttons + targeting. */
   private powerFx!: PowerRenderer;
   private powerUi?: PowerPanel;
+  /** Map objectives: Uplinks and supply crates (world view + the top-bar pill). */
+  private objFx!: ObjectiveRenderer;
+  private objPill: ObjectivePill | null = null;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -159,6 +164,17 @@ export class GameScene extends Phaser.Scene {
       alert: (msg, x, y) => this.hud.alert(msg, x, y),
       ping: (x, y) => this.hud.ping(x, y)
     });
+    this.objFx = new ObjectiveRenderer(this, this.world, this.fx, {
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      earshot: (x, y) => this.earshot(x, y),
+      alert: (msg, x, y) => this.hud.alert(msg, x, y),
+      notify: (msg, tone) => this.hud.notify(msg, tone),
+      ping: (x, y) => this.hud.ping(x, y),
+      hint: (msg, x, y) => this.hud.hint(msg, x, y)
+    });
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -188,6 +204,7 @@ export class GameScene extends Phaser.Scene {
       wrecks: () => this.wrecks.dots(),
       targetChip: () => this.powerUi?.chip() ?? null,
       calldowns: () => this.powerFx.rings(),
+      minimapOverlay: (ctx, k) => this.objFx.minimap(ctx, k),
       strategies: this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label} · ${OPENERS[openers.blue!].name}`,
@@ -198,6 +215,11 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    this.objPill = createObjectivePill(this.world, PLAYER, gameMode.spectator);
+    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.objPill?.destroy();
+      this.objFx.destroy();
+    });
     const powerUi = createPowerPanel({
       world: this.world,
       ctrl: this.ctrl,
@@ -343,11 +365,13 @@ export class GameScene extends Phaser.Scene {
     this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
     this.wrecks.sync(this.ctrl.paused ? 0 : delta);
     this.powerFx.sync(this.ctrl.paused ? 0 : delta, alpha, this.powerUi?.preview() ?? null);
+    this.objFx.sync(this.ctrl.paused ? 0 : delta, alpha);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
     this.fx.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
     this.powerUi?.update();
+    this.objPill?.update();
 
     if (this.world.winner && !this.ended) {
       this.ended = true;
@@ -375,6 +399,7 @@ export class GameScene extends Phaser.Scene {
       this.handleFx(ev);
       this.wrecks.onFx(ev);
       this.powerFx.onFx(ev);
+      this.objFx.onFx(ev);
     }
     const fb = this.ctrl.lastFeedback;
     if (fb) {
