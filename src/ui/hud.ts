@@ -18,6 +18,7 @@ import { rematchToken } from "../game/mode";
 import { createOpsHud } from "./ops";
 import { mountHudLayout } from "./layout";
 import { HINTS, HintQueue, type HintOffer } from "../game/hints";
+import { fullscreen } from "./fullscreen";
 
 export interface HudApi {
   world: World;
@@ -177,14 +178,14 @@ export function createHud(api: HudApi): Hud {
   const surv = w.survival
     ? createSurvivalHud($("#wavepill"), w, { ctrl: api.ctrl, spectator: api.ctrl.spectator, centerCamera: api.centerCamera })
     : null;
-  /** Reload straight into another match ("1", "daily", "op:<id>"). */
+  /** Reload straight into another match ("1", "spectate", "daily", "op:<id>"). */
   const relaunch = (token: string) => {
     try {
       sessionStorage.setItem("battledrones.rematch", token);
     } catch {
       /* ignore */
     }
-    window.location.reload();
+    fullscreen.reload();
   };
   // Ops: goal pill under the clock, objectives card, end-screen stars (ui/ops.ts)
   const ops = w.ops ? createOpsHud($("#opspill"), root, w, { rematch: relaunch }) : null;
@@ -353,22 +354,31 @@ export function createHud(api: HudApi): Hud {
   type Chip = { id: string; label: string; cls?: string; on: () => void; active?: boolean };
   let lastChipKey = "";
   let lastChipShape = "";
+  /** The class each chip was last given (so a refused tap's "nope" shake survives a label tick). */
+  let chipCls: string[] = [];
+  const chipClass = (c: Chip) => `chip ${c.cls ?? ""} ${c.active ? "active" : ""}`;
   function renderChips(list: Chip[]): void {
-    const key = list.map((c) => c.id + (c.active ? "*" : "") + c.label).join("|");
+    const key = list.map((c) => c.id + (c.active ? "*" : "") + (c.cls ?? "") + c.label).join("|");
     if (key === lastChipKey) return;
     lastChipKey = key;
-    // same chips, only a label ticked (e.g. the call-wave bonus): update the
-    // text in place so a tap in progress isn't lost to a rebuilt button
+    // same chips, only a label or style ticked (the call-wave bonus, ✓ Place
+    // turning ⚠ Blocked): update in place so a tap in progress isn't lost to a rebuilt button
     const shape = list.map((c) => c.id + (c.active ? "*" : "")).join("|");
     if (shape === lastChipShape && chipsEl.children.length === list.length) {
-      list.forEach((c, i) => ((chipsEl.children[i] as HTMLElement).textContent = c.label));
+      list.forEach((c, i) => {
+        const el = chipsEl.children[i] as HTMLElement;
+        if (el.textContent !== c.label) el.textContent = c.label;
+        const cls = chipClass(c);
+        if (chipCls[i] !== cls) el.className = chipCls[i] = cls;
+      });
       return;
     }
     lastChipShape = shape;
+    chipCls = list.map(chipClass);
     chipsEl.innerHTML = "";
     for (const c of list) {
       const b = document.createElement("button");
-      b.className = `chip ${c.cls ?? ""} ${c.active ? "active" : ""}`;
+      b.className = chipClass(c);
       b.dataset.id = c.id;
       b.textContent = c.label;
       b.addEventListener("click", () => {
@@ -381,19 +391,28 @@ export function createHud(api: HudApi): Hud {
 
   // ------------------------------------------------------ selection panel ---
   let lastSelKey = "";
+  /** A building's HP line and its head queue item's progress bar, updated in place between rebuilds. */
+  let selHpEl: HTMLElement | null = null;
+  let selHeadEl: HTMLElement | null = null;
   function renderSelection(): void {
     const ctrl = api.ctrl;
     let html = "";
     let key = "";
+    let live: { hp: string; head: string } | null = null;
     if (ctrl.selectedBuilding !== null) {
       const b = w.buildings.get(ctrl.selectedBuilding);
       if (b) {
         const st = BUILDINGS[b.kind];
-        const q = b.queue.map((it, i) => {
-          const k = i === 0 ? 1 - it.remaining / (UNITS[it.kind].buildTime * TICK_RATE) : 0;
-          return `<button class="qi" data-i="${i}" data-kind="${it.kind}"><img src="${icon(it.kind)}" alt=""/><span class="qp" style="height:${Math.round(k * 100)}%"></span></button>`;
-        });
-        key = `b${b.id}:${Math.round(b.hp)}:${b.queue.map((x) => x.kind + Math.round(x.remaining / 5)).join(",")}`;
+        const q = b.queue.map(
+          (it, i) =>
+            `<button class="qi" data-i="${i}" data-kind="${it.kind}"><img src="${icon(it.kind)}" alt=""/><span class="qp" style="height:0%"></span></button>`
+        );
+        // rebuilt only when the queue itself changes: HP and progress tick in
+        // place below, so a tap on a queue button (cancel) isn't lost to a rebuild
+        key = `b${b.id}:${b.queue.map((x) => x.kind).join(",")}`;
+        const head = b.queue[0];
+        const k = head ? 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE) : 0;
+        live = { hp: `${Math.ceil(b.hp)} / ${st.hp}`, head: `${Math.round(k * 100)}%` };
         // producers say how to set a rally point here (it used to be a chip; the row needs the room)
         const rally = b.kind === "hq" || b.kind === "fab-plant" || b.kind === "airpad";
         html = `<img class="pi" src="${icon(b.kind)}" alt=""/><div class="pt"><b>${st.name}</b>
@@ -426,19 +445,26 @@ export function createHud(api: HudApi): Hud {
           .join("")}</div>`;
       }
     }
-    if (key === lastSelKey) return;
-    lastSelKey = key;
-    selEl.hidden = html === "";
-    selEl.innerHTML = html;
-    selEl.querySelectorAll<HTMLButtonElement>(".qi").forEach((el) =>
-      el.addEventListener("click", () => {
-        if (ctrl.selectedBuilding === null) return;
-        ctrl.enqueue({
-          type: "cancelProduce", faction: PLAYER, buildingId: ctrl.selectedBuilding, unit: el.dataset.kind as UnitKind
-        });
-        sfx.play("sell", 0.5);
-      })
-    );
+    if (key !== lastSelKey) {
+      lastSelKey = key;
+      selEl.hidden = html === "";
+      selEl.innerHTML = html;
+      selHpEl = live ? selEl.querySelector<HTMLElement>(".hp") : null;
+      selHeadEl = live ? selEl.querySelector<HTMLElement>(".qi .qp") : null;
+      selEl.querySelectorAll<HTMLButtonElement>(".qi").forEach((el) =>
+        el.addEventListener("click", () => {
+          if (ctrl.selectedBuilding === null) return;
+          ctrl.enqueue({
+            type: "cancelProduce", faction: PLAYER, buildingId: ctrl.selectedBuilding, unit: el.dataset.kind as UnitKind
+          });
+          sfx.play("sell", 0.5);
+        })
+      );
+    }
+    if (live) {
+      if (selHpEl && selHpEl.textContent !== live.hp) selHpEl.textContent = live.hp;
+      if (selHeadEl && selHeadEl.style.height !== live.head) selHeadEl.style.height = live.head;
+    }
   }
   shield(selEl);
 
@@ -634,7 +660,7 @@ export function createHud(api: HudApi): Hud {
       api.ctrl.showFog = !api.ctrl.showFog;
       togglePause();
     });
-    pauseEl.querySelector("#p-quit")!.addEventListener("click", () => window.location.reload());
+    pauseEl.querySelector("#p-quit")!.addEventListener("click", () => fullscreen.reload());
   }
 
   // ------------------------------------------------------------- minimap ---
@@ -921,7 +947,7 @@ export function createHud(api: HudApi): Hud {
   function showEnd(winner: Faction): void {
     const rematch = () => relaunch(rematchToken());
     if (surv && !ops) {
-      surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => window.location.reload());
+      surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());
       shield(endEl);
       return;
     }
@@ -935,7 +961,7 @@ export function createHud(api: HudApi): Hud {
       strategies: api.strategies,
       enemy: api.enemy,
       onRematch: rematch,
-      onMenu: () => window.location.reload(),
+      onMenu: () => fullscreen.reload(),
       ...(ops?.reportOpts() ?? {})
     });
     shield(endEl);

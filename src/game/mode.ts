@@ -31,8 +31,20 @@ export function activeMutators(): MutatorId[] {
   return gameMode.mode === "skirmish" ? gameMode.mutators : [];
 }
 
-/** What the end screen's Rematch stores, so the reload replays the same kind of match. */
-export const rematchToken = (): string => (gameMode.op ? `op:${gameMode.op.id}` : gameMode.daily ? "daily" : "1");
+/**
+ * What the end screen's Rematch stores, so the reload replays the same kind of
+ * match: "op:<id>", "daily", "spectate" (another AI-vs-AI match) or "1" (a
+ * skirmish or Last Stand with the menu's picks). A watched Last Stand hands
+ * over to the player ("▶ Your turn"), so it rematches as "1".
+ */
+export const rematchToken = (): string =>
+  gameMode.op
+    ? `op:${gameMode.op.id}`
+    : gameMode.daily
+      ? "daily"
+      : gameMode.spectator && gameMode.mode !== "survival"
+        ? "spectate"
+        : "1";
 
 /**
  * The sim setup for the next match, built from the menu choices. A fresh

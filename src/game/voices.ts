@@ -254,6 +254,14 @@ export class UnitVoices {
     return !!this.e && sfx.enabled("voice");
   }
 
+  /**
+   * Do unit voices answer this viewer's unit cues (a fresh unit, a promotion)?
+   * Spectators hear none (see events()), so they keep the plain chimes.
+   */
+  answers(h: Pick<VoiceHooks, "spectator">): boolean {
+    return !h.spectator && this.active;
+  }
+
   /** A unit says a line. Returns whether the voice layer owns the cue (even if rate-limited). */
   say(kind: UnitKind, line: VoiceLine, id: number, echo?: { kind: UnitKind; id: number } | null): boolean {
     if (!this.active) return false;
@@ -304,7 +312,7 @@ export class UnitVoices {
 
   /** This tick's sim events: units rolling off the line (or out of a Drop Pod), promotions, deaths in view. */
   events(list: readonly FxEvent[], h: VoiceHooks): void {
-    if (h.spectator || !this.active) return;
+    if (!this.answers(h)) return;
     for (const ev of list) {
       if (ev.type === "built") {
         const u = h.world.units.get(ev.id);

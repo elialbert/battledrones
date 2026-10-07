@@ -12,6 +12,7 @@ import { mountMenuCareer, starsText } from "./ui/career";
 import { dailyOp, today, type DailyOp } from "./game/daily";
 import { opById, type OpDef } from "./sim/ops";
 import { mountMenuOps } from "./ui/ops";
+import { fullscreen } from "./ui/fullscreen";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -69,6 +70,8 @@ function setupPageZoomRescue(): void {
   });
 }
 setupPageZoomRescue();
+// a rematch or Menu reload dropped full screen: ask again on the first tap
+fullscreen.restoreOnGesture();
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -176,18 +179,12 @@ function showMenu(): void {
 
   // career: rank badge, Daily Op card, mutator picker, map stars (ui/career.ts)
   const career = mountMenuCareer(menu, {
-    playDaily: (op) => {
-      startDaily(op);
-      void begin(false);
-    },
+    playDaily: (op) => void begin(false, () => startDaily(op)),
     changed: () => saveSettings()
   });
   // Ops: op cards, progress line and the briefing sheet (ui/ops.ts)
   const ops = mountMenuOps(menu, {
-    start: (op) => {
-      startOp(op);
-      void begin(false);
-    },
+    start: (op) => void begin(false, () => startOp(op)),
     selectedId: () => gameMode.opId,
     select: (id) => {
       gameMode.opId = id;
@@ -271,17 +268,17 @@ function showMenu(): void {
     h.hidden = !h.hidden;
   });
 
-  const begin = async (spectator: boolean) => {
+  // one match per page: a second tap while the full-screen request is
+  // pending (Android takes a moment) must not boot a second game
+  let starting = false;
+  const begin = async (spectator: boolean, setup?: () => void) => {
+    if (starting) return;
+    starting = true;
+    setup?.(); // (the Daily Op / an op points the match at its map and rules)
     gameMode.spectator = spectator;
     sfx.unlock();
     sfx.play("click");
-    // Full-screen where the platform allows it (Android/desktop; iOS Safari
-    // has no Fullscreen API for arbitrary elements — dvh layout covers it).
-    try {
-      await document.documentElement.requestFullscreen?.({ navigationUI: "hide" });
-    } catch {
-      /* declined or unsupported — fine */
-    }
+    await fullscreen.enter(); // (Android/desktop; iOS Safari's dvh layout covers it)
     offMute();
     menu.remove();
     startGame();
@@ -299,7 +296,8 @@ function showMenu(): void {
   try {
     const token = sessionStorage.getItem("battledrones.rematch");
     const op = token?.startsWith("op:") ? opById(token.slice(3)) : null;
-    rematch = token === "1" || token === "daily" || !!op;
+    rematch = token === "1" || token === "spectate" || token === "daily" || !!op;
+    if (token === "spectate") gameMode.spectator = true; // another AI-vs-AI match
     if (token === "daily") startDaily(dailyOp(today()));
     if (op) startOp(op);
     sessionStorage.removeItem("battledrones.rematch");

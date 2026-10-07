@@ -392,7 +392,8 @@ export class BattleCallouts {
       // an op that ends on its objective is narrated by its own op-complete /
       // op-failed banner (spoken like any banner), so say nothing over it
       if (w.ops?.result?.byGoal) return;
-      if (w.survival && !h.spectator) {
+      if (w.survival) {
+        // (watched or played, Last Stand only ends one way: matches the banner and the lament)
         this.say({ key: "defeat", text: "Base overrun. The HQ has fallen.", priority: 0, tone: "bad", caption: false }, t);
         return;
       }

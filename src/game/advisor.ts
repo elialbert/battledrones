@@ -14,6 +14,7 @@
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { unitBlocker } from "../sim/economy";
 import { isVisible } from "../sim/fog";
+import { bannedBy } from "../sim/rules";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 
 export const ADVISOR = {
@@ -108,6 +109,8 @@ export function counterAdvice(
   kind: UnitKind | BuildingKind,
   t: number
 ): Advice {
+  // an option this match's rules ban (a mutator, an op) counters nothing: no ⚔, no card line
+  if (bannedBy(w, kind, faction)) return { threats: [], active: false };
   const threats = (COUNTERS[kind] ?? [])
     .map((k) => ({ kind: k, count: intel.count(k, t) }))
     .filter((x) => x.count > 0)

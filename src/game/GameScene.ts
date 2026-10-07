@@ -29,7 +29,7 @@ import { calldownThreatens, planTicks } from "./awareness";
 import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
-import { Finale, finaleZoom, freeAreaOffset } from "./finale";
+import { Finale, finaleOutcome, finaleZoom, freeAreaOffset } from "./finale";
 import { HeroPresenter } from "./hero-fx";
 import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
 import { OpsPresenter } from "./ops";
@@ -293,8 +293,13 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       camera: cam,
       dpr: this.dpr,
-      centerCamera: (wx, wy) => cam.centerOn(wx * TILE, wy * TILE),
-      zoomBy: (f) => this.zoomBy(f),
+      // (the HQ-kill cinematic owns the camera: minimap, toasts, banners and zoom buttons wait)
+      centerCamera: (wx, wy) => {
+        if (!this.finale) cam.centerOn(wx * TILE, wy * TILE);
+      },
+      zoomBy: (f) => {
+        if (!this.finale) this.zoomBy(f);
+      },
       matchSeconds: () => this.simSeconds,
       wrecks: () => this.wrecks.dots(),
       targetChip: () => this.powerUi?.chip() ?? null,
@@ -315,6 +320,7 @@ export class GameScene extends Phaser.Scene {
       scene: this, world: this.world, player: PLAYER, spectator: gameMode.spectator, dpr: this.dpr,
       hud: this.hud, radio: this.radio,
       sees: (x, y) => this.seesPoint(x, y),
+      cinematic: () => !!this.finale,
       pulse: (x, y, c) => this.fx.pulse(x * TILE, y * TILE, c, 1.4)
     });
     this.command = new CommandUi({
@@ -443,6 +449,7 @@ export class GameScene extends Phaser.Scene {
       const a = this.zoomAnchor ?? { x: cam.width / 2, y: cam.height / 2 };
       this.zoomAround(next, a.x, a.y);
     }
+    if (this.finale) return; // the cinematic owns the camera (its pan and push-in): no keys, no momentum
     // keyboard panning (arrows / WASD), speed in CSS px/s
     const panSpeed = (700 * this.dpr * delta) / 1000 / cam.zoom;
     let kx = 0;
@@ -525,7 +532,7 @@ export class GameScene extends Phaser.Scene {
       settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
       this.playFinale(() => {
         // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
-        const outcome = won || run?.isNew || gameMode.spectator ? "victory" : "defeat";
+        const outcome = finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
         if (!music.finale(outcome) && !gameMode.spectator) sfx.play(outcome);
       });
     }
@@ -544,6 +551,7 @@ export class GameScene extends Phaser.Scene {
     const spec = gameMode.spectator;
     const won = winner === PLAYER;
     this.glide = null;
+    this.gest.reset(); // a drag or pinch in progress lets go of the camera
     this.boxRect = null;
     this.ctrl.clearSelection();
     this.ctrl.placing = null;
@@ -687,7 +695,7 @@ export class GameScene extends Phaser.Scene {
         const u = w.units.get(ev.id);
         if (!u || !this.seesPoint(u.x, u.y)) return;
         this.fx.pulse(u.x * TILE, u.y * TILE, 0xffd66e, 1);
-        if (u.faction === PLAYER && !voices.active) sfx.play("rank", 0.7); // else a voiced sparkle
+        if (u.faction === PLAYER && !voices.answers(this.voiceHooks)) sfx.play("rank", 0.7); // else a voiced sparkle
         break;
       }
     }
@@ -956,9 +964,9 @@ export class GameScene extends Phaser.Scene {
     };
     this.input.on("pointerup", up);
     this.input.on("pointerupoutside", up);
-    this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) =>
-      this.gest.wheel(dy, p.x / this.dpr, p.y / this.dpr)
-    );
+    this.input.on("wheel", (p: Phaser.Input.Pointer, _o: unknown, _dx: number, dy: number) => {
+      if (!this.finale) this.gest.wheel(dy, p.x / this.dpr, p.y / this.dpr);
+    });
     this.input.keyboard?.on("keydown-ESC", () => {
       this.powerUi?.cancel();
       this.ctrl.placing = null;
@@ -970,7 +978,7 @@ export class GameScene extends Phaser.Scene {
     // (a modifier combo like Ctrl+1): act on each DOM event once
     const handled = new WeakSet<KeyboardEvent>();
     this.input.keyboard?.on("keydown", (e: KeyboardEvent) => {
-      if (handled.has(e)) return;
+      if (handled.has(e) || this.finale) return; // (the cinematic: no zoom, squads or jumps)
       handled.add(e);
       if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
       else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);

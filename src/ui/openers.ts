@@ -2,6 +2,7 @@ import { BUILDINGS, UNITS } from "../sim/balance";
 import { OPENERS, OPENER_IDS, type OpenerId } from "../sim/openers";
 import type { UnitKind } from "../sim/types";
 import { sfx } from "../game/audio";
+import { fullscreen } from "./fullscreen";
 
 /**
  * The pre-match opener choice: three big cards over the (frozen) battlefield.
@@ -94,7 +95,7 @@ export function showOpenerPicker(opts: OpenerPickerOptions): { destroy(): void }
       timer = window.setTimeout(destroy, 320);
     }, 380);
   };
-  el.querySelector(".op-back")!.addEventListener("click", () => window.location.reload());
+  el.querySelector(".op-back")!.addEventListener("click", () => fullscreen.reload());
   el.querySelectorAll<HTMLButtonElement>(".op-card").forEach((b) => {
     const why = opts.blocked?.(b.dataset.id as OpenerId);
     if (why) {
@@ -105,15 +106,19 @@ export function showOpenerPicker(opts: OpenerPickerOptions): { destroy(): void }
     }
     b.addEventListener("click", () => pick(b.dataset.id as OpenerId));
   });
+  // 1–3 belong to the cards while they're up: captured before the scene's
+  // keyboard sees them (there they'd also be the squad hotkeys)
   const onKey = (e: KeyboardEvent) => {
     const i = Number(e.key) - 1;
-    if (i >= 0 && i < OPENER_IDS.length && !opts.blocked?.(OPENER_IDS[i]!)) pick(OPENER_IDS[i]!);
+    if (!(i >= 0 && i < OPENER_IDS.length)) return;
+    e.stopImmediatePropagation();
+    if (!opts.blocked?.(OPENER_IDS[i]!)) pick(OPENER_IDS[i]!);
   };
-  window.addEventListener("keydown", onKey);
+  window.addEventListener("keydown", onKey, true);
 
   function destroy(): void {
     window.clearTimeout(timer);
-    window.removeEventListener("keydown", onKey);
+    window.removeEventListener("keydown", onKey, true);
     el.remove();
   }
   return { destroy };
