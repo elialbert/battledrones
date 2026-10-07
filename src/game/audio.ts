@@ -24,6 +24,8 @@ export interface AudioSettings {
   music: boolean;
   sfx: boolean;
   voice: boolean;
+  /** The announcer speaks (speechSynthesis); off = "chirps only": unit voices and radio codes, no words. */
+  speech: boolean;
 }
 
 export const AUDIO_SETTINGS_KEY = "battledrones.audio";
@@ -32,12 +34,12 @@ const LEGACY_MUTE_KEY = "battledrones.muted";
 
 /** Parse stored settings (tolerating junk), falling back to the legacy mute flag. */
 export function parseAudioSettings(raw: string | null, legacyMuted: string | null = null): AudioSettings {
-  const s: AudioSettings = { muted: legacyMuted === "1", music: true, sfx: true, voice: true };
+  const s: AudioSettings = { muted: legacyMuted === "1", music: true, sfx: true, voice: true, speech: true };
   if (!raw) return s;
   try {
     const o = JSON.parse(raw) as Partial<Record<keyof AudioSettings, unknown>> | null;
     if (o && typeof o === "object")
-      for (const k of ["muted", "music", "sfx", "voice"] as const) if (typeof o[k] === "boolean") s[k] = o[k];
+      for (const k of ["muted", "music", "sfx", "voice", "speech"] as const) if (typeof o[k] === "boolean") s[k] = o[k];
   } catch {
     /* corrupt entry: defaults */
   }
@@ -188,6 +190,12 @@ export class Sfx {
   setChannel(ch: AudioChannel, on: boolean): void {
     this.settings[ch] = on;
     if (this.buses && this.ctx) this.buses[ch].gain.setTargetAtTime(on ? BUS_GAIN[ch] : 0, this.ctx.currentTime, 0.08);
+    this.saved();
+  }
+
+  /** Announcer words on/off (off leaves unit chirps and radio codes on the voice bus). */
+  setSpeech(on: boolean): void {
+    this.settings.speech = on;
     this.saved();
   }
 

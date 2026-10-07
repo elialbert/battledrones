@@ -8,6 +8,7 @@ import { TILE, mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
+import { radioCue } from "../game/announcer";
 import { mountAudioToggles } from "./audio-panel";
 
 export interface HudApi {
@@ -27,6 +28,8 @@ export interface Hud {
   update(): void;
   showEnd(winner: Faction): void;
   alert(msg: string, x: number, y: number): void;
+  /** A small radio caption for an announcer line (tap jumps to x, y). */
+  radio(msg: string, tone: string, x?: number, y?: number): void;
   ping(x: number, y: number): void;
   togglePause(): void;
   destroy(): void;
@@ -213,7 +216,10 @@ export function createHud(api: HudApi): Hud {
       }
       const why = buildingBlocker(w, PLAYER, kind);
       if (why) return toast(why);
-      if (f().scrap < BUILDINGS[kind].cost) return toast("Not enough scrap");
+      if (f().scrap < BUILDINGS[kind].cost) {
+        radioCue("no-scrap");
+        return toast("Not enough scrap");
+      }
       api.ctrl.enqueue({ type: "startBuilding", faction: PLAYER, building: kind });
       sfx.play("click");
     }, () => showCard(kind));
@@ -222,7 +228,10 @@ export function createHud(api: HudApi): Hud {
     makeButton(`u:${kind}`, kind, UNITS[kind].cost, SHORT[kind] ?? UNITS[kind].name, () => {
       const why = unitBlocker(w, PLAYER, kind);
       if (why) return toast(why);
-      if (f().scrap < UNITS[kind].cost) return toast("Not enough scrap");
+      if (f().scrap < UNITS[kind].cost) {
+        radioCue("no-scrap");
+        return toast("Not enough scrap");
+      }
       const candidates = unitProducers(kind).filter((b) => b.queue.length < ECONOMY.maxQueue);
       if (candidates.length === 0) return toast("Production queue full");
       candidates.sort((a, b) => a.queue.length - b.queue.length);
@@ -766,6 +775,10 @@ export function createHud(api: HudApi): Hud {
     showEnd,
     alert(msg, x, y) {
       toast(`⚠ ${msg}`, () => api.centerCamera(x, y), "bad");
+    },
+    radio(msg, tone, x, y) {
+      const jump = x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined;
+      toast(`${msg}${jump ? " ›" : ""}`, jump, `radio ${tone}`, 2400);
     },
     ping(x, y) {
       if (pings.length < 12) pings.push({ x, y, t: api.matchSeconds() });

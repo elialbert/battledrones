@@ -21,6 +21,8 @@ export interface Announcement {
   y?: number;
   /** 0 = critical … 3 = flavour; a more important line pre-empts a showing one. Default 2. */
   priority?: number;
+  /** What the radio announcer says, if not the banner text itself. */
+  say?: string;
 }
 
 type Listener = (a: Announcement) => void;

@@ -23,6 +23,8 @@ import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
 import { music } from "./music";
 import { BattleMood } from "./score";
+import { voices, type VoiceHooks } from "./voices";
+import { Announcer } from "./announcer";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { CombatJuice } from "./render/juice-view";
@@ -54,6 +56,9 @@ export class GameScene extends Phaser.Scene {
   private juice!: CombatJuice;
   /** Battle intensity for the adaptive score. */
   private mood!: BattleMood;
+  /** The radio announcer (and the kill-streak callouts it owns). */
+  private radio!: Announcer;
+  private voiceHooks!: VoiceHooks;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -138,6 +143,15 @@ export class GameScene extends Phaser.Scene {
       factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null
     });
     music.play("battle", this.world.biome);
+    const inView = (x: number, y: number) => this.cameras.main.worldView.contains(x * TILE, y * TILE);
+    this.radio = new Announcer({
+      world: this.world, player: PLAYER, spectator: gameMode.spectator, onScreen: inView,
+      caption: (l) => this.hud.radio(l.text, l.tone, l.x, l.y)
+    });
+    this.voiceHooks = {
+      world: this.world, player: PLAYER, spectator: gameMode.spectator,
+      inView: (x, y) => this.seesPoint(x, y) && inView(x, y)
+    };
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -170,7 +184,10 @@ export class GameScene extends Phaser.Scene {
       enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
     });
 
-    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
+    this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.hud.destroy();
+      this.radio.destroy();
+    });
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -180,6 +197,8 @@ export class GameScene extends Phaser.Scene {
       scene: this,
       announce,
       music,
+      radio: this.radio,
+      voices,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
@@ -263,6 +282,8 @@ export class GameScene extends Phaser.Scene {
     this.juice.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
+    voices.watchSelection(this.ctrl.selectedUnits, this.world);
+    this.radio.update(delta, this.ctrl.paused);
     music.update({
       intensity: this.mood.update(delta / 1000, this.simSeconds),
       alarm: this.mood.alarm(this.simSeconds),
@@ -296,12 +317,15 @@ export class GameScene extends Phaser.Scene {
     for (const ev of this.world.fx) this.handleFx(ev);
     this.juice.events(this.world.fx);
     this.mood.events(this.world.fx, this.simSeconds);
+    this.radio.events(this.world.fx, this.simSeconds);
+    voices.events(this.world.fx, this.voiceHooks);
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
       const tint = fb.kind === "attack" ? 0xff5a4a : fb.kind === "rally" ? 0xffe066 : 0x7ef29b;
       this.fx.marker(fb.x * TILE, fb.y * TILE, tint);
       sfx.play("click", 0.6);
+      voices.order(fb.kind, this.ctrl.selectedUnits, this.world);
     }
   }
 
@@ -339,7 +363,7 @@ export class GameScene extends Phaser.Scene {
           const c = buildingCenter(b);
           this.fx.pulse(c.x * TILE, c.y * TILE, 0x7ef29b, BUILDINGS[b.kind].size);
         } else if (u) {
-          sfx.play("ready", 0.5);
+          if (!voices.active) sfx.play("ready", 0.5); // else the unit reports in (voices.ts)
           this.fx.pulse(u.x * TILE, u.y * TILE, 0x7ec1ff, 0.8);
         }
         break;
@@ -356,7 +380,8 @@ export class GameScene extends Phaser.Scene {
           if (!onScreen) {
             this.lastAlert = this.simSeconds;
             sfx.play("alert", 0.8);
-            this.hud.alert(ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
+            const hq = ev.building && w.buildings.get(ev.id)?.kind === "hq";
+            this.hud.alert(hq ? "HQ under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
           }
         }
         this.hud.ping(ev.x, ev.y);
@@ -365,7 +390,7 @@ export class GameScene extends Phaser.Scene {
         const u = w.units.get(ev.id);
         if (!u || !this.seesPoint(u.x, u.y)) return;
         this.fx.pulse(u.x * TILE, u.y * TILE, 0xffd66e, 1);
-        if (u.faction === PLAYER) sfx.play("rank", 0.7);
+        if (u.faction === PLAYER && !voices.active) sfx.play("rank", 0.7); // else a voiced sparkle
         break;
       }
     }

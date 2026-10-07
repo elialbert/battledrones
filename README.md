@@ -36,6 +36,13 @@ installable as a PWA.
   rings under units in combat, kill and loss cues that sound different,
   on-screen-only camera shake, and gold "+100" pops with a rising coin
   chime when your harvesters deliver.
+- **Voices and a radio announcer.** Every unit class answers in its own
+  synthesized robot voice when selected, ordered, built or promoted. Titans
+  growl, Wasps buzz and Menders ring. A radio commander calls out what
+  matters: "Warning: our HQ is under attack", "Enemy aircraft detected",
+  "Squad lost", "Construction complete". Kill streaks get banners: First
+  blood, Double kill, Triple kill, Rampage, Titan down. Spectators get a
+  neutral caster.
 
 ## Development
 

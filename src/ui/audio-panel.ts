@@ -1,9 +1,13 @@
 /**
  * Sound settings: a row of four toggles (All / Music / Effects / Voice)
  * bound to the shared audio engine's persisted settings. Used in the pause
- * menu; the top-left speaker button stays a one-tap master mute.
+ * menu; the top-left speaker button stays a one-tap master mute. Voice has
+ * three states, cycled by tapping: Voice (announcer speech and unit chirps)
+ * → Chirps (no speech: unit chirps and radio codes) → off.
  */
 import { sfx, type AudioChannel } from "../game/audio";
+import { radioCheck } from "../game/announcer";
+import { voices } from "../game/voices";
 
 const TOGGLES: { id: "muted" | AudioChannel; icon: string; label: string }[] = [
   { id: "muted", icon: "🔊", label: "Sound" },
@@ -31,6 +35,12 @@ export function mountAudioToggles(host: HTMLElement): () => void {
       b.classList.toggle("held", k !== "muted" && on && s.muted);
       b.setAttribute("aria-pressed", String(on));
       if (k === "muted") b.querySelector(".si")!.textContent = on ? "🔊" : "🔇";
+      if (k === "voice") {
+        const chirps = on && !s.speech;
+        b.querySelector(".sl")!.textContent = chirps ? "Chirps" : "Voice";
+        b.querySelector(".si")!.textContent = chirps ? "🤖" : "🗣";
+        b.title = chirps ? "Unit chirps and radio codes, no speech (tap to turn off)" : on ? "Announcer speech and unit chirps (tap for chirps only)" : "Voice off (tap to turn on)";
+      }
     });
   };
   host.querySelectorAll<HTMLButtonElement>(".snd").forEach((b) =>
@@ -38,7 +48,21 @@ export function mountAudioToggles(host: HTMLElement): () => void {
       const k = b.dataset.k as (typeof TOGGLES)[number]["id"];
       sfx.unlock();
       if (k === "muted") sfx.setMuted(!sfx.muted);
-      else sfx.setChannel(k, !sfx.settings[k]);
+      else if (k === "voice") {
+        // Voice → Chirps → off → Voice
+        const s = sfx.settings;
+        if (!s.voice) {
+          sfx.setSpeech(true);
+          sfx.setChannel("voice", true);
+        } else if (s.speech) sfx.setSpeech(false);
+        else sfx.setChannel("voice", false);
+        // a sample of what the setting sounds like: a unit answers, then the radio
+        if (sfx.settings.voice) {
+          voices.say("stinger", "select", 7);
+          radioCheck();
+        }
+        return;
+      } else sfx.setChannel(k, !sfx.settings[k]);
       sfx.play("click", 0.5);
     })
   );

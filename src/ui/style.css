@@ -1312,3 +1312,58 @@ button {
     min-height: 44px;
   }
 }
+/* announcer radio captions (hud.radio, src/game/announcer.ts): small, quick, tap to jump */
+.toast.radio {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px 5px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  background: rgba(10, 16, 26, 0.88);
+  border-color: rgba(126, 193, 255, 0.45);
+  color: #cfe6ff;
+}
+.toast.radio::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  animation: radioBlink 0.5s steps(2, jump-none) 3;
+}
+/* a thumb-sized hit area around the slim pill */
+.toast.radio::after {
+  content: "";
+  position: absolute;
+  inset: -6px -4px;
+}
+.toast.radio.bad { color: #ffb3a6; border-color: rgba(255, 110, 90, 0.55); }
+.toast.radio.good { color: var(--green); border-color: rgba(126, 242, 155, 0.5); }
+.toast.radio.epic { color: var(--gold); border-color: rgba(255, 214, 110, 0.6); }
+@keyframes radioBlink {
+  from { opacity: 0.25; }
+  to { opacity: 1; }
+}
+/* toasts make way for a showing announce banner (they share the top-centre column) */
+.toasts {
+  transition: top 0.22s ease-out;
+}
+#hud:has(> .banner.in) .toasts {
+  top: calc(max(6px, env(safe-area-inset-top)) + 196px);
+}
+#hud:has(> .banner.in > span) .toasts {
+  top: calc(max(6px, env(safe-area-inset-top)) + 216px);
+}
+@media (orientation: landscape) and (max-height: 560px) {
+  #hud:has(> .banner.in) .toasts {
+    top: calc(max(6px, env(safe-area-inset-top)) + 100px);
+  }
+  #hud:has(> .banner.in > span) .toasts {
+    top: calc(max(6px, env(safe-area-inset-top)) + 118px);
+  }
+}

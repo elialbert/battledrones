@@ -233,6 +233,73 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
 - **Menu:** a gentle pad/melody/arp take on the selected map's biome,
   starting on the first touch (browsers block audio until a gesture).
 
+### Voices & announcer
+
+Every player action gets a voiced answer, and the big moments are called
+out without eating screen space (C&C's EVA, arena-shooter streaks).
+
+- **Unit chirp-voices** (`src/game/voices.ts`): each unit class has a
+  synthesized robot voice: a carrier glides through two formant
+  band-passes, plus a dry share so thin voices carry on phone speakers.
+  Titans growl at 80 Hz, Hornets drone with FM buzz, Wasps buzz at 60 Hz,
+  Lancers shimmer, Menders ring like bells and Harvesters go "boop-boop".
+  Lines: *select* (two rising syllables), *move* (two short, then a fall),
+  *attack* (a noise bark and three fast syllables), *ready* (three rising,
+  replacing the generic chime), *rank* (four ascending with a sparkle,
+  replacing the rank chime) and *death* (a falling wail with crackle, own
+  units in view only). Pitch is jittered ±6% by unit id, so a group sounds
+  like a chorus. A group answers in its majority kind's voice, with one
+  echo voice 6 dB down. Every line is under 400 ms. Lines start at least
+  250 ms apart; unprompted ones keep their own spacing (ready 2 s, rank
+  1.5 s, death 2.5 s) and stay 600 ms clear of the player's chirps. Lines
+  are balanced to about −30 dBFS RMS.
+- **Radio announcer** (`announcer.ts`, rules in the engine-free, tested
+  `callouts.ts`): a squelch and key-up beep on the voice bus, then
+  `speechSynthesis` (pitch 0.6, rate 1.08, an English, preferably male,
+  on-device voice), then an "over" click. The music ducks 5 dB under it.
+  It reads every `announce()` banner (`Announcement.say` overrides the
+  spoken text) plus its own lines from the fx stream:
+
+  | Line | Priority | When / cooldown |
+  |---|---|---|
+  | Warning: our HQ is under attack | 0 | HQ hit; 30 s (60 s if it's on screen) |
+  | Our base is under attack | 1 | other building hit off screen; 30 s |
+  | Squad lost | 1 | 3 own deaths within 3 s; 20 s |
+  | Enemy aircraft detected | 1 | first visible enemy combat aircraft; re-armed after 2 min unseen |
+  | Structure lost: X | 1 | own building destroyed; 15 s |
+  | Our units are under fire | 2 | own unit hit off screen; 60 s |
+  | Harvester lost / Titan lost | 2 | off screen; expensive (≥ 350) or veteran units |
+  | Enemy X destroyed | 2 | enemy building; 15 s |
+  | Construction complete / X promoted (rank ≥ 2) / Insufficient scrap | 3 | |
+  | Enemy HQ destroyed. Victory! / Our HQ has fallen. Mission failed. | 0 | last word; nothing after it |
+
+  Delivery goes through `RadioQueue`: most important first, ≥ 2.5 s between
+  lines, at most two waiting, and lines dropped after waiting 3 s (6 s for
+  P0). A chatter budget allows at most 3 routine (P2–P3) lines per 30 s;
+  warnings always get through. Lines wait, without ageing, while the game
+  is paused. Radio-only news also gets a small coloured **radio caption**
+  (a slim toast; tap to jump there). Lines that already have a toast or
+  banner get no caption. Speech
+  must be unlocked inside a gesture on iOS (primed on the first tap). Where
+  speech is missing, failing, or set to **Chirps**, a two-tone radio code
+  stands in: falling for warnings, rising for good news.
+- **Kill-streak banners** (through `announce()`, so they also get music
+  stingers and are read out): *First blood* (the player's first kill),
+  *Double kill* / *Triple kill* / *Rampage* for 2 / 3 / 5 kills within a
+  4 s sliding window. The tier is called after a 0.6 s hold, so a fast
+  third kill upgrades the line. Tier cooldowns are 30 / 30 / 45 s.
+  Expensive kills get their own banner ("TITAN DOWN", spoken "Enemy Titan
+  destroyed"), or ride along under a streak. Kill banners are at least 6 s
+  apart; a streak climbing a tier needs only 2 s.
+- **Spectators** hear a neutral caster ("Red HQ under attack", "Double
+  kill for Red", "Blue Fab Plant destroyed", "Blue wins the battle"), with
+  full information.
+- **Measured** over six AI-vs-AI matches (32 min,
+  `callout-rates.ts`): 4.5 delivered lines/min (at most 9 in any 60 s, in
+  end-game sieges), 1.2 banners/min (at most 5 in 60 s), and 9–13
+  unprompted chirps/min with a follow-cam. Spectators: 3.1 lines/min and
+  1.7 banners/min. The test suite replays a match and fails if this drifts.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -342,9 +409,11 @@ DOM overlaid on the canvas, re-flowing by orientation:
   minimap pings where you're being hit. The scrap pill bumps when a
   harvester delivers and flashes red when scrap is spent.
 - **Sound:** the top-left speaker (in game and on the menu) is a one-tap
-  master mute. The pause menu has four toggles — Sound (master), Music
-  (score and ambience), Effects and Voice (the announcer) — persisted in
-  `localStorage` (`battledrones.audio`).
+  master mute. The pause menu has four toggles, persisted in
+  `localStorage` (`battledrones.audio`): Sound (master), Music (score and
+  ambience), Effects, and Voice. Voice cycles through Voice (announcer
+  speech and unit chirps), Chirps (no speech: unit chirps and radio codes)
+  and off, and plays a "radio check" sample.
 
 ### Minimap
 
@@ -381,6 +450,9 @@ src/
     score.ts        # music rules: harmony, patterns, stingers, battle mood (tested)
     music.ts        # adaptive score: lookahead scheduler + synth voices
     ambience.ts     # biome ambience beds
+    voices.ts       # unit chirp-voices: formant synth, line plans, rate limits
+    callouts.ts     # announcer moments, kill streaks, radio queue (tested)
+    announcer.ts    # radio announcer: squelch + speechSynthesis / radio code
   ui/         # DOM HUD, menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour

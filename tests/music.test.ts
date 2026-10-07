@@ -387,17 +387,17 @@ describe("battle mood", () => {
 
 describe("audio settings", () => {
   it("defaults to everything on and migrates the old mute flag", () => {
-    expect(parseAudioSettings(null)).toEqual({ muted: false, music: true, sfx: true, voice: true });
+    expect(parseAudioSettings(null)).toEqual({ muted: false, music: true, sfx: true, voice: true, speech: true });
     expect(parseAudioSettings(null, "1").muted).toBe(true);
     expect(parseAudioSettings(JSON.stringify({ muted: false, music: false }), "1")).toEqual({
-      muted: false, music: false, sfx: true, voice: true
+      muted: false, music: false, sfx: true, voice: true, speech: true
     });
   });
 
   it("tolerates junk", () => {
-    expect(parseAudioSettings("{nope")).toEqual({ muted: false, music: true, sfx: true, voice: true });
+    expect(parseAudioSettings("{nope")).toEqual({ muted: false, music: true, sfx: true, voice: true, speech: true });
     expect(parseAudioSettings(JSON.stringify({ music: "off", voice: false }))).toEqual({
-      muted: false, music: true, sfx: true, voice: false
+      muted: false, music: true, sfx: true, voice: false, speech: true
     });
     expect(parseAudioSettings("null").music).toBe(true);
   });
