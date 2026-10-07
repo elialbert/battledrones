@@ -2,8 +2,9 @@ import Phaser from "phaser";
 import { POWERS } from "../../sim/balance";
 import { POWER_NAMES } from "../../sim/powers";
 import type { Calldown, Faction, FxEvent, PowerKind, World } from "../../sim/types";
-import { buildingCenter, hqOf } from "../../sim/world";
+import { hqOf } from "../../sim/world";
 import { announce } from "../announce";
+import { calldownThreatens } from "../awareness";
 import { sfx, type SfxName } from "../audio";
 import { TILE } from "../assets";
 import type { Fx } from "./fx";
@@ -177,17 +178,9 @@ export class PowerRenderer {
     const y = ev.y * TILE;
     const name = POWER_NAMES[ev.power];
     const ours = this.friendly(ev.faction) && !this.opts.spectator;
-    // does it threaten anything of the player's? (then the siren carries off-screen too)
-    const reach = ev.radius + 1;
-    const threatened =
-      !ours &&
-      !this.opts.spectator &&
-      ([...this.world.units.values()].some((u) => u.faction === this.opts.player && Math.hypot(u.x - ev.x, u.y - ev.y) <= reach) ||
-        [...this.world.buildings.values()].some((b) => {
-          if (b.faction !== this.opts.player) return false;
-          const c = buildingCenter(b);
-          return Math.hypot(c.x - ev.x, c.y - ev.y) <= reach + 1;
-        }));
+    // does it threaten anything of the player's? (then the siren carries off-screen too;
+    // the same rule drops a fast game back to 1×, src/game/awareness.ts)
+    const threatened = !ours && !this.opts.spectator && calldownThreatens(this.world, this.opts.player, ev.x, ev.y, ev.radius);
     if (ours) sfx.play("uplink", 0.8);
     else this.sound("siren", x, y, 0.9, threatened || ev.power === "hammer" ? 0.5 : 0);
     if (ev.power === "hammer") this.sound("charge", x, y, 0.8, this.opts.spectator ? 0 : 0.3);

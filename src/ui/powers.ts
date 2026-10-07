@@ -1,10 +1,11 @@
 import { POWERS, TICK_RATE } from "../sim/balance";
-import { POWER_KINDS, POWER_NAMES, powerBlocker, powerStatus, targetBlocker } from "../sim/powers";
+import { POWER_KINDS, POWER_NAMES, podCrew, powerBlocker, powerStatus, targetBlocker } from "../sim/powers";
 import type { PowerKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import type { TargetPreview } from "../game/render/powers";
+import { HINTS, type HintOffer } from "../game/hints";
 
 /**
  * The commander's calldown buttons: a stack of four round buttons on the
@@ -21,8 +22,8 @@ export interface PowerPanelApi {
   notify(msg: string, tone?: "bad" | "good"): void;
   /** Camera centre in tiles: where the aim preview starts on touch screens. */
   viewCentre(): { x: number; y: number };
-  /** A one-time 💡 tip toast. */
-  hint?(msg: string): void;
+  /** A one-time 💡 hint, paced through the HUD's hint queue. */
+  offerHint?(h: HintOffer): void;
 }
 
 const HINT_KEY = "battledrones.hint.calldowns";
@@ -83,6 +84,8 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
         </button>`
       ).join("")}
     </div>`;
+  // edge arrows slide past the stack (src/ui/awareness.ts)
+  el.dataset.edgeAvoid = "";
   root.appendChild(el);
   el.addEventListener("pointerdown", (e) => e.stopPropagation());
 
@@ -154,6 +157,10 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
 
   function update(): void {
     if (api.ctrl.spectator) return;
+    // a match whose rules ban every Drop Pod crew (e.g. an op with no production) has no pod button
+    const pod = btns.get("droppod")!.b;
+    const podOff = podCrew(w, PLAYER).length === 0;
+    if (pod.hidden !== podOff) pod.hidden = podOff;
     const m = Math.floor(w.powers.meter[PLAYER]);
     if (meterEl.textContent !== String(m)) meterEl.textContent = String(m);
     for (const [p, v] of btns) {
@@ -181,16 +188,23 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
       v.tag.textContent = tag;
       for (const s of ["locked", "cool", "ready", "charging"]) v.b.classList.toggle(s, s === state);
     }
-    // first time a power is ready: point at the buttons
-    if (!hinted && POWER_KINDS.some((p) => p !== "hammer" && powerStatus(w, PLAYER, p).ready)) {
-      hinted = true;
-      api.hint?.("Your ⚡ meter can pay for a calldown. Tap a glowing button on the right, then the map.");
-      try {
-        localStorage.setItem(HINT_KEY, "1");
-      } catch {
-        /* ignore */
-      }
-    }
+    // a power is ready: point at the buttons (once per device, when the hint queue gets to it)
+    const anyReady = () => POWER_KINDS.some((p) => p !== "hammer" && !btns.get(p)!.b.hidden && powerStatus(w, PLAYER, p).ready);
+    if (!hinted && anyReady())
+      api.offerHint?.({
+        id: "calldowns",
+        msg: "Your ⚡ meter can pay for a calldown. Tap a glowing button on the right, then the map.",
+        priority: HINTS.priority.calldowns,
+        valid: anyReady,
+        onShow: () => {
+          hinted = true;
+          try {
+            localStorage.setItem(HINT_KEY, "1");
+          } catch {
+            /* ignore */
+          }
+        }
+      });
     // an armed power that stopped being usable disarms itself
     if (targeting && powerBlocker(w, PLAYER, targeting)) arm(null);
     // building placement takes over the next tap

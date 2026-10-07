@@ -83,7 +83,9 @@ installable as a PWA.
   Turret" warns before a raid lands, a tug-of-war meter shows who is
   winning the fight on screen, and alerts sit in a slim ticker instead of
   over the battlefield. Play at 1×, 1.5× or 2× (4× when watching), or hold
-  the clock to fast-forward.
+  the clock to fast-forward — the game drops back to 1× by itself when an
+  enemy strike, a raid or an attack on your HQ needs your hands. First-time
+  tips arrive one at a time, never over a banner.
 - **Thumb-friendly command.** Three squad chips: hold to save a group, tap
   to select it, double-tap to fly there; each shows its unit, count and
   health and flashes red when hit (keys 1–3). Build buttons glow with ⚔

@@ -26,6 +26,7 @@ import { voices, type VoiceHooks } from "./voices";
 import { Announcer } from "./announcer";
 import { Awareness } from "./awareness-view";
 import { planTicks } from "./awareness";
+import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { Finale, finaleZoom, freeAreaOffset } from "./finale";
@@ -215,7 +216,8 @@ export class GameScene extends Phaser.Scene {
       player: PLAYER,
       spectator: gameMode.spectator,
       dpr: this.dpr,
-      hint: (msg, x, y) => this.hud.hint(msg, undefined, x, y)
+      hint: (msg, x, y, shown) =>
+        this.hud.offerHint({ id: "salvage", msg, priority: HINTS.priority.salvage, x, y, onShow: shown })
     });
     this.powerFx = new PowerRenderer(this, this.world, this.fx, {
       player: PLAYER,
@@ -225,7 +227,10 @@ export class GameScene extends Phaser.Scene {
       earshot: (x, y) => this.earshot(x, y),
       pos: (id) => this.entities.pos(id),
       isShown: (id) => this.entities.isShown(id),
-      alert: (msg, x, y) => this.hud.alert(msg, x, y),
+      // (when the game just dropped to 1× for this strike, that note already says it)
+      alert: (msg, x, y) => {
+        if (!this.aware.slowedFor("calldown")) this.hud.alert(msg, x, y);
+      },
       ping: (x, y) => this.hud.ping(x, y)
     });
     this.overlay = this.add.graphics().setDepth(8);
@@ -280,7 +285,8 @@ export class GameScene extends Phaser.Scene {
           }
         : null,
       enemy: { strategy: this.survival ? "Last Stand" : this.ai.strategy.label, difficulty: gameMode.difficulty },
-      cardNote: (k) => this.command?.cardNote(k) ?? null
+      cardNote: (k) => this.command?.cardNote(k) ?? null,
+      busy: () => this.holdStart || !!this.finale
     });
 
     this.aware = new Awareness({
@@ -292,13 +298,14 @@ export class GameScene extends Phaser.Scene {
     this.command = new CommandUi({
       root: document.getElementById("hud")!, world: this.world, ctrl: this.ctrl, spectator: gameMode.spectator,
       glideTo: (x, y) => this.aware.glideTo(x, y),
-      tip: (msg, ms) => this.hud.hint(msg, ms)
+      tip: (msg, ms) => this.hud.hint(msg, ms),
+      offerHint: (h) => this.hud.offerHint(h)
     });
     const powerUi = createPowerPanel({
       world: this.world,
       ctrl: this.ctrl,
       notify: (msg, tone) => this.hud.notify(msg, tone),
-      hint: (msg) => this.hud.hint(msg),
+      offerHint: (h) => this.hud.offerHint(h),
       viewCentre: () => ({ x: cam.midPoint.x / TILE, y: cam.midPoint.y / TILE })
     });
     this.powerUi = powerUi;
@@ -312,7 +319,8 @@ export class GameScene extends Phaser.Scene {
       this.hud.destroy();
       this.radio.destroy();
     });
-    window.setTimeout(() => announceRules(this.world), 1200); // Daily Op / mutators banner
+    // Daily Op / mutators banner (with opener cards up it waits for the pick: the cards would hide it)
+    if (!this.holdStart) window.setTimeout(() => announceRules(this.world), 1200);
     if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
@@ -378,6 +386,7 @@ export class GameScene extends Phaser.Scene {
     sfx.play("build");
     const o = OPENERS[id];
     announce({ key: `opener-${id}`, text: `${o.name}!`, sub: o.rollout, tone: "good", priority: 1 });
+    announceRules(this.world); // (queued behind the roll-out)
   }
 
   /** Nudge the smooth-zoom target (zoom buttons, +/- keys, wheel). */
@@ -463,7 +472,7 @@ export class GameScene extends Phaser.Scene {
     this.juice.update(this.ctrl.paused ? 0 : delta * slow);
     this.place.update(delta);
     this.drawOverlay(alpha);
-    this.hud.update();
+    this.hud.update(delta);
     this.command.update();
     this.aware.update(delta, this.ctrl.paused);
     voices.watchSelection(this.ctrl.selectedUnits, this.world);
@@ -552,21 +561,21 @@ export class GameScene extends Phaser.Scene {
   }
 
   private afterTick(): void {
-    for (const ev of this.world.fx) this.handleFx(ev);
+    // first: game-speed safety may drop to 1× and say why, so the alerts below can stay quiet
+    this.aware.events(this.world.fx, this.simSeconds);
+    for (const ev of this.world.fx) {
+      this.handleFx(ev);
+      this.wrecks.onFx(ev);
+      this.powerFx.onFx(ev);
+    }
     this.juice.events(this.world.fx);
     this.mood.events(this.world.fx, this.simSeconds);
-    this.aware.events(this.world.fx, this.simSeconds);
     this.radio.events(this.world.fx, this.simSeconds);
     voices.events(this.world.fx, this.voiceHooks);
     this.command.events(this.world.fx, this.simSeconds);
     this.ops?.tick();
     this.chronicle.tick();
     this.heroes.flush();
-    for (const ev of this.world.fx) {
-      this.handleFx(ev);
-      this.wrecks.onFx(ev);
-      this.powerFx.onFx(ev);
-    }
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
@@ -634,7 +643,9 @@ export class GameScene extends Phaser.Scene {
             this.lastAlert = this.simSeconds;
             sfx.play("alert", 0.8);
             const hq = ev.building && w.buildings.get(ev.id)?.kind === "hq";
-            this.hud.alert(hq ? "HQ under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
+            // (a drop to 1× for this attack already put "Speed 1× — HQ under attack" in the ticker)
+            if (!(hq && this.aware.slowedFor("hq")))
+              this.hud.alert(hq ? "HQ under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
           }
         }
         this.hud.ping(ev.x, ev.y);
@@ -865,20 +876,11 @@ export class GameScene extends Phaser.Scene {
         this.targetZoom = cam.zoom; // pinch is immediate; keep target in sync
       },
       onRightClick: (sx, sy) => {
-    for (const ev of this.world.fx) {
-      this.handleFx(ev);
-      this.wrecks.onFx(ev);
-      this.powerFx.onFx(ev);
-    }
-    this.juice.events(this.world.fx);
-    this.mood.events(this.world.fx, this.simSeconds);
-    this.aware.events(this.world.fx, this.simSeconds);
-    this.radio.events(this.world.fx, this.simSeconds);
-    voices.events(this.world.fx, this.voiceHooks);
-    this.command.events(this.world.fx, this.simSeconds);
-    this.ops?.tick();
-    this.chronicle.tick();
-    this.heroes.flush();
+        if (this.powerUi?.targeting) return this.powerUi.cancel(); // right-click disarms a calldown
+        if (this.ctrl.placing) {
+          this.ctrl.placing = null; // right-click cancels placement
+          return;
+        }
         const p = this.worldAt(sx, sy);
         let hit = hitTest(this.world, p.x, p.y, this.hitRadius(), this.canSee);
         // right-click never re-selects; own entities count as ground

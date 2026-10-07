@@ -208,11 +208,12 @@ button {
 /* ------------------------------------------------- announcement banner --- */
 .banner {
   position: absolute;
-  top: calc(max(6px, env(safe-area-inset-top)) + 140px);
-  left: 50%;
+  /* measured below the top band by src/ui/layout.ts */
+  top: var(--banner-top, calc(max(6px, env(safe-area-inset-top)) + 140px));
+  left: var(--banner-x, 50%);
   transform: translateX(-50%);
   width: max-content;
-  max-width: min(92vw, 520px);
+  max-width: var(--banner-max, min(92vw, 520px));
   padding: 8px 22px 9px;
   border-radius: 12px;
   text-align: center;
@@ -248,7 +249,7 @@ button {
 .banner.in { animation: bannerIn 0.32s cubic-bezier(0.2, 1.4, 0.4, 1) forwards; }
 .banner.out { opacity: 1; animation: bannerOut 0.26s ease-in forwards; }
 @media (orientation: landscape) and (max-height: 560px) {
-  .banner { top: calc(max(6px, env(safe-area-inset-top)) + 52px); padding: 6px 18px 7px; }
+  .banner { padding: 6px 18px 7px; }
   .banner b { font-size: 19px; }
 }
 @keyframes bannerIn {
@@ -264,26 +265,43 @@ button {
 #hud.spectator .res {
   display: none;
 }
+/* the two commanders: a two-line pill in the top bar (src/ui/hud.ts) */
 .versus {
-  position: absolute;
-  top: calc(max(6px, env(safe-area-inset-top)) + 38px);
-  left: 50%;
-  transform: translateX(-50%);
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 5px 14px;
-  font-size: 14px;
+  border-radius: 10px;
+  padding: 3px 10px 4px;
+  font-size: 12px;
   font-weight: 700;
+  line-height: 1.25;
   color: var(--dim);
   pointer-events: none;
   white-space: nowrap;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.versus > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.versus > span::before {
+  content: "● ";
+  font-size: 9px;
+  vertical-align: 1px;
 }
 .vs-blue {
   color: #6eb0ff;
 }
 .vs-red {
   color: #ff8a7a;
+}
+@media (orientation: portrait) {
+  .versus {
+    max-width: calc(100vw - 236px);
+  }
 }
 
 /* ----------------------------------------------- page-zoom rescue banner -- */
@@ -345,6 +363,7 @@ button {
 .chip {
   pointer-events: auto;
   min-height: 40px;
+  min-width: 40px;
   padding: 6px 14px;
   border-radius: 20px;
   border: 1px solid var(--line-hi);
@@ -500,6 +519,12 @@ button {
   color: #fff;
   background: #1a2b45;
   border-color: var(--line-hi);
+}
+/* a ≥ 40 px tall touch target without making the bar any taller */
+.tab::after {
+  content: "";
+  position: absolute;
+  inset: -6px 0 -3px;
 }
 .tab .tbadge {
   position: absolute;
@@ -735,7 +760,7 @@ button {
     top: max(6px, env(safe-area-inset-top));
   }
   .zoombtns {
-    top: 38%;
+    top: var(--zoom-top, 38%);
   }
   @media (max-width: 420px) {
     #minimap {
@@ -745,6 +770,7 @@ button {
     .res {
       font-size: 17px;
       padding: 4px 10px;
+      max-width: calc(100vw - 232px);
     }
   }
   .card {
@@ -759,15 +785,15 @@ button {
     align-items: flex-start;
     gap: 3px;
   }
+  /* never under the minimap: (round buttons 102 px) + (minimap + gap) */
+  .res {
+    max-width: calc(100vw - 248px);
+    overflow: hidden;
+    white-space: nowrap;
+  }
   .clock {
     padding: 1px 8px;
     font-size: 12px;
-  }
-  .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 144px);
-  }
-  .versus {
-    top: calc(max(6px, env(safe-area-inset-top)) + 144px);
   }
 }
 
@@ -800,6 +826,9 @@ button {
   .tab {
     font-size: 16px;
   }
+  .tab::after {
+    inset: -6px 0;
+  }
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -822,8 +851,14 @@ button {
     top: 50%;
     transform: translateY(-50%);
   }
+  /* centred at 50vw − 90px; never under the round buttons (right edge ~102 px) or the
+     minimap (left edge 100vw − 302 px): a pill that doesn't fit wraps to a second row */
   .topbar {
     left: calc(50% - 90px);
+    max-width: calc(100vw - 432px);
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 4px;
   }
   #minimap {
     width: 112px;
@@ -1349,23 +1384,9 @@ button {
   from { opacity: 0.25; }
   to { opacity: 1; }
 }
-/* toasts make way for a showing announce banner (they share the top-centre column) */
+/* the ticker slides when the band under it grows or a landscape banner pushes it down */
 .toasts {
   transition: top 0.22s ease-out;
-}
-#hud:has(> .banner.in) .toasts {
-  top: calc(max(6px, env(safe-area-inset-top)) + 196px);
-}
-#hud:has(> .banner.in > span) .toasts {
-  top: calc(max(6px, env(safe-area-inset-top)) + 216px);
-}
-@media (orientation: landscape) and (max-height: 560px) {
-  #hud:has(> .banner.in) .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 100px);
-  }
-  #hud:has(> .banner.in > span) .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 118px);
-  }
 }
 
 /* ===================================================== awareness & tempo === */
@@ -1440,6 +1461,13 @@ button {
 .speed.held {
   color: #10141c;
   background: var(--gold);
+}
+/* the game dropped back to 1× by itself (tempo safety): a short red pulse */
+.speed.drop {
+  animation: speedDrop 0.9s ease-out;
+}
+@keyframes speedDrop {
+  0%, 40% { border-color: var(--red); box-shadow: 0 0 12px rgba(255, 90, 74, 0.8); color: var(--red); }
 }
 
 /* battle meter: hangs under the top bar (its positioning parent) while a fight is on screen */
@@ -1645,14 +1673,19 @@ button {
 }
 
 /* the ticker: toasts leave the middle of the battlefield for a compact
-   left-aligned stack (max 2) under the top-left controls */
+   left-aligned stack (max 2) under the top band; src/ui/layout.ts measures
+   the band (top bar, its pills, the battle meter's slot, an op's corner pill)
+   and sets --tick-top / --tick-w */
 .toasts {
   left: max(8px, env(safe-area-inset-left));
   transform: none;
   width: auto;
-  max-width: min(62vw, 300px);
+  max-width: var(--tick-w, min(62vw, 300px));
   align-items: flex-start;
   gap: 4px;
+}
+#hud .toasts {
+  top: var(--tick-top, calc(max(6px, env(safe-area-inset-top)) + 98px));
 }
 .toast {
   max-width: 100%;
@@ -1662,57 +1695,54 @@ button {
   font-size: 13px;
   line-height: 1.25;
   text-align: left;
+}
+/* the clamp sits on the text span: clamped lines can't peek through the toast's padding */
+.toast > .tx {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
 }
-.toast.hint {
+.toast.hint > .tx {
   -webkit-line-clamp: 4;
   line-clamp: 4;
 }
 .toast.radio {
   display: inline-flex;
 }
-@media (orientation: portrait) {
-  #hud .toasts,
-  #hud:has(> .banner.in) .toasts,
-  #hud:has(> .banner.in > span) .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 98px);
-  }
-}
-@media (orientation: landscape) {
-  #hud .toasts,
-  #hud:has(> .banner.in) .toasts,
-  #hud:has(> .banner.in > span) .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 48px);
-    max-width: min(30vw, 270px);
-  }
-}
-/* while a banner shows, the ticker keeps only its newest line (they share the top-left) */
+/* while a banner shows, the ticker keeps only its newest line, at most two text
+   lines (portrait: the slot reserved above the banner) or one (landscape: under it) */
 #hud:has(> .banner.in) .toasts > .toast:not(:last-child) {
   display: none;
+}
+#hud:has(> .banner.in) .toasts > .toast > .tx {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+#hud.tick-under:has(> .banner.in) .toasts > .toast > .tx {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 .clock.held::before {
   margin-right: 3px;
 }
-/* short landscape: the banner steps down a little while the battle meter shows under the top bar */
+/* short landscape: a slimmer battle meter under the top bar */
 @media (orientation: landscape) and (max-height: 560px) {
   .bmeter {
     top: calc(100% + 3px);
     padding: 2px 7px;
   }
-  #hud:has(.bmeter:not([hidden])) > .banner {
-    top: calc(max(6px, env(safe-area-inset-top)) + 66px);
-  }
 }
-/* landscape: the zoom stack (now with ⚡) sits a little lower so the ticker above it has room */
+/* landscape: the zoom stack (with ⚡) sits in the bottom-left corner, under the
+   thumb, leaving the left column to the ticker (and an op's goal pill) */
 @media (orientation: landscape) {
   .zoombtns {
-    top: calc(50% + 30px);
+    top: auto;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    transform: none;
   }
-  .toast.hint {
+  .toast.hint > .tx {
     -webkit-line-clamp: 3;
     line-clamp: 3;
   }
@@ -2031,6 +2061,23 @@ button {
   }
   .sq {
     width: 40px;
+  }
+  /* the top-bar column between the round buttons and the minimap is ~130 px here */
+  #minimap {
+    width: 100px;
+    height: 100px;
+  }
+  .res {
+    font-size: 16px;
+    padding: 4px 9px;
+    gap: 5px;
+    max-width: calc(100vw - 224px);
+  }
+  .res .rate {
+    font-size: 11px;
+  }
+  .bm-bar {
+    width: 70px;
   }
 }
 
@@ -3424,7 +3471,8 @@ button {
   position: absolute;
   top: calc(max(6px, env(safe-area-inset-top)) + 50px);
   left: max(8px, env(safe-area-inset-left));
-  max-width: min(200px, calc(50vw - 260px));
+  /* clear of the battle meter that hangs under the top bar (centred at 50vw − 90px) */
+  max-width: min(210px, calc(50vw - 186px));
 }
 
 /* objectives card (tap the goal pill) and the pause screen's copy of it */
@@ -4256,6 +4304,29 @@ button {
 #hud.spectator .powers {
   display: none;
 }
+/* portrait: src/ui/layout.ts keeps the stack between the banner slot and the chip row */
+@media (orientation: portrait) {
+  .powers {
+    top: var(--pw-top, calc(50% - 130px));
+    transform: none;
+  }
+  /* the selection panel stays left of the stack */
+  .selpanel {
+    max-width: calc(100vw - 84px);
+  }
+}
+@media (orientation: portrait) and (max-height: 820px) {
+  .pw-grid {
+    gap: 10px;
+  }
+  .pw {
+    width: 48px;
+    height: 48px;
+  }
+  .pw-face {
+    inset: 5px;
+  }
+}
 /* landscape: beside the build sidebar, under the minimap */
 @media (orientation: landscape) {
   .powers {
@@ -4263,10 +4334,20 @@ button {
   }
 }
 @media (orientation: landscape) and (max-height: 560px) {
+  /* the ⚡ meter beside the 2×2 grid: a short block that stays clear of the
+     selection panel and chips under it */
   .powers {
-    top: calc(max(6px, env(safe-area-inset-top)) + 132px);
+    top: calc(max(6px, env(safe-area-inset-top)) + 130px);
     transform: none;
+    flex-direction: row;
+    align-items: flex-start;
     gap: 6px;
+  }
+  .pw-meter {
+    min-width: 0;
+    margin-top: 12px;
+    padding: 2px 6px;
+    font-size: 13px;
   }
   .pw-grid {
     display: grid;
@@ -4283,6 +4364,16 @@ button {
   .pw-face svg {
     width: 21px;
     height: 21px;
+  }
+}
+@media (orientation: landscape) and (max-height: 380px) {
+  .pw-grid {
+    grid-template-columns: 44px 44px;
+    gap: 10px 8px;
+  }
+  .pw {
+    width: 44px;
+    height: 44px;
   }
 }
 

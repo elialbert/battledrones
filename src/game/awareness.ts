@@ -15,6 +15,7 @@
  */
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { isVisible } from "../sim/fog";
+import { POWER_NAMES } from "../sim/powers";
 import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
 
 export const AWARE = {
@@ -553,6 +554,74 @@ export class InboundWatch {
         label: g.domain === "air" ? "Air raid" : "Raid",
         priority: INBOUND_PRIORITY
       }));
+  }
+}
+
+// ===================================================================== tempo
+
+export const TEMPO = {
+  /** An enemy calldown threatens our units within its radius plus this (tiles); buildings by centre, one more. */
+  reach: 1,
+  /** HQ hits are a new attack after this long without one (sim seconds). */
+  hqQuietS: 20
+} as const;
+
+/** Does a calldown at (x, y) with this radius threaten any of `player`'s units or buildings? */
+export function calldownThreatens(w: World, player: Faction, x: number, y: number, radius: number): boolean {
+  const reach = radius + TEMPO.reach;
+  for (const u of w.units.values()) if (u.faction === player && Math.hypot(u.x - x, u.y - y) <= reach) return true;
+  for (const b of w.buildings.values()) {
+    if (b.faction !== player) continue;
+    const s = BUILDINGS[b.kind].size;
+    if (Math.hypot(b.tx + s / 2 - x, b.ty + s / 2 - y) <= reach + 1) return true;
+  }
+  return false;
+}
+
+export interface TempoDrop {
+  cause: "calldown" | "inbound" | "hq";
+  /** "enemy Barrage inbound", "enemy drones inbound", "HQ under attack". */
+  note: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Tempo safety. Telegraphs are timed in sim seconds — a Barrage gives 2.5 s,
+ * the Sky Hammer 3 s — so at 2× or a held 3× they're gone before a thumb can
+ * move. When the game runs faster than 1× and something needs the player's
+ * hands, the speed drops back to 1×: an enemy calldown aimed at their units or
+ * buildings, a (spoken) inbound raid warning, or the HQ coming under a new
+ * attack (first hit after `hqQuietS` without one). Spectators never get this.
+ */
+export class TempoGuard {
+  private lastHqHit = -Infinity;
+
+  constructor(private h: { world: World; player: Faction }) {}
+
+  /**
+   * This tick's events at sim time `t`, the inbound warnings raised this tick,
+   * and whether the game is running above 1×. Returns why to drop to 1× (the
+   * most urgent cause: a calldown, then the HQ, then a raid), or null.
+   */
+  check(fx: readonly FxEvent[], t: number, warnings: readonly InboundWarning[], fast: boolean): TempoDrop | null {
+    const { world: w, player } = this.h;
+    let calldown: TempoDrop | null = null;
+    let hq: TempoDrop | null = null;
+    for (const ev of fx) {
+      if (ev.type === "hit") {
+        if (ev.faction !== player || !ev.building || w.buildings.get(ev.id)?.kind !== "hq") continue;
+        // HQ hits are tracked at any speed, so speeding up mid-siege doesn't snap back
+        if (t - this.lastHqHit > TEMPO.hqQuietS) hq ??= { cause: "hq", note: "HQ under attack", x: ev.x, y: ev.y };
+        this.lastHqHit = t;
+      } else if (ev.type === "calldown" && ev.faction !== player && !calldown) {
+        if (calldownThreatens(w, player, ev.x, ev.y, ev.radius))
+          calldown = { cause: "calldown", note: `enemy ${POWER_NAMES[ev.power]} inbound`, x: ev.x, y: ev.y };
+      }
+    }
+    if (!fast) return null;
+    const raid = warnings.find((wn) => wn.loud);
+    return calldown ?? hq ?? (raid ? { cause: "inbound", note: raid.text.replace(/^Enemy/, "enemy"), x: raid.x, y: raid.y } : null);
   }
 }
 

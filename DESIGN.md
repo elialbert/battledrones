@@ -386,6 +386,18 @@ enemies you can currently see.
   slows down instead of spiralling. Weapon and impact sounds space out by
   the speed factor (`sfx.setTempo`) and get 11 voices instead of 14 above
   1×. Detection windows everywhere are sim seconds, so nothing else changes.
+- **Tempo safety:** telegraphs are sim seconds too, so at 2× a Barrage's
+  2.5 s warning is gone in 1.25 s. Above 1×, the game drops back to 1× by
+  itself (`TempoGuard`) when something needs your hands: an enemy calldown
+  aimed at your units or buildings (the same "threatened" rule as its
+  siren), a spoken inbound warning, or the HQ coming under a new attack
+  (first hit after 20 s without one, tracked at any speed, so speeding up
+  mid-siege doesn't snap back). A held fast-forward lets go too; the chip
+  pulses red and one ticker note says why ("Speed 1× — enemy Barrage
+  inbound", tap to look) — folded into the raid's own warning line, and
+  replacing the off-screen "Enemy Barrage inbound!" / "HQ under attack!"
+  alerts, so it's still one line per event. The chosen speed stays stored
+  for the next match. Spectators never slow down.
 - **Inbound warning:** when visible armed enemies (anything that can hit a
   ground target) come within 12 tiles of a building or harvester, the group
   (single-link, 5 tiles) is warned once, with counter advice by domain and
@@ -395,7 +407,8 @@ enemies you can currently see.
   a fight, not a raid; loud warnings are at least 12 s apart (quieter ones
   still get an arrow). The first raid of each kind per match is a banner
   ("DRONES INBOUND", sub-line with the counters, read out by the
-  announcer); later ones are a ticker line plus the radio. Each sounds a
+  announcer); later ones are a ticker line plus the radio — unless an
+  inbound banner is still up or waiting, which already says it. Each sounds a
   two-whoop siren and pulses the minimap with amber rings. An air raid
   stands in for "Enemy aircraft detected". Measured over 8 AI-vs-AI matches
   (67 min, blue's view): 1.2 loud warnings/min; warning → that group's first
@@ -427,11 +440,11 @@ enemies you can currently see.
   swing of more than 20 points within 4 s flashes **Turning point!** (green
   toward you, red away; at most every 8 s; ignored when the camera jumps).
 - **Ticker:** toasts left the battlefield's centre for a compact,
-  left-aligned stack under the scrap pill (portrait) or under the pause
-  button (landscape): 13 px, at most two lines each, at most two at once
-  (the newest pushes the oldest out), 2.2 s by default, still tappable.
-  While a banner shows only the newest line stays. Big moments remain
-  `announce()` banners.
+  left-aligned stack under the top band: 13 px, at most two lines each, at
+  most two at once (the newest pushes the oldest out, but a 💡 hint
+  outlives a burst of alerts), 2.2 s by default, still tappable. Big
+  moments remain `announce()` banners. While a banner shows only the newest
+  ticker line stays (see *HUD layout* for where each goes).
 
 ### Command UX: squads, build advisor, placement
 
@@ -510,8 +523,9 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
   shakes when it lands on screen. Banners: "Sky Hammer online" at 6:00,
   "Enemy Sky Hammer inbound!" (tap to jump), "Direct hit!" when one of
   yours kills 3+ units or 700+ scrap.
-- **HUD:** four round 52 px buttons on the right edge (a 2×2 block beside
-  the sidebar on landscape phones) under the ⚡ meter, each with a conic
+- **HUD:** four round 52 px buttons on the right edge (48 px on shorter
+  phones; a 2×2 block of 44–46 px beside the sidebar on landscape phones,
+  see *HUD layout*) with the ⚡ meter, each with a conic
   ring — charge in the power's colour, cooldown in white — and its cost,
   cooldown seconds or the Sky Hammer's unlock countdown. Tap a ready one to
   arm it ("Tap map: Barrage ✕" chip, radius preview under the pointer /
@@ -603,7 +617,20 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 First-time players get contextual hints (command your opener units — or
 build a Fab on a classic start — then counters, tech), plus one-time hints
-for squads, touch placement, calldowns and salvage.
+for squads, touch placement, calldowns and salvage. They all go through one
+queue (`game/hints.ts`, tested) so a new player is never handed several at
+once: at most one every 12 s of play (paused time and the opener cards
+don't count), what you're doing right now first (placing a building, a
+group selected), then the tutorial, calldowns, salvage; nothing new starts
+while a banner is up or waiting; a hint that no longer applies or has
+waited 30 s is dropped. Each keeps its own once-per-device flag, written
+only when it is actually shown, so a dropped hint comes back next time.
+Measured on a fresh profile (first minutes of a Blitz skirmish, scripted
+taps at wall-clock pace): the seven hints landed at 0:05 (send your units),
+0:17 (squads, a group selected at 0:09), 0:31 (counters), 1:01 (placement,
+the moment the Turret's ghost went down), 1:21 (salvage), 2:12 (calldowns) and
+2:31 (Tech Lab) — gaps of 12–51 s, none during the opener cards or any of the
+seven banners in that stretch.
 
 ### Veteran heroes, the finale and the after-action report
 
@@ -880,15 +907,36 @@ DOM overlaid on the canvas, re-flowing by orientation:
   income rate and clock top-left.
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
-- **Calldown buttons:** the ⚡ meter and four round power buttons, right
-  edge and vertically centred in portrait; a 2×2 block under the minimap,
-  beside the sidebar, on landscape phones.
-- A ticker of short toasts top-left for "building ready", attacks (tap to
-  jump there) and hints; minimap pings where you're being hit (amber double
+- **The top band** grows by mode: pause + mute, the top bar (scrap; clock +
+  speed chip; Last Stand's wave pill; an op's goal pill — in landscape the
+  op pill takes the corner under the pause button; the spectator's
+  two-line "● Blue · opener / ● Red · opener" pill), the battle meter's
+  slot under it, and the minimap. `ui/layout.ts` measures what it really
+  occupies on every layout change and places what sits below it: the
+  **ticker** under the band in its column (the meter's slot is always
+  reserved, so the ticker doesn't jump when a fight starts), and the
+  **banner** centred over the battlefield (on the top bar's axis in
+  landscape) under the band across its width, never wider than the gap to
+  the landscape minimap. Portrait keeps one ticker line's slot between the
+  two, so neither moves; landscape has no height to spare, so the banner
+  sits right under the top bar and the ticker's newest line steps down
+  under it (one text line) while it shows.
+- **Calldown buttons:** the ⚡ meter and four round power buttons on the
+  right edge in portrait, centred but kept under the banner's slot and
+  above the chip row (the selection panel stays left of them); on
+  landscape phones a 2×2 block under the minimap beside the sidebar, with
+  the meter beside it so the block clears the selection panel. Edge arrows
+  slide past them; spectators don't get them, and a match whose rules ban
+  every Drop Pod crew has no Drop Pod button.
+- **Zoom stack** (＋, −, ⚡ jump to the action): left edge in portrait, the
+  bottom-left corner in landscape (leaving the left column to the ticker).
+- A ticker of short toasts for "building ready", attacks (tap to jump
+  there) and hints; minimap pings where you're being hit (amber double
   rings for an inbound raid). The clock row carries the game-speed chip, a
   battle meter hangs under it during on-screen fights, edge arrows point at
-  off-screen fights, and ⚡ under the zoom buttons jumps to the action. The scrap pill bumps when a
-  harvester delivers and flashes red when scrap is spent.
+  off-screen fights, and ⚡ jumps to the action. The scrap pill bumps when a
+  harvester delivers and flashes red when scrap is spent. Touch targets are
+  at least 40 CSS px (slim pills and tabs get a bigger invisible hit area).
 - **Sound:** the top-left speaker (in game and on the menu) is a one-tap
   master mute. The pause menu has four toggles, persisted in
   `localStorage` (`battledrones.audio`): Sound (master), Music (score and
@@ -948,17 +996,18 @@ src/
     voices.ts       # unit chirp-voices: formant synth, line plans, rate limits
     callouts.ts     # announcer moments, kill streaks, radio queue (tested)
     announcer.ts    # radio announcer: squelch + speechSynthesis / radio code
-    awareness.ts    # game speed, hotspots, inbound warnings, battle meter rules (tested)
+    awareness.ts    # game speed + tempo safety, hotspots, inbound warnings, battle meter rules (tested)
     awareness-view.ts # wires them to the camera, HUD, radio; camera glide
     squads.ts       # squad (control group) rules (tested)
     advisor.ts      # counter advisor + idle-factory watch (tested)
     placement-view.ts # placement ghost: suggested spot, touch move/drag/confirm
+    hints.ts        # one-time hint queue: pacing, priority, staleness (tested)
     heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
     chronicle.ts    # match recorder + story analysis for the report
     finale.ts       # the cinematic HQ kill
     career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
     ops.ts          # Ops narration: briefing banner, countdowns, star notices
-  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges; powers.ts: calldown buttons), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
+  ui/         # DOM HUD (hud.ts; layout.ts: measured top band → ticker/banner/calldown placement; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges; powers.ts: calldown buttons), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```

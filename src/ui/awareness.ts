@@ -46,6 +46,10 @@ export interface AwarenessUiHooks {
 
 export interface AwarenessUi {
   setSpeed(value: number, base: number, held: boolean): void;
+  /** Let go of a held fast-forward (the finger may still be down: it must press again). */
+  cancelHold(): void;
+  /** A short pulse on the speed chip (the game dropped back to 1×). */
+  flashSpeed(): void;
   setMeter(shown: boolean, share: number): void;
   turning(dir: "up" | "down"): void;
   setArrows(list: ArrowSpec[]): void;
@@ -71,6 +75,29 @@ const AVOID = [
   ".banner.in", "#card", "#versus", ".bmeter", "[data-edge-avoid]"
 ].join(",");
 
+/** Which side of its marker an arrow's label goes: toward the battlefield, clear of HUD widgets. */
+function labelSide(a: ArrowSpec, text: string, avoid: Rect[]): "l" | "r" | "t" | "b" {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const pref = a.x < W * 0.33 ? "r" : a.x > W * 0.67 ? "l" : a.y < H / 2 ? "b" : "t";
+  const w = text.length * 7 + 14;
+  const hh = 9;
+  const half = MARKER.size / 2;
+  const rect = (s: string): Rect =>
+    s === "r" ? { x0: a.x + half - 2, y0: a.y - hh, x1: a.x + half - 2 + w, y1: a.y + hh }
+    : s === "l" ? { x0: a.x - half + 2 - w, y0: a.y - hh, x1: a.x - half + 2, y1: a.y + hh }
+    : s === "b" ? { x0: a.x - w / 2, y0: a.y + half - 2, x1: a.x + w / 2, y1: a.y + half + 2 * hh }
+    : { x0: a.x - w / 2, y0: a.y - half - 2 * hh, x1: a.x + w / 2, y1: a.y - half + 2 };
+  const clear = (s: string) => {
+    const r = rect(s);
+    if (r.x0 < 0 || r.x1 > W || r.y0 < 0 || r.y1 > H) return false;
+    // (ignore a widget the marker itself sits on)
+    return !avoid.some((o) => !(a.x >= o.x0 && a.x <= o.x1 && a.y >= o.y0 && a.y <= o.y1) && r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
+  };
+  for (const s of [pref, "b", "t", "l", "r"] as const) if (clear(s)) return s;
+  return pref;
+}
+
 export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): AwarenessUi {
   const shield = (el: HTMLElement) => el.addEventListener("pointerdown", (e) => e.stopPropagation());
 
@@ -91,10 +118,10 @@ export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): Awarenes
   tempo.appendChild(speed);
   speed.addEventListener("click", () => h.onCycleSpeed());
   shield(speed);
+  let pid: number | null = null;
   if (clock) {
     clock.classList.add("holdable");
     clock.title = "Hold to fast-forward (3×)";
-    let pid: number | null = null;
     const release = () => {
       if (pid === null) return;
       pid = null;
@@ -207,6 +234,22 @@ export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): Awarenes
       speed.classList.toggle("held", held);
       clock?.classList.toggle("fast", value > 1);
     },
+    cancelHold() {
+      const id = pid;
+      pid = null;
+      clock?.classList.remove("held");
+      if (id === null || !clock) return;
+      try {
+        clock.releasePointerCapture(id);
+      } catch {
+        /* already released */
+      }
+    },
+    flashSpeed() {
+      speed.classList.remove("drop");
+      void speed.offsetWidth;
+      speed.classList.add("drop");
+    },
     setMeter(shown, share) {
       const pct = Math.round(Math.max(0.03, Math.min(0.97, share)) * 1000) / 10;
       const key = shown ? String(pct) : "off";
@@ -255,8 +298,8 @@ export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): Awarenes
         }
         const label = el.querySelector<HTMLElement>(".el")!;
         if (label.textContent !== a.label) label.textContent = a.label;
-        // the label sits on the battlefield side of the marker
-        const side = a.x < window.innerWidth * 0.33 ? "r" : a.x > window.innerWidth * 0.67 ? "l" : a.y < window.innerHeight / 2 ? "b" : "t";
+        // the label sits on the battlefield side of the marker, unless a HUD widget is there
+        const side = labelSide(a, label.textContent ?? "", layout().avoid);
         if (el.dataset.side !== side) el.dataset.side = side;
         // only touch the DOM when something moved (this runs every frame)
         const tr = `translate(${Math.round(a.x - MARKER.size / 2)}px, ${Math.round(a.y - MARKER.size / 2)}px) scale(${a.scale.toFixed(2)})`;

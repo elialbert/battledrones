@@ -35,8 +35,11 @@ export interface WreckRendererOpts {
   player: Faction;
   spectator: boolean;
   dpr: number;
-  /** One-time "what are these?" hint (HUD toast; tapping it jumps to x, y). */
-  hint(msg: string, x: number, y: number): void;
+  /**
+   * One-time "what are these?" hint (paced by the HUD's hint queue; tapping it
+   * jumps to x, y). `shown` runs once it is actually on screen.
+   */
+  hint(msg: string, x: number, y: number, shown: () => void): void;
 }
 
 interface WreckView {
@@ -338,15 +341,15 @@ export class WreckRenderer {
     const shown = v.seen;
     for (const o of v.parts) o.setVisible(shown);
     if (!shown) return;
-    if (!this.hinted && visibleNow && !v.gone && w.tick >= v.coolTick) {
-      this.hinted = true;
-      try {
-        localStorage.setItem(HINT_KEY, "1");
-      } catch {
-        /* ignore */
-      }
-      this.opts.hint("Glinting wrecks hold scrap: roll any ground unit over them.", v.x / TILE, v.y / TILE);
-    }
+    if (!this.hinted && visibleNow && !v.gone && w.tick >= v.coolTick)
+      this.opts.hint("Glinting wrecks hold scrap: roll any ground unit over them.", v.x / TILE, v.y / TILE, () => {
+        this.hinted = true;
+        try {
+          localStorage.setItem(HINT_KEY, "1");
+        } catch {
+          /* ignore */
+        }
+      });
 
     // burns out over its last 10 s
     const left = (v.expireTick - w.tick) / TICK_RATE;

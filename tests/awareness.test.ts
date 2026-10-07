@@ -9,6 +9,9 @@ import {
   GameSpeed,
   HeatMap,
   InboundWatch,
+  TEMPO,
+  TempoGuard,
+  calldownThreatens,
   edgePoint,
   mergeHotspots,
   parseSpeed,
@@ -277,6 +280,60 @@ describe("inbound warning", () => {
     tickFog(w);
     c.events([], 1.5);
     expect(radio.map((l) => l.key)).not.toContain("enemy-air");
+  });
+});
+
+describe("tempo safety (drop to 1× when the player must react)", () => {
+  const rig = () => {
+    const w = createWorld(64, 64);
+    const hq = spawnBuilding(w, "hq", "blue", 4, 4);
+    const tank = spawnUnit(w, "stinger", "blue", 30, 30);
+    spawnBuilding(w, "hq", "red", 56, 56);
+    return { w, hq, tank, guard: new TempoGuard({ world: w, player: "blue" }) };
+  };
+  const calldown = (faction: Faction, x: number, y: number, power: "barrage" | "hammer" = "barrage", radius = 2): FxEvent => ({
+    type: "calldown", id: 1, faction, power, x, y, radius, landTick: 999
+  });
+
+  it("an enemy calldown aimed at our units or buildings drops a fast game to 1×", () => {
+    const r = rig();
+    expect(r.guard.check([calldown("red", 31, 30)], 10, [], true)).toMatchObject({ cause: "calldown", note: "enemy Barrage inbound", x: 31, y: 30 });
+    expect(r.guard.check([calldown("red", 6, 8, "hammer", 2.5)], 11, [], true)).toMatchObject({ cause: "calldown", note: "enemy Sky Hammer inbound" });
+    // far from anything of ours, or our own: no
+    expect(r.guard.check([calldown("red", 45, 10)], 12, [], true)).toBeNull();
+    expect(r.guard.check([calldown("blue", 31, 30)], 13, [], true)).toBeNull();
+    // already at 1×: nothing to do
+    expect(r.guard.check([calldown("red", 31, 30)], 14, [], false)).toBeNull();
+    expect(calldownThreatens(r.w, "blue", 30, 30 + 2 + TEMPO.reach + 0.1, 2)).toBe(false);
+    expect(calldownThreatens(r.w, "blue", 30, 30 + 2 + TEMPO.reach - 0.1, 2)).toBe(true);
+  });
+
+  it("the HQ coming under a new attack drops to 1×, but not every hit of the same siege", () => {
+    const r = rig();
+    const hqHit = (t: number, fast = true) => r.guard.check([hit("blue", r.hq.id, true, 5.5, 5.5, 99)], t, [], fast);
+    expect(hqHit(20)).toMatchObject({ cause: "hq", note: "HQ under attack" });
+    // the siege goes on: the player chose to speed up again, so leave it
+    expect(hqHit(25)).toBeNull();
+    expect(hqHit(25 + TEMPO.hqQuietS - 1)).toBeNull();
+    // a fresh attack after a quiet spell
+    expect(hqHit(25 + 2 * TEMPO.hqQuietS + 1)).toMatchObject({ cause: "hq" });
+    // a siege that started at 1× doesn't snap the speed back when the player speeds up mid-siege
+    const s = rig();
+    expect(s.guard.check([hit("blue", s.hq.id, true, 5.5, 5.5, 99)], 50, [], false)).toBeNull();
+    expect(s.guard.check([hit("blue", s.hq.id, true, 5.5, 5.5, 99)], 52, [], true)).toBeNull();
+    // other buildings and units don't count
+    expect(s.guard.check([hit("blue", s.tank.id, false, 30, 30, 99)], 200, [], true)).toBeNull();
+  });
+
+  it("a spoken inbound warning drops to 1×; the most urgent cause wins", () => {
+    const r = rig();
+    const wn = {
+      id: 1, domain: "air" as const, lead: "wasp" as const, count: 3, ids: [], x: 20, y: 6,
+      text: "Enemy drones inbound", short: "Drones inbound", advice: "Flak", first: false, loud: true, t: 5
+    };
+    expect(r.guard.check([], 5, [wn], true)).toMatchObject({ cause: "inbound", note: "enemy drones inbound" });
+    expect(r.guard.check([], 5, [{ ...wn, loud: false }], true)).toBeNull();
+    expect(r.guard.check([calldown("red", 31, 30)], 6, [wn], true)?.cause).toBe("calldown");
   });
 });
 

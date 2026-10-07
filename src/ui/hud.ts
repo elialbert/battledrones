@@ -16,6 +16,8 @@ import { showReport } from "./report";
 import { markBanned, pauseRulesHtml } from "./career";
 import { rematchToken } from "../game/mode";
 import { createOpsHud } from "./ops";
+import { mountHudLayout } from "./layout";
+import { HINTS, HintQueue, type HintOffer } from "../game/hints";
 
 export interface HudApi {
   world: World;
@@ -36,18 +38,29 @@ export interface HudApi {
   targetChip?: () => { label: string; cancel(): void } | null;
   /** Calldown reticles in flight (tiles), drawn as rings on the minimap. */
   calldowns?: () => { x: number; y: number; r: number; enemy: boolean }[];
+  /** A big moment owns the screen (opener cards, the finale): no new hints, the hint clock stops. */
+  busy?: () => boolean;
 }
 
 export interface Hud {
-  update(): void;
+  /** Every frame; `dtMs` is the frame's real time (drives hint pacing). */
+  update(dtMs?: number): void;
   showEnd(winner: Faction): void;
   alert(msg: string, x: number, y: number): void;
   /** A small radio caption for an announcer line (tap jumps to x, y). */
   radio(msg: string, tone: string, x?: number, y?: number): void;
   /** A minimap ping; "inbound" is a bigger amber pulse for an approaching raid. */
   ping(x: number, y: number, kind?: "hit" | "inbound"): void;
-  /** A 💡 tip in the ticker, shown for `ms`; tapping it jumps the camera to (x, y) when given. */
+  /** A 💡 tip in the ticker right now (feedback to a tap), shown for `ms`; tapping it jumps to (x, y). */
   hint(msg: string, ms?: number, x?: number, y?: number): void;
+  /**
+   * A one-time onboarding hint, paced through the hint queue (src/game/hints.ts):
+   * at most one every 12 s, most important first, never over a banner or the
+   * opener cards. Re-offering a waiting id is a no-op.
+   */
+  offerHint(h: HintOffer): void;
+  /** Is a banner whose key starts with `prefix` showing or waiting? */
+  bannerUp(prefix: string): boolean;
   /** A small toast (veteran promoted / lost…); tapping it jumps to (x, y). */
   notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
   /** A plain short toast (e.g. why a calldown can't fire). */
@@ -100,10 +113,10 @@ export function createHud(api: HudApi): Hud {
     <div class="topbar">
       <div class="res" id="res"><span class="gear">⚙</span><span id="scrap">0</span><span class="rate" id="rate"></span></div>
       <div class="clock" id="clock">0:00</div>
+      <div id="versus" class="versus" hidden></div>
       <div class="wavepill" id="wavepill" hidden></div>
       <div class="opspill" id="opspill" hidden></div>
     </div>
-    <div id="versus" class="versus" hidden></div>
     <div class="tl">
       <button id="btn-menu" class="round" title="Pause (P)">❚❚</button>
       <button id="btn-mute" class="round" title="Mute all (sound settings in the pause menu)">🔊</button>
@@ -148,6 +161,8 @@ export function createHud(api: HudApi): Hud {
   const mctx = minimap.getContext("2d")!;
   const thumb = new Image();
   thumb.src = `${mapAssetBase(api.world.mapId)}/thumb.webp`;
+  // the ticker and banner sit under whatever the top band really occupies (src/ui/layout.ts)
+  const layout = mountHudLayout(root);
 
   // keep HUD touches from reaching the game canvas
   const shield = (el: HTMLElement) => el.addEventListener("pointerdown", (e) => e.stopPropagation());
@@ -429,13 +444,21 @@ export function createHud(api: HudApi): Hud {
   function toast(msg: string, onTap?: () => void, cls = "", ms = 2200): void {
     const t = document.createElement("div");
     t.className = `toast ${cls}`;
-    t.textContent = msg;
+    const tx = document.createElement("span");
+    tx.className = "tx";
+    tx.textContent = msg;
+    t.appendChild(tx);
     if (onTap) t.addEventListener("click", onTap);
     // nothing to tap: let touches fall through to the battlefield underneath
     else t.classList.add("passive");
     toastsEl.appendChild(t);
-    // the ticker keeps two lines at most: the newest pushes the oldest out
-    while (toastsEl.children.length > 2) toastsEl.firstChild?.remove();
+    // the ticker keeps two lines at most: the newest pushes the oldest out (a
+    // waiting reader's 💡 hint outlives a burst of alerts)
+    while (toastsEl.children.length > 2) {
+      const kids = [...toastsEl.children].filter((c) => c !== t);
+      const old = kids.find((c) => c.classList.contains("out")) ?? kids.find((c) => !c.classList.contains("hint")) ?? kids[0];
+      old?.remove();
+    }
     setTimeout(() => t.classList.add("out"), ms);
     setTimeout(() => t.remove(), ms + 500);
   }
@@ -454,9 +477,11 @@ export function createHud(api: HudApi): Hud {
     bannerEl.querySelector("b")!.textContent = a.text;
     if (a.sub) bannerEl.querySelector("span")!.textContent = a.sub;
     bannerEl.hidden = false;
+    layout.refresh(true); // centre it under the band at its real width
     // restart the entrance animation
     void bannerEl.offsetWidth;
     bannerEl.classList.add("in");
+    layout.refresh(true); // (landscape: the ticker steps under it)
     window.clearTimeout(bannerTimer);
     bannerTimer = window.setTimeout(() => {
       bannerEl.classList.remove("in");
@@ -466,6 +491,7 @@ export function createHud(api: HudApi): Hud {
         bannerCur = null;
         const next = bannerQueue.shift();
         if (next) showBanner(next);
+        else layout.refresh(true);
       }, 260);
     }, prio(a) <= 1 ? 3000 : 2200);
   }
@@ -490,40 +516,60 @@ export function createHud(api: HudApi): Hud {
     /* storage blocked: skip the hints */
   }
   if (api.ctrl.spectator || w.ops) hintStage = 99; // ops brief the player themselves
-  const hint = (msg: string) => toast(`💡 ${msg}`, undefined, "hint", 7000);
+  // every one-time hint is paced through one queue (src/game/hints.ts)
+  const hints = new HintQueue();
+  const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
+  const hasFactory = () => mine("fab-plant") || mine("airpad");
+  const armySize = () => [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+  /** The tutorial's next stage, offered to the queue once its moment comes; the stage moves on when it is shown. */
   function tutorial(): void {
-    if (hintStage >= 99) return;
+    if (hintStage >= 99 || hints.has(`tut-${hintStage}`)) return;
+    const stage = hintStage;
     const secs = api.matchSeconds();
-    const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
-    const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
-    if (hintStage === 0 && secs > 4) {
+    let msg: string | null = null;
+    let next = stage;
+    let still = () => true;
+    if (stage === 0 && secs > 4) {
       // quick-start openers hand out a factory (and maybe an army) up front
-      if (mine("fab-plant") || mine("airpad")) {
-        hint(
-          army > 0
-            ? "Your harvesters mine on their own. Tap a unit (or ⚔ Select army), then tap the map to send it."
-            : "Your harvesters mine on their own. Train tanks in Vehicles, then tap a unit and tap the map to send it."
-        );
-        hintStage = 2;
+      const factory = hasFactory();
+      const army = armySize() > 0;
+      still = () => hasFactory() === factory && armySize() > 0 === army;
+      if (factory) {
+        msg = army
+          ? "Your harvesters mine on their own. Tap a unit (or ⚔ Select army), then tap the map to send it."
+          : "Your harvesters mine on their own. Train tanks in Vehicles, then tap a unit and tap the map to send it.";
+        next = 2;
       } else {
-        hint("Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.");
-        hintStage = 1;
+        msg = "Your harvester mines scrap by itself. Open Base and tap Fab to build a factory.";
+        next = 1;
       }
-    } else if (hintStage === 1 && mine("fab-plant")) {
-      hint("Train tanks in Vehicles. Tap a unit, then tap the map to send it.");
-      hintStage = 2;
-    } else if (hintStage === 2 && army >= 3 && secs > 30) {
-      hint("Long-press any build button to see what it counters. ⚔ Select army grabs everyone.");
-      hintStage = 3;
-    } else if (hintStage === 3 && secs > 150) {
-      hint("Build a Tech Lab to unlock Titans, Lancers, Mortars and Hornets.");
-      hintStage = 99;
-      try {
-        localStorage.setItem(TUTORIAL_KEY, "done");
-      } catch {
-        /* ignore */
-      }
+    } else if (stage === 1 && mine("fab-plant")) {
+      msg = "Train tanks in Vehicles. Tap a unit, then tap the map to send it.";
+      next = 2;
+    } else if (stage === 2 && armySize() >= 3 && secs > 30) {
+      msg = "Long-press any build button to see what it counters. ⚔ Select army grabs everyone.";
+      next = 3;
+    } else if (stage === 3 && secs > 150) {
+      msg = "Build a Tech Lab to unlock Titans, Lancers, Mortars and Hornets.";
+      next = 99;
     }
+    if (!msg) return;
+    hints.offer({
+      id: `tut-${stage}`,
+      msg,
+      priority: HINTS.priority.tutorial,
+      ttlS: 600,
+      valid: () => hintStage === stage && still(),
+      onShow: () => {
+        hintStage = next;
+        if (next < 99) return;
+        try {
+          localStorage.setItem(TUTORIAL_KEY, "done");
+        } catch {
+          /* ignore */
+        }
+      }
+    });
   }
 
   const pings: { x: number; y: number; t: number; kind?: "hit" | "inbound" }[] = [];
@@ -549,7 +595,10 @@ export function createHud(api: HudApi): Hud {
     root.classList.add("spectator");
     const versus = $("#versus");
     versus.hidden = false;
-    versus.innerHTML = `<span class="vs-blue">${api.strategies?.blue}</span> vs <span class="vs-red">${api.strategies?.red}</span>`;
+    versus.innerHTML = `<span class="vs-blue"></span><span class="vs-red"></span>`;
+    versus.querySelector(".vs-blue")!.textContent = api.strategies?.blue ?? "Blue";
+    versus.querySelector(".vs-red")!.textContent = api.strategies?.red ?? "Red";
+    versus.title = `${api.strategies?.blue} vs ${api.strategies?.red}`;
   }
 
   function togglePause(): void {
@@ -606,7 +655,20 @@ export function createHud(api: HudApi): Hud {
   let lastClock = "";
   const incomeWindow: { t: number; v: number }[] = [];
 
-  function update(): void {
+  let lastFrame = performance.now();
+  function update(dtMs?: number): void {
+    const nowMs = performance.now();
+    const dt = dtMs ?? Math.min(250, nowMs - lastFrame);
+    lastFrame = nowMs;
+    layout.refresh();
+    // one-time hints: one at a time, never over a banner or the opener cards, paused time doesn't count
+    const busy = api.busy?.() ?? false;
+    const quiet = busy || api.ctrl.paused || !!w.winner || bannerCur !== null || bannerQueue.length > 0;
+    const shown = hints.update(busy || api.ctrl.paused ? 0 : dt / 1000, quiet);
+    if (shown) {
+      const { x, y } = shown;
+      toast(`💡 ${shown.msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", shown.ms ?? HINTS.showMs);
+    }
     const fs = f();
     const scrap = Math.floor(fs.scrap);
     if (scrap !== lastScrap) {
@@ -891,6 +953,12 @@ export function createHud(api: HudApi): Hud {
     hint(msg, ms = 7000, x, y) {
       toast(`💡 ${msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", ms);
     },
+    offerHint(h) {
+      if (!api.ctrl.spectator) hints.offer(h);
+    },
+    bannerUp(prefix) {
+      return !!bannerCur?.key.startsWith(prefix) || bannerQueue.some((a) => a.key.startsWith(prefix));
+    },
     notice(msg, tone, x, y) {
       toast(msg, () => api.centerCamera(x, y), tone === "info" ? "" : tone, 3600);
     },
@@ -901,6 +969,7 @@ export function createHud(api: HudApi): Hud {
     destroy() {
       offAnnounce();
       offMute();
+      layout.destroy();
       offToggles?.();
       window.clearTimeout(bannerTimer);
       root.innerHTML = "";

@@ -17,13 +17,15 @@ import {
   HeatMap,
   InboundWatch,
   SPEED_KEY,
+  TempoGuard,
   edgePoint,
   mergeHotspots,
   placeOnEdge,
   tallyView,
   type Hotspot,
   type InboundWarning,
-  type Rect
+  type Rect,
+  type TempoDrop
 } from "./awareness";
 import type { Hud } from "../ui/hud";
 import { MARKER, mountAwareness, type ArrowSpec, type AwarenessUi } from "../ui/awareness";
@@ -53,6 +55,9 @@ export class Awareness {
   readonly speed: GameSpeed;
   readonly heat: HeatMap;
   readonly inbound: InboundWatch;
+  private tempo: TempoGuard;
+  /** The last automatic drop to 1× (sim time), so presenters can fold their line into its note. */
+  private dropped: { cause: TempoDrop["cause"]; t: number } | null = null;
   private meter = new BattleMeter();
   private ui: AwarenessUi;
   private spots: Hotspot[] = [];
@@ -78,6 +83,7 @@ export class Awareness {
     this.speed = new GameSpeed(h.spectator, raw);
     this.heat = new HeatMap({ world: h.world, player: h.player, spectator: h.spectator });
     this.inbound = new InboundWatch({ world: h.world, player: h.player });
+    this.tempo = new TempoGuard({ world: h.world, player: h.player });
     this.ui = mountAwareness(document.getElementById("hud")!, {
       spectator: h.spectator,
       onCycleSpeed: () => this.cycleSpeed(),
@@ -136,25 +142,51 @@ export class Awareness {
           this.lastShotInView = t;
       }
     if (this.h.spectator) return;
-    for (const wn of this.inbound.events(fx, t)) this.warn(wn);
+    const warnings = this.inbound.events(fx, t);
+    // tempo safety: something needs the player's hands, so back to 1×
+    const drop = this.tempo.check(fx, t, warnings, this.speed.value > 1);
+    if (drop) this.slowDown(drop, t);
+    for (const wn of warnings) this.warn(wn, drop?.cause === "inbound");
   }
 
-  /** Present an inbound warning: banner (first of its kind) or ticker + radio, alarm, minimap pulse. */
-  private warn(wn: InboundWarning): void {
+  /**
+   * Present an inbound warning on one channel: a banner for the first raid of
+   * its kind, later ones as a ticker line + radio — but nothing extra while an
+   * inbound banner is still up or waiting (that banner already says it).
+   * Always: the siren and a minimap pulse.
+   */
+  private warn(wn: InboundWarning, slowed: boolean): void {
     if (!wn.loud) return; // inside the global gap: the arrow alone
     const h = this.h;
     h.radio.callouts.inbound(wn.domain, wn.t);
     if (wn.first)
       announce({
-        key: `inbound-${wn.domain}`, text: wn.short, sub: `Counter: ${wn.advice}`, tone: "bad", priority: 1,
+        key: `inbound-${wn.domain}`, text: wn.short, sub: `Counter: ${wn.advice}${slowed ? " · speed 1×" : ""}`, tone: "bad", priority: 1,
         x: wn.x, y: wn.y, say: wn.text
       });
-    else {
-      h.hud.alert(`${wn.text} — ${wn.advice}`, wn.x, wn.y);
+    else if (!h.hud.bannerUp("inbound-")) {
+      h.hud.alert(`${slowed ? "Speed 1× — " : ""}${wn.text} — ${wn.advice}`, wn.x, wn.y);
       h.radio.push({ key: "inbound", text: wn.text, priority: 1, tone: "bad", x: wn.x, y: wn.y, caption: false });
     }
     sfx.play("inbound", 0.85);
     h.hud.ping(wn.x, wn.y, "inbound");
+  }
+
+  /** Drop to 1× (the chosen speed stays stored for the next match) and say why, once. */
+  private slowDown(d: TempoDrop, t: number): void {
+    this.speed.base = 1;
+    this.speed.held = false;
+    this.ui.cancelHold();
+    this.syncSpeed();
+    this.ui.flashSpeed();
+    this.dropped = { cause: d.cause, t };
+    // a raid's warning line carries the note itself (one line per event)
+    if (d.cause !== "inbound") this.h.hud.notice(`Speed 1× — ${d.note}`, "bad", d.x, d.y);
+  }
+
+  /** Did the game just drop to 1× for this cause (this tick)? Its note already tells the player. */
+  slowedFor(cause: TempoDrop["cause"]): boolean {
+    return !!this.dropped && this.dropped.cause === cause && this.dropped.t === this.simT;
   }
 
   // --------------------------------------------------------- render side --

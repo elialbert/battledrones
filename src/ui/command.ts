@@ -19,6 +19,7 @@ import { sfx } from "../game/audio";
 import { PLAYER, type Controller } from "../game/controller";
 import { SQUAD } from "../game/squads";
 import { ADVISOR, EnemyIntel, IdleWatch, adviceNote, counterAdvice, type FactoryTab } from "../game/advisor";
+import { HINTS, type HintOffer } from "../game/hints";
 
 export interface CommandHooks {
   root: HTMLElement;
@@ -27,8 +28,10 @@ export interface CommandHooks {
   spectator: boolean;
   /** Glide the camera to a tile point. */
   glideTo(x: number, y: number): void;
-  /** A 💡 tip in the ticker. */
+  /** A 💡 tip in the ticker right now (feedback to a tap). */
   tip(msg: string, ms?: number): void;
+  /** A one-time hint, paced through the HUD's hint queue. */
+  offerHint(h: HintOffer): void;
 }
 
 const HINTS_KEY = "battledrones.cmdhints";
@@ -232,11 +235,29 @@ export class CommandUi {
     }
   }
 
-  /** Show a hint once per device. */
+  /**
+   * Offer a once-per-device hint ("squads", "place") to the HUD's hint queue;
+   * it counts as seen only once it is shown, and only while it still applies
+   * (a group selected / a building being placed). Safe to call every frame.
+   */
   hint(id: string, msg: string): void {
     if (this.h.spectator || this.hints.has(id)) return;
-    this.seen(id);
-    this.h.tip(msg);
+    const ctrl = this.h.ctrl;
+    const w = this.h.world;
+    const applies =
+      id === "place"
+        ? () => ctrl.placing !== null
+        : () => [...ctrl.selectedUnits].filter((u) => w.units.get(u)?.kind !== "harvester").length >= 2;
+    // (the player may find the gesture on their own while the hint waits)
+    const valid = () => !this.hints.has(id) && applies();
+    this.h.offerHint({
+      id: `cmd-${id}`,
+      msg,
+      priority: id === "place" ? HINTS.priority.placement : HINTS.priority.squads,
+      ttlS: 20,
+      valid,
+      onShow: () => this.seen(id)
+    });
   }
 
   // -------------------------------------------------------------- update --
