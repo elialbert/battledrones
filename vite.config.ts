@@ -6,7 +6,13 @@ export default defineConfig({
   // built game from the repo with no build step.
   base: "./",
   server: { host: true },
-  build: { target: "es2022", outDir: "docs", chunkSizeWarningLimit: 1600 },
+  build: {
+    target: "es2022",
+    outDir: "docs",
+    chunkSizeWarningLimit: 1600,
+    // the engine in its own chunk: game updates don't re-download Phaser
+    rollupOptions: { output: { manualChunks: { phaser: ["phaser"] } } }
+  },
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
