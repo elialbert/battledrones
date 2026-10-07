@@ -1,4 +1,5 @@
 import type { Difficulty } from "../sim/ai/commander";
+import type { MatchOptions } from "../sim/maps";
 
 /** Match settings, chosen on the menu before the game boots. */
 export const gameMode = {
@@ -7,6 +8,15 @@ export const gameMode = {
   mapId: "riverlands",
   difficulty: "normal" as Difficulty
 };
+
+/**
+ * The sim setup for the next match, built from the menu choices. A fresh
+ * random seed per match (render side, so Math.random is fine here) keeps
+ * seeded events varied while each match stays internally deterministic.
+ */
+export function matchOptions(): MatchOptions {
+  return { seed: (Math.random() * 0x7fffffff) | 0 };
+}
 
 const KEY = "battledrones.settings";
 

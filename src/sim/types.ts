@@ -106,6 +106,8 @@ export interface Unit {
   xp: number;
   /** Veterancy rank 0–3 (derived from xp); boosts damage. */
   rank: number;
+  /** Enemy units and buildings this unit has destroyed. */
+  kills: number;
 }
 
 export interface QueueItem {
@@ -144,6 +146,8 @@ export interface FactionStats {
   unitsLost: number;
   unitsKilled: number;
   buildingsLost: number;
+  /** Enemy buildings destroyed (by anything this faction owns). */
+  buildingsKilled: number;
   scrapHarvested: number;
 }
 
@@ -196,8 +200,52 @@ export type FxEvent =
   | { type: "heal"; x: number; y: number; tx: number; ty: number; sourceId: number; targetId: number }
   | { type: "built"; faction: Faction; id: number }
   | { type: "sold"; id: number }
-  | { type: "hit"; faction: Faction; x: number; y: number; building: boolean }
-  | { type: "rankUp"; id: number };
+  | {
+      type: "hit";
+      /** Victim's faction, id and position. */
+      faction: Faction;
+      id: number;
+      x: number;
+      y: number;
+      building: boolean;
+      /** Who dealt the damage (may already be dead next tick). */
+      attackerId: number;
+    }
+  | { type: "rankUp"; id: number }
+  | {
+      /**
+       * Something was destroyed. Emitted once per death alongside the
+       * visual "explosion" event, with everything feedback, stats and
+       * awards need (the entity is already gone from the world).
+       */
+      type: "death";
+      id: number;
+      /** The victim's faction; the kill is credited to the other one. */
+      faction: Faction;
+      unitKind: UnitKind | null;
+      buildingKind: BuildingKind | null;
+      x: number;
+      y: number;
+      air: boolean;
+      /** Scrap value of what died (HQs count 500). */
+      value: number;
+      /** Killer unit/building id if it is still alive this tick, else null. */
+      killerId: number | null;
+      /** The killer's unit kind, when the killer is a living unit. */
+      killerKind: UnitKind | null;
+      /** Victim's veterancy rank and kill count at death (0 for buildings). */
+      rank: number;
+      kills: number;
+    }
+  | {
+      /** A harvester started unloading `amount` scrap at a drop-off. */
+      type: "deposit";
+      faction: Faction;
+      id: number;
+      x: number;
+      y: number;
+      amount: number;
+    };
 
 import type { FactionFog } from "./fog";
 
@@ -225,6 +273,11 @@ export interface World {
   /** Map metadata for the renderer. */
   mapId: string;
   biome: Biome;
+  /**
+   * Per-match seed. All sim randomness must derive from this (see rand.ts),
+   * never Math.random, so a match replays identically from its commands.
+   */
+  seed: number;
 }
 
 export type Command =

@@ -376,8 +376,12 @@ export function tickHarvest(w: World): void {
         continue;
       }
       const d = dockPoint(home, u.x, u.y);
-      if (moveUnitToward(w, u, d.x, d.y) || distToBuilding(home, u.x, u.y) < 1.2)
+      if (moveUnitToward(w, u, d.x, d.y) || distToBuilding(home, u.x, u.y) < 1.2) {
         o.phase = "unloading";
+        const c = buildingCenter(home);
+        const amount = u.cargo * w.factions[u.faction].incomeMult;
+        w.fx.push({ type: "deposit", faction: u.faction, id: u.id, x: c.x, y: c.y, amount });
+      }
     } else {
       // unloading
       const transfer = Math.min(perTick(ECONOMY.unloadRate), u.cargo);

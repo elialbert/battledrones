@@ -19,7 +19,8 @@ import {
 } from "./assets";
 import { Controller, PLAYER, hitTest } from "./controller";
 import { GestureRecognizer } from "./gestures";
-import { gameMode } from "./mode";
+import { announce } from "./announce";
+import { gameMode, matchOptions } from "./mode";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
@@ -89,7 +90,7 @@ export class GameScene extends Phaser.Scene {
       hideOnComplete: true
     });
 
-    this.world = createMapWorld(gameMode.mapId);
+    this.world = createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
     // spectating pits two Normal commanders against each other
     this.ai = createAiState(undefined, gameMode.spectator ? "normal" : gameMode.difficulty, (Math.random() * 1e9) | 0);
@@ -158,6 +159,7 @@ export class GameScene extends Phaser.Scene {
       ctrl: this.ctrl,
       cam,
       scene: this,
+      announce,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };

@@ -111,7 +111,7 @@ function applyDamage(
     u.damagedTick = w.tick;
     u.lastAttackerId = attackerId;
     incidents.push({ victimId: id, attackerId });
-    w.fx.push({ type: "hit", faction: u.faction, x: u.x, y: u.y, building: false });
+    w.fx.push({ type: "hit", faction: u.faction, id, x: u.x, y: u.y, building: false, attackerId });
     return;
   }
   const b = w.buildings.get(id);
@@ -121,7 +121,7 @@ function applyDamage(
     b.lastAttackerId = attackerId;
     incidents.push({ victimId: id, attackerId });
     const c = buildingCenter(b);
-    w.fx.push({ type: "hit", faction: b.faction, x: c.x, y: c.y, building: true });
+    w.fx.push({ type: "hit", faction: b.faction, id, x: c.x, y: c.y, building: true, attackerId });
   }
 }
 
@@ -371,11 +371,20 @@ function rankFor(u: Unit): number {
   return r;
 }
 
-function creditKill(w: World, killerId: number | null, victimCost: number): void {
+/**
+ * Credit a kill. The faction stat always goes to the victim's enemy (every
+ * source of damage is hostile), even when the killer has since died or is a
+ * building; XP and the kill count go to the killing unit if it still lives.
+ */
+function creditKill(w: World, victimFaction: Faction, killerId: number | null, victimCost: number, building: boolean): void {
+  const enemy = victimFaction === "blue" ? "red" : "blue";
+  const stats = w.factions[enemy].stats;
+  if (building) stats.buildingsKilled++;
+  else stats.unitsKilled++;
   if (killerId === null) return;
   const k = w.units.get(killerId);
-  if (!k) return;
-  w.factions[k.faction].stats.unitsKilled++;
+  if (!k || k.faction === victimFaction) return;
+  k.kills++;
   k.xp += victimCost;
   const r = rankFor(k);
   if (r > k.rank) {
@@ -384,25 +393,42 @@ function creditKill(w: World, killerId: number | null, victimCost: number): void
   }
 }
 
+/** Killer id/kind if the last attacker is still alive this tick. */
+function killerOf(w: World, id: number | null): { killerId: number | null; killerKind: Unit["kind"] | null } {
+  if (id === null) return { killerId: null, killerKind: null };
+  const u = w.units.get(id);
+  if (u) return { killerId: id, killerKind: u.kind };
+  return w.buildings.has(id) ? { killerId: id, killerKind: null } : { killerId: null, killerKind: null };
+}
+
 /** Remove dead entities, emit explosions, and settle the winner. */
 export function cleanupDeaths(w: World): void {
   for (const [id, u] of w.units) {
     if (u.hp > 0) continue;
     w.units.delete(id);
     w.factions[u.faction].stats.unitsLost++;
-    creditKill(w, u.lastAttackerId, UNITS[u.kind].cost);
+    const killer = killerOf(w, u.lastAttackerId);
+    creditKill(w, u.faction, u.lastAttackerId, UNITS[u.kind].cost, false);
+    const air = unitDomain(u) === "air";
+    w.fx.push({ type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2, air, kind: "unit" });
     w.fx.push({
-      type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2,
-      air: unitDomain(u) === "air", kind: "unit"
+      type: "death", id, faction: u.faction, unitKind: u.kind, buildingKind: null,
+      x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
     });
   }
   for (const b of [...w.buildings.values()]) {
     if (b.hp > 0) continue;
     removeBuilding(w, b);
     w.factions[b.faction].stats.buildingsLost++;
-    creditKill(w, b.lastAttackerId, BUILDINGS[b.kind].cost || 500);
+    const killer = killerOf(w, b.lastAttackerId);
+    const value = BUILDINGS[b.kind].cost || 500;
+    creditKill(w, b.faction, b.lastAttackerId, value, true);
     const c = buildingCenter(b);
     w.fx.push({ type: "explosion", x: c.x, y: c.y, size: BUILDINGS[b.kind].size, air: false, kind: "building" });
+    w.fx.push({
+      type: "death", id: b.id, faction: b.faction, unitKind: null, buildingKind: b.kind,
+      x: c.x, y: c.y, air: false, value, ...killer, rank: 0, kills: 0
+    });
     if (b.kind === "hq" && w.winner === null)
       w.winner = b.faction === "blue" ? "red" : "blue";
   }

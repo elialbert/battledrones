@@ -307,12 +307,22 @@ function createClassicTerrain(w: World): void {
       if (w.terrain[ty * S + tx] === Terrain.Ground) setTerrain(w, tx, ty, Terrain.Scrap);
 }
 
+/**
+ * Per-match setup beyond the map itself. Every field is optional and the
+ * defaults reproduce the classic skirmish start exactly (tests rely on it).
+ */
+export interface MatchOptions {
+  /** Match seed for deterministic randomness (see rand.ts). Default: the map's seed. */
+  seed?: number;
+}
+
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
-export function createMapWorld(id: string): World {
+export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   const def = mapById(id);
   const w = createWorld(def.size, def.size);
   w.mapId = def.id;
   w.biome = def.biome;
+  w.seed = (opts.seed ?? def.seed) >>> 0;
   if (def.id === "proving-grounds") createClassicTerrain(w);
   else {
     def.paint(new Painter(w, def.seed));

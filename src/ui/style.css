@@ -205,6 +205,60 @@ button {
   }
 }
 
+/* ------------------------------------------------- announcement banner --- */
+.banner {
+  position: absolute;
+  top: calc(max(6px, env(safe-area-inset-top)) + 140px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(92vw, 520px);
+  padding: 8px 22px 9px;
+  border-radius: 12px;
+  text-align: center;
+  pointer-events: auto;
+  background: linear-gradient(180deg, rgba(14, 20, 32, 0.92), rgba(8, 12, 20, 0.92));
+  border: 1px solid var(--line-hi);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  z-index: 6;
+}
+.banner b {
+  display: block;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+.banner span {
+  display: block;
+  margin-top: 1px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+}
+.banner.good { border-color: rgba(126, 242, 155, 0.7); }
+.banner.good b { color: var(--green); }
+.banner.bad { border-color: rgba(255, 110, 90, 0.8); }
+.banner.bad b { color: var(--red); }
+.banner.epic { border-color: rgba(255, 214, 110, 0.85); box-shadow: 0 0 34px rgba(255, 196, 80, 0.35), 0 8px 28px rgba(0, 0, 0, 0.55); }
+.banner.epic b { color: var(--gold); }
+.banner.in { animation: bannerIn 0.32s cubic-bezier(0.2, 1.4, 0.4, 1) forwards; }
+.banner.out { opacity: 1; animation: bannerOut 0.26s ease-in forwards; }
+@media (orientation: landscape) and (max-height: 560px) {
+  .banner { top: calc(max(6px, env(safe-area-inset-top)) + 52px); padding: 6px 18px 7px; }
+  .banner b { font-size: 19px; }
+}
+@keyframes bannerIn {
+  from { opacity: 0; transform: translateX(-50%) scale(1.35); }
+  to { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+@keyframes bannerOut {
+  to { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(0.96); }
+}
+
 /* ------------------------------------------------------------ spectator --- */
 #hud.spectator .buildbar,
 #hud.spectator .res {

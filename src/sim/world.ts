@@ -14,7 +14,7 @@ import {
 const newFaction = (): FactionState => ({
   scrap: ECONOMY.startingScrap,
   pending: null,
-  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, scrapHarvested: 0 },
+  stats: { unitsBuilt: 0, unitsLost: 0, unitsKilled: 0, buildingsLost: 0, buildingsKilled: 0, scrapHarvested: 0 },
   incomeMult: 1
 });
 
@@ -35,7 +35,8 @@ export function createWorld(width: number, height: number): World {
     fx: [],
     fog: createFog(width, height),
     mapId: "custom",
-    biome: "temperate"
+    biome: "temperate",
+    seed: 1
   };
 }
 
@@ -124,7 +125,8 @@ export function spawnUnit(
     lastAttackerId: null,
     firedTick: -1000,
     xp: 0,
-    rank: 0
+    rank: 0,
+    kills: 0
   };
   w.units.set(unit.id, unit);
   return unit;

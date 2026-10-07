@@ -7,6 +7,7 @@ import { sfx } from "../game/audio";
 import { TILE, mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
+import { onAnnounce, type Announcement } from "../game/announce";
 
 export interface HudApi {
   world: World;
@@ -81,6 +82,7 @@ export function createHud(api: HudApi): Hud {
       <button id="btn-mute" class="round" title="Sound">🔊</button>
     </div>
     <div id="toasts" class="toasts"></div>
+    <div id="banner" class="banner" hidden></div>
     <div class="minimap-wrap"><canvas id="minimap"></canvas></div>
     <div class="zoombtns">
       <button id="zoom-in" class="zb" title="Zoom in (+)">＋</button>
@@ -112,6 +114,7 @@ export function createHud(api: HudApi): Hud {
   const pauseEl = $("#pause");
   const endEl = $("#endscreen");
   const toastsEl = $("#toasts");
+  const bannerEl = $("#banner");
   const minimap = $<HTMLCanvasElement>("#minimap");
   minimap.width = MINIMAP_PX;
   minimap.height = MINIMAP_PX;
@@ -121,7 +124,7 @@ export function createHud(api: HudApi): Hud {
 
   // keep HUD touches from reaching the game canvas
   const shield = (el: HTMLElement) => el.addEventListener("pointerdown", (e) => e.stopPropagation());
-  [root.querySelector(".dock"), root.querySelector(".tl"), root.querySelector(".zoombtns"), cardEl, toastsEl]
+  [root.querySelector(".dock"), root.querySelector(".tl"), root.querySelector(".zoombtns"), cardEl, toastsEl, bannerEl]
     .forEach((el) => el && shield(el as HTMLElement));
 
   const w = api.world;
@@ -365,6 +368,47 @@ export function createHud(api: HudApi): Hud {
     setTimeout(() => t.classList.add("out"), ms);
     setTimeout(() => t.remove(), ms + 500);
   }
+
+  // ------------------------------------------------------------ banners ---
+  // Big centre-top callouts for announce(): one at a time, the more
+  // important line pre-empts, others wait in a short queue.
+  let bannerCur: Announcement | null = null;
+  let bannerTimer = 0;
+  const bannerQueue: Announcement[] = [];
+  const prio = (a: Announcement) => a.priority ?? 2;
+  function showBanner(a: Announcement): void {
+    bannerCur = a;
+    bannerEl.className = `banner ${a.tone ?? "info"}`;
+    bannerEl.innerHTML = `<b></b>${a.sub ? "<span></span>" : ""}`;
+    bannerEl.querySelector("b")!.textContent = a.text;
+    if (a.sub) bannerEl.querySelector("span")!.textContent = a.sub;
+    bannerEl.hidden = false;
+    // restart the entrance animation
+    void bannerEl.offsetWidth;
+    bannerEl.classList.add("in");
+    window.clearTimeout(bannerTimer);
+    bannerTimer = window.setTimeout(() => {
+      bannerEl.classList.remove("in");
+      bannerEl.classList.add("out");
+      bannerTimer = window.setTimeout(() => {
+        bannerEl.hidden = true;
+        bannerCur = null;
+        const next = bannerQueue.shift();
+        if (next) showBanner(next);
+      }, 260);
+    }, prio(a) <= 1 ? 3000 : 2200);
+  }
+  bannerEl.addEventListener("click", () => {
+    if (bannerCur?.x !== undefined && bannerCur.y !== undefined) api.centerCamera(bannerCur.x, bannerCur.y);
+  });
+  const offAnnounce = onAnnounce((a) => {
+    if (bannerCur?.key === a.key || bannerQueue.some((q) => q.key === a.key)) return; // no stutter
+    if (!bannerCur) return showBanner(a);
+    if (prio(a) < prio(bannerCur)) return showBanner(a);
+    bannerQueue.push(a);
+    bannerQueue.sort((p, q) => prio(p) - prio(q));
+    if (bannerQueue.length > 3) bannerQueue.pop();
+  });
 
   // ---------------------------------------------------- first-run hints ---
   const TUTORIAL_KEY = "battledrones.tutorial";
@@ -723,6 +767,8 @@ export function createHud(api: HudApi): Hud {
     },
     togglePause,
     destroy() {
+      offAnnounce();
+      window.clearTimeout(bannerTimer);
       root.innerHTML = "";
     }
   };
