@@ -1,6 +1,11 @@
 import Phaser from "phaser";
+import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
+import { MAPS } from "./sim/maps";
+import { sfx } from "./game/audio";
+import { mapAssetBase } from "./game/assets";
 import { GameScene } from "./game/GameScene";
-import { gameMode } from "./game/mode";
+import { gameMode, loadSettings, saveSettings } from "./game/mode";
+import { HELP_HTML } from "./ui/hud";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -34,7 +39,6 @@ function setupPageZoomRescue(): void {
     const zoomed = vv.scale > 1.05;
     btn.hidden = !zoomed;
     if (!zoomed) return;
-    // pin across the bottom of the visible area, in layout coordinates
     const s = 1 / vv.scale;
     btn.style.left = `${vv.offsetLeft}px`;
     btn.style.top = `${vv.offsetTop + vv.height - 56 * s}px`;
@@ -60,38 +64,112 @@ function setupPageZoomRescue(): void {
 }
 setupPageZoomRescue();
 
+/** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
+const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+
 function startGame(): void {
-  new Phaser.Game({
+  const hud = document.getElementById("hud")!;
+  const loading = document.createElement("div");
+  loading.id = "loading";
+  loading.className = "screen";
+  loading.innerHTML = `<div class="loadbox"><p>Deploying to ${MAPS.find((m) => m.id === gameMode.mapId)?.name ?? "battlefield"}…</p><div class="loadtrack"><div id="loadbar"></div></div></div>`;
+  hud.appendChild(loading);
+
+  const r = dpr();
+  const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "game",
-    backgroundColor: "#10141c",
+    backgroundColor: "#070a10",
     scale: {
-      mode: Phaser.Scale.RESIZE,
-      width: window.innerWidth,
-      height: window.innerHeight
+      mode: Phaser.Scale.NONE,
+      width: Math.round(window.innerWidth * r),
+      height: Math.round(window.innerHeight * r),
+      zoom: 1 / r
     },
-    render: { pixelArt: true, antialias: false },
+    render: { antialias: true, pixelArt: false, mipmapFilter: "LINEAR_MIPMAP_LINEAR", powerPreference: "high-performance" },
     input: { activePointers: 4 },
     scene: [GameScene]
   });
+  game.registry.set("dpr", r);
+  const resize = () => game.scale.resize(Math.round(window.innerWidth * r), Math.round(window.innerHeight * r));
+  window.addEventListener("resize", resize);
+  window.addEventListener("orientationchange", () => setTimeout(resize, 200));
 }
 
-function showSplash(): void {
+function showMenu(): void {
+  loadSettings();
   const hud = document.getElementById("hud")!;
-  const splash = document.createElement("div");
-  splash.id = "splash";
-  splash.className = "screen";
-  splash.innerHTML = `
-    <div class="panel">
-      <h1>BATTLE DRONES</h1>
-      <p class="sub">Mine scrap. Build your swarm.<br/>Destroy the enemy HQ.</p>
-      <button class="cta" id="play">▶ Play</button>
-      <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
+  const menu = document.createElement("div");
+  menu.id = "splash";
+  menu.className = "menu";
+  const diffs = Object.keys(DIFFICULTY) as Difficulty[];
+  menu.innerHTML = `
+    <div class="keyart"></div>
+    <div class="menu-inner">
+      <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
+      <p class="sub">Mine scrap. Build your swarm. Destroy the enemy HQ.</p>
+      <div class="maps" id="maps">
+        ${MAPS.map(
+          (m) => `
+          <button class="mapcard" data-id="${m.id}">
+            <img src="${mapAssetBase(m.id)}/thumb.webp" alt="" draggable="false" />
+            <span class="mn">${m.name}</span>
+            <span class="mb">${m.size}×${m.size} · ${m.biome}</span>
+          </button>`
+        ).join("")}
+      </div>
+      <p class="blurb" id="blurb"></p>
+      <div class="seg" id="diff">
+        ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
+      </div>
+      <button class="cta big" id="play">▶ Play</button>
+      <div class="row">
+        <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
+        <button class="cta alt" id="howto">? How to play</button>
+      </div>
+      <div class="help" id="helpbox" hidden>${HELP_HTML}</div>
+      <p class="credits">Art generated with OpenAI gpt-image-2.5 · sound synthesised live</p>
     </div>
   `;
-  hud.appendChild(splash);
+  hud.appendChild(menu);
+  // inline, document-relative URLs keep GitHub Pages subpaths working
+  const art = menu.querySelector<HTMLElement>(".keyart")!;
+  const landscape = window.matchMedia("(orientation: landscape)");
+  const setArt = () =>
+    (art.style.backgroundImage = `url(assets/ui/keyart-${landscape.matches ? "landscape" : "portrait"}.webp)`);
+  setArt();
+  landscape.addEventListener("change", setArt);
+
+  const sync = () => {
+    menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => el.classList.toggle("on", el.dataset.id === gameMode.mapId));
+    menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
+    const m = MAPS.find((x) => x.id === gameMode.mapId);
+    menu.querySelector("#blurb")!.textContent = m?.blurb ?? "";
+  };
+  sync();
+  menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) =>
+    el.addEventListener("click", () => {
+      gameMode.mapId = el.dataset.id!;
+      saveSettings();
+      sync();
+    })
+  );
+  menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) =>
+    el.addEventListener("click", () => {
+      gameMode.difficulty = el.dataset.d as Difficulty;
+      saveSettings();
+      sync();
+    })
+  );
+  menu.querySelector("#howto")!.addEventListener("click", () => {
+    const h = menu.querySelector<HTMLElement>("#helpbox")!;
+    h.hidden = !h.hidden;
+  });
+
   const begin = async (spectator: boolean) => {
     gameMode.spectator = spectator;
+    sfx.unlock();
+    sfx.play("click");
     // Full-screen where the platform allows it (Android/desktop; iOS Safari
     // has no Fullscreen API for arbitrary elements — dvh layout covers it).
     try {
@@ -99,13 +177,26 @@ function showSplash(): void {
     } catch {
       /* declined or unsupported — fine */
     }
-    splash.remove();
+    menu.remove();
     startGame();
   };
-  splash.querySelector("#play")!.addEventListener("click", () => begin(false));
-  splash
-    .querySelector("#play-spectate")!
-    .addEventListener("click", () => begin(true));
+  menu.querySelector("#play")!.addEventListener("click", () => begin(false));
+  menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
+
+  // "Rematch" from the end screen skips straight back into a game
+  let rematch = false;
+  try {
+    rematch = sessionStorage.getItem("battledrones.rematch") === "1";
+    sessionStorage.removeItem("battledrones.rematch");
+  } catch {
+    /* ignore */
+  }
+  if (rematch) {
+    menu.remove();
+    startGame();
+    // audio needs a gesture: unlock on the first touch
+    window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
+  }
 }
 
-showSplash();
+showMenu();

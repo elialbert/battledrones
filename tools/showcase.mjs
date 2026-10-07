@@ -1,0 +1,66 @@
+// Visual QA: stage a close-up skirmish with every unit type and capture
+// frames mid-fight (tracers, rockets, lasers, shells, bombs, heal beams).
+// Usage: node tools/showcase.mjs [url] [outDir]   (Vite dev server by default)
+import { chromium } from "playwright-core";
+import { existsSync, mkdirSync } from "node:fs";
+
+const [, , url = "http://localhost:5173/", out = "/tmp/showcase"] = process.argv;
+mkdirSync(out, { recursive: true });
+const exe = ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p));
+const browser = await chromium.launch({
+  executablePath: exe,
+  args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"]
+});
+const page = await browser.newPage({ viewport: { width: 900, height: 600 }, deviceScaleFactor: 2 });
+const errors = [];
+page.on("pageerror", (e) => errors.push(String(e)));
+page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+await page.goto(url, { waitUntil: "networkidle" });
+await page.evaluate(
+  (m) => localStorage.setItem("battledrones.settings", JSON.stringify({ mapId: m, difficulty: "normal" })),
+  process.env.MAP ?? "dune-sea"
+);
+await page.reload({ waitUntil: "networkidle" });
+await page.click("#play-spectate");
+await page.waitForFunction(() => window.__bd?.world?.tick > 2, null, { timeout: 30000 });
+await page.waitForTimeout(1500);
+
+// clear the stage and set up two armies facing each other in the open
+await page.evaluate(() => {
+  const { world: w, cam, scene } = window.__bd;
+  const cx = Math.floor(w.width / 2);
+  const cy = Math.floor(w.height / 2) + 6;
+  const add = (kind, faction, x, y) => {
+    const id = w.nextId++;
+    const u = {
+      id, kind, faction, x, y, hp: 999, facing: faction === "blue" ? Math.PI / 2 : -Math.PI / 2,
+      aim: 0, order: { type: "idle" }, path: null, pathGoal: null, cargo: kind === "harvester" ? 100 : 0,
+      cooldown: 0, autoTargetId: null, damagedTick: -1000, lastAttackerId: null, firedTick: -1000, xp: 0, rank: 0
+    };
+    w.units.set(id, u);
+    return u;
+  };
+  const blue = [["titan", 0, 0], ["lancer", 0, 1.4], ["stinger", 0, -1.4], ["mortar", -3, 0.6], ["flak-crawler", -1.5, 2.2],
+    ["wasp", 1, -2.4], ["hornet", 1.4, 2.6], ["mender", -1.2, -1.2], ["raptor", 0.6, 3.6]];
+  const red = [["titan", 5, 0], ["stinger", 5.2, 1.6], ["flak-crawler", 5.5, -1.5], ["wasp", 4, 3], ["raptor", 4.2, -3],
+    ["lancer", 6.4, 2.6], ["harvester", 7, -0.5]];
+  for (const [k, dx, dy] of blue) add(k, "blue", cx - 3 + dx, cy + dy);
+  for (const [k, dx, dy] of red) add(k, "red", cx - 1 + dx, cy + dy);
+  // real hp values so health bars read correctly
+  for (const u of w.units.values()) u.hp = Math.min(u.hp, 400) * 0.8;
+  cam.setZoom(1.6 * scene.game.registry.get("dpr") / 2);
+  cam.centerOn((cx) * 64, cy * 64);
+});
+for (let i = 0; i < 4; i++) {
+  for (let k = 0; k < (i === 0 ? 20 : 9); k++) {
+    await page.evaluate(() => {
+      const s = window.__bd.scene;
+      s.game.loop.rawDelta = 33;
+      s.update(0, 33);
+    });
+  }
+  await page.waitForTimeout(80);
+  await page.screenshot({ path: `${out}/showcase-${i}.png` });
+}
+console.log(errors.length ? errors.join("\n") : "no errors");
+await browser.close();

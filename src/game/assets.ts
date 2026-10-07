@@ -1,69 +1,67 @@
 import type Phaser from "phaser";
 import type { BuildingKind, Faction, UnitKind } from "../sim/types";
 
-/** World pixels per sim tile. Art is authored at 64px/tile ("HD"). */
+/** World pixels per sim tile. */
 export const TILE = 64;
+/** Atlas art is authored at 128 texture px per tile: sprites draw at 0.5×. */
+export const ART_SCALE = TILE / 128;
+/** Painted terrain images: 48 px per tile, split into 1024 px chunks. */
+export const TERRAIN_PX = 48;
+export const TERRAIN_CHUNK = 1024;
+
+export const ATLAS = "game";
 
 export const UNIT_KINDS: UnitKind[] = [
-  "harvester",
-  "scout",
-  "stinger",
-  "flak-crawler",
-  "wasp",
-  "raptor"
+  "harvester", "scout", "stinger", "flak-crawler", "mortar", "titan", "lancer",
+  "wasp", "raptor", "hornet", "mender"
 ];
+export const BUILDING_KINDS: BuildingKind[] = [
+  "hq", "fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar"
+];
+/** Buildings drawn with a separately rotating head. */
+export const HEADED: Partial<Record<BuildingKind, true>> = { turret: true, "sam-site": true, radar: true };
 
-export const unitTex = (f: Faction, k: UnitKind) => `u-${f}-${k}`;
-export const buildingTex = (f: Faction, k: BuildingKind) => `b-${f}-${k}`;
+export const unitFrame = (f: Faction, k: UnitKind) => `u/${f}/${k}`;
+export const turretFrame = (f: Faction, k: UnitKind) => `u/${f}/${k}-turret`;
+export const buildingFrame = (f: Faction, k: BuildingKind) => `b/${f}/${k}`;
+export const headFrame = (f: Faction, k: BuildingKind) => `b/${f}/${k}-head`;
 
-/** Terrain sheet indices (see ART.md). */
-export const T_GROUND = [0, 1, 2];
-export const T_ROCK = [3, 4];
-export const T_SCRAP_FULL = 5;
-export const T_SCRAP_HALF = 6;
-export const T_SCRAP_EMPTY = 7;
-
-export function loadAssets(load: Phaser.Loader.LoaderPlugin): void {
-  const base = "assets/sprites";
-  for (const f of ["blue", "red"] as const) {
-    for (const k of UNIT_KINDS)
-      load.spritesheet(unitTex(f, k), `${base}/units/${f}/${k}.png`, {
-        frameWidth: TILE,
-        frameHeight: TILE
-      });
-    load.spritesheet(buildingTex(f, "hq"), `${base}/buildings/${f}/hq.png`, {
-      frameWidth: 3 * TILE,
-      frameHeight: 3 * TILE
-    });
-    load.spritesheet(buildingTex(f, "fab-plant"), `${base}/buildings/${f}/fab-plant.png`, {
-      frameWidth: 2 * TILE,
-      frameHeight: 2 * TILE
-    });
-    load.spritesheet(buildingTex(f, "airpad"), `${base}/buildings/${f}/airpad.png`, {
-      frameWidth: 2 * TILE,
-      frameHeight: 2 * TILE
-    });
-    load.image(`b-${f}-turret-base`, `${base}/buildings/${f}/turret-base.png`);
-    load.spritesheet(`b-${f}-turret-head`, `${base}/buildings/${f}/turret-head.png`, {
-      frameWidth: TILE,
-      frameHeight: TILE
-    });
-  }
-  load.image("shadow", `${base}/units/shadow.png`);
-  load.spritesheet("terrain", `${base}/terrain/tiles.png`, {
-    frameWidth: TILE,
-    frameHeight: TILE
-  });
-  load.image("fx-muzzle", `${base}/fx/muzzle.png`);
-  load.image("fx-bolt", `${base}/fx/bolt.png`);
-  load.spritesheet("fx-explosion", `${base}/fx/explosion.png`, {
-    frameWidth: TILE,
-    frameHeight: TILE
-  });
+export interface SpriteMeta {
+  pxPerTile: number;
+  frames: Record<string, { origin?: [number, number] }>;
+  /** Turret/head mount offset from the hull/base origin, in tiles (hull facing north). */
+  mounts: Record<string, [number, number]>;
+  sizes: Record<string, number>;
 }
 
-/** Facing angle (radians, 0 = North, clockwise) to 8-direction frame index. */
-export function facingFrame(facing: number): number {
-  const step = Math.round(facing / (Math.PI / 4));
-  return ((step % 8) + 8) % 8;
+let meta: SpriteMeta = { pxPerTile: 128, frames: {}, mounts: {}, sizes: {} };
+
+export function setSpriteMeta(m: SpriteMeta | undefined): void {
+  if (m) meta = { ...meta, ...m };
+}
+
+export function frameOrigin(frame: string): [number, number] {
+  return meta.frames[frame]?.origin ?? [0.5, 0.5];
+}
+
+export function mountOffset(kind: string): [number, number] {
+  return meta.mounts[kind] ?? [0, 0];
+}
+
+export function mapAssetBase(mapId: string): string {
+  return `assets/maps/${mapId}`;
+}
+
+export function loadAssets(load: Phaser.Loader.LoaderPlugin, mapId: string, mapSize: number): void {
+  load.multiatlas(ATLAS, "assets/sprites/game.json", "assets/sprites/");
+  load.json("sprite-meta", "assets/sprites/meta.json");
+  const px = mapSize * TERRAIN_PX;
+  const n = Math.ceil(px / TERRAIN_CHUNK);
+  for (let r = 0; r < n; r++)
+    for (let c = 0; c < n; c++) load.image(`terrain-${c}-${r}`, `${mapAssetBase(mapId)}/t_${c}_${r}.webp`);
+}
+
+/** Terrain chunk grid for a map (chunks per side). */
+export function terrainChunks(mapSize: number): number {
+  return Math.ceil((mapSize * TERRAIN_PX) / TERRAIN_CHUNK);
 }

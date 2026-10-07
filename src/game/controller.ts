@@ -1,15 +1,12 @@
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { canPlaceBuilding } from "../sim/economy";
-import {
-  Terrain,
-  type BuildingKind,
-  type Command,
-  type Faction,
-  type World
-} from "../sim/types";
-import { buildingAtTile, terrainAt } from "../sim/world";
+import type { BuildingKind, Command, Faction, World } from "../sim/types";
+import { buildingAtTile, isResource, tileIndex } from "../sim/world";
 
 export const PLAYER: Faction = "blue";
+
+/** What the player's last tap did, for on-map feedback markers. */
+export type TapFeedback = { kind: "move" | "attack" | "harvest" | "rally" | "place"; x: number; y: number } | null;
 
 /**
  * Bridges input/HUD and the sim: owns the player's selection, the command
@@ -20,10 +17,14 @@ export class Controller {
   selectedBuilding: number | null = null;
   /** When set, taps place this building instead of commanding. */
   placing: BuildingKind | null = null;
+  /** Next ground tap issues a plain move (retreat) instead of attack-move. */
+  forceMove = false;
   /** Debug: render fog of war (display-only — the sim always keeps fog). */
   showFog = true;
   /** Spectator (AI vs AI): taps may inspect but never command. */
   spectator = false;
+  paused = false;
+  lastFeedback: TapFeedback = null;
   private queue: Command[] = [];
 
   constructor(public world: World) {}
@@ -35,6 +36,7 @@ export class Controller {
   }
 
   enqueue(cmd: Command): void {
+    if (this.spectator) return;
     this.queue.push(cmd);
   }
 
@@ -51,19 +53,30 @@ export class Controller {
   selectUnits(ids: number[]): void {
     this.selectedUnits = new Set(ids);
     this.selectedBuilding = null;
+    this.forceMove = false;
   }
 
   clearSelection(): void {
     this.selectedUnits.clear();
     this.selectedBuilding = null;
+    this.forceMove = false;
+  }
+
+  /** Select every combat unit the player owns. */
+  selectArmy(): void {
+    const ids = [...this.world.units.values()]
+      .filter((u) => u.faction === PLAYER && u.kind !== "harvester")
+      .map((u) => u.id);
+    this.selectUnits(ids);
   }
 
   /** Player tapped world position (wx, wy in tile units). */
   tapWorld(wx: number, wy: number, hit: TapHit): void {
     const w = this.world;
+    this.lastFeedback = null;
     if (this.spectator) {
       // inspection only: selecting shows rings/health, orders are forbidden
-      if (hit.kind === "ownUnit") this.selectUnits([hit.id]);
+      if (hit.kind === "ownUnit" || hit.kind === "enemy") this.selectUnits(w.units.has(hit.id) ? [hit.id] : []);
       else this.clearSelection();
       return;
     }
@@ -74,6 +87,7 @@ export class Controller {
       if (canPlaceBuilding(w, PLAYER, this.placing, tx, ty)) {
         this.enqueue({ type: "placeBuilding", faction: PLAYER, tx, ty });
         this.placing = null;
+        this.lastFeedback = { kind: "place", x: tx + size / 2, y: ty + size / 2 };
       }
       return;
     }
@@ -83,18 +97,25 @@ export class Controller {
       return;
     }
     if (hit.kind === "ownBuilding") {
-      this.selectedUnits.clear();
-      this.selectedBuilding = hit.id;
-      return;
+      // with units selected, tapping our own building just moves them there
+      if (this.selectedUnits.size === 0) {
+        this.selectedUnits.clear();
+        this.selectedBuilding = hit.id;
+        return;
+      }
     }
-    if (hit.kind === "enemy") {
+    if (hit.kind === "enemy" && this.selectedUnits.size > 0) {
       const attackers = this.selectedAttackers(hit.targetsAir);
       if (attackers.length > 0) {
         this.enqueue({ type: "attack", faction: PLAYER, unitIds: attackers, targetId: hit.id });
+        const others = [...this.selectedUnits].filter((id) => !attackers.includes(id));
+        if (others.length > 0)
+          this.enqueue({ type: "move", faction: PLAYER, unitIds: others, x: wx, y: wy });
+        this.lastFeedback = { kind: "attack", x: wx, y: wy };
         return;
       }
-      return; // tapping enemies with no army selected does nothing
     }
+    if (hit.kind === "enemy" && this.selectedUnits.size === 0) return;
 
     // ground tap
     const tx = Math.floor(wx);
@@ -103,23 +124,40 @@ export class Controller {
       const ids = [...this.selectedUnits].filter((id) => w.units.has(id));
       const harvesters = ids.filter((id) => w.units.get(id)!.kind === "harvester");
       const rest = ids.filter((id) => w.units.get(id)!.kind !== "harvester");
-      if (terrainAt(w, tx, ty) === Terrain.Scrap && harvesters.length > 0) {
+      const onResource =
+        tx >= 0 && ty >= 0 && tx < w.width && ty < w.height && isResource(w, tileIndex(w, tx, ty));
+      const type = this.forceMove ? "move" : "attackMove";
+      if (onResource && harvesters.length > 0) {
         this.enqueue({ type: "harvest", faction: PLAYER, unitIds: harvesters, x: wx, y: wy });
-        if (rest.length > 0)
-          this.enqueue({ type: "attackMove", faction: PLAYER, unitIds: rest, x: wx, y: wy });
+        if (rest.length > 0) this.enqueue({ type, faction: PLAYER, unitIds: rest, x: wx, y: wy });
+        this.lastFeedback = { kind: "harvest", x: wx, y: wy };
       } else {
-        this.enqueue({ type: "attackMove", faction: PLAYER, unitIds: ids, x: wx, y: wy });
+        // harvesters always just drive (they have no guns to stop for)
+        if (harvesters.length > 0) this.enqueue({ type: "move", faction: PLAYER, unitIds: harvesters, x: wx, y: wy });
+        if (rest.length > 0) this.enqueue({ type, faction: PLAYER, unitIds: rest, x: wx, y: wy });
+        this.lastFeedback = { kind: "move", x: wx, y: wy };
       }
+      this.forceMove = false;
       return;
     }
     if (this.selectedBuilding !== null) {
-      this.enqueue({ type: "rally", faction: PLAYER, buildingId: this.selectedBuilding, x: wx, y: wy });
+      const b = w.buildings.get(this.selectedBuilding);
+      if (b && (b.kind === "hq" || b.kind === "fab-plant" || b.kind === "airpad")) {
+        this.enqueue({ type: "rally", faction: PLAYER, buildingId: this.selectedBuilding, x: wx, y: wy });
+        this.lastFeedback = { kind: "rally", x: wx, y: wy };
+      } else this.clearSelection();
     }
   }
 
   stopSelected(): void {
     if (this.selectedUnits.size > 0)
       this.enqueue({ type: "stop", faction: PLAYER, unitIds: [...this.selectedUnits] });
+  }
+
+  sellSelected(): void {
+    if (this.selectedBuilding !== null)
+      this.enqueue({ type: "sell", faction: PLAYER, buildingId: this.selectedBuilding });
+    this.selectedBuilding = null;
   }
 
   /** Selected units able to shoot at the given domain (air or ground). */
@@ -131,7 +169,6 @@ export class Controller {
       const t = UNITS[u.kind].targets;
       if (t === "both" || t === (air ? "air" : "ground")) out.push(id);
     }
-    // if nothing can hit it, send everyone anyway (attack-move onto the spot)
     return out;
   }
 }
@@ -142,13 +179,25 @@ export type TapHit =
   | { kind: "enemy"; id: number; targetsAir: boolean }
   | { kind: "ground" };
 
-/** Hit-test a world point against entities with a forgiving radius. */
-export function hitTest(w: World, wx: number, wy: number, radiusTiles: number): TapHit {
+/**
+ * Hit-test a world point against entities with a forgiving radius.
+ * `canSee` filters out enemies hidden in the fog.
+ */
+export function hitTest(
+  w: World,
+  wx: number,
+  wy: number,
+  radiusTiles: number,
+  canSee: (id: number) => boolean = () => true
+): TapHit {
   let best: TapHit = { kind: "ground" };
   let bestD = radiusTiles;
   for (const u of w.units.values()) {
-    const d = Math.hypot(u.x - wx, u.y - wy);
+    // aircraft are drawn lifted: test against where they appear
+    const lift = UNITS[u.kind].domain === "air" ? 0.35 : 0;
+    const d = Math.hypot(u.x - wx, u.y - lift - wy);
     if (d < bestD) {
+      if (u.faction !== PLAYER && !canSee(u.id)) continue;
       bestD = d;
       best =
         u.faction === PLAYER
@@ -158,9 +207,9 @@ export function hitTest(w: World, wx: number, wy: number, radiusTiles: number): 
   }
   if (best.kind !== "ground") return best;
   const b = buildingAtTile(w, Math.floor(wx), Math.floor(wy));
-  if (b)
-    return b.faction === PLAYER
-      ? { kind: "ownBuilding", id: b.id }
-      : { kind: "enemy", id: b.id, targetsAir: false };
+  if (b) {
+    if (b.faction === PLAYER) return { kind: "ownBuilding", id: b.id };
+    if (canSee(b.id)) return { kind: "enemy", id: b.id, targetsAir: false };
+  }
   return best;
 }

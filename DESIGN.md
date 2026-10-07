@@ -1,17 +1,22 @@
-# Battle Drones — MVP Design
+# Battle Drones — Design
 
 A mobile-friendly real-time strategy game in the Command & Conquer tradition.
 Two armies of drones — flying and ground-based — battle for territory and
-resources. The MVP is a single-player skirmish against an AI commander,
-playable in a mobile browser.
+resources. Single-player skirmish against an AI commander (or watch two AIs
+fight), playable in a mobile browser and installable as a PWA.
+
+This document started as the MVP design (6 units, 4 buildings, one map);
+the v2 overhaul expanded it to 11 units, 8 buildings, 5 maps across 4
+biomes with gameplay-relevant terrain, a damage/armor model, AI
+personalities and difficulty levels, painted art and procedural audio.
 
 ## Design pillars
 
 1. **Readable at phone size.** Every unit, building, and state must be
    identifiable on a 6" screen. Big touch targets, high-contrast sprites,
    minimal chrome.
-2. **A full match in a coffee break.** Target match length ~10 minutes.
-   Fast build times, small maps, decisive combat.
+2. **A full match in a coffee break.** Target match length ~10 minutes
+   against a human (AI-vs-AI games settle in 5–8).
 3. **Air vs ground is the core tension.** The rock-paper-scissors between
    flying and ground drones is what makes this game *Battle Drones* and not
    a generic RTS. Every roster and map decision should feed it.
@@ -20,126 +25,177 @@ playable in a mobile browser.
 
 | Decision | Choice |
 |---|---|
-| Platform | Web PWA — TypeScript, Canvas/WebGL 2D |
-| Opponent | Single-player vs scripted AI |
-| Core mechanics | Resource harvesting, base building, fog of war |
-| Win condition | Destroy the enemy HQ (~10 min matches) |
-| Roster size | 6 units, 4 buildings |
-| Art | Pixel-art sprites, supplied by the project owner (placeholders until then) |
+| Platform | Web PWA — TypeScript, Phaser 3 (WebGL), rendered at device pixel ratio (≤ 2×) |
+| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), or AI vs AI spectator |
+| Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
+| Win condition | Destroy the enemy HQ |
+| Roster size | 11 units, 8 buildings |
+| Art | Painted top-down sprites and terrain generated with OpenAI `gpt-image-2.5-sunburst` (see ART.md) |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
 
 ## Tech stack
 
 - **Language:** TypeScript, strict mode.
-- **Engine:** [Phaser 3](https://phaser.io/) — gives us WebGL rendering with
-  canvas fallback, sprite atlases, tilemaps, camera controls, pointer/touch
-  input, and an asset pipeline out of the box. Game *logic* stays in plain
-  TS modules that don't import Phaser, so the simulation is unit-testable
-  headlessly.
+- **Engine:** [Phaser 3](https://phaser.io/) for WebGL rendering, texture
+  atlases (mipmapped), particles, tweens and camera. Game *logic* stays in
+  plain TS modules that don't import Phaser, so the simulation is
+  unit-testable headlessly.
 - **Build tooling:** Vite + `vite-plugin-pwa` (service worker, installable,
-  offline-capable — the whole game is client-side).
-- **Testing:** Vitest for the simulation layer (economy math, pathfinding,
-  combat resolution, AI decisions). Playwright smoke test that boots the
-  game and runs a few simulated frames.
-- **No server.** Everything runs on-device. Persistence (settings, last
-  match result) via `localStorage`.
+  offline-capable after first play of each map).
+- **Testing:** Vitest for the simulation (economy, pathfinding, combat,
+  terrain, tech tree, AI, maps); a Playwright smoke test that drives the
+  real touch input paths; a headless balance harness (`tools/balance.ts`).
+- **Audio:** every sound is synthesised live with WebAudio — no audio files.
+- **No server.** Everything runs on-device. Settings persist in
+  `localStorage`.
 
 ## The game
 
-### Map
+### Maps & terrain
 
-- Square tile grid, **48×48 tiles** for the MVP map, 32 px tiles
-  (1536×1536 px world).
-- Tile types: **ground** (passable to all), **rock** (impassable to ground,
-  passable to air), **scrap field** (the harvestable resource, sits on
-  ground tiles).
-- One hand-authored, mirrored map for the MVP: player HQ bottom-left, AI HQ
-  top-right, a scrap field near each base and one contested field
-  mid-map, rock formations creating ground chokepoints that air units can
-  overfly.
+Five 2-player maps, all point-symmetric (rotated 180°) so both sides are
+equal, painted procedurally from a seed in `src/sim/maps.ts`:
+
+| Map | Size | Biome | Character |
+|---|---|---|---|
+| Riverlands | 56² | Temperate | A river splits the valley: one bridge, two muddy fords, woods on the banks |
+| Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
+| Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
+| Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
+| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges and one contested field |
+
+Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
+
+| Terrain | Tanks | Hover | Air | Notes |
+|---|---|---|---|---|
+| Ground | ✓ | ✓ | ✓ | Buildable |
+| Road / Bridge | ✓ fast (1.35×) | ✓ | ✓ | Roads are buildable, bridges not |
+| Rough (mud, scree, slush, cinders) | ✓ slow (0.6×) | ✓ full speed | ✓ | |
+| Woods | ✓ slow (0.55×) | ✓ slow | ✓ | Ground units inside take 30% less damage |
+| Shallows (fords) | ✓ slow (0.5×) | ✓ | ✓ | |
+| Water / lava | ✗ | ✓ | ✓ | The Lancer's party trick |
+| Rock | ✗ | ✗ | ✓ | |
+| Scrap field | ✓ | ✓ | ✓ | Resource: 1500 per tile |
+| Crystal field | ✓ | ✓ | ✓ | Rich resource: mines 1.6× faster per load |
+
+Ground pathfinding is A* weighted by terrain speed, so tanks prefer roads
+and skirt mud. Air units fly straight over everything.
 
 ### Economy
 
-- Single resource: **Scrap**.
-- Harvester drones carry up to **100 scrap** per trip; a scrap-field tile
-  holds a finite pool (depletes visually). Harvesters auto-cycle:
-  field → HQ → field.
-- Starting stockpile: **500 scrap** — enough for a Fab Plant and a
-  second Harvester, forcing an early build-order choice.
-- No power/supply mechanic in the MVP. One resource, one currency.
+- Single currency: **Scrap**. Harvesters haul 100 per trip from scrap piles
+  or glowing crystals back to the nearest **drop-off** (HQ or Depot).
+  Harvesters flee home when shot and auto-mine when built.
+- Each HQ also salvages a trickle of 2 scrap/second, so no side can be left
+  permanently broke.
+- Starting stockpile: 600 scrap and one harvester.
 
-### Buildings (4)
+### Buildings (8)
 
-| Building | Cost | Role |
+| Building | Role | Requires |
 |---|---|---|
-| **HQ** | — (pre-placed) | Scrap drop-off, builds Harvesters. Its destruction ends the game. 3×3 tiles, high HP. |
-| **Fab Plant** | 300 | Builds ground combat drones. 2×2. |
-| **Airpad** | 400 | Builds flying drones. 2×2. |
-| **Turret** | 250 | Static defense, hits ground *and* air, short range. 1×1. |
+| **HQ** | Pre-placed. Builds Harvesters, takes scrap, point-defence gun vs aircraft. Lose it, lose the game. 3×3. | — |
+| **Fab Plant** | Builds ground vehicles. 2×2. | — |
+| **Airpad** | Builds aircraft. 2×2. | — |
+| **Tech Lab** | Unlocks Mortar, Titan, Lancer, Hornet. 2×2. | Fab Plant or Airpad |
+| **Depot** | Forward scrap drop-off for distant fields. 2×2. | — |
+| **Turret** | Autocannon, hits ground and air. 1×1. | — |
+| **SAM Site** | Long-range anti-air missiles. 1×1. | — |
+| **Radar** | Reveals a 13-tile radius through the fog. 1×1. | — |
 
-- Build flow, C&C-style: pick a building from the build bar → it constructs
-  on a timer → tap a valid tile near your base to place it. Placement must
-  be within **6 tiles** of an existing friendly building (keeps bases
-  coherent and the AI simple).
+C&C build flow: pick a structure → it constructs on a timer → tap it again
+and tap a valid spot within 6 tiles of your base. One construction at a
+time. Buildings can be **sold** for 50% (scaled by health).
 
-### Units (6)
+### Units (11)
 
-| Unit | Cost | Built at | Domain | Attacks | Notes |
-|---|---|---|---|---|---|
-| **Harvester** | 150 | HQ | Ground | — | Auto-harvests. Slow, tanky-ish. |
-| **Scout** | 100 | Airpad | Air | — | Fast, fragile, big sight radius. The fog-of-war tool. |
-| **Stinger** | 150 | Fab Plant | Ground | Ground only | Cheap line infantry drone. |
-| **Flak Crawler** | 200 | Fab Plant | Ground | Air only | The anti-air answer. Helpless vs ground. |
-| **Wasp** | 200 | Airpad | Air | Ground only | Strike drone. Ignores terrain, shreds Stingers/Harvesters, dies to Flak. |
-| **Raptor** | 250 | Airpad | Air | Air only | Air-superiority drone. Counters Wasps and Scouts. |
+| Unit | Built at | Domain | Hits | Role |
+|---|---|---|---|---|
+| **Harvester** | HQ | Ground | — | Economy |
+| **Scout** | Airpad | Air | — | Fast, big sight radius |
+| **Stinger** | Fab | Ground | Ground | Cheap fast light tank |
+| **Flak Crawler** | Fab | Ground | Air | The anti-air answer |
+| **Mortar** ⚗ | Fab | Ground | Ground | Long-range splash artillery with a minimum range; shells are real projectiles and can be dodged |
+| **Titan** ⚗ | Fab | Ground | Ground | Super-heavy twin-cannon tank |
+| **Lancer** ⚗ | Fab | Hover | Both | Anti-armour laser that also hits air (at reduced effect) and crosses water |
+| **Wasp** | Airpad | Air | Ground | Rocket strike drone |
+| **Raptor** | Airpad | Air | Air | Interceptor |
+| **Hornet** ⚗ | Airpad | Air | Ground | Heavy bomber: splash vs ground and bases |
+| **Mender** | Airpad | Air | — | Repair drone: heals units and buildings |
 
-The counter-triangle: **Stingers** beat Flak Crawlers, **Flak Crawlers**
-beat Wasps/Raptors, **Wasps** beat Stingers — with Raptors and Turrets as
-the flex pieces. Exact HP/damage/speed numbers live in
-`src/sim/balance.ts` as a single tuning table, not in this document.
+⚗ = needs a Tech Lab.
 
-- **Movement:** ground units path with A* on the tile grid (rocks and
-  buildings block); air units fly straight lines over everything.
-  Local avoidance is simple separation steering — no flow fields in MVP.
-- **Combat:** auto-acquire nearest valid target in range; attack-move is
-  the default behavior when given a move order onto/near enemies. Damage is
-  instant-hit with a visual projectile/laser effect (no projectile
-  simulation in MVP).
+The counter web (verified by the cost-equal duel matrix in
+`tools/balance.ts duels`): **Stingers** beat Flak, Mortars and Lancers ·
+**Lancers** burn through Titans · **Titans** crush Stingers, Flak and
+Mortars · **Flak** beats all aircraft · **Wasps** beat tanks and artillery ·
+**Raptors** beat aircraft · **Hornets** smash bases and armour but die to
+Flak/Raptors/SAMs. Stinger › Lancer › Titan › Stinger is the ground
+triangle; air vs anti-air sits across it.
+
+### Combat
+
+- **Damage types × armor classes.** Every weapon has a damage type
+  (kinetic, cannon, flak, missile, explosive, laser) and every target an
+  armor class (light, medium, heavy, structure); `DAMAGE_VS` in
+  `balance.ts` is the multiplier table.
+- **Splash & projectiles.** Mortar shells and Hornet bombs are simulated
+  projectiles aimed at where the target *was* — fast units can dodge.
+  Splash falls off from 100% to 50% at the edge.
+- **Cover.** Ground units in woods take less damage.
+- **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
+  each +15% damage, rank 3 self-repairs. Shown as gold chevrons.
+- **Retaliation.** Idle units hit by something out of reach go after the
+  attacker, and nearby idle allies join in.
+- Auto-acquire targets in range; attack-move is the default command, with
+  a "Move only" chip for retreats.
 
 ### Fog of war
 
-- Two states per tile: **unexplored** (black) and **explored-but-unseen**
-  (dimmed, shows last-known terrain and buildings, not units).
-- Sight radii per unit/building; recomputed on a coarse timer (~4×/sec),
-  not per frame.
-- The AI does *not* cheat: it maintains its own visibility map and only
-  reacts to what it has scouted. (This is cheap to do symmetrically and
-  makes Scouts matter for both sides.)
+- Unexplored (black), explored-but-unseen (dimmed; remembers enemy
+  buildings), visible. Rendered as a smoothly fading soft-edged overlay.
+- The AI does *not* cheat: it keeps its own visibility map and reacts only
+  to what it has seen.
 
 ### AI opponent
 
-A finite-state commander with three states — **Build-up → Harass →
-Assault** — evaluated every 2 seconds:
+A commander that runs a decision pass every 1.2–3.5 s (by difficulty) and
+emits ordinary commands. Six personalities, picked at random each match:
 
-- **Build-up:** follow a build order (Harvester ×2, Fab Plant, Airpad,
-  Turret), keep scrap flowing, replace lost Harvesters.
-- **Harass:** once an Airpad exists, send Scout sweeps and 2–3-Wasp raids
-  at the player's Harvester line.
-- **Assault:** when army value exceeds a threshold (or its economy is
-  starved), gather at a rally point and push the player HQ, composing the
-  wave with counters to whatever it has scouted.
+| Strategy | Plan |
+|---|---|
+| Balanced | Factory, airpad, tech; steady macro |
+| Rush | Two factories early, attacks at half the usual army size |
+| Air Swarm | Airpad first, wasp raids, bombers later |
+| Boom | Greedy economy, forward depot, huge late push |
+| Skyforce | Air force first; the Fab Plant only guards home |
+| Ironclad | Rushes the Tech Lab for Titans, Lancers and Mortars |
 
-One difficulty level in the MVP. The AI uses the same build/production
-rules and the same fog of war as the player — its advantage is discipline,
-not cheating.
+Behaviours: build orders with reactive SAM sites and extra factories when
+scrap piles up; forward depots at distant fields; adaptive production
+(flak/raptors vs air it has seen, mortars vs defences, air vs heavy
+armour); defend-the-economy guard squads; threat response against
+intruders; wasp raids that avoid remembered anti-air; staged assault waves
+that go for harvesters, then production, then defences, then the HQ;
+menders escorting the army.
+
+Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
+**Hard** (fast reactions, +30% income, an extra harvester — shown in the
+menu, never hidden). Each difficulty also picks from its own pool of
+personalities: AI-vs-AI tournaments (`tools/balance.ts matches`) show
+Ironclad, Boom and Balanced are the strongest, so Easy draws from Balanced,
+Rush, Air Swarm and Skyforce, and Hard from Balanced, Air Swarm, Boom and
+Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
-1. Splash → "Skirmish" button (menu is just this in MVP).
-2. Both HQs pre-placed, each side starts with 1 Harvester + 500 scrap.
-3. Real-time play until one HQ is destroyed.
-4. Victory/defeat screen with match stats (duration, units built/lost,
-   scrap harvested) → "Play again".
+1. Menu: pick a map and difficulty → Play (or Watch AI vs AI).
+2. Both HQs pre-placed, one harvester each (it starts mining at once).
+3. Real-time play until one HQ is destroyed. Pause any time.
+4. Victory/defeat screen with stats → Rematch or Menu.
+
+First-time players get four contextual hints (build a Fab, move units,
+counters, tech).
 
 ## Controls & UI (mobile-first, full-screen)
 
@@ -148,151 +204,107 @@ not cheating.
 The game owns the entire screen — no page chrome, no scrolling, no
 accidental browser gestures:
 
-- **Installed as PWA:** `display: "fullscreen"` in the manifest — no
-  browser UI at all.
-- **In-browser play:** a "Play" tap on the splash screen requests the
-  Fullscreen API where available (Android); on iOS Safari (no Fullscreen
-  API for canvas) we rely on `100dvh` layout plus a one-time "Add to Home
-  Screen for the best experience" hint.
-- **Viewport hygiene:** `100dvh`/`100dvw` sizing so browser-bar
-  show/hide never clips the HUD; `viewport-fit=cover` +
-  `env(safe-area-inset-*)` padding so HUD elements clear notches, punch
-  holes, and the home-indicator strip; `touch-action: none` and
-  `overscroll-behavior: none` on the canvas so pinch/pan/pull-to-refresh
-  never leak to the browser; `user-select: none` and context-menu
-  suppression to kill long-press text/image popups.
-- Canvas resizes live on orientation change and window resize (Phaser
-  `Scale.RESIZE`); the sim never pauses, only the HUD re-flows.
+- **Installed as PWA:** `display: "fullscreen"` in the manifest.
+- **In-browser play:** the Play tap requests the Fullscreen API where
+  available (Android); on iOS Safari we rely on `100dvh` layout.
+- **Viewport hygiene:** `100dvh`/`100dvw` sizing, `viewport-fit=cover` +
+  `env(safe-area-inset-*)` padding, `touch-action: none`,
+  `overscroll-behavior: none`, `user-select: none`, context-menu and iOS
+  gesture/page-zoom suppression (with a rescue button if iOS zooms anyway).
+- **Hi-DPI:** the canvas renders at the device pixel ratio (capped at 2×)
+  and is CSS-scaled down, so painted art is crisp on phones.
 
 ### Touch gesture spec
 
-All input via Pointer Events, so mouse and touch share one code path.
-Exact, non-overlapping gestures:
-
 | Gesture | On | Action |
 |---|---|---|
-| Tap | Own unit | Select it (replaces selection) |
-| Tap | Own building | Select it (shows its build options) |
-| Tap | Enemy / ground / scrap | With selection: attack / attack-move / harvest. Without: ping-select whatever's there |
+| Tap | Own unit | Select it |
+| Tap | Own building | Select it (production queue, sell, rally) |
+| Tap | Enemy / ground / scrap | With selection: attack / attack-move / harvest |
+| Tap | Ground, building selected | Set rally point |
 | Double-tap | Own unit | Select all on-screen units of that type |
-| Drag (one finger) | Empty ground | Pan the camera |
-| Long-press (~250 ms) then drag | Anywhere | Box-select (haptic tick + visual rectangle on trigger) |
-| Two-finger drag | Anywhere | Pan (always works, even over units) |
-| Pinch | Anywhere | Zoom between min/max (two useful levels) |
-| Tap | Minimap | Jump camera there |
+| Drag (one finger) | Anywhere | Pan (with momentum) |
+| Long-press then drag | Anywhere | Box-select (prefers combat units over harvesters) |
+| Two-finger drag / pinch | Anywhere | Pan / zoom |
+| Tap / drag | Minimap | Jump / scrub the camera |
+| Long-press | Build button | Info card: stats, counters, cancel queued |
 
-Disambiguation rules: a touch is a *tap* if it moves < 8 px and lasts
-< 250 ms; movement beyond the slop radius before the long-press timer
-fires commits to *pan*; after the timer fires it commits to *box-select*.
-Commands from taps are forgiving — target hit-testing uses an enlarged
-(≥ 44 px) radius around units, nearest-match wins.
+Disambiguation: a touch is a *tap* if it moves < 8 px and lasts < 250 ms;
+movement beyond the slop radius before the long-press timer fires commits
+to *pan*; after the timer fires it commits to *box-select*. Hit-testing
+uses an enlarged (≥ 24 CSS px) radius, and aircraft are tested where they
+are drawn (lifted above their shadows).
 
-A compact **command chip row** appears above the build bar when units are
-selected: Stop, and Rally (for buildings). Everything else is
-context-from-tap — no mode buttons to fiddle with mid-fight.
+Context **chips** above the build bar: Stop / Move only / deselect for
+units; Sell (+refund) / rally hint for buildings; "Select army" when
+nothing is selected; placement hint + cancel while placing.
 
-### Mouse & keyboard (comes along for free, still supported properly)
+### Mouse & keyboard
 
-Left-click select / left-drag box-select (no long-press needed — pointer
-type is detected), right-click = move/attack command, wheel = zoom,
-middle-drag or arrow keys = pan. No hotkey system in MVP beyond Esc =
-deselect.
+Left-click select, left-drag box-select, right-click command, wheel zoom,
+middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
+Delete sell, Esc cancel/deselect. Right-click a build button for its card.
 
 ### HUD layout — portrait and landscape both first-class
 
-The HUD is DOM overlaid on the canvas (crisper text, free layout engine,
-easy safe-area handling) and re-flows by orientation via CSS:
+DOM overlaid on the canvas, re-flowing by orientation:
 
-- **Landscape:** build bar as a vertical column on the right edge
-  (C&C-style sidebar, thumb-reachable), minimap top-right above it,
-  scrap counter top-center.
-- **Portrait:** build bar as a horizontal strip along the bottom,
-  minimap bottom-right above the bar, scrap counter top-center. Portrait
-  shows a taller slice of the map — good for the vertical
-  bottom-left/top-right base layout of the MVP map.
-- All buttons ≥ 56 px touch targets with visible cost labels; disabled
-  (can't afford / prerequisite missing) states are dimmed with the reason
-  on tap.
-- The camera never hides under the HUD: the sim viewport is inset by the
-  occupied HUD edges, so "tap ground" near the build bar can't misfire.
+- **Portrait:** a bottom dock — selection panel and chips above a tabbed
+  build bar (Base / Vehicles / Aircraft) with unit portraits, costs, lock
+  icons, queue badges and progress fills. Minimap top-right; scrap,
+  income rate and clock top-left.
+- **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
+  grid; selection panel and chips sit bottom-right beside it.
+- Toasts for "building ready", attacks (tap to jump there) and hints;
+  minimap pings where you're being hit.
 
 ### Minimap
 
-Top/bottom corner per orientation (see above); shows explored terrain,
-friendly/enemy blips (fog-respecting), and combat pings. Tap to jump the
-camera; drag on it to scrub.
+Painted-map thumbnail under the fog, resource fields, buildings and unit
+blips (fog-respecting), attack pings and the camera frame.
 
-## Sprite spec (for the artist)
+## Art
 
-All art on a **32 px grid**, PNG sprite sheets, transparent background.
-Two factions: player (blue accents) and enemy (red accents) — either
-separate sheets or grayscale + tint masks, artist's choice.
-
-| Asset | Canvas | Frames |
-|---|---|---|
-| Ground units | 32×32 | 8 rotation directions (or 1 frame + engine rotation if the silhouette reads well), 2-frame move wobble optional |
-| Air units | 32×32 + 8 px drop-shadow decal | Same as ground; shadow rendered separately so altitude reads |
-| Harvester | 32×32 | Empty + loaded variants |
-| HQ | 96×96 | Idle, damaged (≤50% HP), rubble |
-| Fab Plant / Airpad | 64×64 | Idle, damaged, rubble; brief "working" flash optional |
-| Turret | 32×32 base + rotating 32×32 head | Head rotates in engine |
-| Terrain tiles | 32×32 | Ground ×3 variants, rock ×2, scrap field full/half/empty |
-| FX | 32×32 | Muzzle flash, laser/bolt, small explosion (4–6 frames), selection ring (drawn in engine) |
-
-Until real art lands, the game runs on programmer placeholders (colored
-shapes with icons) sized exactly to this spec, so sprites drop in with no
-code changes.
+See **ART.md** for the generation pipeline (prompts, processing, atlases,
+terrain painting). Summary: every sprite, terrain material, decoration,
+the key art and the app icon were generated with OpenAI's
+`gpt-image-2.5-sunburst` using native transparency; sprites are drawn
+top-down facing north and rotated in engine, with separately rotating
+turrets, drop shadows, and red team colours derived by hue-shifting the
+blue originals.
 
 ## Architecture
 
 ```
 src/
   sim/        # Pure TS, no Phaser. The authoritative game state.
-    world.ts        # entity store, tile grid, spatial hash
-    balance.ts      # all tunable numbers in one table
-    economy.ts      # scrap, harvesting, build queues
-    movement.ts     # A* + steering
-    combat.ts       # targeting, damage
-    fog.ts          # per-side visibility maps
-    ai/             # the enemy commander FSM
-  game/       # Phaser scenes, rendering, input → sim commands
-  ui/         # build bar, minimap, HUD (Phaser or DOM overlay)
+    world.ts        # entities, tile grid, occupancy, passability
+    balance.ts      # every tunable number: units, buildings, terrain, damage table
+    maps.ts         # the 5 maps (seeded painter) + createMapWorld
+    economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
+    movement.ts     # terrain-weighted A* (ground/hover/air), steering
+    combat.ts       # targeting, armor, splash projectiles, healing, veterancy
+    fog.ts          # per-side visibility maps + building memory
+    ai/commander.ts # the enemy commander: strategies, difficulty
+  game/       # Phaser: scene, camera, input, rendering
+    render/         # world-view (terrain, piles, fog), entities, fx
+    audio.ts        # procedural WebAudio sound effects
+  ui/         # DOM HUD, menu styles
+art/          # image generation + processing pipeline (Python)
+tools/        # map export, balance harness, smoke test, screenshot tour
 ```
 
 - **Fixed-timestep simulation** (10 ticks/sec) decoupled from rendering
-  (60 fps with interpolation). Input produces **commands** applied at tick
-  boundaries. This keeps the sim deterministic and testable — and is
-  exactly the structure future online multiplayer (lockstep) needs, at
-  near-zero extra MVP cost.
-- Entities are plain objects in typed arrays/maps — no heavyweight ECS
-  framework; ~100 units max is trivial.
-- Performance budget: 60 fps on a mid-range Android phone with 80 units on
-  screen. Sprite batching via one atlas; fog rendered as a single
-  RenderTexture overlay updated on the fog timer.
+  (interpolated at display rate, driven by the raw frame delta so the game
+  keeps real time even when the browser throttles its smoothed clock).
+  Input produces **commands** applied at tick boundaries; the sim is
+  deterministic and testable.
+- One 2048² mipmapped sprite atlas (WebP, ~1.3 MB); painted terrain as
+  1024 px chunks per map (48 px per tile).
 
-## Explicitly out of scope for MVP
+## Explicitly out of scope (for now)
 
-- Online multiplayer, matchmaking, accounts (the deterministic sim keeps
-  the door open).
-- Territory-control zones (candidate for v2 — it fits the pitch, revisit
-  after the core loop is fun).
-- Campaign, missions, tutorials beyond a first-run hint overlay.
-- Multiple maps, map editor, random maps.
-- Tech tree / upgrades, superweapons, veterancy.
-- Sound design beyond a handful of essential effect + one music loop
-  (stretch goal).
-- Difficulty levels, replays, saves mid-match.
-
-## Milestones
-
-1. **M1 — Moving dots:** Vite+Phaser skeleton, full-screen/viewport
-   scaffold with portrait & landscape HUD shells, map renders, the full
-   gesture spec (tap select, long-press box-select, pan, pinch), ground
-   pathing. *Playable toy on a real phone.*
-2. **M2 — Economy:** HQ, Harvesters, scrap loop, build bar, building
-   placement, unit production. *You can build an army.*
-3. **M3 — Combat:** all 6 units with the counter-triangle, turrets, HQ
-   destruction, win/lose screen. *Two humans could theoretically fight (hot-seat via debug).* 
-4. **M4 — The opponent:** fog of war + AI commander. *A real match.*
-5. **M5 — Polish pass:** minimap, match stats, PWA install, performance on
-   real phones, drop in real sprites when available. *Shippable MVP.*
+- Online multiplayer (the deterministic command-driven sim keeps the door
+  open), campaigns, map editor, replays, saves mid-match.
+- Upgrades research, superweapons, walls, control groups.
+- Music (sound effects only).
