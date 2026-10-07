@@ -79,6 +79,8 @@ function matches(): void {
   let draws = 0;
   let totalMin = 0;
   let n = 0;
+  let salvaged = 0;
+  let harvested = 0;
   const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
@@ -92,7 +94,10 @@ function matches(): void {
         if (winner === "blue") wins[names[i]!]!++;
         else if (winner === "red") wins[names[j]!]!++;
         else draws++;
-        for (const f of ["blue", "red"] as const) void f;
+        for (const f of ["blue", "red"] as const) {
+          salvaged += w.factions[f].stats.scrapSalvaged;
+          harvested += w.factions[f].stats.scrapHarvested;
+        }
         for (const u of w.units.values()) built[u.kind] = (built[u.kind] ?? 0) + 1;
         process.stdout.write(`${map.id} ${names[i]} vs ${names[j]}: ${winner} @ ${min.toFixed(1)}m\n`);
       }
@@ -100,6 +105,9 @@ function matches(): void {
   console.log("\nwin rates:");
   for (const s of names) console.log(`  ${s.padEnd(10)} ${((100 * wins[s]!) / games[s]!).toFixed(0)}%`);
   console.log(`draws ${draws}/${n}, mean length ${(totalMin / n).toFixed(1)} min`);
+  console.log(
+    `salvage ${(salvaged / n).toFixed(0)} scrap per match (${((100 * salvaged) / Math.max(1, salvaged + harvested)).toFixed(1)}% of income)`
+  );
   console.log("units alive at match end:", built);
 }
 

@@ -95,6 +95,13 @@ export class EntityRenderer {
     return { x: v.cx, y: v.cy, gx: v.cx, gy: v.cy };
   }
 
+  /** Last rendered pose of a unit (wrecks start from it): body/ground px, hull and turret angles. */
+  pose(id: number): { bx: number; by: number; gx: number; gy: number; face: number; aim: number; visible: boolean } | null {
+    const v = this.views.get(id);
+    if (!v || v.kind !== "unit") return null;
+    return { bx: v.bx, by: v.by, gx: v.gx, gy: v.gy, face: v.face, aim: v.aim, visible: v.visible };
+  }
+
   isShown(id: number): boolean {
     return this.views.get(id)?.visible ?? false;
   }

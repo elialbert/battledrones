@@ -20,6 +20,8 @@ export interface HudApi {
   /** Spectator mode: the two AI strategy names, else null. */
   strategies: { blue: string; red: string } | null;
   enemy: { strategy: string; difficulty: string };
+  /** Battlefield wrecks the player knows about (tiles), drawn as gold minimap dots. */
+  wrecks?: () => { x: number; y: number }[];
 }
 
 export interface Hud {
@@ -27,6 +29,8 @@ export interface Hud {
   showEnd(winner: Faction): void;
   alert(msg: string, x: number, y: number): void;
   ping(x: number, y: number): void;
+  /** A 💡 tip toast; tapping it jumps the camera to (x, y). */
+  hint(msg: string, x?: number, y?: number): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -541,12 +545,13 @@ export function createHud(api: HudApi): Hud {
     if (clock !== lastClock) {
       lastClock = clock;
       clockEl.textContent = clock;
-      // income over the last 60 s of harvesting
-      incomeWindow.push({ t: secs, v: fs.stats.scrapHarvested });
+      // income over the last 60 s of harvesting and salvage
+      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged;
+      incomeWindow.push({ t: secs, v: earned });
       while (incomeWindow.length > 1 && secs - incomeWindow[0]!.t > 60) incomeWindow.shift();
       const first = incomeWindow[0]!;
       const span = Math.max(10, secs - first.t);
-      const rate = ((fs.stats.scrapHarvested - first.v) / span) * 60;
+      const rate = ((earned - first.v) / span) * 60;
       rateEl.textContent = secs > 10 ? `+${Math.round(rate)}/m` : "";
     }
 
@@ -682,6 +687,9 @@ export function createHud(api: HudApi): Hud {
       if (fogOn && vis[i] === Vis.Unexplored) continue;
       mctx.fillRect(tx * k + k * 0.25, ty * k + k * 0.25, k * 0.5, k * 0.5);
     }
+    // wrecks worth salvaging (fog-respecting: the renderer only lists ones we've seen)
+    mctx.fillStyle = "#ffd66e";
+    for (const r of api.wrecks?.() ?? []) mctx.fillRect(r.x * k - 2, r.y * k - 2, 4, 4);
     const enemyBuildings = fogOn
       ? [...w.fog[PLAYER].known.values()]
       : [...w.buildings.values()].filter((b) => b.faction !== PLAYER);
@@ -750,6 +758,7 @@ export function createHud(api: HudApi): Hud {
           ${row("Kills", st("blue").unitsKilled, st("red").unitsKilled)}
           ${row("Buildings lost", st("blue").buildingsLost, st("red").buildingsLost)}
           ${row("Scrap harvested", st("blue").scrapHarvested, st("red").scrapHarvested)}
+          ${row("Salvaged", st("blue").scrapSalvaged, st("red").scrapSalvaged)}
         </table>
         <button id="again" class="cta">↻ Rematch</button>
         <button id="menu" class="cta alt">Main menu</button>
@@ -775,6 +784,9 @@ export function createHud(api: HudApi): Hud {
     ping(x, y) {
       if (pings.length < 12) pings.push({ x, y, t: api.matchSeconds() });
     },
+    hint(msg, x, y) {
+      toast(`💡 ${msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", 7000);
+    },
     togglePause,
     destroy() {
       offAnnounce();
@@ -787,7 +799,7 @@ export function createHud(api: HudApi): Hud {
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Openers</h3><p>Every match starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
-  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap.</p>
+  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Building</h3><p>Open <b>Base</b>, tap a structure to construct it, then tap it again when ready and tap the map to place it near your base.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>

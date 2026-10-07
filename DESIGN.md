@@ -90,6 +90,40 @@ and skirt mud. Air units fly straight over everything.
   permanently broke.
 - Starting stockpile: 600 scrap and one harvester, plus the side's opener
   (below) — so in practice two or three harvesters and a factory.
+- **Battlefield salvage** (below): wrecks are the second income stream,
+  ~18% of all scrap earned in AI-vs-AI play.
+
+### Battlefield salvage
+
+Every destroyed combat unit leaves a burning wreck worth **30% of its
+cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none) for
+**60 s**. After 2.5 s it has cooled enough to touch, and the first ground
+unit of *either* side — harvesters included — whose centre comes within
+0.9 tiles scoops it up (income multipliers apply). Fights leave loot worth
+holding the field for, a defender who breaks a wave gets paid for it, and
+the losing side has a way back in.
+
+- Aircraft wrecks land where they fall; a death spot no tank could reach
+  (rock, water, lava, a building) slides to the nearest passable point
+  within 2 tiles, else the wreck is lost. Wrecks never block movement or
+  placement (a building placed on one clears it for its owner).
+- At most 60 wrecks at once (the oldest burns out first).
+- Looks: the dead unit's own sprite, charred, turret blown off its ring;
+  embers and smoke while hot, then a gold glint and a faint warm glow that
+  say "loot"; it fades over its last 10 s. Downed aircraft tumble from
+  flying height first. Pickups pop a gold "+52" (merged when several land
+  together) with a coin blip; the enemy's pickups show in muted red.
+  A sweep of 400+ in a few seconds calls out a "SALVAGE HAUL" banner.
+  Wrecks show only where you have vision and are remembered like buildings
+  until you see they're gone; gold minimap dots. The income rate (+N/m)
+  includes salvage, and the end screen has a Salvaged row.
+- Measured (AI-vs-AI round robin with openers, all 5 maps, 300 games
+  per setting): about 6,100 scrap salvaged per match (18% of income);
+  stalemate draws 30 → 17; the side ahead by 200+ value at 2:00 / 3:00
+  went on to win 88% / 92% → 84% / 88%; median length 5.5 → 5.7 min, mean
+  8.8 → 7.8. Shares of 25% and 35% were tried too: 35% removes more draws
+  but hands the leader its edge back (87% / 88%); 25% was within noise
+  of 30%.
 
 ### Openers (quick start)
 
@@ -213,7 +247,11 @@ intruders; home defence (a force at the HQ that outguns the home guard
 recalls the army from raids and waves — openers make 1:00 pushes real);
 wasp raids that avoid remembered anti-air; staged assault waves
 that go for harvesters, then production, then defences, then the HQ;
-menders escorting the army.
+menders escorting the army; salvage sweeps once a fight near home is
+over (idle ground units within 8 tiles go for visible, cooled wrecks that
+no visible enemy or known turret covers, and harvesters with a light load
+detour to a wreck within 3 tiles — never into the enemy for loot; diverted
+harvesters die no more often than mining ones).
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -299,8 +337,9 @@ DOM overlaid on the canvas, re-flowing by orientation:
 
 ### Minimap
 
-Painted-map thumbnail under the fog, resource fields, buildings and unit
-blips (fog-respecting), attack pings and the camera frame.
+Painted-map thumbnail under the fog, resource fields, salvageable wrecks
+(gold dots), buildings and unit blips (fog-respecting), attack pings and
+the camera frame.
 
 ## Art
 
@@ -324,9 +363,11 @@ src/
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     fog.ts          # per-side visibility maps + building memory
+    salvage.ts      # battlefield wrecks: spawn, cool, pick-up, burn-out
     ai/commander.ts # the enemy commander: strategies, difficulty
+    ai/salvage.ts   # the commander's wreck sweeps
   game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx
+    render/         # world-view (terrain, piles, fog), entities, fx, wrecks
     audio.ts        # procedural WebAudio sound effects
   ui/         # DOM HUD, menu styles
 art/          # image generation + processing pipeline (Python)

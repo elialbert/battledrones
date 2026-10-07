@@ -149,6 +149,8 @@ export interface FactionStats {
   /** Enemy buildings destroyed (by anything this faction owns). */
   buildingsKilled: number;
   scrapHarvested: number;
+  /** Scrap collected from battlefield wrecks (salvage.ts). */
+  scrapSalvaged: number;
 }
 
 export interface FactionState {
@@ -245,7 +247,42 @@ export type FxEvent =
       x: number;
       y: number;
       amount: number;
+    }
+  | {
+      /** A ground unit scooped up a wreck: `value` scrap (after incomeMult) went to `faction`. */
+      type: "salvage";
+      faction: Faction;
+      x: number;
+      y: number;
+      value: number;
+      wreckId: number;
+      /** The collecting unit (or the building placed on top of the wreck). */
+      collectorId: number;
     };
+
+/**
+ * What a destroyed combat unit leaves behind (salvage.ts): a burning hull
+ * worth scrap to whichever side's ground unit reaches it first. Wrecks are
+ * pure loot: they never block movement or placement.
+ */
+export interface Wreck {
+  /** The dead unit's id (ids are never reused, so this is unique). */
+  id: number;
+  kind: UnitKind;
+  /** Whose unit it was (the renderer tints the hull; anyone may salvage it). */
+  faction: Faction;
+  /** Resting position (tiles): where it died, or nudged onto passable ground. */
+  x: number;
+  y: number;
+  /** Hull facing at death, radians clockwise from North. */
+  facing: number;
+  /** Scrap it is worth before the collector's incomeMult. */
+  value: number;
+  /** Ticks left before it burns out. */
+  ttl: number;
+  /** Ticks left while it is still too hot to salvage. */
+  hot: number;
+}
 
 import type { FactionFog } from "./fog";
 
@@ -264,6 +301,8 @@ export interface World {
   units: Map<number, Unit>;
   buildings: Map<number, Building>;
   projectiles: Projectile[];
+  /** Salvageable wrecks on the field, oldest first. */
+  wrecks: Wreck[];
   factions: Record<Faction, FactionState>;
   /** null while the match runs; the winning faction once an HQ dies. */
   winner: Faction | null;

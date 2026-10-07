@@ -11,6 +11,9 @@ installable as a PWA.
 - **Pick an opener, play from second one**: every match starts on three
   cards — Blitz (Fab Plant + 3 Stingers), Industry (a third harvester +
   scrap) or Air Wing (Airpad + 3 Wasps) — and the AI picks its own.
+- **Battlefield salvage**: destroyed vehicles and downed drones leave
+  burning wrecks worth 30% of their cost — roll any ground unit over one
+  to scoop up the scrap. Hold the field after a fight and it pays.
 - **11 units** across a real counter web: Stinger light tanks, Flak
   Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet

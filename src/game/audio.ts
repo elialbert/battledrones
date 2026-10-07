@@ -8,7 +8,8 @@
 export type SfxName =
   | "cannon" | "heavy" | "mg" | "flak" | "rocket" | "missile" | "laser" | "shell" | "bomb"
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
-  | "victory" | "defeat";
+  | "victory" | "defeat"
+  | "coin";
 
 const MUTE_KEY = "battledrones.muted";
 
@@ -82,7 +83,8 @@ class Sfx {
 }
 
 const GAP: Partial<Record<SfxName, number>> = {
-  mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02
+  mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
+  coin: 0.07
 };
 
 type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer) => number;
@@ -218,6 +220,12 @@ const RECIPES: Record<SfxName, Recipe> = {
   defeat: (c, o, t) => {
     [392, 330, 262, 196].forEach((f, i) => tone(c, o, t, "triangle", f, f * 0.98, 0.4, 0.25, i * 0.2));
     return 1.2;
+  },
+  // salvage pickup: a bright two-note coin blip
+  coin: (c, o, t) => {
+    tone(c, o, t, "square", 1318, 1318, 0.06, 0.07);
+    tone(c, o, t, "sine", 1976, 2100, 0.16, 0.16, 0.055);
+    return 0.24;
   }
 };
 

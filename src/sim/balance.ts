@@ -284,3 +284,23 @@ export const FOG = {
 /** Damage per shot for a weapon, before armor/veterancy. */
 export const shotDamage = (s: ArmedStats): number =>
   s.dps * (s.shotInterval ?? COMBAT.shotInterval);
+
+/**
+ * Battlefield salvage (salvage.ts): a destroyed combat unit leaves a
+ * burning wreck worth a share of its cost, scooped up by the first ground
+ * unit of either side to drive over it. Fights leave loot worth holding.
+ */
+export const SALVAGE = {
+  /** Wreck value as a share of the dead unit's cost (harvesters leave none). */
+  share: 0.3,
+  /** Seconds a wreck lies on the field before it burns out. */
+  ttl: 60,
+  /** Seconds a fresh wreck burns before it can be salvaged (not mid-brawl). */
+  hot: 2.5,
+  /** A ground unit whose centre comes this close (tiles) collects the wreck. */
+  pickupRadius: 0.9,
+  /** A death spot no tank could reach (water, rock, a building) shifts to a passable tile this close, else no wreck. */
+  shiftRadius: 2,
+  /** Most wrecks on the field at once; past that the oldest burns out. */
+  maxWrecks: 60
+};

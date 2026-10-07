@@ -3,6 +3,7 @@ import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
 import { findPath } from "../movement";
+import { planSalvage } from "./salvage";
 import type {
   Building,
   BuildingKind,
@@ -478,6 +479,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       }
     }
   }
+
+  // --- 4b. salvage: once a fight near home is over, sweep up the wrecks ----
+  cmds.push(
+    ...planSalvage(w, faction, {
+      army, harvesters, buildings: myBuildings, used, threatened: raidValue >= HOME_ALARM_VALUE, assault: s.mode === "assault"
+    })
+  );
 
   // --- 5. menders tag along with whoever needs them -------------------------
   for (const m of mine.filter((u) => u.kind === "mender" && u.order.type === "idle" && !used.has(u.id))) {

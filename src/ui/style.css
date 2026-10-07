@@ -1474,3 +1474,26 @@ button {
     font-size: 12.5px;
   }
 }
+
+/* ---- salvage (a2): the end screen gained a "Salvaged" row — keep the
+   whole panel, buttons included, on one landscape phone screen ---- */
+@media (orientation: landscape) and (max-height: 420px) {
+  .panel {
+    padding: 12px 22px;
+  }
+  .panel h1 {
+    font-size: 28px;
+    margin-bottom: 0;
+  }
+  .panel .time {
+    margin-bottom: 6px;
+  }
+  .panel table {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .panel td,
+  .panel th {
+    padding: 1px 12px;
+  }
+}

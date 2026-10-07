@@ -1,5 +1,6 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
 import { moveUnitToward } from "./movement";
+import { leaveWreck } from "./salvage";
 import type { ArmorClass, Building, Domain, Faction, TargetDomain, Unit, World } from "./types";
 import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
 
@@ -415,6 +416,7 @@ export function cleanupDeaths(w: World): void {
       type: "death", id, faction: u.faction, unitKind: u.kind, buildingKind: null,
       x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
     });
+    leaveWreck(w, u); // combat units leave salvage (salvage.ts)
   }
   for (const b of [...w.buildings.values()]) {
     if (b.hp > 0) continue;

@@ -25,6 +25,7 @@ import { gameMode, matchOptions } from "./mode";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
+import { WreckRenderer } from "./render/wrecks";
 import { createFxTextures } from "./textures";
 import { createHud, type Hud } from "../ui/hud";
 import { showOpenerPicker } from "../ui/openers";
@@ -51,6 +52,7 @@ export class GameScene extends Phaser.Scene {
   private worldView!: WorldView;
   private entities!: EntityRenderer;
   private fx!: Fx;
+  private wrecks!: WreckRenderer;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -133,6 +135,14 @@ export class GameScene extends Phaser.Scene {
       (b) => this.buildingShown(b),
       (f) => f === PLAYER || !this.ctrl.showFog
     );
+    this.wrecks = new WreckRenderer(this, this.world, this.fx, {
+      visibleAt: (x, y) => this.tileVisible(x, y),
+      pose: (id) => this.entities.pose(id),
+      player: PLAYER,
+      spectator: gameMode.spectator,
+      dpr: this.dpr,
+      hint: (msg, x, y) => this.hud.hint(msg, x, y)
+    });
     this.overlay = this.add.graphics().setDepth(8);
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
@@ -159,6 +169,7 @@ export class GameScene extends Phaser.Scene {
       centerCamera: (wx, wy) => cam.centerOn(wx * TILE, wy * TILE),
       zoomBy: (f) => this.zoomBy(f),
       matchSeconds: () => this.simSeconds,
+      wrecks: () => this.wrecks.dots(),
       strategies: this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label} · ${OPENERS[openers.blue!].name}`,
@@ -300,6 +311,7 @@ export class GameScene extends Phaser.Scene {
     const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
     this.worldView.update(delta, this.ctrl.showFog);
     this.entities.sync(alpha, this.prev, this.ctrl.paused ? 0 : delta);
+    this.wrecks.sync(this.ctrl.paused ? 0 : delta);
     this.fx.projectiles(this.world.projectiles, alpha, this.prev);
     this.fx.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
@@ -327,7 +339,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private afterTick(): void {
-    for (const ev of this.world.fx) this.handleFx(ev);
+    for (const ev of this.world.fx) {
+      this.handleFx(ev);
+      this.wrecks.onFx(ev);
+    }
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
