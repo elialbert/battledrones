@@ -10,9 +10,11 @@ import {
   isResource,
   moveClassOf,
   passable,
+  sideFrame,
   spawnBuilding,
   spawnUnit,
-  terrainAt
+  terrainAt,
+  type SideFrame
 } from "./world";
 // type-only: the AI module imports the sim, never the other way round at runtime
 import type { StrategyName } from "./ai/commander";
@@ -208,21 +210,9 @@ export function predictOpenerSite(w: World, faction: Faction, kind: BuildingKind
 
 type Pt = { x: number; y: number };
 
-/** Coordinates as seen from one side: identity for blue, a 180° turn for red. */
-interface Frame {
-  /** Frame point ↔ world point (the map turn is its own inverse). */
-  pt(p: Pt): Pt;
-  /** Top-left world tile of a `size`² footprint whose frame top-left is (fx, fy). */
-  tile(fx: number, fy: number, size: number): [number, number];
-}
-
-function frame(w: World, faction: Faction): Frame {
-  if (faction === "blue") return { pt: (p) => ({ x: p.x, y: p.y }), tile: (fx, fy) => [fx, fy] };
-  return {
-    pt: (p) => ({ x: w.width - p.x, y: w.height - p.y }),
-    tile: (fx, fy, size) => [w.width - fx - size, w.height - fy - size]
-  };
-}
+/** Coordinates as seen from one side: identity for blue, a 180° turn for red (world.ts). */
+type Frame = SideFrame;
+const frame = sideFrame;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
 

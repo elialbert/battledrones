@@ -175,7 +175,10 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
 
   // --- crates: the nearest free units race for every announced crate --------
   const reach = s.difficulty === "easy" ? CRATE_REACH_EASY : CRATE_REACH;
-  for (const c of [...o.crates].sort((a, b) => a.landTick - b.landTick)) planCrate(w, faction, c, m, ctx, free, cmds, reach);
+  // (a drop's two crates land together: the one on our own side first, for both sides alike)
+  const home = (c: Crate) => dist(c.x, c.y, ctx.hqC.x, ctx.hqC.y);
+  for (const c of [...o.crates].sort((a, b) => a.landTick - b.landTick || home(a) - home(b)))
+    planCrate(w, faction, c, m, ctx, free, cmds, reach);
 
   // --- capture squads: take the best Uplink we don't hold -------------------
   // (mid-assault only when the army is big enough to spare a squad and still push)

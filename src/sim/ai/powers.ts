@@ -150,9 +150,12 @@ function bestClump(
 function podSite(w: World, faction: Faction, x: number, y: number): { x: number; y: number } | null {
   const cx = Math.floor(x);
   const cy = Math.floor(y);
+  const s = faction === "red" ? -1 : 1; // scan in the side's own frame (mirror-fair ties)
   for (let r = 0; r <= 4; r++)
-    for (let dy = -r; dy <= r; dy++)
-      for (let dx = -r; dx <= r; dx++) {
+    for (let i = -r; i <= r; i++)
+      for (let j = -r; j <= r; j++) {
+        const dy = i * s;
+        const dx = j * s;
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const tx = cx + dx;
         const ty = cy + dy;

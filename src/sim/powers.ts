@@ -264,7 +264,7 @@ function landPod(w: World, c: Calldown): void {
   const kinds = podCrew(w, c.faction);
   const ids: number[] = [];
   kinds.forEach((kind, i) => {
-    const spot = podSpot(w, kind, c.x, c.y, i, kinds.length);
+    const spot = podSpot(w, kind, c.x, c.y, i, kinds.length, c.faction === "red");
     if (!spot) return;
     const u = spawnUnit(w, kind, c.faction, spot.x, spot.y);
     applySpawnRank(w, u); // the Veterans mutator ranks pod crews too
@@ -278,17 +278,21 @@ function landPod(w: World, c: Calldown): void {
  * Where crew member i of n steps out of the pod: a small ring around the
  * landing point, or the nearest tile its movement class can stand on.
  */
-function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: number): { x: number; y: number } | null {
+function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: number, flip = false): { x: number; y: number } | null {
   const mc = moveClassOf(kind);
-  const a = (i / n) * Math.PI * 2 + 0.4;
+  // the crew ring (and the tile search below) in the side's own frame: red's is blue's turned 180°
+  const a = (i / n) * Math.PI * 2 + 0.4 + (flip ? Math.PI : 0);
+  const s = flip ? -1 : 1;
   const px = x + Math.sin(a) * 0.65;
   const py = y - Math.cos(a) * 0.65;
   if (passable(w, Math.floor(px), Math.floor(py), mc)) return { x: px, y: py };
   for (let r = 0; r <= 3; r++) {
     let best: { x: number; y: number } | null = null;
     let bestD = Infinity;
-    for (let dy = -r; dy <= r; dy++)
-      for (let dx = -r; dx <= r; dx++) {
+    for (let i2 = -r; i2 <= r; i2++)
+      for (let j2 = -r; j2 <= r; j2++) {
+        const dy = i2 * s;
+        const dx = j2 * s;
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const tx = Math.floor(px) + dx;
         const ty = Math.floor(py) + dy;

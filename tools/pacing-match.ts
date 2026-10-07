@@ -39,6 +39,8 @@ export interface Match {
   uplinkLost: number;
   cratesLanded: number;
   cratesClaimed: number;
+  /** Scrap each side had harvested by 4:00 (side-fairness check). */
+  harvest4: Record<Faction, number>;
 }
 
 export function playMatch(map: string, blue: StrategyName, red: StrategyName, seed: number, aiSeed: number): Match {
@@ -54,7 +56,7 @@ export function playMatch(map: string, blue: StrategyName, red: StrategyName, se
     map, blue, red, seed, openers, winner: "draw", min: 0, firstCombatDeath: null,
     bins: new Array(10).fill(0), combatBins: new Array(10).fill(0), leadAt: {}, leadChanges: 0,
     wasBehind: { blue: false, red: false }, series: [], fights: [], calldowns: { blue: {}, red: {} },
-    uplinkFlips: 0, uplinkLost: 0, cratesLanded: 0, cratesClaimed: 0
+    uplinkFlips: 0, uplinkLost: 0, cratesLanded: 0, cratesClaimed: 0, harvest4: { blue: 0, red: 0 }
   };
   const value = (f: Faction) => {
     let v = w.factions[f].scrap;
@@ -94,6 +96,7 @@ export function playMatch(map: string, blue: StrategyName, red: StrategyName, se
       if (d < -800) m.wasBehind.blue = true;
       if (d > 800) m.wasBehind.red = true;
     }
+    if (w.tick === 4 * 60 * TICK_RATE) for (const s of SIDES) m.harvest4[s] = w.factions[s].stats.scrapHarvested;
     if (w.tick % (60 * TICK_RATE) === 0 && w.tick <= 6 * 60 * TICK_RATE) {
       const d = value("blue") - value("red");
       m.leadAt[w.tick / (60 * TICK_RATE)] = Math.abs(d) < 200 ? null : d > 0 ? "blue" : "red";
