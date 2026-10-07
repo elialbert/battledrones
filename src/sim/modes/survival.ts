@@ -19,6 +19,9 @@ export type SurvivalDifficulty = "easy" | "normal" | "hard";
 
 export interface SurvivalOptions {
   difficulty?: SurvivalDifficulty;
+  /** Ops: seconds before the first wave, and between waves (bosses get +10 s). Default: SURVIVAL. */
+  firstWave?: number;
+  interval?: number;
 }
 
 /** Every tunable number of the mode (kept here so it merges cleanly). */
@@ -128,6 +131,8 @@ export interface SurvivalState {
   marches: March[];
   /** Wave unit id → its wave number. */
   members: Map<number, number>;
+  /** Seconds between waves when an op sets its own pace (else SURVIVAL.interval). */
+  interval?: number;
 }
 
 export const THEME_NAMES: Record<WaveTheme, string> = {
@@ -220,7 +225,7 @@ export function setupSurvival(w: World, opts: SurvivalOptions = {}, defender: Fa
     theme: null,
     site: -1,
     cleared: 0,
-    nextWaveTick: SURVIVAL.firstWave[difficulty] * TICK_RATE,
+    nextWaveTick: (opts.firstWave ?? SURVIVAL.firstWave[difficulty]) * TICK_RATE,
     warned: false,
     earlyBonus: 0,
     sites: hq ? computeSites(w, hq) : [],
@@ -229,7 +234,8 @@ export function setupSurvival(w: World, opts: SurvivalOptions = {}, defender: Fa
     lastSpawnTick: -1000,
     bonusEarned: 0,
     marches: [],
-    members: new Map()
+    members: new Map(),
+    ...(opts.interval ? { interval: opts.interval } : {})
   };
 }
 
@@ -476,7 +482,8 @@ export function tickSurvival(w: World): void {
     s.theme = plan.theme;
     s.site = plan.site;
     s.warned = false;
-    s.nextWaveTick = w.tick + (plan.theme === "boss" ? SURVIVAL.bossInterval : SURVIVAL.interval) * TICK_RATE;
+    const every = s.interval ?? SURVIVAL.interval;
+    s.nextWaveTick = w.tick + (plan.theme === "boss" ? every + SURVIVAL.bossInterval - SURVIVAL.interval : every) * TICK_RATE;
     for (const kind of plan.units)
       if (s.pending.length < SURVIVAL.maxPending)
         s.pending.push({ kind, rank: plan.rank, wave: plan.wave, site: plan.site });

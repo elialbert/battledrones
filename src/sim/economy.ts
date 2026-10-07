@@ -34,7 +34,7 @@ import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind): string | null {
   const stats = BUILDINGS[kind];
   if (kind === "hq") return "Unique";
-  const banned = bannedBy(w, kind);
+  const banned = bannedBy(w, kind, faction);
   if (banned) return banned;
   if (stats.requires && !stats.requires.some((k) => hasBuilding(w, faction, k)))
     return `Needs ${stats.requires.map((k) => BUILDINGS[k].name).join(" or ")}`;
@@ -44,7 +44,7 @@ export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind):
 /** Why this unit can't be queued right now (null = it can). */
 export function unitBlocker(w: World, faction: Faction, kind: UnitKind): string | null {
   const stats = UNITS[kind];
-  const banned = bannedBy(w, kind);
+  const banned = bannedBy(w, kind, faction);
   if (banned) return banned;
   if (!hasBuilding(w, faction, stats.builtAt)) return `Needs ${BUILDINGS[stats.builtAt].name}`;
   if (stats.requires && !hasBuilding(w, faction, stats.requires))

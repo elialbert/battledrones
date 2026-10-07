@@ -26,9 +26,9 @@ personalities and difficulty levels, painted art and procedural audio.
 | Decision | Choice |
 |---|---|
 | Platform | Web PWA — TypeScript, Phaser 3 (WebGL), rendered at device pixel ratio (≤ 2×) |
-| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, or Last Stand waves |
+| Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, Last Stand waves, or the Ops campaign |
 | Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
-| Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can) |
+| Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can; Ops: the op's objective) |
 | Roster size | 11 units, 8 buildings |
 | Art | Painted top-down sprites and terrain generated with OpenAI `gpt-image-2.5-sunburst` (see ART.md) |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
@@ -192,8 +192,9 @@ Ironclad. AI-vs-AI games settle in a median of ~6 minutes.
 
 ### Match flow
 
-1. Menu: pick a mode (Skirmish | Last Stand), a map, a difficulty and any
-   mutators → Play (or watch the AI play), or play today's Daily Op.
+1. Menu: pick a mode (Skirmish | Last Stand | Ops), a map, a difficulty and
+   any mutators → Play (or watch the AI play), or play today's Daily Op; in
+   Ops, pick an op card → briefing → Start op.
 2. Both HQs pre-placed, one harvester each (it starts mining at once).
 3. Real-time play until one HQ is destroyed. Pause any time.
 4. The HQ kill plays as a short cinematic, then the after-action report
@@ -340,6 +341,73 @@ Reasons to come back between matches. Spectated games never count.
   (median 4.2), Veterans 46, Clear Skies 47; Air War 13/20. The next 21
   Daily Ops all finished (median 4.7 min).
 
+### Ops (a short scenario campaign)
+
+Eight handcrafted 3–7 minute missions on the existing maps and units, each
+with a twist objective and three stars: ★ complete it, ★★ and ★★★ two harder
+conditions. They teach the counter web through play and give the game a
+completion goal.
+
+- **Data, not code paths** (`sim/ops.ts`): an `OpDef` is a map, an enemy (an
+  AI commander with a fixed personality and difficulty, optionally tweaked —
+  e.g. one that never attacks — the Last Stand wave director, or nobody),
+  rules (per-side bans, a frozen economy, mutators: `World.rules` gained
+  `sideBans`, `sideIncome` and `banLabel`, so `unitBlocker`/`buildingBlocker`
+  say "Disabled in this op" and bind the AI on its side too), a `setup` that
+  pre-places buildings and units and tags what must be protected, primary
+  goals and two star conditions. `createMapWorld(map, { op })` builds it.
+- **Goals** are pure functions of the world, checked once a second by
+  `tickOps()` (called from `step()` only when `World.ops` is set): destroy the
+  HQ, destroy N of a kind, survive N seconds, survive N waves, deliver N
+  scrap, protect a tagged group (or ≥ N of a kind), within N seconds, lose at
+  most N units / of a kind / buildings. Meeting every achievement goal wins;
+  breaking a condition (time, protected group, losses) loses; an HQ kill still
+  ends it the classic way. The result sets `World.winner`, so the finale
+  (without HQ blasts when no HQ died), report and career run unchanged.
+- **The ops** (verified by `tests/ops.test.ts`: each sets up on legal ground,
+  runs, is completed with ★★+ by at least one stand-in pilot — an AI
+  commander or a scripted player from `tests/ops-pilots.ts` — and is *lost*
+  by doing nothing; `npx vite-node tools/ops.ts` prints the numbers):
+
+| # | Op | Map | Enemy | Objective | ★★ / ★★★ |
+|---|---|---|---|---|---|
+| 1 | 🌉 Bridgehead | Riverlands | Rush, Hard, bigger waves | Hold 4:00 with a bridge turret standing (forward outpost pre-placed) | lose ≤ 6 · both turrets |
+| 2 | 🌙 Harvest Moon | Dune Sea | Air Swarm, Hard, early Wasps | Deliver 10,000 scrap by 5:00 | ≤ 1 harvester lost · by 4:00 |
+| 3 | 🎯 Decapitation | Proving Grounds | Balanced, Easy, never attacks | Strike group, no production: HQ by 3:00 | lose ≤ 4 · under 2:00 |
+| 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income or harvesters: HQ by 6:00 | 4 harvesters killed · under 4:00 |
+| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants (air only), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
+| 6 | 💥 Glass Jaw | Dune Sea | Rush, Normal | Glass Cannons + Rapid Fab: HQ by 6:00 | lose no building · under 4:00 |
+| 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
+| 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
+
+- **Measured** (stand-in pilots, `tools/ops.ts`, 3 seeds): idle play loses
+  every op; the scripted pilots clear all eight every time (Bridgehead ★★–★★★
+  at 4:00, Harvest Moon ★★ ~4:05, Decapitation ★–★★ ~1:45, Frozen Assets ★★
+  ~1:50, Sky Pirates ★★ ~3:05, Glass Jaw ★★★ ~3:00, Iron Tide ★★★, Last
+  Light ★★ ~7:25); a stock Balanced AI commander clears six of the eight at
+  least once — it leaves the bridge to attack in Bridgehead and wastes its
+  fixed budget in Frozen Assets.
+- **Campaign**: the first three ops are open; every op completed opens one
+  more. Progress (best star mask, best time, attempts) lives in the career
+  (`CareerData.ops`); XP: 60 per clear, +100 the first time, +40 per new star,
+  a little for a failure. Ops award no medals, map stars or skirmish W/L.
+- **Menu** (`ui/ops.ts`): a third mode, 🎖 Ops: progress line, op cards in
+  the map-card style (number, icon, stars or 🔒), the picked op's tagline and
+  enemy; tapping the picked card or Play opens the briefing sheet (brief,
+  rules, objective, star conditions with your best, a tip, Start op; two
+  columns in landscape).
+- **In match**: a briefing banner (`op-start`); a goal pill under the clock
+  in portrait (top-left corner under the pause button in landscape, where the
+  top bar is a full row): the objective and its clock, the other conditions,
+  and three live stars (gold while the condition holds, struck out when
+  lost). Tapping it opens the objectives card. "★★ lost" / "★★★ secured"
+  toasts, a one-minute call-out (`op-timer`), the camera opens on the action
+  (`OpDef.focus`). No tutorial hints in ops. The pause screen lists the goals.
+- **End screen**: "OP COMPLETE" / "OP FAILED" heads the after-action report,
+  with the reason, big stars (new ones pop), the star conditions, your best,
+  "New op unlocked", the op's tip after a failure, and Next op / Retry / Main
+  menu. Rematch tokens are `op:<id>`.
+
 ## Controls & UI (mobile-first, full-screen)
 
 ### Full-screen behavior
@@ -426,6 +494,7 @@ src/
     maps.ts         # the 5 maps (seeded painter) + createMapWorld
     modes/survival.ts # Last Stand wave director (pure, seeded)
     rules.ts        # match mutators (World.rules) and their hooks
+    ops.ts          # the Ops campaign: op definitions, goals, tickOps
     awards.ts       # medals from an end-of-match recap (pure)
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
     movement.ts     # terrain-weighted A* (ground/hover/air), steering
@@ -440,7 +509,8 @@ src/
     chronicle.ts    # match recorder + story analysis for the report
     finale.ts       # the cinematic HQ kill
     career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
-  ui/         # DOM HUD (hud.ts), after-action report (report.ts), career UI (career.ts), menu styles
+    ops.ts          # Ops narration: briefing banner, countdowns, star notices
+  ui/         # DOM HUD (hud.ts), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```
@@ -456,6 +526,7 @@ tools/        # map export, balance harness, smoke test, screenshot tour
 ## Explicitly out of scope (for now)
 
 - Online multiplayer (the deterministic command-driven sim keeps the door
-  open), campaigns, map editor, replays, saves mid-match.
+  open), a story campaign (Ops are standalone missions), map editor,
+  replays, saves mid-match.
 - Upgrades research, superweapons, walls, control groups.
 - Music (sound effects only).

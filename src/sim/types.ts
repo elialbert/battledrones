@@ -272,6 +272,7 @@ export type FxEvent =
 import type { FactionFog } from "./fog";
 import type { SurvivalState, WaveTheme } from "./modes/survival";
 import type { Rules } from "./rules";
+import type { OpsState } from "./ops";
 
 export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
 
@@ -306,6 +307,8 @@ export interface World {
   survival?: SurvivalState | null;
   /** Match mutators (rules.ts); absent = classic rules. Read via rulesOf(w). */
   rules?: Rules | null;
+  /** Ops campaign scenario state (ops.ts); absent in skirmish and Last Stand. */
+  ops?: OpsState | null;
 }
 
 export type Command =

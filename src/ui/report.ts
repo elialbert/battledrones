@@ -37,6 +37,11 @@ export interface ReportOpts {
   enemy: { strategy: string; difficulty: string };
   onRematch(): void;
   onMenu(): void;
+  /** Replace the VICTORY / DEFEAT headline (Ops: "OP COMPLETE", the op and its time). */
+  head?: { title: string; cls: "win" | "lose"; sub: string };
+  /** Extra buttons before Rematch (Ops: "Next op"), and Rematch's own label. */
+  actions?: { id: string; label: string; cls?: string; on(): void }[];
+  rematchLabel?: string;
 }
 
 export interface ReportContext extends ReportOpts {
@@ -207,6 +212,7 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
 // ------------------------------------------------------------- sections ---
 
 function headHtml(ctx: ReportContext): string {
+  if (ctx.head) return `<h1 class="${ctx.head.cls}">${escapeHtml(ctx.head.title)}</h1><p class="time">${escapeHtml(ctx.head.sub)}</p>`;
   const spec = ctx.spectator;
   const title = spec ? `${ctx.winner.toUpperCase()} WINS` : ctx.won ? "VICTORY" : "DEFEAT";
   const cls = spec ? (ctx.winner === "blue" ? "win" : "lose") : ctx.won ? "win" : "lose";
@@ -330,6 +336,7 @@ function tipHtml(ctx: ReportContext): string | null {
       )}</span></p>`;
     return `<div class="aar-story">${line("blue")}${line("red")}</div>`;
   }
+  if (ctx.world.ops) return null; // an op's section shows its own tip and the stars still to earn
   const c = ctx.chronicle;
   const tip = pickTip({
     pov: ctx.pov, won: ctx.won, duration: ctx.secs, difficulty: ctx.enemy.difficulty.toLowerCase(),
@@ -383,8 +390,9 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
     <div class="panel aar ${ctx.spectator ? "spec" : ctx.won ? "won" : "lost"}">
       <header class="aar-sec aar-head" style="--d:0ms">${headHtml(ctx)}</header>
       <div class="aar-cols"><div class="aar-col l">${left}</div><div class="aar-col r">${right}</div></div>
-      <div class="aar-actions">
-        <button id="again" class="cta">↻ Rematch</button>
+      <div class="aar-actions${o.actions?.length ? " more" : ""}">
+        ${(o.actions ?? []).map((a) => `<button id="${a.id}" class="cta ${a.cls ?? ""}">${escapeHtml(a.label)}</button>`).join("")}
+        <button id="again" class="cta${o.actions?.length ? " alt" : ""}">${escapeHtml(o.rematchLabel ?? "↻ Rematch")}</button>
         <button id="menu" class="cta alt">Main menu</button>
       </div>
     </div>`;
@@ -410,6 +418,7 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
     const el = endEl.querySelector<HTMLElement>(`.aar-sec[data-id="${r.s.id}"]`);
     if (el && r.s.mount) r.s.mount(el, ctx);
   }
+  for (const a of o.actions ?? []) endEl.querySelector(`#${a.id}`)?.addEventListener("click", a.on);
   endEl.querySelector("#again")!.addEventListener("click", o.onRematch);
   endEl.querySelector("#menu")!.addEventListener("click", o.onMenu);
 }

@@ -33,6 +33,8 @@ export interface FinaleOpts {
   x: number;
   y: number;
   size: number;
+  /** False when no HQ died (an op ended on its objective): no blasts, just the slow-mo, flash and banner. */
+  blasts?: boolean;
   /** World-px shift of the camera target so the HQ sits mid free area (clear of the HUD dock). */
   shiftX?: number;
   shiftY?: number;
@@ -67,7 +69,7 @@ export class Finale {
     const s = this.o.scene;
     // staged chain of blasts across the footprint, outside-in (real time,
     // like everything here, so a slow frame can't reorder the beats)
-    const n = Math.min(FINALE.blasts, this.spots.length);
+    const n = this.o.blasts === false ? 0 : Math.min(FINALE.blasts, this.spots.length);
     while (this.blasts < n && this.t >= FINALE.blastAt + this.blasts * FINALE.blastEvery) {
       const [dx, dy] = this.spots[this.blasts]!;
       const last = this.blasts === n - 1;

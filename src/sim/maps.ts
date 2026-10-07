@@ -3,6 +3,7 @@ import { Terrain, type Biome, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 import { setupSurvival, type SurvivalOptions } from "./modes/survival";
 import { applyMutators, type MutatorId } from "./rules";
+import { setupOp } from "./ops";
 
 /**
  * Skirmish maps. Every map is 2-player and point-symmetric (rotated 180°
@@ -320,6 +321,8 @@ export interface MatchOptions {
   survival?: SurvivalOptions;
   /** Match mutators for both sides (rules.ts). */
   mutators?: MutatorId[];
+  /** Ops: play this scenario (ops.ts) — its own rules, enemy, setup and goals. */
+  op?: string;
 }
 
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
@@ -345,6 +348,7 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
   if (opts.mutators?.length) applyMutators(w, opts.mutators);
   if (opts.survival) setupSurvival(w, opts.survival);
+  if (opts.op) setupOp(w, opts.op);
   return w;
 }
 

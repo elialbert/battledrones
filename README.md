@@ -41,6 +41,12 @@ installable as a PWA.
   match a day, the same for everyone, with a win streak.
 - **Seven mutators** to twist a skirmish for both sides: Blitz, Gold Rush,
   Glass Cannons, Rapid Fab, Air War, Veterans and Clear Skies.
+- **Ops**: a campaign of eight short missions with a twist and three stars
+  each — hold the Riverlands bridge against a Rush, deliver 10,000 scrap under
+  Air Swarm raids, decapitate a base with a fixed strike group, win on a
+  frozen 3,000-scrap budget, raid with aircraft only, survive Ironclad on Hard,
+  and a 10-wave Last Light. A goal pill with live stars, a briefing sheet,
+  "Next op" on the end screen; ops unlock as you clear them.
 - Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
   at device resolution with turrets that track their targets, shadows,
   particles, smooth fog of war — and fully synthesised sound effects.
@@ -57,6 +63,8 @@ npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin
 npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds]
                        # Last Stand: waves survived by an AI / scripted-player defender
+npx vite-node tools/ops.ts [op|all] [seeds]
+                       # Ops: can the stand-in pilots clear each op, and with how many stars
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects

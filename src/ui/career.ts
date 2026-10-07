@@ -5,10 +5,12 @@ import { MUTATORS, MUTATOR_IDS, bannedBy, rulesOf, type MutatorId } from "../sim
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { mapAssetBase } from "../game/assets";
+import { OPS, fmtClock } from "../sim/ops";
 import {
   RANKS,
   STAR_LABELS,
   currentStreak,
+  opsCompleted,
   loadCareer,
   medalsOf,
   rankOf,
@@ -20,6 +22,7 @@ import {
 } from "../game/career";
 import { dailyOp, today, type DailyOp } from "../game/daily";
 import { gameMode } from "../game/mode";
+import { PLAYER } from "../game/controller";
 import { loadBest } from "../game/survival";
 import { addReportSection, type ReportContext } from "./report";
 
@@ -272,13 +275,18 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
        <span><b>${totalStars}</b>/${MAPS.length * 9} stars</span>
        <span><b>🔥 ${currentStreak(c, day)}</b>daily streak${c.daily.bestStreak > 1 ? ` (best ${c.daily.bestStreak})` : ""}</span>
      </div>
+     <h3>Ops <small>${opsCompleted(c)}/${OPS.length} complete</small></h3>
+     <table class="cs-table">${OPS.map((o) => {
+       const r = c.ops[o.id];
+       return `<tr><td>${o.icon} ${o.title}</td><td class="st${r?.stars ? " got" : ""}">${starsText(r?.stars ?? 0)}</td><td>${r?.bestSecs != null ? fmtClock(r.bestSecs) : "—"}</td></tr>`;
+     }).join("")}</table>
      <h3>Medals</h3><div class="medalgrid">${medalCells}</div>
      <h3>Map stars <small>${STAR_LABELS.map((l, i) => `${"★".repeat(i + 1)} ${l.toLowerCase()}`).join(" · ")}</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${starRows}</table>
      <h3>Last Stand bests <small>${c.laststand.runs} run${c.laststand.runs === 1 ? "" : "s"} · ${fmt(c.laststand.waves)} waves in all</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${lsRows}</table>
      <h3>Ranks</h3><ol class="ladder">${ladder}</ol>
-     <p class="sh-note">XP: wins 100 · losses 30 (× Easy 1 / Normal 1.5 / Hard 2.2) · 25 per medal · Last Stand 10 per wave · Daily Op win +100. Spectated games don't count.</p>
+     <p class="sh-note">XP: wins 100 · losses 30 (× Easy 1 / Normal 1.5 / Hard 2.2) · 25 per medal · Last Stand 10 per wave · Daily Op win +100 · Ops 60 per clear, +100 the first time, +40 per new star. Spectated games don't count.</p>
      <div class="sh-actions"><button class="cta sheet-close">Close</button></div>`
   );
 }
@@ -296,7 +304,7 @@ export function rulesLine(w: World): string {
 
 /** Build buttons: a kind the mutators disable shows ⛔ rather than the tech lock. */
 export function markBanned(lock: HTMLElement, w: World, kind: UnitKind | BuildingKind): void {
-  const icon = bannedBy(w, kind) ? "⛔" : "🔒";
+  const icon = bannedBy(w, kind, PLAYER) ? "⛔" : "🔒";
   if (lock.textContent !== icon) lock.textContent = icon;
 }
 
@@ -328,7 +336,9 @@ export function careerBlockHtml(s: Settlement, rules: string): string {
   const lines = s.lines.map((l) => `<span>${esc(l.label)} <b>+${l.xp}</b></span>`).join("");
   const medals = s.medals.length
     ? `<div class="cr-medals">${s.medals.map((id, i) => medalChip(id, i, s.firstMedals.includes(id))).join("")}</div>`
-    : `<p class="cr-none">${noMedalLine(s)}</p>`;
+    : res.kind === "op"
+      ? "" // ops earn stars, not medals
+      : `<p class="cr-none">${noMedalLine(s)}</p>`;
   let stars = "";
   if (res.kind === "skirmish") {
     const where = `${mapName(res.mapId)} · ${diffName(res.difficulty)}`;

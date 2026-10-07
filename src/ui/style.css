@@ -2492,3 +2492,464 @@ button {
     opacity: 1;
   }
 }
+
+/* ------------------------------------------------------------------ Ops --- */
+/* goal pill in the top bar: objective + clock on top, conditions + live stars below */
+.opspill {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 40px;
+  align-content: center;
+  padding: 3px 9px 4px;
+  line-height: 1.15;
+  background: var(--panel);
+  border: 1px solid rgba(255, 214, 110, 0.4);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.opspill .ol {
+  grid-area: 1 / 1;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.opspill .ov {
+  grid-area: 1 / 2;
+  justify-self: end;
+  color: var(--gold);
+}
+.opspill .os {
+  grid-area: 2 / 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c3cde0;
+}
+.opspill .ostars {
+  grid-area: 2 / 2;
+  justify-self: end;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.ostars i {
+  font-style: normal;
+  color: #59657a;
+}
+.ostars i.on {
+  color: var(--gold);
+}
+.ostars i.lost {
+  color: #3a4252;
+  text-decoration: line-through;
+  text-decoration-color: var(--red);
+}
+.opspill.hot {
+  border-color: rgba(255, 110, 90, 0.95);
+  animation: wavehot 0.8s ease-in-out infinite alternate;
+}
+.opspill.hot .ov {
+  color: var(--red);
+}
+.opspill.near {
+  border-color: var(--green);
+}
+.opspill.near .ov {
+  color: var(--green);
+}
+@media (orientation: portrait) {
+  .opspill {
+    max-width: calc(100vw - 236px);
+  }
+}
+/* landscape: the top bar is one full row, so the pill takes the corner under the pause button */
+.opspill.corner {
+  position: absolute;
+  top: calc(max(6px, env(safe-area-inset-top)) + 50px);
+  left: max(8px, env(safe-area-inset-left));
+  max-width: min(200px, calc(50vw - 260px));
+}
+
+/* objectives card (tap the goal pill) and the pause screen's copy of it */
+.opsinfo {
+  position: absolute;
+  z-index: 25;
+  top: calc(max(6px, env(safe-area-inset-top)) + 96px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(92vw, 340px);
+  padding: 10px 12px 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-hi);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  font-size: 13px;
+  animation: sheetUp 0.2s ease-out both;
+}
+@media (orientation: portrait) {
+  .opsinfo {
+    top: calc(max(6px, env(safe-area-inset-top)) + 150px);
+  }
+}
+.opsinfo.corner {
+  left: max(8px, env(safe-area-inset-left));
+  transform: none;
+  top: calc(max(6px, env(safe-area-inset-top)) + 96px);
+  max-height: calc(100dvh - 110px);
+  overflow-y: auto;
+}
+.oi-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.oi-head em {
+  font-style: normal;
+  font-size: 18px;
+}
+.oi-head b {
+  font-size: 16px;
+}
+.oi-head span {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 12px;
+}
+.op-goals,
+.op-starlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+.op-goals li,
+.op-starlist li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  color: #c3cde0;
+}
+.op-goals li em {
+  font-style: normal;
+  width: 20px;
+  text-align: center;
+  flex: none;
+}
+.op-goals li span,
+.op-starlist li span {
+  flex: 1;
+  min-width: 0;
+}
+.op-goals li b {
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.op-goals li.got {
+  color: var(--green);
+}
+.op-goals li.lost,
+.op-starlist li.lost {
+  color: var(--red);
+}
+.op-starlist {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.op-starlist li b {
+  flex: none;
+  width: 44px;
+  color: #59657a;
+  letter-spacing: 1px;
+  font-size: 13px;
+}
+.op-starlist li.ok b,
+.op-starlist li.got b {
+  color: var(--gold);
+}
+.op-starlist li.got span {
+  color: var(--text);
+}
+.op-starlist li.lost b {
+  color: #3a4252;
+}
+.op-pause {
+  margin: -6px auto 14px;
+  max-width: 340px;
+  font-size: 14px;
+}
+
+/* end screen: the op's star row */
+.op-res {
+  text-align: center;
+}
+.op-bigstars {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin: 2px 0 2px;
+}
+.op-bigstars i {
+  font-style: normal;
+  font-size: 40px;
+  line-height: 1;
+  color: #3a4252;
+}
+.op-bigstars i.on {
+  color: var(--gold);
+  text-shadow: 0 0 18px rgba(255, 214, 110, 0.55);
+}
+.op-bigstars i:nth-child(2) {
+  font-size: 46px;
+  transform: translateY(-4px);
+}
+.op-bigstars i.new {
+  animation: opStar 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  animation-delay: var(--md, 600ms);
+}
+@keyframes opStar {
+  from { transform: scale(2.4); opacity: 0; }
+}
+.op-reason {
+  font-weight: 700;
+  color: var(--text);
+  margin: 2px 0 4px;
+}
+.op-res.lost .op-reason {
+  color: var(--red);
+}
+.op-res .op-starlist {
+  max-width: 340px;
+  margin: 4px auto 0;
+  font-size: 13px;
+}
+.op-best {
+  margin-top: 6px;
+  color: var(--dim);
+  font-size: 12px;
+}
+.op-unlock {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 214, 110, 0.1);
+  border: 1px solid rgba(255, 214, 110, 0.4);
+  color: #ffe7a6;
+  font-size: 14px;
+}
+.op-tip {
+  margin-top: 8px;
+  text-align: left;
+  font-size: 13px;
+  color: #c3cde0;
+  display: flex;
+  gap: 8px;
+}
+.op-tip b {
+  color: var(--gold);
+  flex: none;
+}
+.aar-actions.more {
+  flex-wrap: wrap;
+}
+.aar-actions.more .cta {
+  font-size: 15px;
+}
+.aar-actions.more #op-next {
+  flex-basis: 100%;
+}
+@media (orientation: landscape) {
+  .aar-actions.more #op-next {
+    flex-basis: 0;
+    flex-grow: 1.4;
+  }
+}
+
+/* menu: the third mode, op cards (map-card style), briefing sheet */
+.seg.modes button.on[data-m="ops"] {
+  background: #3b2a12;
+  color: var(--gold);
+}
+.seg.modes button {
+  white-space: nowrap;
+}
+@media (max-width: 420px) {
+  .seg.modes button {
+    font-size: 14px;
+    padding: 0 2px;
+  }
+}
+.opcard {
+  position: relative;
+  text-align: center;
+}
+.opcard .op-n {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  min-width: 20px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(8, 12, 20, 0.85);
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+.opcard .op-ic {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 20px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 3px #000);
+}
+.opcard .mstars {
+  position: static;
+  align-self: center;
+  margin-top: 1px;
+}
+.opcard.done .op-n {
+  color: var(--gold);
+}
+.opcard.locked img {
+  filter: grayscale(1) brightness(0.45);
+}
+.opcard.locked .mn {
+  color: var(--dim);
+}
+.opblurb {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.opblurb small {
+  font-size: 12px;
+  color: var(--dim);
+}
+.opsum b {
+  color: var(--gold);
+}
+#play.locked {
+  filter: grayscale(0.8) brightness(0.7);
+}
+.opbrief .ob-head {
+  display: grid;
+  grid-template-columns: 64px 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.opbrief .ob-head img {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+.opbrief .ob-n {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.opbrief h2 {
+  margin: 0;
+}
+.ob-where {
+  color: var(--dim);
+  font-size: 13px;
+}
+.ob-brief {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.ob-rules {
+  margin-top: 8px;
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: #2a1a1a;
+  color: #ffb3a8;
+  font-size: 13px;
+  font-weight: 700;
+}
+.ob-obj {
+  font-weight: 700;
+  color: var(--text);
+}
+.ob-tip {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #c3cde0;
+}
+.opbrief .op-starlist {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+@media (orientation: landscape) {
+  .ob-cols {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    column-gap: 18px;
+  }
+  .ob-r h3:first-child {
+    margin-top: 10px;
+  }
+}
+/* short landscape: no difficulty picker in Ops, so the mode selector takes the row; slimmer cards */
+@media (orientation: landscape) and (max-height: 500px) {
+  .menu.ops-mode .menu-inner > #gmode {
+    grid-column: 1 / -1;
+  }
+  .opcard {
+    flex-basis: 96px;
+  }
+  .opcard img {
+    aspect-ratio: 16 / 10;
+  }
+  .opcard .mn {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .opsum {
+    font-size: 12px;
+  }
+  .opblurb {
+    flex-direction: row;
+    justify-content: center;
+    flex-wrap: wrap;
+    column-gap: 8px;
+  }
+  .opblurb small {
+    align-self: center;
+  }
+  .opbrief .ob-head img {
+    width: 48px;
+    height: 48px;
+  }
+  .ob-brief {
+    font-size: 14px;
+    margin-top: 6px;
+  }
+}

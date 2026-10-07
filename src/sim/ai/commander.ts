@@ -5,7 +5,7 @@ import { isVisible, knownBuildings } from "../fog";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
-import { rulesOf } from "../rules";
+import { bannedBy } from "../rules";
 import type {
   Building,
   BuildingKind,
@@ -160,13 +160,17 @@ export interface AiState {
   waveValue: number;
 }
 
-/** Pass a strategy for deterministic behaviour (tests); omit for random. */
-export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number): AiState {
+/**
+ * Pass a strategy for deterministic behaviour (tests); omit for random.
+ * `tweak` overrides parts of the personality (Ops: a commander that never
+ * attacks gets `assaultValue: Infinity, harassGroup: Infinity`).
+ */
+export function createAiState(strategy?: StrategyName, difficulty: Difficulty = "normal", seed?: number, tweak?: Partial<Strategy>): AiState {
   const names = DIFFICULTY[difficulty].pool;
   const picked = strategy ?? names[Math.floor(Math.random() * names.length)]!;
   return {
     mode: "buildup",
-    strategy: STRATEGIES[picked],
+    strategy: tweak ? { ...STRATEGIES[picked], ...tweak } : STRATEGIES[picked],
     difficulty,
     lastDecisionTick: -1000,
     seenAir: 0,
@@ -310,7 +314,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
     if (pad.queue.length >= depth) continue;
     // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
-    const airWar = rulesOf(w).bannedBuildings.includes("fab-plant");
+    const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
     const airOnly = s.strategy.airOnly || airWar;
     const wantRaptors = Math.min(airWar ? 5 : airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
     const armySize = army.length;
@@ -448,7 +452,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     );
     const stagedValue = value(staged);
     // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
-    const launchAt = rulesOf(w).bannedBuildings.includes("fab-plant") ? assaultAt : Math.max(450, assaultAt * 0.6);
+    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * 0.6);
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, enemyHqPos);
@@ -637,7 +641,7 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
-  const noFab = rulesOf(w).bannedBuildings.includes("fab-plant"); // Air War mutator
+  const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   for (let i = 0; i < s.extraProduction; i++) {
     const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
     order.push(air ? "airpad" : "fab-plant");

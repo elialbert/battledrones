@@ -10,6 +10,7 @@ import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement } from "./movement";
+import { tickOps } from "./ops";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
@@ -26,6 +27,7 @@ export function step(w: World, commands: Command[]): void {
   tickMovement(w, engaged);
   cleanupDeaths(w);
   if (w.survival) tickSurvival(w);
+  if (w.ops) tickOps(w);
   if (w.tick % FOG.intervalTicks === 0) tickFog(w);
   w.tick++;
 }

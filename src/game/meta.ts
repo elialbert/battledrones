@@ -1,4 +1,5 @@
-import { DIFFICULTY, STRATEGIES, type Difficulty, type StrategyName } from "../sim/ai/commander";
+import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
+import { opAiState } from "../sim/ops";
 import { MUTATORS, makeRules, rulesOf, strategyFits } from "../sim/rules";
 import type { Faction, World } from "../sim/types";
 import { announce } from "./announce";
@@ -36,8 +37,12 @@ export function mutatorLine(w: World, sep = " · "): string {
     .join(sep);
 }
 
+/** An op's enemy commander (null outside ops, or when the op has none: waves or no enemy). */
+export const opEnemyAi = (): AiState | null => (gameMode.op ? opAiState(gameMode.op, aiSeed(1)) : null);
+
 /** Opening banner naming the Daily Op and/or the mutators in play. */
 export function announceRules(w: World): void {
+  if (w.ops) return; // an op opens with its own briefing banner (game/ops.ts)
   const line = mutatorLine(w);
   const d = gameMode.daily;
   if (!line && !d) return;

@@ -25,7 +25,8 @@ import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { Finale, finaleZoom, freeAreaOffset } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { aiSeed, aiStrategy, announceRules, settleCareer } from "./meta";
+import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
+import { OpsPresenter } from "./ops";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { WorldView } from "./render/world-view";
@@ -52,6 +53,8 @@ export class GameScene extends Phaser.Scene {
   private chronicle!: Chronicle;
   private finale: Finale | null = null;
   private finaleAt: { x: number; y: number; size: number } | null = null;
+  /** Ops: briefing banner, countdowns and star notices (null outside ops). */
+  private ops: OpsPresenter | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   private dpr = 1;
@@ -108,14 +111,14 @@ export class GameScene extends Phaser.Scene {
       this.survival = new SurvivalPresenter(this.world, {
         mapId: gameMode.mapId,
         difficulty: this.world.survival.difficulty,
-        spectator: gameMode.spectator,
+        spectator: gameMode.spectator || !!this.world.ops, // (no Last Stand records in an op)
         ping: (x, y) => this.hud?.ping(x, y),
         gfx: this.add.graphics().setDepth(10.5)
       });
     // spectating pits two Normal commanders against each other
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
-    this.ai = createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+    this.ai = opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
       this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
@@ -154,7 +157,7 @@ export class GameScene extends Phaser.Scene {
     this.ghost = this.add.image(0, 0, ATLAS, buildingFrame(PLAYER, "turret")).setDepth(9).setAlpha(0.55).setVisible(false);
 
     const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
-    const c = focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 };
+    const c = gameMode.op?.focus ?? (focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 });
     cam.setZoom(DEFAULT_ZOOM * this.dpr);
     this.clampZoom();
     cam.centerOn(c.x * TILE, c.y * TILE);
@@ -184,6 +187,7 @@ export class GameScene extends Phaser.Scene {
 
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => this.hud.destroy());
     window.setTimeout(() => announceRules(this.world), 1200); // Daily Op / mutators banner
+    if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
 
     // debug/testing handle (harmless in production)
     (window as unknown as Record<string, unknown>).__bd = {
@@ -281,7 +285,7 @@ export class GameScene extends Phaser.Scene {
       this.ended = true;
       const won = this.world.winner === PLAYER;
       // Last Stand always ends in defeat; a new record still gets the fanfare
-      const run = this.survival && !gameMode.spectator ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
+      const run = this.survival && !gameMode.spectator && !this.world.ops ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
       this.chronicle.finish();
       settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
       this.playFinale(() => {
@@ -296,7 +300,10 @@ export class GameScene extends Phaser.Scene {
    */
   private playFinale(stinger: () => void): void {
     const winner = this.world.winner!;
-    const at = this.finaleAt ?? { x: this.world.width / 2, y: this.world.height / 2, size: 3 };
+    // an op that ended on its objective has no HQ wreck: look where it was decided, skip the blasts
+    const opEnd = this.world.ops?.result;
+    const at = (opEnd?.byGoal ? { x: opEnd.x, y: opEnd.y, size: 3 } : null) ??
+      this.finaleAt ?? { x: this.world.width / 2, y: this.world.height / 2, size: 3 };
     const spec = gameMode.spectator;
     const won = winner === PLAYER;
     this.glide = null;
@@ -309,13 +316,16 @@ export class GameScene extends Phaser.Scene {
       scene: this,
       fx: this.fx,
       ...at,
+      blasts: !opEnd?.byGoal,
       shiftX: (free.x * this.dpr) / this.clampedZoom(zoom),
       shiftY: (free.y * this.dpr) / this.clampedZoom(zoom),
       onFlash: () => {
         stinger();
         const loser = winner === "blue" ? "Red" : "Blue";
         announce(
-          this.survival
+          this.ops
+            ? this.ops.endAnnouncement()
+            : this.survival
             ? { key: "base-overrun", text: "Base overrun", sub: "The HQ has fallen", tone: "bad", priority: 0, x: at.x, y: at.y }
             : spec
               ? { key: "hq-destroyed", text: `${loser} HQ destroyed`, sub: `${loser === "Red" ? "Blue" : "Red"} wins`, tone: "epic", priority: 0, x: at.x, y: at.y }
@@ -347,6 +357,7 @@ export class GameScene extends Phaser.Scene {
 
   private afterTick(): void {
     for (const ev of this.world.fx) this.handleFx(ev);
+    this.ops?.tick();
     this.chronicle.tick();
     this.heroes.flush();
     const fb = this.ctrl.lastFeedback;

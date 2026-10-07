@@ -33,6 +33,12 @@ export interface Rules {
   startRank: number;
   /** The mutators these rules came from, in canonical order (display, career). */
   mutators: MutatorId[];
+  /** Ops: bans for one side only (e.g. "air only" for the player), on top of the shared ones. */
+  sideBans?: Partial<Record<Faction, { units?: UnitKind[]; buildings?: BuildingKind[] }>>;
+  /** Ops: per-side income multiplier on top of `incomeMult` (0 = a frozen economy). */
+  sideIncome?: Partial<Record<Faction, number>>;
+  /** What a ban no mutator explains says ("Disabled in this op"); default "Disabled: match rules". */
+  banLabel?: string;
 }
 
 export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({
@@ -156,18 +162,25 @@ export const rulesOf = (w: World): Readonly<Rules> => w.rules ?? DEFAULT_RULES;
 /** True when any mutator is active (career: no map stars). */
 export const isMutated = (w: World): boolean => rulesOf(w).mutators.length > 0;
 
-/** Total income multiplier for a faction: AI handicap × mutators. */
-export const incomeOf = (w: World, f: Faction): number => w.factions[f].incomeMult * rulesOf(w).incomeMult;
-
-/** Why a kind is disabled by this match's mutators (null = allowed). */
-export function bannedBy(w: World, kind: UnitKind | BuildingKind): string | null {
+/** Total income multiplier for a faction: AI handicap × mutators (× an op's per-side factor). */
+export const incomeOf = (w: World, f: Faction): number => {
   const r = rulesOf(w);
-  const banned = kind in UNITS ? r.bannedUnits.includes(kind as UnitKind) : r.bannedBuildings.includes(kind as BuildingKind);
-  if (!banned) return null;
-  const by = r.mutators.find(
-    (id) => MUTATORS[id].bansUnits?.includes(kind as UnitKind) || MUTATORS[id].bansBuildings?.includes(kind as BuildingKind)
-  );
-  return `Disabled: ${by ? MUTATORS[by].name : "match rules"}`;
+  return w.factions[f].incomeMult * r.incomeMult * (r.sideIncome?.[f] ?? 1);
+};
+
+/**
+ * Why a kind is disabled by this match's rules (null = allowed): a mutator
+ * for both sides, or (with `faction`) an op's ban on that side alone.
+ */
+export function bannedBy(w: World, kind: UnitKind | BuildingKind, faction?: Faction): string | null {
+  const r = rulesOf(w);
+  const isUnit = kind in UNITS;
+  const inList = (units?: readonly UnitKind[], buildings?: readonly BuildingKind[]) =>
+    isUnit ? !!units?.includes(kind as UnitKind) : !!buildings?.includes(kind as BuildingKind);
+  const side = faction ? r.sideBans?.[faction] : undefined;
+  if (!inList(r.bannedUnits, r.bannedBuildings) && !inList(side?.units, side?.buildings)) return null;
+  const by = r.mutators.find((id) => inList(MUTATORS[id].bansUnits, MUTATORS[id].bansBuildings));
+  return by ? `Disabled: ${MUTATORS[by].name}` : r.banLabel ?? "Disabled: match rules";
 }
 
 /** Veterans mutator: a freshly built combat unit starts ranked (with the XP to match). */

@@ -9,6 +9,8 @@ import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
 import { mountMenuCareer, starsText } from "./ui/career";
 import { dailyOp, today, type DailyOp } from "./game/daily";
+import { opById, type OpDef } from "./sim/ops";
+import { mountMenuOps } from "./ui/ops";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -119,8 +121,12 @@ function showMenu(): void {
       <div class="seg modes" id="gmode">
         <button data-m="skirmish">⚔ Skirmish</button>
         <button data-m="survival">🛡 Last Stand</button>
+        <button data-m="ops">🎖 Ops</button>
       </div>
       <p class="lsbest" id="lsbest" hidden></p>
+      <p class="lsbest opsum" id="opsum" hidden></p>
+      <div class="maps opcards" id="opcards" hidden></div>
+      <p class="blurb opblurb" id="opblurb" hidden></p>
       <div class="maps" id="maps">
         ${MAPS.map(
           (m) => `
@@ -164,10 +170,29 @@ function showMenu(): void {
     },
     changed: () => saveSettings()
   });
+  // Ops: op cards, progress line and the briefing sheet (ui/ops.ts)
+  const ops = mountMenuOps(menu, {
+    start: (op) => {
+      startOp(op);
+      void begin(false);
+    },
+    selectedId: () => gameMode.opId,
+    select: (id) => {
+      gameMode.opId = id;
+      saveSettings();
+      sync(); // the Play button names the picked op
+    }
+  });
   const sync = () => {
     const survival = gameMode.mode === "survival";
+    const opsMode = gameMode.mode === "ops";
     career.sync();
-    menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) => {
+    for (const id of ["#opsum", "#opcards", "#opblurb"]) menu.querySelector<HTMLElement>(id)!.hidden = !opsMode;
+    for (const id of ["#maps", "#blurb", "#diff"]) menu.querySelector<HTMLElement>(id)!.hidden = opsMode;
+    ops.sync();
+    menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
+    menu.classList.toggle("ops-mode", opsMode);
+    menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) => {
       el.classList.toggle("on", el.dataset.id === gameMode.mapId);
       // Last Stand: each map card shows its best for the chosen difficulty
       const badge = el.querySelector<HTMLElement>(".mbest")!;
@@ -184,9 +209,11 @@ function showMenu(): void {
     menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
     const m = MAPS.find((x) => x.id === gameMode.mapId);
     menu.querySelector("#blurb")!.textContent = m?.blurb ?? "";
-    menu.querySelector("#sub")!.textContent = survival
-      ? "Hold your base against endless, themed waves. How long can you last?"
-      : "Mine scrap. Build your swarm. Destroy the enemy HQ.";
+    menu.querySelector("#sub")!.textContent = opsMode
+      ? "Short missions with a twist. Three stars each — can you take them all?"
+      : survival
+        ? "Hold your base against endless, themed waves. How long can you last?"
+        : "Mine scrap. Build your swarm. Destroy the enemy HQ.";
     const best = menu.querySelector<HTMLElement>("#lsbest")!;
     best.hidden = !survival;
     if (survival) {
@@ -196,11 +223,15 @@ function showMenu(): void {
         ? `🏆 Best on ${where}: <b>${rec.best} wave${rec.best === 1 ? "" : "s"}</b>`
         : `No record yet on ${where} — set one!`;
     }
-    menu.querySelector("#play")!.textContent = survival ? "▶ Start Last Stand" : "▶ Play";
+    const sel = ops.selected();
+    menu.querySelector("#play")!.textContent = opsMode
+      ? ops.locked(sel) ? "🔒 Locked" : `▶ Op: ${sel.title}`
+      : survival ? "▶ Start Last Stand" : "▶ Play";
+    menu.querySelector("#play")!.classList.toggle("locked", opsMode && ops.locked(sel));
     menu.querySelector("#play-spectate")!.textContent = survival ? "🤖 Watch AI defend" : "🤖 Watch AI vs AI";
   };
   sync();
-  menu.querySelectorAll<HTMLElement>(".mapcard").forEach((el) =>
+  menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) =>
     el.addEventListener("click", () => {
       gameMode.mapId = el.dataset.id!;
       saveSettings();
@@ -241,15 +272,22 @@ function showMenu(): void {
     menu.remove();
     startGame();
   };
-  menu.querySelector("#play")!.addEventListener("click", () => begin(false));
+  menu.querySelector("#play")!.addEventListener("click", () => {
+    if (gameMode.mode !== "ops") return void begin(false);
+    const op = ops.selected();
+    sfx.play("click", 0.5);
+    if (!ops.locked(op)) ops.openBrief(op);
+  });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
 
   // "Rematch" from the end screen skips straight back into a game
   let rematch = false;
   try {
     const token = sessionStorage.getItem("battledrones.rematch");
-    rematch = token === "1" || token === "daily";
+    const op = token?.startsWith("op:") ? opById(token.slice(3)) : null;
+    rematch = token === "1" || token === "daily" || !!op;
     if (token === "daily") startDaily(dailyOp(today()));
+    if (op) startOp(op);
     sessionStorage.removeItem("battledrones.rematch");
   } catch {
     /* ignore */
@@ -260,6 +298,17 @@ function showMenu(): void {
     // audio needs a gesture: unlock on the first touch
     window.addEventListener("pointerdown", () => sfx.unlock(), { once: true });
   }
+}
+
+/** Point the next match at an op (not saved: the op fixes map, enemy and rules). */
+function startOp(op: OpDef): void {
+  // remember the pick (and the Ops tab) before the op's own map and difficulty take over
+  gameMode.opId = op.id;
+  gameMode.mode = "ops";
+  saveSettings();
+  gameMode.op = op;
+  gameMode.mapId = op.map;
+  gameMode.difficulty = op.ai && op.ai !== "survival" ? op.ai.difficulty : op.survival?.difficulty ?? "normal";
 }
 
 /** Point the next match at the Daily Op (not saved: the player's own picks stay). */
