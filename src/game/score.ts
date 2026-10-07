@@ -7,7 +7,8 @@
  *
  * Time is counted in 16th-note steps: 16 per bar, one chord per two bars.
  */
-import type { Biome, Faction, FxEvent } from "../sim/types";
+import { TICK_RATE } from "../sim/balance";
+import type { Biome, Faction, FxEvent, PowerKind } from "../sim/types";
 
 export type Wave = "sine" | "square" | "sawtooth" | "triangle";
 export type MusicLayer = "pad" | "bell" | "bass" | "drums" | "arp";
@@ -50,6 +51,20 @@ export const MUSIC = {
   /** Our units fought anywhere in this window: the bass pulse stays in. */
   contactS: 8,
   contactFloor: 0.3,
+  /**
+   * Calldowns are the loudest moments in a match: an impact adds this
+   * (× its earshot) and fades out over strikeFadeS. A Sky Hammer counts at
+   * least strikeHammerFloor wherever it lands (its boom carries) and in full
+   * when it lands on or near our things.
+   */
+  strikeBoost: { barrage: 0.45, emp: 0.3, droppod: 0.3, hammer: 0.85 } as Record<PowerKind, number>,
+  strikeFadeS: 6,
+  strikeHammerFloor: 0.5,
+  /** An enemy strike telegraphed onto our things lifts the tension before it lands. */
+  telegraphBoost: 0.35,
+  /** Last Stand: from a wave's warning until a little after it arrives, the bass pulse stays in. */
+  waveFloor: 0.35,
+  waveHoldS: 6,
   /** Drums go double-time / bass drives above these levels. */
   drumsDriveAt: 0.75,
   bassDriveAt: 0.6
@@ -707,15 +722,22 @@ export interface MoodHooks {
   sees(x: number, y: number): boolean;
   /** Faction of a live unit or building, if any. */
   factionOf(id: number): Faction | null;
+  /** Would a strike of radius `r` at (x, y) catch any of our units or buildings? (Default: no.) */
+  threatened?(x: number, y: number, r: number): boolean;
 }
 
 /**
  * Battle intensity for the score, from the sim's fx stream:
  *   I = clamp(audibleShots4s / 32 + 0.5·(base under sustained attack)
- *             + 0.25·min(1, ownLosses10s / 3), 0, 1),
- * floored at 0.3 while our units have fought anywhere in the last 8 s, and
- * smoothed with a quick attack and a slow release. Spectators hear all
- * on-screen combat (and on-screen deaths of either side), with no alarm.
+ *             + 0.25·min(1, ownLosses10s / 3) + strike, 0, 1),
+ * where `strike` is the loudest calldown still ringing (an impact in
+ * earshot, fading over 6 s: Barrage 0.45, Sky Hammer 0.85 — in full when it
+ * lands on our things, at least half anywhere; an enemy reticle over our
+ * things holds 0.35 until it lands). Floored at 0.3 while our units have
+ * fought anywhere in the last 8 s (and from a Last Stand wave's warning
+ * until it arrives), and smoothed with a quick attack and a slow release.
+ * Spectators hear all on-screen combat (and on-screen deaths of either
+ * side), with no alarm.
  */
 export class BattleMood {
   /** Smoothed intensity, 0–1. */
@@ -727,6 +749,9 @@ export class BattleMood {
   private buildingHitAt = -Infinity;
   private attackStart = -Infinity;
   private contactAt = -Infinity;
+  /** Calldown boosts: start time, size, length (s); fading out, or held flat (a telegraph). */
+  private strikes: { t: number; w: number; s: number; flat: boolean }[] = [];
+  private waveUntil = -Infinity;
   private now = 0;
 
   constructor(private h: MoodHooks) {}
@@ -756,8 +781,39 @@ export class BattleMood {
           if (h.spectator ? h.sees(e.x, e.y) && h.earshot(e.x, e.y) > 0.3 : e.faction === h.player)
             this.deaths.push(t);
           break;
+        case "calldown":
+          // the reticle is up over our things: hold your breath (a Sky Hammer's charge is 3 s)
+          if (!h.spectator && e.faction !== h.player && h.threatened?.(e.x, e.y, e.radius))
+            this.strike(t, MUSIC.telegraphBoost, Math.max(0.5, e.landTick / TICK_RATE - t), true);
+          break;
+        case "calldownImpact": {
+          // calldowns are public: no fog check, just how close it is (and whether it hit home)
+          let k = h.earshot(e.x, e.y);
+          if (e.power === "hammer") {
+            k = Math.max(k, MUSIC.strikeHammerFloor);
+            if (!h.spectator && h.threatened?.(e.x, e.y, e.radius)) k = 1;
+          }
+          if (k > 0.05) this.strike(t, MUSIC.strikeBoost[e.power] * k, MUSIC.strikeFadeS);
+          break;
+        }
+        case "waveIncoming":
+          this.waveUntil = Math.max(this.waveUntil, t + e.eta / TICK_RATE + MUSIC.waveHoldS);
+          break;
       }
     }
+  }
+
+  private strike(t: number, w: number, s: number, flat = false): void {
+    this.strikes.push({ t, w, s, flat });
+    if (this.strikes.length > 12) this.strikes.shift();
+  }
+
+  /** The biggest calldown boost still ringing at `t` (they don't stack: three shells are one Barrage). */
+  private strikeLevel(t: number): number {
+    let best = 0;
+    this.strikes = this.strikes.filter((b) => t - b.t <= b.s);
+    for (const b of this.strikes) if (t >= b.t) best = Math.max(best, b.flat ? b.w : b.w * (1 - (t - b.t) / b.s));
+    return best;
   }
 
   private buildingHit(t: number): void {
@@ -781,9 +837,10 @@ export class BattleMood {
     const building = t - this.buildingHitAt <= m.buildingHitS ? (this.h.spectator ? 0.3 : m.buildingHitBoost) : 0;
     const deaths = m.deathBoost * Math.min(1, this.deaths.length / m.deathsForFull);
     const full = m.shotsForFull * (this.h.spectator ? m.spectatorShotScale : 1);
-    const fight = this.shotSum / full + building + deaths;
+    const fight = this.shotSum / full + building + deaths + this.strikeLevel(t);
     const contact = !this.h.spectator && t - this.contactAt <= m.contactS ? m.contactFloor : 0;
-    return clamp01(Math.max(fight, contact));
+    const wave = t <= this.waveUntil ? m.waveFloor : 0;
+    return clamp01(Math.max(fight, contact, wave));
   }
 
   /**

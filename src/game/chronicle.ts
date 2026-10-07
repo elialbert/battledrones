@@ -1,6 +1,7 @@
 import { TICK_RATE, UNITS } from "../sim/balance";
-import type { BuildingKind, Faction, FxEvent, UnitKind, World } from "../sim/types";
+import type { BuildingKind, Faction, FxEvent, PowerKind, UnitKind, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
+import { CalldownCredit, powerName } from "./calldown-credit";
 
 /**
  * The match chronicle: a render-side recorder (full information — it is
@@ -39,6 +40,28 @@ export interface DeathRec {
   killerKind: UnitKind | null;
   /** Killed by a building (turret, SAM, HQ gun) rather than a unit. */
   byBuilding: boolean;
+  /** Killed by a commander calldown (then not `byBuilding`), and which one (calldown id). */
+  power?: PowerKind | null;
+  strike?: number | null;
+}
+
+/** A commander calldown and what it did (both sides; full information). */
+export interface StrikeRec {
+  id: number;
+  /** Game seconds when it was called. */
+  t: number;
+  faction: Faction;
+  power: PowerKind;
+  x: number;
+  y: number;
+  /** The target side's units under the reticle when it was called (what there was to dodge). */
+  exposed: number;
+  /** Units and buildings it hit when it landed (summed over a Barrage's shells; an EMP: what it froze). */
+  hits: number;
+  /** What it destroyed: units, buildings, their scrap value. */
+  units: number;
+  buildings: number;
+  value: number;
 }
 
 export interface HeroRec {
@@ -76,6 +99,8 @@ export interface MapRefs {
 export class Chronicle {
   readonly samples: Sample[] = [];
   readonly deaths: DeathRec[] = [];
+  /** Every calldown, in order. */
+  readonly strikes: StrikeRec[] = [];
   /** Units and buildings completed, per side and kind. */
   readonly built: Record<Faction, Record<string, number>> = { blue: {}, red: {} };
   /** Game second each building kind was first completed. */
@@ -89,8 +114,10 @@ export class Chronicle {
   /** The best fallen unit per side (living units are checked at the end). */
   private fallen: Record<Faction, HeroRec | null> = { blue: null, red: null };
   private finished = false;
+  private credit: CalldownCredit;
 
   constructor(private w: World) {
+    this.credit = new CalldownCredit(w);
     const hq: MapRefs["hq"] = {};
     for (const f of FACTIONS) {
       const b = hqOf(w, f);
@@ -112,11 +139,30 @@ export class Chronicle {
 
   onFx(ev: FxEvent): void {
     if (this.finished) return;
-    if (ev.type === "death") {
+    const by = this.credit.see(ev);
+    if (ev.type === "calldown") {
+      const victim = other(ev.faction);
+      let exposed = 0;
+      for (const u of this.w.units.values())
+        if (u.faction === victim && Math.hypot(u.x - ev.x, u.y - ev.y) <= ev.radius) exposed++;
+      this.strikes.push({
+        id: ev.id, t: this.t, faction: ev.faction, power: ev.power, x: ev.x, y: ev.y, exposed, hits: 0, units: 0, buildings: 0, value: 0
+      });
+    } else if (ev.type === "calldownImpact") {
+      const st = this.strikes.find((s) => s.id === ev.id);
+      if (st) st.hits += ev.hits;
+    } else if (ev.type === "death") {
       this.deaths.push({
         t: this.t, x: ev.x, y: ev.y, faction: ev.faction, unitKind: ev.unitKind, buildingKind: ev.buildingKind,
-        value: ev.value, killerKind: ev.killerKind, byBuilding: ev.killerId !== null && ev.killerKind === null
+        value: ev.value, killerKind: ev.killerKind, byBuilding: !by && ev.killerId !== null && ev.killerKind === null,
+        power: by?.power ?? null, strike: by?.calldownId ?? null
       });
+      const st = by ? this.strikes.find((s) => s.id === by.calldownId) : undefined;
+      if (st) {
+        if (ev.buildingKind) st.buildings++;
+        else st.units++;
+        st.value += ev.value;
+      }
       if (ev.unitKind && ev.kills > 0) {
         const rec: HeroRec = {
           id: ev.id, faction: ev.faction, kind: ev.unitKind, kills: ev.kills, rank: ev.rank, alive: false, diedAt: this.t
@@ -222,6 +268,8 @@ export interface Battle {
   y: number;
   count: number;
   lost: Record<Faction, number>;
+  /** The calldown that did the most of it (≥ 2 deaths): whose losses, to what, how many. */
+  strike?: { victim: Faction; power: PowerKind; n: number } | null;
 }
 
 /**
@@ -249,10 +297,44 @@ export function biggestBattle(deaths: DeathRec[], window = 20, radius = 10, min 
       x: group.reduce((s, d) => s + d.x, 0) / group.length,
       y: group.reduce((s, d) => s + d.y, 0) / group.length,
       count: group.length,
-      lost
+      lost,
+      strike: topStrike(group)
     };
   }
   return best;
+}
+
+/** The calldown power with the most kills among these deaths (at least 2), by victim side. */
+function topStrike(group: DeathRec[]): Battle["strike"] {
+  const n = new Map<string, { victim: Faction; power: PowerKind; n: number }>();
+  for (const d of group) {
+    if (!d.power) continue;
+    const k = `${d.faction}:${d.power}`;
+    const e = n.get(k) ?? { victim: d.faction, power: d.power, n: 0 };
+    e.n++;
+    n.set(k, e);
+  }
+  let best: Battle["strike"] = null;
+  for (const e of n.values()) if (e.n >= 2 && (!best || e.n > best.n)) best = e;
+  return best;
+}
+
+/**
+ * A calldown by `by` that killed at least 2 units (or 400 scrap) in the
+ * `window` seconds up to `t` (plus a few after): the strike that swung it.
+ */
+export function swingStrike(deaths: DeathRec[], by: Faction, t: number, window = 20): PowerKind | null {
+  const tally = new Map<number, { power: PowerKind; n: number; value: number }>();
+  for (const d of deaths) {
+    if (!d.power || d.strike == null || d.faction === by || d.t < t - window || d.t > t + 5) continue;
+    const e = tally.get(d.strike) ?? { power: d.power, n: 0, value: 0 };
+    e.n++;
+    e.value += d.value;
+    tally.set(d.strike, e);
+  }
+  let best: { power: PowerKind; n: number; value: number } | null = null;
+  for (const e of tally.values()) if ((e.n >= 2 || e.value >= 400) && (!best || e.value > best.value)) best = e;
+  return best?.power ?? null;
 }
 
 export interface Turn {
@@ -341,7 +423,13 @@ export function moments(c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRef
   const fb = firstBlood(c.deaths);
   if (fb) {
     const killer = other(fb.faction);
-    const by = fb.killerKind ? `${Cap(yours(killer))} ${unitName(fb.killerKind)}` : fb.byBuilding ? `${Cap(yours(killer))} defences` : Cap(side(killer));
+    const by = fb.power
+      ? `${Cap(yours(killer))} ${powerName(fb.power)}`
+      : fb.killerKind
+        ? `${Cap(yours(killer))} ${unitName(fb.killerKind)}`
+        : fb.byBuilding
+          ? `${Cap(yours(killer))} defences`
+          : Cap(side(killer));
     out.push({
       kind: "first-blood", t: fb.t, title: "First blood",
       text: `${by} took out ${yours(fb.faction)} ${unitName(fb.unitKind)}`,
@@ -355,9 +443,12 @@ export function moments(c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRef
     const p: Faction = pov ?? "blue";
     const q: Faction = other(p);
     const winner = b.lost.blue === b.lost.red ? null : b.lost.blue < b.lost.red ? "blue" : "red";
+    // "they lost 9 (4 to your Sky Hammer)"
+    const to = (f: Faction) =>
+      b.strike && b.strike.victim === f ? ` (${b.strike.n} to ${yours(other(f))} ${powerName(b.strike.power)})` : "";
     out.push({
       kind: "battle", t: b.t, title: "Biggest battle",
-      text: `${Cap(where)}: ${side(p)} lost ${b.lost[p]}, ${side(q)} lost ${b.lost[q]}`,
+      text: `${Cap(where)}: ${side(p)} lost ${b.lost[p]}${to(p)}, ${side(q)} lost ${b.lost[q]}${to(q)}`,
       tone: toneFor(winner)
     });
   }
@@ -366,12 +457,15 @@ export function moments(c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRef
   if (turn) {
     const l = turn.leader;
     const lead = `${shortK(turn.army[l])} vs ${shortK(turn.army[other(l)])}`;
+    // a strike by the new leader just before the turn is the story: "… after your Sky Hammer"
+    const swing = swingStrike(c.deaths, l, turn.t);
+    const after = swing ? ` after ${yours(l)} ${powerName(swing)}` : "";
     const text =
       pov === null
-        ? `${side(l)}'s army pulled ahead (${lead})${turn.toEnd ? " and never looked back" : ""}`
+        ? `${side(l)}'s army pulled ahead${after} (${lead})${turn.toEnd ? " and never looked back" : ""}`
         : l === pov
-          ? `Your army overtook theirs (${lead})${turn.toEnd ? " and never looked back" : ""}`
-          : `Their army overtook yours (${lead})${turn.toEnd ? " and kept the lead" : ""}`;
+          ? `Your army overtook theirs${after} (${lead})${turn.toEnd ? " and never looked back" : ""}`
+          : `Their army overtook yours${after} (${lead})${turn.toEnd ? " and kept the lead" : ""}`;
     out.push({ kind: "turn", t: turn.t, title: "Turning point", text, tone: toneFor(l) });
   } else {
     // the lead never changed hands: when did it become decisive?
@@ -451,6 +545,14 @@ export function pickTip(i: TipInput): string {
   ).length;
   if (artillery >= 3)
     tips.push({ score: 50, text: `Mortars and Hornets wrecked ${artillery} of your buildings. Wasps catch Mortars; Flak, Raptors and SAMs stop Hornets.` });
+
+  // (a Drop Pod's thump barely counts: Barrages and Sky Hammers are the ones to dodge)
+  const struck = i.deaths.filter((d) => d.faction === me && d.unitKind && d.power && d.power !== "droppod").length;
+  if (struck >= 6)
+    tips.push({
+      score: 48,
+      text: `Enemy calldowns destroyed ${struck} of your units. When a red circle appears, select what's inside and move it out: a Barrage takes 2.5 s to land.`
+    });
 
   const byTowers = i.deaths.filter((d) => d.faction === me && d.unitKind && d.byBuilding).length;
   if (byTowers >= 8)

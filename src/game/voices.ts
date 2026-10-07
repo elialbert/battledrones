@@ -302,7 +302,7 @@ export class UnitVoices {
     this.group(kind === "attack" ? "attack" : "move", units);
   }
 
-  /** This tick's sim events: units rolling off the line, promotions, deaths in view. */
+  /** This tick's sim events: units rolling off the line (or out of a Drop Pod), promotions, deaths in view. */
   events(list: readonly FxEvent[], h: VoiceHooks): void {
     if (h.spectator || !this.active) return;
     for (const ev of list) {
@@ -314,6 +314,15 @@ export class UnitVoices {
         if (u && u.faction === h.player && h.inView(u.x, u.y)) this.say(u.kind, "rank", u.id);
       } else if (ev.type === "death") {
         if (ev.faction === h.player && ev.unitKind && h.inView(ev.x, ev.y)) this.say(ev.unitKind, "death", ev.id);
+      } else if (ev.type === "calldownImpact" && ev.power === "droppod" && ev.faction === h.player) {
+        // our Drop Pod's crew steps out and reports in, like a fresh unit off the line
+        const crew: Unit[] = [];
+        for (const id of ev.unitIds) {
+          const u = h.world.units.get(id);
+          if (u) crew.push(u);
+        }
+        const g = groupVoices(crew);
+        if (g) this.say(g.lead.kind, "ready", g.lead.id, g.echo);
       }
     }
   }

@@ -17,7 +17,9 @@ installable as a PWA.
 - **Commander calldowns**: a meter that fills mostly from your losses pays
   for a Barrage, an EMP or a Drop Pod — tap the button, tap the map — and
   at 6:00 both sides get the **Sky Hammer** orbital strike. Every strike is
-  telegraphed with a public warning circle: land yours, dodge theirs.
+  telegraphed with a public warning circle: land yours, dodge theirs. The
+  radio shouts "Incoming artillery!", the music swells on impact, and
+  kill streaks, hero toasts and the after-action report name the strike.
 - **11 units** across a real counter web: Stinger light tanks, Flak
   Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet
@@ -45,8 +47,9 @@ installable as a PWA.
   waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and a Boss
   every fifth wave — from shifting map edges. Call waves early for bonus
   scrap; your best per map and difficulty is saved.
-- **A Commander career**: XP and ten ranks from Cadet to Marshal, 13
-  medals (Lightning War, Comeback, Ace, Giant Slayer…) popping in on the end
+- **A Commander career**: XP and ten ranks from Cadet to Marshal, 16
+  medals (Lightning War, Comeback, Ace, Giant Slayer, Orbital, Scavenger,
+  Steady Hands…) popping in on the end
   screen, three stars per map and difficulty, and a **Daily Op** — one seeded
   match a day, the same for everyone, with a win streak.
 - **Seven mutators** to twist a skirmish for both sides: Blitz, Gold Rush,

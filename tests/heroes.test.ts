@@ -265,10 +265,12 @@ describe("after-action report stats", () => {
   it("reads stats added by other features defensively", () => {
     const core: FactionStats = { unitsBuilt: 1, unitsLost: 2, unitsKilled: 3, buildingsLost: 0, buildingsKilled: 1, scrapHarvested: 500, scrapSalvaged: 0 };
     expect(extraStatRows(core, core)).toEqual([]);
-    const blue = { ...core, scrapSalvaged: 240, weirdThing: 3, flag: true } as unknown as FactionStats;
+    // (scrap salvaged is a core row now; extras are what later features add)
+    const blue = { ...core, scrapSalvaged: 240, uplinkSeconds: 40, weirdThing: 3, flag: true } as unknown as FactionStats;
     const red = { ...core, scrapSalvaged: 80 } as unknown as FactionStats;
     const rows = extraStatRows(blue, red);
-    expect(rows[0]).toEqual({ label: "Scrap salvaged", a: 240, b: 80 });
+    expect(rows[0]).toEqual({ label: "Uplink time (s)", a: 40, b: 0 });
+    expect(rows.some((r) => r.label === "Scrap salvaged")).toBe(false);
     expect(rows.find((r) => r.label === "Weird thing")).toEqual({ label: "Weird thing", a: 3, b: 0 });
     expect(rows.some((r) => r.label === "Flag")).toBe(false);
   });

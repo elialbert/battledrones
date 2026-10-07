@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { SALVAGE, TICK_RATE, UNITS } from "../../sim/balance";
+import { incomeOf } from "../../sim/rules";
 import type { Faction, FxEvent, UnitKind, World, Wreck } from "../../sim/types";
 import { announce } from "../announce";
 import { ART_SCALE, ATLAS, TILE, frameOrigin, mountOffset, turretFrame, unitFrame } from "../assets";
@@ -134,7 +135,8 @@ export class WreckRenderer {
       })
       .setDepth(1.66);
     try {
-      this.hinted = opts.spectator || localStorage.getItem(HINT_KEY) === "1";
+      // (no tip on a frozen economy — an op's: wrecks pay its side nothing)
+      this.hinted = opts.spectator || incomeOf(world, opts.player) <= 0 || localStorage.getItem(HINT_KEY) === "1";
     } catch {
       this.hinted = true;
     }

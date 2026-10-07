@@ -1,6 +1,7 @@
-import { POWERS, TICK_RATE } from "../sim/balance";
+import { POWERS, TICK_RATE, UNITS } from "../sim/balance";
 import { POWER_KINDS, POWER_NAMES, podCrew, powerBlocker, powerStatus, targetBlocker } from "../sim/powers";
-import type { PowerKind, World } from "../sim/types";
+import { rulesOf } from "../sim/rules";
+import type { PowerKind, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
@@ -20,6 +21,8 @@ export interface PowerPanelApi {
   ctrl: Controller;
   /** A short toast (why a power can't fire, …). */
   notify(msg: string, tone?: "bad" | "good"): void;
+  /** A longer read (a power's long-press details): the ticker's roomier tip line, not a 2-line toast. */
+  info?(msg: string): void;
   /** Camera centre in tiles: where the aim preview starts on touch screens. */
   viewCentre(): { x: number; y: number };
   /** A one-time 💡 hint, paced through the HUD's hint queue. */
@@ -66,6 +69,15 @@ const ICON: Record<PowerKind, string> = {
   hammer: `<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10.3 0h3.4l-.6 13.5h-2.2z" opacity=".85"/><path fill="currentColor" d="M12 12.2l1.7 3.4 3.8-1.2-2.2 3.3 3.3 2.1-4-.1-.6 3.9-2-3.4-2 3.4-.6-3.9-4 .1 3.3-2.1-2.2-3.3 3.8 1.2z"/></svg>`
 };
 
+/** "2 Wasps + a Raptor" */
+function crewLabel(crew: UnitKind[]): string {
+  const n = new Map<UnitKind, number>();
+  for (const k of crew) n.set(k, (n.get(k) ?? 0) + 1);
+  return [...n]
+    .map(([k, c]) => (c === 1 ? `a ${UNITS[k].name}` : `${c} ${UNITS[k].name}s`))
+    .join(" + ");
+}
+
 const clock = (ticks: number) => {
   const s = Math.ceil(ticks / TICK_RATE);
   return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : `${s}s`;
@@ -101,6 +113,14 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     /* storage blocked: skip the tip */
   }
 
+  /** Long-press text; the Drop Pod names its real crew (match rules swap banned kinds, e.g. Air War: Wasps). */
+  const about = (p: PowerKind): string => {
+    if (p !== "droppod") return ABOUT[p];
+    const crew = podCrew(w, PLAYER);
+    if (crew.join() === POWERS.droppod.units.join() || crew.join() === POWERS.droppod.techUnits.join()) return ABOUT[p];
+    return `Drop Pod: ${crewLabel(crew)} land where you can see. ${POWERS.droppod.cost} charge, ${POWERS.droppod.cooldown} s cooldown.`;
+  };
+
   const arm = (p: PowerKind | null) => {
     targeting = p;
     aimAt = null;
@@ -122,12 +142,12 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
       timer = window.setTimeout(() => {
         long = true;
         if (navigator.vibrate) navigator.vibrate(8);
-        api.notify(ABOUT[p]);
+        (api.info ?? api.notify)(about(p));
       }, 420);
       if (e.button === 2) {
         window.clearTimeout(timer);
         long = true;
-        api.notify(ABOUT[p]);
+        (api.info ?? api.notify)(about(p));
       }
     });
     const clear = () => window.clearTimeout(timer);
@@ -156,7 +176,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
   }
 
   function update(): void {
-    if (api.ctrl.spectator) return;
+    if (el.hidden) return;
     // a match whose rules ban every Drop Pod crew (e.g. an op with no production) has no pod button
     const pod = btns.get("droppod")!.b;
     const podOff = podCrew(w, PLAYER).length === 0;
@@ -211,7 +231,8 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     if (targeting && api.ctrl.placing) arm(null);
   }
 
-  if (api.ctrl.spectator) el.hidden = true;
+  // spectators don't call strikes, and some ops play without them (rules.ts noCalldowns)
+  if (api.ctrl.spectator || rulesOf(w).noCalldowns) el.hidden = true;
 
   return {
     get targeting() {

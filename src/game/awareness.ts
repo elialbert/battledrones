@@ -17,6 +17,7 @@ import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { isVisible } from "../sim/fog";
 import { POWER_NAMES } from "../sim/powers";
 import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
+import { CalldownCredit } from "./calldown-credit";
 
 export const AWARE = {
   // ------------------------------------------------------------- speed --
@@ -218,8 +219,12 @@ export interface HeatHooks {
 export class HeatMap {
   private cells = new Map<number, Cell>();
   private t = 0;
+  /** Calldown kills are credited to the firing HQ: they must not heat up our own base. */
+  private credit: CalldownCredit;
 
-  constructor(private h: HeatHooks) {}
+  constructor(private h: HeatHooks) {
+    this.credit = new CalldownCredit(h.world);
+  }
 
   /** Feed one tick's events at sim time `t`. */
   events(fx: readonly FxEvent[], t: number): void {
@@ -229,6 +234,7 @@ export class HeatMap {
     const { world: w, player, spectator } = this.h;
     const H = AWARE.heat;
     for (const ev of fx) {
+      const strike = this.credit.see(ev);
       if (ev.type === "hit") {
         if (!spectator && ev.faction !== player) continue;
         let cls: number;
@@ -250,7 +256,8 @@ export class HeatMap {
         this.add(ev.x, ev.y, 0, H.ownShot);
       } else if (ev.type === "death" && !spectator && ev.unitKind) {
         if (ev.faction === player) this.add(ev.x, ev.y, ev.unitKind === "harvester" ? 2 : 1, H.ownDeath);
-        else if (ev.killerId !== null) {
+        else if (ev.killerId !== null && !strike) {
+          // (our calldown's kills: we aimed it, so no "Attack" arrow — and never one at our own HQ)
           // a kill heats up where our killer stands (the victim may have been in the fog)
           const ku = w.units.get(ev.killerId);
           const kb = ku ? undefined : w.buildings.get(ev.killerId);
@@ -446,6 +453,9 @@ export class InboundWatch {
         const s = this.hitBy.get(ev.attackerId);
         if (s && t - s.last <= I.engagedS) s.last = t;
         else this.hitBy.set(ev.attackerId, { first: t, last: t });
+      } else if (ev.type === "calldownImpact" && ev.power === "droppod" && ev.faction !== this.h.player) {
+        // an enemy Drop Pod's crew was announced by its own reticle, siren and radio line: not a new raid
+        for (const id of ev.unitIds) this.seen.set(id, t);
       }
     if (t - this.lastScan < I.scanS - 1e-6) return [];
     this.lastScan = t;

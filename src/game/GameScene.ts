@@ -25,7 +25,7 @@ import { BattleMood } from "./score";
 import { voices, type VoiceHooks } from "./voices";
 import { Announcer } from "./announcer";
 import { Awareness } from "./awareness-view";
-import { planTicks } from "./awareness";
+import { calldownThreatens, planTicks } from "./awareness";
 import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
@@ -198,7 +198,9 @@ export class GameScene extends Phaser.Scene {
       player: PLAYER, spectator: gameMode.spectator,
       earshot: (x, y) => this.earshot(x * TILE, y * TILE),
       sees: (x, y) => this.seesPoint(x, y),
-      factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null
+      factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null,
+      // (the siren's rule: a strike that would catch our units or buildings)
+      threatened: (x, y, r) => calldownThreatens(this.world, PLAYER, x, y, r)
     });
     music.play("battle", this.world.biome);
     const inView = (x: number, y: number) => this.cameras.main.worldView.contains(x * TILE, y * TILE);
@@ -229,6 +231,8 @@ export class GameScene extends Phaser.Scene {
       isShown: (id) => this.entities.isShown(id),
       // (when the game just dropped to 1× for this strike, that note already says it)
       alert: (msg, x, y) => {
+        // (its shells landing are the same event: no "Units under attack!" line right after it)
+        this.lastAlert = this.simSeconds;
         if (!this.aware.slowedFor("calldown")) this.hud.alert(msg, x, y);
       },
       ping: (x, y) => this.hud.ping(x, y)
@@ -305,6 +309,8 @@ export class GameScene extends Phaser.Scene {
       world: this.world,
       ctrl: this.ctrl,
       notify: (msg, tone) => this.hud.notify(msg, tone),
+      // (long-press details run longer than a 2-line ticker toast)
+      info: (msg) => this.hud.hint(msg, 6500),
       offerHint: (h) => this.hud.offerHint(h),
       viewCentre: () => ({ x: cam.midPoint.x / TILE, y: cam.midPoint.y / TILE })
     });

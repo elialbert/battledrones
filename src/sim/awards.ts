@@ -1,5 +1,5 @@
 import { UNITS } from "./balance";
-import type { BuildingKind, Faction, FactionStats, UnitKind } from "./types";
+import type { BuildingKind, Faction, FactionStats, PowerKind, UnitKind } from "./types";
 
 /**
  * Medals: pure functions of an end-of-match recap (stats, the army-strength
@@ -21,6 +21,9 @@ export type MedalId =
   | "iron-wall"
   | "exterminator"
   | "wrecking-crew"
+  | "orbital"
+  | "scavenger"
+  | "steady-hands"
   | "holdout"
   | "unbreakable";
 
@@ -50,9 +53,23 @@ export const AWARDS = {
   wallKills: 30,
   exterminatorKills: 60,
   wreckingBuildings: 12,
+  /**
+   * Orbital: one Sky Hammer destroys this much (scrap value of units and
+   * buildings). Measured: its flat 700 to buildings makes "any building"
+   * near-automatic once the Hammer is online, and units mostly get clear.
+   */
+  orbitalValue: 1000,
+  /** Scavenger: scrap salvaged from wrecks in one match. */
+  scavengerScrap: 3000,
+  /** Steady Hands: this many enemy Barrages / Sky Hammers with our units under them (at least dodgeExposed) that hit nothing. */
+  steadyDodges: 3,
+  dodgeExposed: 2,
   holdoutWaves: 10,
   unbreakableWaves: 20
 } as const;
+
+/** 1500 → "1,500" */
+const n = (x: number) => String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 export const MEDALS: Record<MedalId, MedalDef> = {
   lightning: { id: "lightning", name: "Lightning War", icon: "⚡", desc: "Win in under 5:00", mode: "skirmish" },
@@ -66,6 +83,11 @@ export const MEDALS: Record<MedalId, MedalDef> = {
   "iron-wall": { id: "iron-wall", name: "Iron Wall", icon: "🧱", desc: "Your defences destroy 30 enemy units", mode: "skirmish" },
   exterminator: { id: "exterminator", name: "Exterminator", icon: "☠️", desc: "Destroy 60 enemy units", mode: "skirmish" },
   "wrecking-crew": { id: "wrecking-crew", name: "Wrecking Crew", icon: "🏚", desc: "Destroy 12 enemy buildings", mode: "skirmish" },
+  orbital: { id: "orbital", name: "Orbital", icon: "🛰️", desc: `Destroy ${n(AWARDS.orbitalValue)} scrap with one Sky Hammer`, mode: "skirmish" },
+  scavenger: { id: "scavenger", name: "Scavenger", icon: "♻️", desc: `Salvage ${n(AWARDS.scavengerScrap)} scrap from wrecks`, mode: "skirmish" },
+  "steady-hands": {
+    id: "steady-hands", name: "Steady Hands", icon: "💨", desc: `Dodge ${AWARDS.steadyDodges} enemy Barrages or Sky Hammers`, mode: "skirmish"
+  },
   holdout: { id: "holdout", name: "Holdout", icon: "🏰", desc: "Last Stand: survive 10 waves", mode: "survival" },
   unbreakable: { id: "unbreakable", name: "Unbreakable", icon: "🗼", desc: "Last Stand: survive 20 waves", mode: "survival" }
 };
@@ -81,6 +103,23 @@ export interface RecapDeath {
   buildingKind: BuildingKind | null;
   /** Killed by a building (turret, SAM, HQ gun). */
   byBuilding: boolean;
+  /** Killed by a commander calldown (then not byBuilding). */
+  power?: PowerKind | null;
+}
+
+/** A commander calldown and what came of it (from the chronicle). */
+export interface RecapStrike {
+  /** The side that called it. */
+  faction: Faction;
+  power: PowerKind;
+  /** The target side's units under the reticle when it was called. */
+  exposed: number;
+  /** Units and buildings it hit when it landed (summed over a Barrage's shells). */
+  hits: number;
+  /** What it destroyed, and its scrap value. */
+  units: number;
+  buildings: number;
+  value: number;
 }
 
 /** Everything the medals need, from one side's point of view. */
@@ -95,6 +134,8 @@ export interface MatchRecap {
   deaths: RecapDeath[];
   /** Most kills scored by one of the pov side's units (alive or fallen). */
   bestUnitKills: number;
+  /** Every calldown of the match, both sides (absent: none recorded). */
+  strikes?: RecapStrike[];
   /** Last Stand: waves survived (null in a skirmish). */
   waves?: number | null;
 }
@@ -110,6 +151,18 @@ export function wasBehind(r: MatchRecap): boolean {
       s.army[them] - s.army[r.pov] >= AWARDS.comebackMinGap &&
       s.army[r.pov] <= s.army[them] * AWARDS.comebackRatio
   );
+}
+
+/**
+ * Enemy Barrages and Sky Hammers the pov side got clear of: at least
+ * AWARDS.dodgeExposed of its units under the reticle when it was called, and
+ * not one unit or building hit when it landed.
+ */
+export function strikesDodged(r: MatchRecap): number {
+  const them = enemyOf(r.pov);
+  return (r.strikes ?? []).filter(
+    (s) => s.faction === them && (s.power === "barrage" || s.power === "hammer") && s.exposed >= AWARDS.dodgeExposed && s.hits === 0
+  ).length;
 }
 
 /** Enemy units the pov side destroyed matching a filter. */
@@ -144,5 +197,9 @@ export function computeMedals(r: MatchRecap): MedalId[] {
   if (killsWhere(r, (d) => d.byBuilding) >= AWARDS.wallKills) out.push("iron-wall");
   if (me.unitsKilled >= AWARDS.exterminatorKills) out.push("exterminator");
   if ((me.buildingsKilled ?? 0) >= AWARDS.wreckingBuildings) out.push("wrecking-crew");
+  // the battlefield's own feats: calldowns and salvage
+  if ((r.strikes ?? []).some((s) => s.faction === r.pov && s.power === "hammer" && s.value >= AWARDS.orbitalValue)) out.push("orbital");
+  if ((me.scrapSalvaged ?? 0) >= AWARDS.scavengerScrap) out.push("scavenger");
+  if (strikesDodged(r) >= AWARDS.steadyDodges) out.push("steady-hands");
   return out;
 }

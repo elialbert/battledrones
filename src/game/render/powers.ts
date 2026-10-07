@@ -2,7 +2,6 @@ import Phaser from "phaser";
 import { POWERS } from "../../sim/balance";
 import { POWER_NAMES } from "../../sim/powers";
 import type { Calldown, Faction, FxEvent, PowerKind, World } from "../../sim/types";
-import { hqOf } from "../../sim/world";
 import { announce } from "../announce";
 import { calldownThreatens } from "../awareness";
 import { sfx, type SfxName } from "../audio";
@@ -69,8 +68,6 @@ export class PowerRenderer {
   /** Barrage shells in the air, positioned from sim time (pauses and speeds with the game). */
   private streaks: { img: Phaser.GameObjects.Image; x: number; y: number; tick: number; lead: number }[] = [];
   private time = 0;
-  /** Kills by each of our calldowns, for the "direct hit" callout. */
-  private tally = new Map<number, { power: PowerKind; faction: Faction; kills: number; value: number; x: number; y: number }>();
   private hammerAnnounced = false;
 
   constructor(
@@ -150,26 +147,17 @@ export class PowerRenderer {
           announce({
             key: "sky-hammer-online",
             text: "Sky Hammer online",
-            sub: this.opts.spectator ? "Both commanders can call orbital strikes" : "Orbital strike ready. Tap its button, then the map",
+            sub: !this.opts.spectator
+              ? "Orbital strike ready. Tap its button, then the map"
+              : this.world.survival
+                ? "The defender can call orbital strikes" // (the waves have no commander)
+                : "Both commanders can call orbital strikes",
             tone: "epic",
             priority: 1
           });
           sfx.play("ready");
         }
         break;
-      case "death": {
-        if (ev.killerId === null) break;
-        // a calldown's victims die in the same tick it lands, killed by its side's HQ
-        for (const t of this.tally.values()) {
-          const hq = hqOf(this.world, t.faction);
-          if (hq && hq.id === ev.killerId && Math.hypot(ev.x - t.x, ev.y - t.y) <= POWERS.hammer.radius + 3) {
-            t.kills++;
-            t.value += ev.value;
-            break;
-          }
-        }
-        break;
-      }
     }
   }
 
@@ -195,10 +183,8 @@ export class PowerRenderer {
         .setVisible(false);
       this.pods.set(ev.id, { img, glow });
     }
-    if (this.friendly(ev.faction)) {
-      this.tally.set(ev.id, { power: ev.power, faction: ev.faction, kills: 0, value: 0, x: ev.x, y: ev.y });
-      return;
-    }
+    // (what our strikes destroy is cheered by the callouts: a kill streak named for it, "Direct hit!")
+    if (this.friendly(ev.faction)) return;
     if (this.opts.spectator) {
       if (ev.power === "hammer")
         announce({ key: "sky-hammer-inbound", text: "Sky Hammer inbound!", sub: `${ev.faction === "blue" ? "Blue" : "Red"} calls an orbital strike`, tone: "info", priority: 1, x: ev.x, y: ev.y });
@@ -326,7 +312,6 @@ export class PowerRenderer {
     this.flyStreaks(now);
     this.drawStuns(dtMs);
     if (preview) this.drawPreview(preview);
-    this.settleTallies();
   }
 
   private drawCalldown(c: Calldown, now: number): void {
@@ -484,27 +469,6 @@ export class PowerRenderer {
     if (!p.ok) {
       const d = this.px(9);
       g.lineStyle(this.px(3), 0xff5a4a, 1).lineBetween(x - d, y - d, x + d, y + d).lineBetween(x - d, y + d, x + d, y - d);
-    }
-  }
-
-  /** Once one of our calldowns has fully landed, cheer if it hit hard. */
-  private settleTallies(): void {
-    if (this.tally.size === 0) return;
-    const live = new Set(this.world.powers.active.map((c) => c.id));
-    for (const [id, t] of this.tally) {
-      if (live.has(id)) continue;
-      this.tally.delete(id);
-      if (this.opts.spectator || t.power === "emp" || t.power === "droppod") continue;
-      if (t.kills >= 3 || t.value >= 700)
-        announce({
-          key: "calldown-hit",
-          text: t.kills >= 5 ? "Devastating strike!" : "Direct hit!",
-          sub: `${POWER_NAMES[t.power]}: ${t.kills} destroyed (${Math.round(t.value)} scrap)`,
-          tone: "good",
-          priority: 3,
-          x: t.x,
-          y: t.y
-        });
     }
   }
 

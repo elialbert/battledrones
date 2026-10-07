@@ -39,6 +39,11 @@ export interface Rules {
   sideIncome?: Partial<Record<Faction, number>>;
   /** What a ban no mutator explains says ("Disabled in this op"); default "Disabled: match rules". */
   banLabel?: string;
+  /**
+   * Ops: no commander calldowns for either side — for an op whose puzzle is
+   * a fixed strike group or a fixed budget (a free Drop Pod would break it).
+   */
+  noCalldowns?: boolean;
 }
 
 export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({
@@ -66,7 +71,7 @@ export interface MutatorDef {
   conflicts?: MutatorId[];
 }
 
-const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer"];
+export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer"];
 
 export const MUTATORS: Record<MutatorId, MutatorDef> = {
   blitz: {

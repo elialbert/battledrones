@@ -8,10 +8,12 @@
  * Times are sim seconds for detection windows and cooldowns (so a faster
  * game speed needs no change) and render seconds for the delivery queue.
  */
-import { BUILDINGS, UNITS } from "../sim/balance";
+import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { isVisible } from "../sim/fog";
-import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
+import type { Faction, FxEvent, PowerKind, UnitKind, World } from "../sim/types";
 import type { Announcement, AnnounceTone } from "./announce";
+import { calldownThreatens } from "./awareness";
+import { CalldownCredit, powerName, powerPhrase, type CalldownKill } from "./calldown-credit";
 
 /** A line for the radio announcer. */
 export interface RadioLine {
@@ -31,6 +33,11 @@ export interface RadioLine {
    * is the only place it appears.
    */
   caption: boolean;
+  /**
+   * Drop the line if it has waited this long (render seconds) — for warnings
+   * that are useless once the moment has passed. Default RADIO.staleS.
+   */
+  staleS?: number;
 }
 
 /** Outside cues the HUD and input can send the radio. */
@@ -51,8 +58,23 @@ export const CALLOUTS = {
     "structure-killed": 15,
     promoted: 25,
     "no-scrap": 8,
-    "cant-build": 8
+    "cant-build": 8,
+    "enemy-barrage": 20,
+    "enemy-emp": 20,
+    "enemy-droppod": 20
   } as Record<string, number>,
+  /**
+   * An enemy calldown aimed at our units or buildings (the siren's
+   * "threatened" rule). The Sky Hammer has its own spoken banner. Each line
+   * is only worth saying while the reticle is still up.
+   */
+  calldownLines: {
+    barrage: { key: "enemy-barrage", text: "Incoming artillery!", staleS: 1.5 },
+    emp: { key: "enemy-emp", text: "EMP inbound!", staleS: 1 },
+    droppod: { key: "enemy-droppod", text: "Enemy drop pod!", staleS: 2.5 }
+  } as Partial<Record<PowerKind, { key: string; text: string; staleS: number }>>,
+  /** A streak mostly made by one calldown is its own banner ("Sky Hammer: triple kill"), with this cooldown. */
+  calldownStreakCooldownS: 10,
   /** "Squad lost": this many own unit deaths within the window. */
   squadDeaths: 3,
   squadWindowS: 3,
@@ -99,8 +121,10 @@ const SHORT: Partial<Record<UnitKind, string>> = { "flak-crawler": "Flak" };
 const enemyOf = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
 
 interface Streak {
-  /** Sim times of kills inside the window. */
+  /** Sim times of kills inside the window… */
   kills: number[];
+  /** …and the calldown behind each one (null: a unit or building got it). */
+  powers: (PowerKind | null)[];
   /** Highest tier already called in this streak. */
   tier: number;
   /** Tier waiting for its hold to expire (0 = none) and when it was reached. */
@@ -121,9 +145,11 @@ export class BattleCallouts {
   private last = new Map<string, number>();
   private ownDeaths: number[] = [];
   private streaks: Record<Faction, Streak> = {
-    blue: { kills: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 },
-    red: { kills: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 }
+    blue: { kills: [], powers: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 },
+    red: { kills: [], powers: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 }
   };
+  /** Names the Barrage / Sky Hammer behind a kill (calldown-credit.ts). */
+  private credit: CalldownCredit;
   private firstBlood = false;
   private lastKillBanner = -Infinity;
   private lastBigKill = -Infinity;
@@ -131,19 +157,25 @@ export class BattleCallouts {
   private airSeen: Record<Faction, number> = { blue: -Infinity, red: -Infinity };
   private airArmed: Record<Faction, boolean> = { blue: true, red: true };
   private lastAirScan = -Infinity;
+  /** An enemy strike we warned about lands about now: its hits are that news, not new news. */
+  private strikeQuietUntil = -Infinity;
   private ended = false;
   /** Lines and banners raised, by key (debug/measurement). */
   readonly counts = new Map<string, number>();
 
-  constructor(private h: CalloutHooks) {}
+  constructor(private h: CalloutHooks) {
+    this.credit = new CalldownCredit(h.world);
+  }
 
   /** Feed one tick's events at sim time `t` (seconds). */
   events(fx: readonly FxEvent[], t: number): void {
     if (this.ended) return;
     for (const ev of fx) {
+      const by = this.credit.see(ev);
       if (ev.type === "hit") this.hit(ev, t);
-      else if (ev.type === "death") this.death(ev, t);
+      else if (ev.type === "death") this.death(ev, t, by);
       else if (ev.type === "rankUp") this.rankUp(ev.id, t);
+      else if (ev.type === "calldown") this.calldown(ev, t);
     }
     this.poll(t);
   }
@@ -210,23 +242,41 @@ export class BattleCallouts {
         }
         return;
       }
-      if (h.spectator || b.faction !== h.player) return;
+      if (h.spectator || b.faction !== h.player || t < this.strikeQuietUntil) return;
       if (!h.onScreen(ev.x, ev.y) && this.ready("base-attack", t) && this.ready("hq-attack", t, 8))
         this.say({ key: "base-attack", text: "Our base is under attack", priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: false }, t);
       return;
     }
-    if (h.spectator || ev.faction !== h.player || h.onScreen(ev.x, ev.y)) return;
+    if (h.spectator || ev.faction !== h.player || h.onScreen(ev.x, ev.y) || t < this.strikeQuietUntil) return;
     if (this.ready("units-attack", t) && this.ready("squad-lost", t, 10))
       this.say({ key: "units-attack", text: "Our units are under fire", priority: 2, tone: "bad", x: ev.x, y: ev.y, caption: false }, t);
   }
 
-  private death(ev: Extract<FxEvent, { type: "death" }>, t: number): void {
+  private death(ev: Extract<FxEvent, { type: "death" }>, t: number, by: CalldownKill | null): void {
     const h = this.h;
     const victim = ev.faction;
     const killer = enemyOf(victim);
     if (ev.buildingKind) {
       if (ev.buildingKind === "hq") return; // the winner line covers it
       const name = BUILDINGS[ev.buildingKind].name;
+      if (by && !h.spectator && killer === h.player) {
+        // our strike flattened a building: worth a cheer, not just a radio line —
+        // under the strike's own streak banner if it's about to call one
+        const s = this.streaks[killer];
+        if (s.pending) {
+          s.big ??= `${name} destroyed`;
+          this.last.set("structure-killed", t);
+          return;
+        }
+        if (t - this.lastKillBanner >= CALLOUTS.killBannerGapS) {
+          this.last.set("structure-killed", t);
+          this.banner(
+            { key: "calldown-hit", text: "Direct hit!", sub: `${powerName(by.power)}: enemy ${name} destroyed`, tone: "good", priority: 3, x: ev.x, y: ev.y },
+            t
+          );
+          return;
+        }
+      }
       if (h.spectator) {
         const key = `structure-killed-${victim}`;
         if (this.ready(key, t, 20))
@@ -241,7 +291,7 @@ export class BattleCallouts {
     }
     const kind = ev.unitKind;
     if (!kind) return;
-    if (h.spectator || killer === h.player) this.kill(ev, killer, t);
+    if (h.spectator || killer === h.player) this.kill(ev, killer, t, by?.power ?? null);
     if (!h.spectator && victim === h.player) this.loss(ev, t);
   }
 
@@ -267,26 +317,34 @@ export class BattleCallouts {
     }
   }
 
-  /** A kill credited to `killer`: first blood, streaks, big game. */
-  private kill(ev: Extract<FxEvent, { type: "death" }>, killer: Faction, t: number): void {
+  /** A kill credited to `killer` (`power`: by its calldown): first blood, streaks, big game. */
+  private kill(ev: Extract<FxEvent, { type: "death" }>, killer: Faction, t: number, power: PowerKind | null): void {
     const h = this.h;
     const name = UNITS[ev.unitKind!].name;
     const s = this.streaks[killer];
     if (!this.firstBlood) {
       this.firstBlood = true;
+      const sub = h.spectator
+        ? `${SIDE[killer]}${power ? `'s ${powerName(power)}` : ""} strikes first`
+        : power
+          ? `Enemy ${SHORT[ev.unitKind!] ?? name} destroyed by ${powerPhrase(power)}`
+          : `Enemy ${name} destroyed`;
       this.banner(
         {
-          key: "first-blood", text: "First blood", tone: "epic", priority: 2, x: ev.x, y: ev.y,
-          sub: h.spectator ? `${SIDE[killer]} strikes first` : `Enemy ${name} destroyed`,
+          key: "first-blood", text: "First blood", tone: "epic", priority: 2, x: ev.x, y: ev.y, sub,
           ...(h.spectator ? { say: `First blood to ${SIDE[killer]}` } : {})
         },
         t
       );
     }
     // streak bookkeeping (a gap longer than the window starts a new streak)
-    while (s.kills.length && t - s.kills[0]! > CALLOUTS.streakWindowS) s.kills.shift();
+    while (s.kills.length && t - s.kills[0]! > CALLOUTS.streakWindowS) {
+      s.kills.shift();
+      s.powers.shift();
+    }
     if (s.kills.length === 0) s.tier = 0;
     s.kills.push(t);
+    s.powers.push(power);
     s.x = ev.x;
     s.y = ev.y;
     const tier = CALLOUTS.tiers.find((x) => s.kills.length >= x.n)?.n ?? 0;
@@ -301,10 +359,14 @@ export class BattleCallouts {
       else if (t - this.lastBigKill >= CALLOUTS.bigKillCooldownS && t - this.lastKillBanner >= CALLOUTS.killBannerGapS) {
         this.lastBigKill = t;
         // short on the banner ("TITAN DOWN" fits a phone), complete on the radio
+        const how = power ? ` by ${powerPhrase(power)}` : "";
         this.banner(
           h.spectator
-            ? { key: `kill-${ev.unitKind}`, text: `${SIDE[ev.faction]} ${label} down`, sub: `${SIDE[killer]} scores`, tone: "good", priority: 3, x: ev.x, y: ev.y }
-            : { key: `kill-${ev.unitKind}`, text: `${label} down`, say: `Enemy ${label} destroyed`, tone: "good", priority: 3, x: ev.x, y: ev.y },
+            ? { key: `kill-${ev.unitKind}`, text: `${SIDE[ev.faction]} ${label} down`, sub: `${SIDE[killer]} scores${power ? ` · ${powerName(power)}` : ""}`, tone: "good", priority: 3, x: ev.x, y: ev.y }
+            : {
+                key: `kill-${ev.unitKind}`, text: `${label} down`, say: `Enemy ${label} destroyed${how}`, tone: "good", priority: 3, x: ev.x, y: ev.y,
+                ...(power ? { sub: powerName(power) } : {})
+              },
           t
         );
       }
@@ -365,9 +427,13 @@ export class BattleCallouts {
     s.pending = 0;
     const big = s.big;
     s.big = null;
-    const cdKey = this.h.spectator ? tier.key : `${tier.key}-${f}`;
+    // mostly one calldown's work? Then it's that strike's banner, on its own (short) cooldown:
+    // calldowns are rare, and a Sky Hammer triple kill shouldn't wait out a Stinger's
+    const power = streakPower(s.powers);
+    const cdKey = power ? `streak-calldown-${f}` : this.h.spectator ? tier.key : `${tier.key}-${f}`;
+    const cooldown = power ? CALLOUTS.calldownStreakCooldownS : tier.cooldownS;
     if (t - this.lastKillBanner < (escalation ? CALLOUTS.escalateGapS : CALLOUTS.killBannerGapS)) return;
-    if (!this.ready(cdKey, t, tier.cooldownS)) {
+    if (!this.ready(cdKey, t, cooldown)) {
       // the streak was called recently: a big kill inside it still gets its own line
       if (big && t - this.lastBigKill >= CALLOUTS.bigKillCooldownS) {
         this.lastBigKill = t;
@@ -383,16 +449,32 @@ export class BattleCallouts {
     }
     this.last.set(cdKey, t);
     if (big) this.lastBigKill = t;
-    const sub = this.h.spectator ? (big ? `${SIDE[f]} · ${big}` : SIDE[f]) : big ?? undefined;
+    // a calldown's streak names it under the title (one line on a phone) and says it: "Sky Hammer: triple kill"
+    const parts = [this.h.spectator ? SIDE[f] : null, power ? powerName(power) : null, big].filter((x): x is string => !!x);
+    const sub = parts.length ? parts.join(" · ") : undefined;
+    const said = power ? `${powerName(power)}: ${tier.text.toLowerCase()}` : tier.text;
     this.banner(
       {
         key: tier.key, text: tier.text, tone: tier.tone, priority: tier.priority, x: s.x, y: s.y,
         ...(sub ? { sub } : {}),
         // the caster says whose streak it is
-        ...(this.h.spectator ? { say: `${tier.text} for ${SIDE[f]}` } : {})
+        ...(this.h.spectator ? { say: `${said} for ${SIDE[f]}` } : power ? { say: said } : {})
       },
       t
     );
+  }
+
+  /** An enemy calldown aimed at our units or buildings: say what's coming while there's time to move. */
+  private calldown(ev: Extract<FxEvent, { type: "calldown" }>, t: number): void {
+    const h = this.h;
+    if (h.spectator || ev.faction === h.player) return;
+    if (!calldownThreatens(h.world, h.player, ev.x, ev.y, ev.radius)) return;
+    // when it lands, "our units are under fire" would only repeat the warning
+    this.strikeQuietUntil = Math.max(this.strikeQuietUntil, ev.landTick / TICK_RATE + 1.5);
+    const line = CALLOUTS.calldownLines[ev.power]; // (the Sky Hammer has its own spoken banner)
+    if (!line || !this.ready(line.key, t)) return;
+    // the siren, the red circle and (off screen) a ticker line already show it: no caption
+    this.say({ key: line.key, text: line.text, priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: false, staleS: line.staleS }, t);
   }
 
   /** "Enemy aircraft detected": the first visible enemy combat aircraft (re-armed after a long absence). */
@@ -421,6 +503,23 @@ export class BattleCallouts {
       } else if (t - this.airSeen[f] > CALLOUTS.airRearmS) this.airArmed[f] = true;
     }
   }
+}
+
+/**
+ * The calldown that made most of a streak (at least two kills and half of
+ * them), or null when units did the work.
+ */
+export function streakPower(powers: readonly (PowerKind | null)[]): PowerKind | null {
+  const n = new Map<PowerKind, number>();
+  for (const p of powers) if (p) n.set(p, (n.get(p) ?? 0) + 1);
+  let best: PowerKind | null = null;
+  let most = 0;
+  for (const [p, k] of n)
+    if (k > most) {
+      best = p;
+      most = k;
+    }
+  return best && most >= 2 && most * 2 >= powers.length ? best : null;
 }
 
 // ---------------------------------------------------------------- queue --
@@ -477,7 +576,7 @@ export class RadioQueue {
   /** The line to deliver now, if any: none while `busy` or inside the gap (unless `ignoreGap`). */
   next(now: number, busy = false, ignoreGap = false): RadioLine | null {
     this.items = this.items.filter(
-      (i) => now - i.at <= (i.line.priority === 0 ? RADIO.staleCriticalS : RADIO.staleS)
+      (i) => now - i.at <= (i.line.staleS ?? (i.line.priority === 0 ? RADIO.staleCriticalS : RADIO.staleS))
     );
     if (busy || this.items.length === 0 || (!ignoreGap && now - this.lastStart < RADIO.gapS)) return null;
     while (this.starts.length && now - this.starts[0]! > RADIO.budget.windowS) this.starts.shift();

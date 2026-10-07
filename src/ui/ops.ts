@@ -16,7 +16,7 @@ import {
   type OpDef,
   type OpStatus
 } from "../sim/ops";
-import { MUTATORS } from "../sim/rules";
+import { GROUND_COMBAT, MUTATORS } from "../sim/rules";
 import type { World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { mapAssetBase } from "../game/assets";
@@ -109,9 +109,11 @@ function rulesNote(op: OpDef): string {
   if (bans?.units?.length && bans.buildings?.length && bans.units.length > 8) bits.push("⛔ No production");
   else {
     if (bans?.buildings?.length) bits.push(`⛔ No ${bans.buildings.map((k) => `${BUILDINGS[k].name}s`).join(", ")}`);
-    if (bans?.units?.length) bits.push(`⛔ No ${bans.units.map((k) => `${UNITS[k].name}s`).join(", ")}`);
+    const ground = bans?.units?.length === GROUND_COMBAT.length && GROUND_COMBAT.every((k) => bans.units!.includes(k));
+    if (bans?.units?.length) bits.push(ground ? "⛔ No ground units" : `⛔ No ${bans.units.map((k) => `${UNITS[k].name}s`).join(", ")}`);
   }
   if (op.rules?.playerIncome === 0) bits.push("❄ No income");
+  if (op.rules?.calldowns === false) bits.push("⚡ No calldowns");
   for (const id of op.rules?.mutators ?? []) bits.push(`${MUTATORS[id].icon} ${MUTATORS[id].name}`);
   return bits.join(" · ");
 }

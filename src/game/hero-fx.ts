@@ -1,8 +1,9 @@
 import Phaser from "phaser";
 import { UNITS } from "../sim/balance";
-import type { Faction, FxEvent, World } from "../sim/types";
+import type { Faction, FxEvent, PowerKind, World } from "../sim/types";
 import { announce } from "./announce";
 import { TILE } from "./assets";
+import { CalldownCredit, powerName } from "./calldown-credit";
 import { NAMED_RANK, RANK_TITLES, callsignOf, heroShort, killsLabel, stars } from "./heroes";
 
 /**
@@ -33,6 +34,8 @@ interface Fallen {
   kills: number;
   x: number;
   y: number;
+  /** Killed by a commander calldown (whose, and which power). */
+  strike: { by: Faction; power: PowerKind } | null;
 }
 
 const TITLE_STYLE: Record<number, { color: string; size: number }> = {
@@ -46,14 +49,19 @@ export class HeroPresenter {
   private aces: Fallen[] = [];
   /** Live promotion titles, one per unit (a new one replaces the old). */
   private titles = new Map<number, Phaser.GameObjects.Text>();
+  /** Names the Barrage / Sky Hammer that got a hero (calldown-credit.ts). */
+  private credit: CalldownCredit;
 
   constructor(
     private scene: Phaser.Scene,
     private w: World,
     private opts: HeroPresenterOpts
-  ) {}
+  ) {
+    this.credit = new CalldownCredit(w);
+  }
 
   handleFx(ev: FxEvent): void {
+    const by = this.credit.see(ev);
     if (ev.type === "rankUp") this.promoted(ev.id);
     else if (ev.type === "death" && ev.unitKind && ev.rank >= NAMED_RANK) {
       const rec: Fallen = {
@@ -61,7 +69,8 @@ export class HeroPresenter {
         line: heroShort(this.w, { id: ev.id, faction: ev.faction, kind: ev.unitKind, kills: ev.kills }),
         kills: ev.kills,
         x: ev.x,
-        y: ev.y
+        y: ev.y,
+        strike: by ? { by: by.faction, power: by.power } : null
       };
       if (this.opts.spectator) {
         // both sides' real heroes, not every rank-2 grunt
@@ -72,19 +81,35 @@ export class HeroPresenter {
     }
   }
 
+  /** "by the enemy Sky Hammer" / "to your Barrage" when one strike got them all, else "". */
+  private strikeNote(list: Fallen[], prep: "by" | "to"): string {
+    const s = list[0]!.strike;
+    if (!s || list.some((x) => x.strike?.power !== s.power || x.strike.by !== s.by)) return "";
+    const whose = this.opts.spectator
+      ? `${s.by === "blue" ? "Blue" : "Red"}'s`
+      : s.by === this.opts.player
+        ? "your"
+        : s.power === "hammer"
+          ? "the enemy"
+          : "an enemy";
+    return ` ${prep} ${whose} ${powerName(s.power)}`;
+  }
+
   /** Emit this tick's batched notices. */
   flush(): void {
     if (this.lost.length > 0) {
       const l = this.lost;
+      const by = this.strikeNote(l, "by");
       const msg =
         l.length === 1
-          ? `${l[0]!.line} destroyed`
-          : `${listNames(l.map((x) => x.name))} destroyed (${killsLabel(l.reduce((s, x) => s + x.kills, 0))} between them)`;
+          ? `${l[0]!.line} destroyed${by}`
+          : `${listNames(l.map((x) => x.name))} destroyed${by} (${killsLabel(l.reduce((s, x) => s + x.kills, 0))} between them)`;
       this.opts.notify(`✝ ${msg}`, this.opts.spectator ? "info" : "bad", l[0]!.x, l[0]!.y);
     }
     if (this.aces.length > 0) {
       const a = this.aces;
-      const msg = a.length === 1 ? `Enemy ace ${a[0]!.line} down` : `Enemy aces ${listNames(a.map((x) => x.name))} down`;
+      const to = this.strikeNote(a, "to");
+      const msg = a.length === 1 ? `Enemy ace ${a[0]!.line} down${to}` : `Enemy aces ${listNames(a.map((x) => x.name))} down${to}`;
       this.opts.notify(`🎯 ${msg}`, "good", a[0]!.x, a[0]!.y);
     }
     this.lost = [];

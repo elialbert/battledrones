@@ -1,4 +1,5 @@
 import { UNITS } from "../sim/balance";
+import { POWER_KINDS, POWER_NAMES } from "../sim/powers";
 import type { Faction, FactionStats, World } from "../sim/types";
 import {
   chronicleOf,
@@ -255,7 +256,7 @@ export function mvpRowHtml(w: World, mvp: Record<Faction, HeroRec | null>, pov: 
   return cards.length ? `<div class="aar-mvps">${cards.join("")}</div>` : null;
 }
 
-const KNOWN_STATS = new Set(["unitsBuilt", "unitsLost", "unitsKilled", "buildingsLost", "buildingsKilled", "scrapHarvested"]);
+const KNOWN_STATS = new Set(["unitsBuilt", "unitsLost", "unitsKilled", "buildingsLost", "buildingsKilled", "scrapHarvested", "scrapSalvaged"]);
 /** Friendly labels for stats other features may add to FactionStats. */
 const EXTRA_LABELS: Record<string, string> = {
   scrapSalvaged: "Scrap salvaged",
@@ -317,15 +318,35 @@ function statsHtml(ctx: ReportContext): string {
     row("Buildings destroyed", st(p).buildingsKilled ?? 0, st(q).buildingsKilled ?? 0),
     row("Units built", st(p).unitsBuilt, st(q).unitsBuilt),
     row("Units lost", st(p).unitsLost, st(q).unitsLost),
-    row("Scrap harvested", st(p).scrapHarvested, st(q).scrapHarvested),
-    row("Peak army", peakArmy(ctx.chronicle.samples, p), peakArmy(ctx.chronicle.samples, q))
+    row("Scrap harvested", st(p).scrapHarvested, st(q).scrapHarvested)
   ];
+  // battlefield salvage and calldowns (not every mode has them: rows only when something happened)
+  const salv = (f: Faction) => st(f).scrapSalvaged ?? 0;
+  if (salv(p) + salv(q) > 0) rows.push(row("Scrap salvaged", salv(p), salv(q)));
+  const calls = calldownCounts(ctx.world);
+  if (calls.blue.total + calls.red.total > 0)
+    rows.push(
+      `<tr title="${escapeHtml(`${calldownBreakdown(calls[p].by)} · ${calldownBreakdown(calls[q].by)}`)}"><td>Calldowns</td><td>${calls[p].total}</td><td>${calls[q].total}</td></tr>`
+    );
+  rows.push(row("Peak army", peakArmy(ctx.chronicle.samples, p), peakArmy(ctx.chronicle.samples, q)));
   const ex = extraStatRows(st("blue"), st("red"));
   for (const r of ex) rows.push(row(r.label, p === "blue" ? r.a : r.b, p === "blue" ? r.b : r.a));
   return `<table class="aar-stats">
     <tr><th></th><th class="hb"><i class="${p}"></i>${sideName(p, ctx)}</th><th class="hb"><i class="${q}"></i>${sideName(q, ctx)}</th></tr>
     ${rows.join("")}</table>`;
 }
+
+/** Calldowns fired per side (World.powers.fired), with the per-power counts. */
+export function calldownCounts(w: World): Record<Faction, { total: number; by: [string, number][] }> {
+  const one = (f: Faction) => {
+    const fired = w.powers?.fired?.[f];
+    const by = POWER_KINDS.map((k) => [POWER_NAMES[k], fired?.[k] ?? 0] as [string, number]).filter(([, n]) => n > 0);
+    return { total: by.reduce((s, [, n]) => s + n, 0), by };
+  };
+  return { blue: one("blue"), red: one("red") };
+}
+
+const calldownBreakdown = (by: [string, number][]) => (by.length ? by.map(([k, n]) => `${n} ${k}`).join(", ") : "none");
 
 function tipHtml(ctx: ReportContext): string | null {
   if (ctx.spectator) {

@@ -100,7 +100,10 @@ Every destroyed combat unit leaves a burning wreck worth **30% of its
 cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters leave none) for
 **60 s**. After 2.5 s it has cooled enough to touch, and the first ground
 unit of *either* side — harvesters included — whose centre comes within
-0.9 tiles scoops it up (income multipliers apply). Fights leave loot worth
+0.9 tiles scoops it up (income multipliers apply; a side on a frozen
+economy — an op's zero income — can't cash wrecks in, so its units drive
+over them, no "+0" pops or salvage tip, and the wreck stays for the enemy).
+Fights leave loot worth
 holding the field for, a defender who breaks a wave gets paid for it, and
 the losing side has a way back in.
 
@@ -276,9 +279,16 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
   arctic F lydian (Fmaj7–G7–Dm7–Am7, FM glass bells, half-time drums),
   volcanic C aeolian (Cm–Ab–Eb–Bb, marimba, driven chugging bass, toms).
 - **Intensity** (`BattleMood`, from the sim's fx stream):
-  `I = audibleShots4s/32 + 0.5·(base under attack) + 0.25·min(1, losses10s/3)`,
+  `I = audibleShots4s/32 + 0.5·(base under attack) + 0.25·min(1, losses10s/3) + strike`,
   floored at 0.3 while your units fought anywhere in the last 8 s; attack
-  0.5 s, release 6 s. Shots count by the same earshot rule as the SFX and
+  0.5 s, release 6 s. Calldowns are the loudest moments: `strike` is the
+  biggest one still ringing — an impact adds Barrage 0.45 / EMP 0.3 / Drop
+  Pod 0.3 / Sky Hammer 0.85 × its earshot, fading out over 6 s (public, so
+  no fog check; three shells are one Barrage, they don't stack). A Sky
+  Hammer counts at least half wherever it lands (its boom carries) and in
+  full on or near your things; an enemy reticle over your things holds 0.35
+  until it lands. In Last Stand a 0.35 floor holds from a wave's warning
+  until a few seconds after it arrives. Shots count by the same earshot rule as the SFX and
   only if you can see them. Bass enters around I 0.15–0.35, drums 0.42–0.6,
   arp 0.72–0.9. Spectators hear on-screen combat from both sides (1.5× the
   shots for full) with no alarm. Measured over six AI-vs-AI matches with a
@@ -337,7 +347,8 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   | Squad lost | 1 | 3 own deaths within 3 s; 20 s |
   | Enemy aircraft detected | 1 | first visible enemy combat aircraft; re-armed after 2 min unseen |
   | Structure lost: X | 1 | own building destroyed; 15 s |
-  | Our units are under fire | 2 | own unit hit off screen; 60 s |
+  | Incoming artillery! / EMP inbound! / Enemy drop pod! | 1 | an enemy Barrage / EMP / Drop Pod aimed at our units or buildings (the siren's "threatened" rule); 20 s each; dropped if it can't start within 1.5 / 1 / 2.5 s (the Sky Hammer has its own spoken banner) |
+  | Our units are under fire | 2 | own unit hit off screen; 60 s (not for the hits of an enemy strike just warned about) |
   | Harvester lost / Titan lost | 2 | off screen; expensive (≥ 350) or veteran units |
   | Enemy X destroyed | 2 | enemy building; 15 s |
   | Construction complete / X promoted (rank ≥ 2) / Insufficient scrap | 3 | |
@@ -361,6 +372,17 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   Expensive kills get their own banner ("TITAN DOWN", spoken "Enemy Titan
   destroyed"), or ride along under a streak. Kill banners are at least 6 s
   apart; a streak climbing a tier needs only 2 s.
+- **Calldown kills count, and say so.** A calldown's kills are credited to
+  its side's HQ in the sim; `calldown-credit.ts` (engine-free, tested) spots
+  them — killed by the enemy HQ, next to one of that side's impacts in the
+  same tick — so every presentation layer can name the strike. They count
+  for first blood ("Enemy Stinger destroyed by a Barrage") and streaks; a
+  streak mostly made by one calldown (≥ 2 kills and half of them) puts it on
+  the sub-line ("TRIPLE KILL / Sky Hammer", spoken "Sky Hammer: triple
+  kill") on its own 10 s cooldown, since strikes are rare. A building one of
+  ours flattens gets "Direct hit!" ("Sky Hammer: enemy Turret destroyed"),
+  or rides under that strike's streak banner. Our Drop Pod's crew reports
+  in with the *ready* chirp as it steps out.
 - **Spectators** hear a neutral caster ("Red HQ under attack", "Double
   kill for Red", "Blue Fab Plant destroyed", "Blue wins the battle"), with
   full information.
@@ -410,7 +432,8 @@ enemies you can currently see.
   announcer); later ones are a ticker line plus the radio — unless an
   inbound banner is still up or waiting, which already says it. Each sounds a
   two-whoop siren and pulses the minimap with amber rings. An air raid
-  stands in for "Enemy aircraft detected". Measured over 8 AI-vs-AI matches
+  stands in for "Enemy aircraft detected". An enemy Drop Pod's crew isn't
+  a new raid: its reticle, siren and radio line already announced it. Measured over 8 AI-vs-AI matches
   (67 min, blue's view): 1.2 loud warnings/min; warning → that group's first
   hit median 3.8 s (p10 0.9, p90 8.0). Lead time is bounded by vision: a
   harvester sees 4 tiles and a Wasp shoots from 3, so the first raid on a
@@ -418,7 +441,9 @@ enemies you can currently see.
   sight or units on watch buy several seconds.
 - **Hotspots and edge arrows:** hits on your things (HQ 0.6, other
   buildings and harvesters 0.45, units 0.35 heat), your losses (0.6), and
-  shots/kills by your units (0.2/0.4, at the shooter) heat 6×6-tile cells
+  shots/kills by your units (0.2/0.4, at the shooter; not your calldowns'
+  kills, which the sim credits to your HQ — that was an "Attack" arrow
+  pointing home) heat 6×6-tile cells
   that cool 15% per second; warm cells within 8 tiles cluster and a cluster
   over 1 heat is a hotspot, named by the most important thing hit (HQ! >
   Base > Harvesters > Units; only your own shots: Attack). Off-screen
@@ -508,7 +533,12 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
   `calldownBlocker` (charge, cooldown, the HQ alive, an *explored* target —
   a *visible*, ground-passable one for the pod) for the player and the AI
   alike. Calldowns only hurt the enemy; kills are credited to the firing
-  side (its HQ is the killer, so faction stats count them; no unit XP).
+  side (its HQ is the killer, so faction stats count them; no unit XP). The
+  presentation layers name the strike instead of "defences" or the HQ (see
+  *Calldown kills count* under Voices & announcer): first blood, streaks,
+  hero toasts ("✝ Viper (Lancer, 9 kills) destroyed by an enemy Barrage"),
+  the report's story, medals and tips; they never heat an "Attack" hotspot
+  at your own HQ and never make the HQ an MVP.
 - **Every calldown is telegraphed, publicly.** `World.powers.active` and the
   `calldown` FxEvent are visible to both sides through the fog: a reticle
   shrinks to the moment of impact, so landing one and dodging one are both
@@ -521,8 +551,12 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
   in a ring of dust, and the Sky Hammer charges a lance from orbit (rising
   hum) before a beam, a white-out flash and a rolling boom. The camera
   shakes when it lands on screen. Banners: "Sky Hammer online" at 6:00,
-  "Enemy Sky Hammer inbound!" (tap to jump), "Direct hit!" when one of
-  yours kills 3+ units or 700+ scrap.
+  "Enemy Sky Hammer inbound!" (tap to jump); what yours destroy is a kill
+  streak named for the strike ("TRIPLE KILL / Sky Hammer"), or "Direct hit!"
+  for a building. The radio warns of an enemy Barrage, EMP or Drop Pod aimed
+  at your things ("Incoming artillery!"), the music swells with every
+  impact, and the hits a warned strike lands don't also raise "Units under
+  attack!" (one channel per event).
 - **HUD:** four round 52 px buttons on the right edge (48 px on shorter
   phones; a 2×2 block of 44–46 px beside the sidebar on landscape phones,
   see *HUD layout*) with the ⚡ meter, each with a conic
@@ -530,8 +564,19 @@ cooldown. Numbers live in `POWERS` in `balance.ts`.
   cooldown seconds or the Sky Hammer's unlock countdown. Tap a ready one to
   arm it ("Tap map: Barrage ✕" chip, radius preview under the pointer /
   finger, grey with ✕ where it can't go), tap the map to fire; an illegal
-  tap explains why. Long-press for details. Reticles show on the minimap;
-  the end screen counts calldowns.
+  tap explains why. Long-press for details (in the ticker's roomier tip
+  line; the Drop Pod names the crew the match's rules really give, e.g.
+  "2 Wasps + a Raptor" under Air War). Reticles show on the minimap; the end
+  screen counts calldowns per side.
+- **Which modes have them:** skirmish, the Daily Op and Last Stand (the
+  player's alone: the waves have no HQ, and the director copes — strikes kill
+  wave units like any other, pod crews are just more defenders). Ops keep
+  them except where the op's puzzle is a fixed force: Decapitation's strike
+  group and Frozen Assets' 3,000-scrap budget (a free Drop Pod would break
+  either) set `OpRules.calldowns: false` → `Rules.noCalldowns`, which blocks
+  them for both sides (no buttons, no Sky Hammer at 6:00; the briefing says
+  "⚡ No calldowns"). Sky Pirates bans ground units for the player too, so
+  its Drop Pod lands 2 Wasps + a Raptor and the op stays an air raid.
 - **AI:** a per-tick dodge reflex (before the decision gate) moves every
   unit inside an enemy reticle ~4 tiles out after 1.1 / 0.6 / 0.4 s
   (Easy / Normal / Hard) — if there's still time. It Barrages the best
@@ -645,8 +690,9 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   new chevron pops; rank 3 units get a pulsing gold shimmer. Your unit
   reaching rank 2 gets a "earned a callsign" toast; rank 3 an announcement.
   Your named unit dying gives "✝ Viper (Lancer, 9 kills) destroyed" (one
-  toast per tick); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives
-  "🎯 Enemy ace … down".
+  toast per tick; "… destroyed by an enemy Barrage" when one strike got
+  them); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives "🎯 Enemy
+  ace … down" ("… down to your Sky Hammer").
 - **Finale** (`game/finale.ts`): when an HQ falls the render clocks (tweens,
   sprite anims, particles, tracers) drop to 0.3×, the camera glides and
   zooms onto the wreck (centred in the area the dock leaves free), five
@@ -661,11 +707,18 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   the *biggest battle* (most deaths within 20 s and 10 tiles, with each
   side's losses and where), and the *turning point* (the lead passing to the
   other side and holding 30 s) or, if it never changed hands, when the
-  winner *pulled ahead* (≥ 1.5× and 400 up to the end); the MVP card (most
-  kills, fallen or alive) and the enemy's ace; stats with correct kill
-  counts plus any numeric stats other features add to `FactionStats`; and
-  one rule-picked tip (no anti-air vs an air force, harvesters lost, idle
-  factories, banked scrap, Titans unanswered, …). Spectators get both
+  winner *pulled ahead* (≥ 1.5× and 400 up to the end). Calldowns are named
+  in them: "Your Barrage took out their Stinger", "At your base: you lost 6
+  (4 to their Barrage), they lost 5", "Your army overtook theirs after your
+  Sky Hammer" (a strike by the new leader that killed 2+ units or 400 scrap
+  in the 20 s before). Then the MVP card (most kills, fallen or alive — a
+  unit, never the HQ that calldown kills are credited to) and the enemy's
+  ace; stats with correct kill counts, *Scrap salvaged*, *Calldowns* fired
+  per side (`World.powers.fired`), plus any numeric stats other features
+  add to `FactionStats` (with friendly labels); and one rule-picked tip (no
+  anti-air vs an air force, harvesters lost, idle factories, banked scrap,
+  Titans unanswered, 6+ units lost to enemy calldowns, …). Calldown kills
+  never count as "your defences" (tips, Iron Wall). Spectators get both
   MVPs and a one-line story per commander instead of a tip. Buttons stay
   pinned at the bottom of the scrolling panel; landscape uses two columns.
   `addReportSection()` lets later features add blocks (career medals).
@@ -713,7 +766,13 @@ best per map and difficulty is saved on the device and shown on the menu
 - **Tuning** (`npx vite-node tools/survival.ts both all all 3`): a scripted
   "decent phone player" survives a median of ~10 waves on Normal (8–16), ~9
   on Hard and ~18 on Easy; the Normal Balanced AI ~15. Proving Grounds (30k
-  scrap in total) is the hardest map; the rich Dune Sea the easiest.
+  scrap in total) is the hardest map; the rich Dune Sea the easiest. (Those
+  numbers predate salvage and calldowns. Spot checks after the merge, one
+  run each of a Normal Balanced AI defender with / without calldowns:
+  Riverlands 15 / 33 waves, Proving Grounds 25 / 25 — so calldowns don't make
+  it easier — while it salvaged 17–67k scrap a run from the waves' wrecks.
+  Retuning wave budgets or salvage for Last Stand belongs to the balance
+  pass.)
 
 ### Career, medals, mutators and the Daily Op
 
@@ -726,9 +785,22 @@ Reasons to come back between matches. Spectated games never count.
   harvesting 2× theirs), and — in defeat too — 🎖️ Ace (one unit, 9 kills),
   🗿 Giant Slayer (3 Titans), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
   (defences kill 30), ☠️ Exterminator (60 kills), 🏚 Wrecking Crew (12
-  buildings); Last Stand 🏰 Holdout (10 waves) and 🗼 Unbreakable (20).
-  Thresholds were calibrated on 40 AI-vs-AI matches so a typical win earns
-  one or two and the rest are goals.
+  buildings); the battlefield's own feats, in defeat too — 🛰️ Orbital (one
+  Sky Hammer destroys 1,000 scrap of units and buildings), ♻️ Scavenger
+  (salvage 3,000 scrap from wrecks) and 💨 Steady Hands (dodge 3 enemy
+  Barrages / Sky Hammers: at least 2 of your units under the reticle when it
+  was called, nothing hit when it landed); Last Stand 🏰 Holdout (10 waves)
+  and 🗼 Unbreakable (20). Thresholds were calibrated on 40 AI-vs-AI matches
+  so a typical win earns one or two and the rest are goals. The chronicle
+  records every calldown (`StrikeRec`: who, what, units exposed when called,
+  hits and kills when it landed) for the battlefield medals, calibrated on
+  120 more (60 to tune, 60 to check; % of sides): "any building" or "3 units"
+  for one Sky Hammer were 44% and ~0% (its flat 700 flattens turrets and
+  SAMs, while units get clear), so Orbital counts value — 22%; Scavenger at
+  1,500 was 82% (AI sweeps; median 2,600–2,800 a side), at 3,000 42%;
+  Steady Hands at 3 dodges 25–32%, with the AI's 0.6 s reflex. A human
+  salvages and dodges by hand, so those two should land lower. Calldown
+  kills no longer count toward Iron Wall.
 - **Career** (`game/career.ts`, localStorage `battledrones.career`, pure math
   + try/catch storage): XP = win 100 / loss 30 (scaled down for losses under
   5:00) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
@@ -802,9 +874,9 @@ completion goal.
 |---|---|---|---|---|---|
 | 1 | 🌉 Bridgehead | Riverlands | Rush, Hard, bigger waves | Hold 4:00 with a bridge turret standing (forward outpost pre-placed) | lose ≤ 6 · both turrets |
 | 2 | 🌙 Harvest Moon | Dune Sea | Air Swarm, Hard, early Wasps | Deliver 10,000 scrap by 5:00 | ≤ 1 harvester lost · by 4:00 |
-| 3 | 🎯 Decapitation | Proving Grounds | Balanced, Easy, never attacks | Strike group, no production: HQ by 3:00 | lose ≤ 4 · under 2:00 |
-| 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income or harvesters: HQ by 6:00 | 4 harvesters killed · under 4:00 |
-| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants (air only), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
+| 3 | 🎯 Decapitation | Proving Grounds | Balanced, Easy, never attacks | Strike group, no production, no calldowns: HQ by 3:00 | lose ≤ 4 · under 2:00 |
+| 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income (not even salvage) or harvesters, no calldowns: HQ by 6:00 | 4 harvesters killed · under 4:00 |
+| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants or ground units (air only; the Drop Pod lands Wasps), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
 | 6 | 💥 Glass Jaw | Dune Sea | Rush, Normal | Glass Cannons + Rapid Fab: HQ by 6:00 | lose no building · under 4:00 |
 | 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
 | 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
@@ -1004,6 +1076,7 @@ src/
     hints.ts        # one-time hint queue: pacing, priority, staleness (tested)
     heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
     chronicle.ts    # match recorder + story analysis for the report
+    calldown-credit.ts # which deaths a calldown caused (kill credit for callouts, chronicle, toasts, hotspots; tested)
     finale.ts       # the cinematic HQ kill
     career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
     ops.ts          # Ops narration: briefing banner, countdowns, star notices

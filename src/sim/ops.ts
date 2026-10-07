@@ -2,7 +2,7 @@ import { BUILDINGS, TICK_RATE, UNITS } from "./balance";
 import { createAiState, type AiState, type Difficulty, type Strategy, type StrategyName } from "./ai/commander";
 import { nearestReachableResource } from "./economy";
 import { setupSurvival, wavesSurvived, type SurvivalOptions } from "./modes/survival";
-import { makeRules, type MutatorId } from "./rules";
+import { GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
 import type { BuildingKind, Faction, UnitKind, World } from "./types";
 import { buildingCenter, hqOf, inBounds, passable, spawnBuilding, spawnUnit } from "./world";
 
@@ -74,6 +74,8 @@ export interface OpRules {
   playerIncome?: number;
   /** Enemy income multiplier (a commander that digs in rather than out-grows you). */
   enemyIncome?: number;
+  /** false: no commander calldowns for either side (a fixed strike group or budget is the puzzle). */
+  calldowns?: false;
 }
 
 export interface OpDef {
@@ -216,7 +218,8 @@ export const OPS: OpDef[] = [
     map: "proving-grounds",
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
     focus: { x: 10, y: 39 },
-    rules: { playerBans: { units: ALL_UNITS, buildings: ALL_BUILDINGS }, playerIncome: 0 },
+    // (no calldowns: a Drop Pod or Barrage would make the fixed strike group moot, and Red's pods would reinforce it)
+    rules: { playerBans: { units: ALL_UNITS, buildings: ALL_BUILDINGS }, playerIncome: 0, calldowns: false },
     scrap: 0,
     setup(w, o) {
       o.removeUnits("blue", "harvester");
@@ -252,7 +255,8 @@ export const OPS: OpDef[] = [
     tip: "Every unit counts. Hit their harvesters to stall the Boom, keep your army together, and don't waste scrap on defences you won't need.",
     map: "frostbite",
     ai: { strategy: "boom", difficulty: "normal" },
-    rules: { playerBans: { units: ["harvester"] }, playerIncome: 0 },
+    // (no calldowns: free Drop Pod crews would break the fixed budget)
+    rules: { playerBans: { units: ["harvester"] }, playerIncome: 0, calldowns: false },
     scrap: 3000,
     setup(_w, o) {
       o.removeUnits("blue", "harvester");
@@ -277,7 +281,8 @@ export const OPS: OpDef[] = [
     map: "ashlands",
     // a commander that digs in (never attacks) on half income: the clock is the enemy
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
-    rules: { playerBans: { buildings: ["fab-plant"] }, enemyIncome: 0.5 },
+    // (ground units are banned too, so a Drop Pod lands Wasps and a Raptor: it stays an air raid)
+    rules: { playerBans: { units: GROUND_COMBAT, buildings: ["fab-plant"] }, enemyIncome: 0.5 },
     scrap: 800,
     setup(_w, o) {
       o.building("blue", "airpad", 9, 54);
@@ -410,6 +415,7 @@ export function setupOp(w: World, id: string): void {
   if (op.rules?.playerIncome !== undefined || op.rules?.enemyIncome !== undefined)
     r.sideIncome = { [player]: op.rules.playerIncome ?? 1, [enemy]: op.rules.enemyIncome ?? 1 };
   r.banLabel = "Disabled in this op";
+  if (op.rules?.calldowns === false) r.noCalldowns = true;
   w.rules = r;
   if (op.ai === "survival") setupSurvival(w, op.survival ?? {}, player);
   w.factions[player].scrap = op.scrap ?? r.startScrap;

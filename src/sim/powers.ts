@@ -2,7 +2,7 @@ import { POWERS, TICK_RATE, UNITS } from "./balance";
 import { areaBlast, strikeDamage } from "./combat";
 import { isExplored, isVisible } from "./fog";
 import { worldRandom } from "./rand";
-import { applySpawnRank, bannedBy } from "./rules";
+import { applySpawnRank, bannedBy, rulesOf } from "./rules";
 import type { Calldown, Command, Faction, PowerKind, PowerState, UnitKind, World } from "./types";
 import { distToBuilding, hasBuilding, hqOf, inBounds, moveClassOf, passable, spawnUnit } from "./world";
 
@@ -91,7 +91,7 @@ export function powerStatus(w: World, faction: Faction, power: PowerKind): Power
   const charge = cost === 0 ? 1 : Math.min(1, ps.meter[faction] / cost);
   return {
     power, cost, charge, cooldown, cooldownTotal: cooldownTicks(power), locked,
-    ready: locked === 0 && cooldown === 0 && charge >= 1 && !w.winner
+    ready: locked === 0 && cooldown === 0 && charge >= 1 && !w.winner && !rulesOf(w).noCalldowns
   };
 }
 
@@ -103,6 +103,7 @@ const clock = (t: number) => {
 /** Why the power can't be fired at all right now (charge, cooldown, lock), or null. */
 export function powerBlocker(w: World, faction: Faction, power: PowerKind): string | null {
   if (w.winner) return "The battle is over";
+  if (rulesOf(w).noCalldowns) return "No calldowns in this match";
   if (!hqOf(w, faction)) return "Calldowns need an HQ";
   if (power === "droppod" && podCrew(w, faction).length === 0) return "Drop Pod is disabled in this match";
   const st = powerStatus(w, faction, power);
@@ -171,7 +172,7 @@ const enemyOf = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
 export function tickPowers(w: World): void {
   const ps = w.powers;
   for (const f of FACTIONS)
-    if (w.tick === ps.readyAt[f].hammer) w.fx.push({ type: "powerOnline", faction: f, power: "hammer" });
+    if (w.tick === ps.readyAt[f].hammer && !rulesOf(w).noCalldowns) w.fx.push({ type: "powerOnline", faction: f, power: "hammer" });
   if (ps.stunned.size > 0)
     for (const [id, until] of ps.stunned)
       if (until <= w.tick || (!w.units.has(id) && !w.buildings.has(id))) ps.stunned.delete(id);

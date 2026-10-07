@@ -376,6 +376,7 @@ export function recapOf(w: World, chronicle: Chronicle, pov: Faction): MatchReca
     samples: chronicle.samples,
     deaths: chronicle.deaths,
     bestUnitKills: mvp[pov]?.kills ?? 0,
+    strikes: chronicle.strikes,
     waves: w.survival ? wavesSurvived(w) : null
   };
 }

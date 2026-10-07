@@ -89,8 +89,10 @@ function collect(w: World, r: Wreck, faction: Faction, collectorId: number): voi
 export function tickSalvage(w: World): void {
   if (w.wrecks.length === 0) return;
   const reach = SALVAGE.pickupRadius;
+  // a side on a frozen economy (an op's zero income) can't cash wrecks in: its units drive over them
+  const earns = { blue: incomeOf(w, "blue") > 0, red: incomeOf(w, "red") > 0 };
   const ground: Unit[] = [];
-  for (const u of w.units.values()) if (UNITS[u.kind].domain === "ground") ground.push(u);
+  for (const u of w.units.values()) if (UNITS[u.kind].domain === "ground" && earns[u.faction]) ground.push(u);
   const keep: Wreck[] = [];
   for (const r of w.wrecks) {
     if (--r.ttl <= 0) continue; // burnt out
@@ -102,7 +104,7 @@ export function tickSalvage(w: World): void {
     // a building placed over a wreck clears it: its owner keeps the scrap
     const b = buildingAtTile(w, Math.floor(r.x), Math.floor(r.y));
     if (b) {
-      collect(w, r, b.faction, b.id);
+      if (earns[b.faction]) collect(w, r, b.faction, b.id);
       continue;
     }
     let best: Unit | null = null;
