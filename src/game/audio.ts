@@ -14,7 +14,8 @@ export type SfxName =
   | "cannon" | "heavy" | "mg" | "flak" | "rocket" | "missile" | "laser" | "shell" | "bomb"
   | "explosion" | "bigExplosion" | "build" | "ready" | "click" | "alert" | "heal" | "rank" | "sell"
   | "victory" | "defeat"
-  | "kill" | "lost" | "coin";
+  | "kill" | "lost" | "coin"
+  | "inbound";
 
 export type AudioChannel = "sfx" | "music" | "voice";
 
@@ -71,6 +72,8 @@ export class Sfx {
   private noise: AudioBuffer | null = null;
   private last = new Map<SfxName, number>();
   private voices = 0;
+  /** Game speed (awareness lane): battle sounds space out at 1.5–4×. */
+  private tempo = 1;
   private readyFns = new Set<(e: AudioEngine) => void>();
   private changeFns = new Set<(s: AudioSettings) => void>();
   private wantUnlock = false;
@@ -229,6 +232,11 @@ export class Sfx {
     g.setTargetAtTime(1, until, 0.4);
   }
 
+  /** Game speed: at k× the sim makes k× the shots, so battle sounds' minimum gaps stretch by k. */
+  setTempo(k: number): void {
+    this.tempo = Math.max(1, k);
+  }
+
   /**
    * Play a sound at volume `vol` (0–1, already distance-attenuated by the
    * caller). `pitch` scales the recipe's frequencies where it supports it.
@@ -237,10 +245,10 @@ export class Sfx {
     const ctx = this.ctx;
     if (!ctx || !this.buses || !this.enabled("sfx") || vol < 0.03) return;
     const now = ctx.currentTime;
-    const minGap = GAP[name] ?? 0.05;
+    const minGap = (GAP[name] ?? 0.05) * (BATTLE.has(name) ? this.tempo : 1);
     if (now - (this.last.get(name) ?? -1) < minGap) return;
     // feedback cues keep two reserved voices so a loud battle can't swallow them
-    if (this.voices > (PRIORITY.has(name) ? 16 : 14)) return;
+    if (this.voices > (PRIORITY.has(name) ? 16 : this.tempo > 1 ? 11 : 14)) return;
     this.last.set(name, now);
     const duck = DUCKS[name];
     if (duck && vol >= 0.25) this.duck(duck[0] * Math.min(1, vol), duck[1]);
@@ -260,17 +268,21 @@ export class Sfx {
 const DUCKS: Partial<Record<SfxName, [number, number]>> = {
   bigExplosion: [6, 0.6],
   alert: [5, 0.6],
+  inbound: [5, 0.7],
   victory: [6, 1.2],
   defeat: [6, 1.2]
 };
 
 const GAP: Partial<Record<SfxName, number>> = {
   mg: 0.07, flak: 0.06, cannon: 0.05, laser: 0.06, explosion: 0.06, heal: 0.4, alert: 3, click: 0.02,
-  kill: 0.08, lost: 0.08, coin: 0.1
+  kill: 0.08, lost: 0.08, coin: 0.1, inbound: 2
 };
 
+/** Weapon and impact sounds: these thin out at faster game speeds (setTempo). */
+const BATTLE = new Set<SfxName>(["cannon", "heavy", "mg", "flak", "rocket", "missile", "laser", "shell", "bomb", "explosion", "bigExplosion", "heal"]);
+
 /** Short feedback cues that may use the reserved voices above the battle cap. */
-const PRIORITY = new Set<SfxName>(["kill", "lost", "coin", "alert"]);
+const PRIORITY = new Set<SfxName>(["kill", "lost", "coin", "alert", "inbound"]);
 
 type Recipe = (ctx: AudioContext, out: AudioNode, t: number, noise: AudioBuffer, pitch: number) => number;
 
@@ -438,6 +450,14 @@ const RECIPES: Record<SfxName, Recipe> = {
     tone(c, o, t, "triangle", 1760 * p, 1760 * p, 0.14, 0.1, 0.04);
     tone(c, o, t, "sine", 3520 * p, 3520 * p, 0.08, 0.025, 0.04);
     return 0.2;
+  },
+  // enemies approaching your base: two rising siren whoops (unlike the beeping "alert" for damage)
+  inbound: (c, o, t) => {
+    for (let i = 0; i < 2; i++) {
+      tone(c, o, t, "sawtooth", 440, 990, 0.24, 0.06, i * 0.28);
+      tone(c, o, t, "triangle", 440, 990, 0.24, 0.14, i * 0.28);
+    }
+    return 0.56;
   }
 };
 

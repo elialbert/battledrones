@@ -1367,3 +1367,353 @@ button {
     top: calc(max(6px, env(safe-area-inset-top)) + 118px);
   }
 }
+
+/* ===================================================== awareness & tempo === */
+/* src/ui/awareness.ts: speed chip + hold-the-clock, battle meter, edge arrows,
+   jump button; and the toasts become a compact top-left ticker. */
+
+/* clock + speed chip share a row under the scrap pill (portrait) / beside it (landscape) */
+.tempo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.tempo .clock {
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 16px;
+}
+.clock.holdable {
+  position: relative;
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+/* a ≥ 40 px thumb target around the slim pills */
+.clock.holdable::after,
+.speed::after {
+  content: "";
+  position: absolute;
+  inset: -7px -4px;
+}
+.clock.fast {
+  color: var(--gold);
+}
+.clock.held {
+  color: #10141c;
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.clock.held::before {
+  content: "▶▶ ";
+  font-size: 10px;
+  letter-spacing: -2px;
+}
+.speed {
+  position: relative;
+  pointer-events: auto;
+  min-width: 44px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 10px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  touch-action: manipulation;
+}
+.speed:active {
+  background: #223048;
+}
+.speed.fast {
+  color: var(--gold);
+  border-color: rgba(255, 214, 110, 0.75);
+  box-shadow: 0 0 10px rgba(255, 196, 80, 0.3);
+}
+.speed.held {
+  color: #10141c;
+  background: var(--gold);
+}
+
+/* battle meter: hangs under the top bar (its positioning parent) while a fight is on screen */
+.bmeter {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 9px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.bmeter.in {
+  animation: bmIn 0.25s ease-out;
+}
+@keyframes bmIn {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+.bm-own { color: #7ec1ff; }
+.bm-foe { color: #ff8a7a; }
+.bm-bar {
+  position: relative;
+  width: 96px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #ff6a55, #a3271d);
+}
+.bm-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(90deg, #2c64c8, #6ab4ff);
+  transition: width 0.1s linear;
+}
+.bm-knob {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 14px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.9);
+  transition: left 0.1s linear;
+}
+.bmeter.winning { border-color: rgba(110, 176, 255, 0.6); }
+.bmeter.losing { border-color: rgba(255, 110, 90, 0.65); }
+.bm-tp {
+  position: absolute;
+  inset: -1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #0b111c;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+}
+.bm-tp.up { color: var(--green); border: 1px solid rgba(126, 242, 155, 0.7); }
+.bm-tp.down { color: var(--red); border: 1px solid rgba(255, 110, 90, 0.8); }
+.bm-tp.neutral { color: var(--gold); border: 1px solid rgba(255, 214, 110, 0.7); }
+.bm-tp.show { animation: tpFlash 1.8s ease-out forwards; }
+@keyframes tpFlash {
+  0% { opacity: 0; transform: scale(1.3); }
+  12% { opacity: 1; transform: scale(1); }
+  75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (orientation: landscape) {
+  .bmeter {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .bmeter.in {
+    animation: none;
+  }
+}
+
+/* edge arrows: off-screen hotspots, kept inside the HUD-safe playfield */
+.edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+.edge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: none;
+  background: none;
+  pointer-events: auto;
+  transform-origin: 23px 23px;
+  touch-action: manipulation;
+  --c: #ff5a4a;
+  --glow: rgba(255, 90, 74, 0.55);
+  animation: edgeIn 0.2s ease-out;
+}
+.edge.attack,
+.edge.fight {
+  --c: #ffb84a;
+  --glow: rgba(255, 184, 74, 0.5);
+}
+.edge .ring {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: rgba(12, 14, 22, 0.86);
+  border: 2px solid var(--c);
+  box-shadow: 0 0 0 0 var(--glow), 0 3px 10px rgba(0, 0, 0, 0.5);
+  animation: edgePulse 1.1s ease-out infinite;
+}
+.edge.inbound .ring {
+  border-style: dashed;
+  animation-duration: 0.7s;
+}
+.edge .chev {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 26px;
+  height: 26px;
+  fill: var(--c);
+  filter: drop-shadow(0 0 3px var(--glow));
+}
+.edge .el {
+  position: absolute;
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: rgba(10, 14, 22, 0.9);
+  border: 1px solid var(--c);
+  color: var(--c);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.edge[data-side="r"] .el { left: 44px; top: 50%; transform: translateY(-50%); }
+.edge[data-side="l"] .el { right: 44px; top: 50%; transform: translateY(-50%); }
+.edge[data-side="b"] .el { top: 44px; left: 50%; transform: translateX(-50%); }
+.edge[data-side="t"] .el { bottom: 44px; left: 50%; transform: translateX(-50%); }
+.edge:active .ring {
+  background: #2a1a1a;
+}
+@keyframes edgePulse {
+  0% { box-shadow: 0 0 0 0 var(--glow), 0 3px 10px rgba(0, 0, 0, 0.5); }
+  70% { box-shadow: 0 0 0 10px transparent, 0 3px 10px rgba(0, 0, 0, 0.5); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 3px 10px rgba(0, 0, 0, 0.5); }
+}
+@keyframes edgeIn {
+  from { opacity: 0; }
+}
+
+/* ⚡ jump-to-action, under the zoom buttons */
+.zb.jump {
+  position: relative;
+  color: var(--gold);
+  font-size: 20px;
+}
+.zb.jump.idle {
+  color: var(--dim);
+  opacity: 0.55;
+}
+.zb.jump.threat {
+  border-color: rgba(255, 110, 90, 0.8);
+  box-shadow: 0 0 10px rgba(255, 90, 74, 0.45);
+}
+.zb.jump .jdot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff5a4a;
+  box-shadow: 0 0 6px #ff5a4a;
+  animation: radioBlink 0.6s ease-in-out infinite alternate;
+}
+.zb.jump.nope {
+  animation: jumpNope 0.3s ease-in-out;
+}
+@keyframes jumpNope {
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+/* the ticker: toasts leave the middle of the battlefield for a compact
+   left-aligned stack (max 2) under the top-left controls */
+.toasts {
+  left: max(8px, env(safe-area-inset-left));
+  transform: none;
+  width: auto;
+  max-width: min(62vw, 300px);
+  align-items: flex-start;
+  gap: 4px;
+}
+.toast {
+  max-width: 100%;
+  padding: 5px 10px 5px 9px;
+  border-radius: 8px;
+  border-left-width: 3px;
+  font-size: 13px;
+  line-height: 1.25;
+  text-align: left;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.toast.hint {
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+.toast.radio {
+  display: inline-flex;
+}
+@media (orientation: portrait) {
+  #hud .toasts,
+  #hud:has(> .banner.in) .toasts,
+  #hud:has(> .banner.in > span) .toasts {
+    top: calc(max(6px, env(safe-area-inset-top)) + 98px);
+  }
+}
+@media (orientation: landscape) {
+  #hud .toasts,
+  #hud:has(> .banner.in) .toasts,
+  #hud:has(> .banner.in > span) .toasts {
+    top: calc(max(6px, env(safe-area-inset-top)) + 48px);
+    max-width: min(30vw, 270px);
+  }
+}
+/* while a banner shows, the ticker keeps only its newest line (they share the top-left) */
+#hud:has(> .banner.in) .toasts > .toast:not(:last-child) {
+  display: none;
+}
+.clock.held::before {
+  margin-right: 3px;
+}
+/* short landscape: the banner steps down a little while the battle meter shows under the top bar */
+@media (orientation: landscape) and (max-height: 560px) {
+  .bmeter {
+    top: calc(100% + 3px);
+    padding: 2px 7px;
+  }
+  #hud:has(.bmeter:not([hidden])) > .banner {
+    top: calc(max(6px, env(safe-area-inset-top)) + 66px);
+  }
+}
+/* landscape: the zoom stack (now with ⚡) sits a little lower so the ticker above it has room */
+@media (orientation: landscape) {
+  .zoombtns {
+    top: calc(50% + 30px);
+  }
+  .toast.hint {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+}

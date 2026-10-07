@@ -43,6 +43,13 @@ installable as a PWA.
   "Squad lost", "Construction complete". Kill streaks get banners: First
   blood, Double kill, Triple kill, Rampage, Titan down. Spectators get a
   neutral caster.
+- **Battle awareness and game speed.** Pulsing arrows at the screen edge
+  point at off-screen fights (red when you're hit, amber when you attack);
+  tap one, or ⚡, to glide there. "Enemy drones inbound — Flak, Raptors or a
+  Turret" warns before a raid lands, a tug-of-war meter shows who is
+  winning the fight on screen, and alerts sit in a slim ticker instead of
+  over the battlefield. Play at 1×, 1.5× or 2× (4× when watching), or hold
+  the clock to fast-forward.
 
 ## Development
 

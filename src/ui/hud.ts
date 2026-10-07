@@ -30,7 +30,8 @@ export interface Hud {
   alert(msg: string, x: number, y: number): void;
   /** A small radio caption for an announcer line (tap jumps to x, y). */
   radio(msg: string, tone: string, x?: number, y?: number): void;
-  ping(x: number, y: number): void;
+  /** A minimap ping; "inbound" is a bigger amber pulse for an approaching raid. */
+  ping(x: number, y: number, kind?: "hit" | "inbound"): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -368,13 +369,14 @@ export function createHud(api: HudApi): Hud {
   shield(selEl);
 
   // ------------------------------------------------------------- toasts ---
-  function toast(msg: string, onTap?: () => void, cls = "", ms = 2600): void {
+  function toast(msg: string, onTap?: () => void, cls = "", ms = 2200): void {
     const t = document.createElement("div");
     t.className = `toast ${cls}`;
     t.textContent = msg;
     if (onTap) t.addEventListener("click", onTap);
     toastsEl.appendChild(t);
-    while (toastsEl.children.length > 3) toastsEl.firstChild?.remove();
+    // the ticker keeps two lines at most: the newest pushes the oldest out
+    while (toastsEl.children.length > 2) toastsEl.firstChild?.remove();
     setTimeout(() => t.classList.add("out"), ms);
     setTimeout(() => t.remove(), ms + 500);
   }
@@ -455,7 +457,7 @@ export function createHud(api: HudApi): Hud {
     }
   }
 
-  const pings: { x: number; y: number; t: number }[] = [];
+  const pings: { x: number; y: number; t: number; kind?: "hit" | "inbound" }[] = [];
   let lastReady: BuildingKind | null = null;
 
   // --------------------------------------------------------- top buttons ---
@@ -719,6 +721,18 @@ export function createHud(api: HudApi): Hud {
         pings.splice(i, 1);
         continue;
       }
+      if (p.kind === "inbound") {
+        // a raid on its way: two amber rings, bigger and slower
+        for (const off of [0, 0.6]) {
+          const a = Math.max(0, age - off);
+          mctx.strokeStyle = `rgba(255,190,70,${Math.max(0, 1 - a / 3)})`;
+          mctx.lineWidth = 3;
+          mctx.beginPath();
+          mctx.arc(p.x * k, p.y * k, 6 + a * 14, 0, Math.PI * 2);
+          mctx.stroke();
+        }
+        continue;
+      }
       mctx.strokeStyle = `rgba(255,80,60,${1 - age / 3})`;
       mctx.lineWidth = 2;
       mctx.beginPath();
@@ -780,8 +794,8 @@ export function createHud(api: HudApi): Hud {
       const jump = x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined;
       toast(`${msg}${jump ? " ›" : ""}`, jump, `radio ${tone}`, 2400);
     },
-    ping(x, y) {
-      if (pings.length < 12) pings.push({ x, y, t: api.matchSeconds() });
+    ping(x, y, kind) {
+      if (pings.length < 12 || kind === "inbound") pings.push({ x, y, t: api.matchSeconds(), kind });
     },
     togglePause,
     destroy() {
@@ -801,5 +815,6 @@ export const HELP_HTML = `
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything.</p>
-  <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump.</p>`;
+  <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them.</p>
+  <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>`;
 

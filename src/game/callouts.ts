@@ -144,6 +144,17 @@ export class BattleCallouts {
     this.poll(t);
   }
 
+  /**
+   * The awareness layer just warned of an inbound raid (awareness.ts): an
+   * aircraft raid makes "Enemy aircraft detected" redundant for a while.
+   */
+  inbound(domain: "air" | "ground" | "mixed", t: number): void {
+    if (domain === "ground" || this.h.spectator) return;
+    const f = enemyOf(this.h.player);
+    this.airArmed[f] = false;
+    this.airSeen[f] = t;
+  }
+
   /** An outside cue (HUD): "no-scrap". */
   cue(key: "no-scrap", t: number): void {
     if (this.h.spectator || this.ended) return;

@@ -300,6 +300,69 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   unprompted chirps/min with a follow-cam. Spectators: 3.1 lines/min and
   1.7 banners/min. The test suite replays a match and fails if this drifts.
 
+### Battle awareness & tempo
+
+On a 6" screen you can't see the fight you should react to, warnings used
+to come after the damage, toasts covered the battlefield, and the build-up
+dragged. Rules in `src/game/awareness.ts` (engine-free, tested), wired up
+in `awareness-view.ts`, widgets in `src/ui/awareness.ts`. Everything is
+fog-respecting: hits on your own things, shots your units fire, and only
+enemies you can currently see.
+
+- **Game speed:** a chip beside the clock cycles 1× → 1.5× → 2× (spectators
+  also 4×), remembered per mode in `localStorage` (`battledrones.speed`);
+  **press and hold the clock** for 3× while held; `.` cycles. At most 8 sim
+  ticks run per frame and a backlog beyond that is dropped, so a slow phone
+  slows down instead of spiralling. Weapon and impact sounds space out by
+  the speed factor (`sfx.setTempo`) and get 11 voices instead of 14 above
+  1×. Detection windows everywhere are sim seconds, so nothing else changes.
+- **Inbound warning:** when visible armed enemies (anything that can hit a
+  ground target) come within 12 tiles of a building or harvester, the group
+  (single-link, 5 tiles) is warned once, with counter advice by domain and
+  lead kind: "Enemy drones inbound — Flak, Raptors or a Turret", "Enemy
+  Titans inbound — Lancers, Wasps or Hornets"… A group seen in the zone
+  within 20 s isn't new; one that has been shooting your things for 1.5 s is
+  a fight, not a raid; loud warnings are at least 12 s apart (quieter ones
+  still get an arrow). The first raid of each kind per match is a banner
+  ("DRONES INBOUND", sub-line with the counters, read out by the
+  announcer); later ones are a ticker line plus the radio. Each sounds a
+  two-whoop siren and pulses the minimap with amber rings. An air raid
+  stands in for "Enemy aircraft detected". Measured over 8 AI-vs-AI matches
+  (67 min, blue's view): 1.2 loud warnings/min; warning → that group's first
+  hit median 3.8 s (p10 0.9, p90 8.0). Lead time is bounded by vision: a
+  harvester sees 4 tiles and a Wasp shoots from 3, so the first raid on a
+  mining line gets well under a second, while Radar, the HQ's 8.5-tile
+  sight or units on watch buy several seconds.
+- **Hotspots and edge arrows:** hits on your things (HQ 0.6, other
+  buildings and harvesters 0.45, units 0.35 heat), your losses (0.6), and
+  shots/kills by your units (0.2/0.4, at the shooter) heat 6×6-tile cells
+  that cool 15% per second; warm cells within 8 tiles cluster and a cluster
+  over 1 heat is a hotspot, named by the most important thing hit (HQ! >
+  Base > Harvesters > Units; only your own shots: Attack). Off-screen
+  hotspots (by priority, then heat; at most 3, one per direction) become
+  pulsing, tappable 46 px arrows at the edge of the visible battlefield,
+  red when you're being hit (dashed for an inbound raid), amber when you're
+  attacking. Each slides along the edge past HUD widgets (minimap, zoom
+  stack, ticker, chips, banner, anything marked `data-edge-avoid`). Tapping
+  one glides the camera there in 350 ms (ease-out) and flashes a ring. The
+  **⚡ button** under the zoom buttons cycles through all hotspots, most
+  urgent first (a red dot when something of yours is under threat).
+  Spectators get amber "Fight" / "Red HQ" arrows for both sides. Measured:
+  a camera parked on the HQ has at least one hotspot elsewhere 51% of the
+  match.
+- **Battle meter:** while at least 2 of your armed units and 2 visible
+  enemy ones are in view and shots were fired there in the last 3 s, a slim
+  tug-of-war bar under the clock compares Σ cost × HP fraction (turrets and
+  SAMs count, harvesters don't), easing over 300 ms and lingering 1.5 s. A
+  swing of more than 20 points within 4 s flashes **Turning point!** (green
+  toward you, red away; at most every 8 s; ignored when the camera jumps).
+- **Ticker:** toasts left the battlefield's centre for a compact,
+  left-aligned stack under the scrap pill (portrait) or under the pause
+  button (landscape): 13 px, at most two lines each, at most two at once
+  (the newest pushes the oldest out), 2.2 s by default, still tappable.
+  While a banner shows only the newest line stays. Big moments remain
+  `announce()` banners.
+
 ### Fog of war
 
 - Unexplored (black), explored-but-unseen (dimmed; remembers enemy
@@ -393,7 +456,8 @@ nothing is selected; placement hint + cancel while placing.
 
 Left-click select, left-drag box-select, right-click command, wheel zoom,
 middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
-Delete sell, Esc cancel/deselect. Right-click a build button for its card.
+Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action.
+Hold the clock to fast-forward. Right-click a build button for its card.
 
 ### HUD layout — portrait and landscape both first-class
 
@@ -405,8 +469,11 @@ DOM overlaid on the canvas, re-flowing by orientation:
   income rate and clock top-left.
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
-- Toasts for "building ready", attacks (tap to jump there) and hints;
-  minimap pings where you're being hit. The scrap pill bumps when a
+- A ticker of short toasts top-left for "building ready", attacks (tap to
+  jump there) and hints; minimap pings where you're being hit (amber double
+  rings for an inbound raid). The clock row carries the game-speed chip, a
+  battle meter hangs under it during on-screen fights, edge arrows point at
+  off-screen fights, and ⚡ under the zoom buttons jumps to the action. The scrap pill bumps when a
   harvester delivers and flashes red when scrap is spent.
 - **Sound:** the top-left speaker (in game and on the menu) is a one-tap
   master mute. The pause menu has four toggles, persisted in
@@ -453,7 +520,9 @@ src/
     voices.ts       # unit chirp-voices: formant synth, line plans, rate limits
     callouts.ts     # announcer moments, kill streaks, radio queue (tested)
     announcer.ts    # radio announcer: squelch + speechSynthesis / radio code
-  ui/         # DOM HUD, menu styles
+    awareness.ts    # game speed, hotspots, inbound warnings, battle meter rules (tested)
+    awareness-view.ts # wires them to the camera, HUD, radio; camera glide
+  ui/         # DOM HUD (hud.ts; awareness.ts: speed chip, edge arrows, meter), menu styles
 art/          # image generation + processing pipeline (Python)
 tools/        # map export, balance harness, smoke test, screenshot tour
 ```

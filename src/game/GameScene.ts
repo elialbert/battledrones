@@ -25,6 +25,8 @@ import { music } from "./music";
 import { BattleMood } from "./score";
 import { voices, type VoiceHooks } from "./voices";
 import { Announcer } from "./announcer";
+import { Awareness } from "./awareness-view";
+import { planTicks } from "./awareness";
 import { EntityRenderer } from "./render/entities";
 import { AIR_LIFT, Fx } from "./render/fx";
 import { CombatJuice } from "./render/juice-view";
@@ -59,6 +61,8 @@ export class GameScene extends Phaser.Scene {
   /** The radio announcer (and the kill-streak callouts it owns). */
   private radio!: Announcer;
   private voiceHooks!: VoiceHooks;
+  /** Game speed, inbound warnings, edge arrows, jump button, battle meter. */
+  private aware!: Awareness;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private hud!: Hud;
@@ -184,7 +188,15 @@ export class GameScene extends Phaser.Scene {
       enemy: { strategy: this.ai.strategy.label, difficulty: gameMode.difficulty }
     });
 
+    this.aware = new Awareness({
+      scene: this, world: this.world, player: PLAYER, spectator: gameMode.spectator, dpr: this.dpr,
+      hud: this.hud, radio: this.radio,
+      sees: (x, y) => this.seesPoint(x, y),
+      pulse: (x, y, c) => this.fx.pulse(x * TILE, y * TILE, c, 1.4)
+    });
+
     this.events.on(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.aware.destroy();
       this.hud.destroy();
       this.radio.destroy();
     });
@@ -199,6 +211,7 @@ export class GameScene extends Phaser.Scene {
       music,
       radio: this.radio,
       voices,
+      aware: this.aware,
       canPlace: (tx: number, ty: number) =>
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
@@ -261,9 +274,10 @@ export class GameScene extends Phaser.Scene {
     this.updateCamera(delta);
 
     if (!this.ctrl.paused && !this.ended) {
-      this.acc += Math.min(delta, 250);
-      while (this.acc >= TICK_MS) {
-        this.acc -= TICK_MS;
+      // game speed (1–4×), at most AWARE.maxTicksPerFrame ticks per frame
+      const plan = planTicks(this.acc, delta, this.aware.value);
+      this.acc = plan.acc;
+      for (let i = 0; i < plan.ticks; i++) {
         this.snapshotPrev();
         const cmds = this.blueAi
           ? [...tickAi(this.world, "blue", this.blueAi), ...tickAi(this.world, "red", this.ai)]
@@ -282,6 +296,7 @@ export class GameScene extends Phaser.Scene {
     this.juice.update(this.ctrl.paused ? 0 : delta);
     this.drawOverlay(alpha);
     this.hud.update();
+    this.aware.update(delta, this.ctrl.paused);
     voices.watchSelection(this.ctrl.selectedUnits, this.world);
     this.radio.update(delta, this.ctrl.paused);
     music.update({
@@ -317,6 +332,7 @@ export class GameScene extends Phaser.Scene {
     for (const ev of this.world.fx) this.handleFx(ev);
     this.juice.events(this.world.fx);
     this.mood.events(this.world.fx, this.simSeconds);
+    this.aware.events(this.world.fx, this.simSeconds);
     this.radio.events(this.world.fx, this.simSeconds);
     voices.events(this.world.fx, this.voiceHooks);
     const fb = this.ctrl.lastFeedback;
@@ -677,6 +693,8 @@ export class GameScene extends Phaser.Scene {
       else if (e.key === "p" || e.key === " ") this.hud.togglePause();
       else if (e.key === "q") this.ctrl.selectArmy();
       else if (e.key === "Delete") this.ctrl.sellSelected();
+      else if (e.key === ".") this.aware.cycleSpeed();
+      else if (e.key === "j") this.aware.jump();
     });
   }
 
