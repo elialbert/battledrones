@@ -7,6 +7,7 @@
   "b/red/radar-head": {"origin": [0.5024, 0.6471]},
   "b/red/sam-site-head": {"origin": [0.5003, 0.5367]},
   "b/red/turret-head": {"origin": [0.5, 0.6717]},
+  "obj/uplink-head": {"origin": [0.504, 0.7627]},
   "u/blue/flak-crawler": {"origin": [0.4994, 0.4984]},
   "u/blue/flak-crawler-turret": {"origin": [0.5005, 0.6627]},
   "u/blue/harvester": {"origin": [0.5007, 0.5106]},
@@ -50,7 +51,8 @@
   "sam-site": [-0.003, -0.0256],
   "stinger": [-0.0009, -0.0561],
   "titan": [-0.0005, -0.0684],
-  "turret": [-0.0009, -0.0142]
+  "turret": [-0.0009, -0.0142],
+  "uplink": [-0.0068, -0.0335]
  },
  "sizes": {
   "harvester": 1.15,

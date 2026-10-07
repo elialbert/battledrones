@@ -1,5 +1,6 @@
 import { BUILDINGS, ECONOMY, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { moveUnitToward } from "./movement";
+import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
 import {
   Terrain,
@@ -95,6 +96,7 @@ export function canPlaceBuilding(
       u.y >= ty && u.y < ty + size
     )
       return false;
+  if (blocksObjective(w, tx, ty, size)) return false; // Uplink platforms and crates stay open ground
   // within build radius of a friendly building
   const cx = tx + size / 2;
   const cy = ty + size / 2;

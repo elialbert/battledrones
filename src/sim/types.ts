@@ -325,7 +325,109 @@ export type FxEvent =
       type: "powerOnline";
       faction: Faction;
       power: PowerKind;
-    };
+    }
+  | {
+      /**
+       * An Uplink changed hands (objectives.ts): `owner` took it (from
+       * neutral), or `owner` is null when `prev` lost it to a neutralising
+       * push by `by`. Public: both sides see it.
+       */
+      type: "uplinkFlip";
+      id: number;
+      x: number;
+      y: number;
+      owner: Faction | null;
+      prev: Faction | null;
+      by: Faction;
+    }
+  | {
+      /** `faction` started pushing an Uplink's capture bar its way (fires once per push). */
+      type: "uplinkContest";
+      id: number;
+      x: number;
+      y: number;
+      faction: Faction;
+      /** Owner at the moment the push began. */
+      owner: Faction | null;
+    }
+  | {
+      /** A supply crate was announced (public, both sides): it lands at `landTick`. */
+      type: "crateIncoming";
+      id: number;
+      x: number;
+      y: number;
+      reward: CrateReward;
+      landTick: number;
+      /** Which drop of the match (0 = the first); both crates of a drop share it. */
+      drop: number;
+    }
+  | { type: "crateLanded"; id: number; x: number; y: number; reward: CrateReward }
+  | {
+      /**
+       * `faction` claimed a crate. `amount`: scrap or charge gained, units
+       * promoted or healed; `unitIds`: the units it affected (or the one it
+       * delivered).
+       */
+      type: "crateClaimed";
+      id: number;
+      x: number;
+      y: number;
+      faction: Faction;
+      collectorId: number;
+      reward: CrateReward;
+      amount: number;
+      unitIds: number[];
+      /** Scrap credited (the scrap reward, or the fallback when a kit had nothing to work on). */
+      scrap: number;
+    }
+  | { type: "crateExpired"; id: number; x: number; y: number };
+
+/**
+ * A capturable Uplink relay (objectives.ts). Not a building: nothing
+ * occupies its tiles and nothing can shoot it, so combat never sees it.
+ */
+export interface Uplink {
+  id: number;
+  /** Centre of the capture zone, in tiles. */
+  x: number;
+  y: number;
+  owner: Faction | null;
+  /** Capture bar: −100 (red holds it) … 0 (neutral) … +100 (blue holds it). */
+  progress: number;
+  /** Who is pushing the bar right now (null: nobody, or contested). */
+  pushing: Faction | null;
+  /** Both sides are inside the zone (the bar is frozen). */
+  contested: boolean;
+}
+
+/** What a supply crate holds (the same for both crates of a drop: fair). */
+export type CrateReward = "scrap" | "veterans" | "repair" | "charge" | "unit";
+
+export interface Crate {
+  id: number;
+  x: number;
+  y: number;
+  reward: CrateReward;
+  drop: number;
+  /** Announced at, lands (claimable from) at, and burns out at, in ticks. */
+  announcedTick: number;
+  landTick: number;
+  expireTick: number;
+}
+
+export interface ObjectiveState {
+  uplinks: Uplink[];
+  /** Announced or landed crates not yet claimed or expired. */
+  crates: Crate[];
+  /** Supply-drop sites (tiles, blue-side; each drop lands a crate here and at the mirror). Empty = no drops. */
+  dropSites: { x: number; y: number }[];
+  /** Drops announced so far (the next drop's index). */
+  drops: number;
+  /** Index into `dropSites` of the last drop (the next one lands elsewhere). */
+  lastSite: number;
+  /** Per side: scrap from Uplinks and crates, captures, crates claimed. */
+  stats: Record<Faction, { uplinkScrap: number; crateScrap: number; captures: number; crates: number }>;
+}
 
 /**
  * What a destroyed combat unit leaves behind (salvage.ts): a burning hull
@@ -405,6 +507,8 @@ export interface World {
   wrecks: Wreck[];
   /** Commander meters, cooldowns, calldowns in flight and EMP stuns (powers.ts). */
   powers: PowerState;
+  /** Map objectives: Uplink relays and supply drops (objectives.ts). Empty unless the match enables them. */
+  objectives: ObjectiveState;
   factions: Record<Faction, FactionState>;
   /** null while the match runs; the winning faction once an HQ dies. */
   winner: Faction | null;

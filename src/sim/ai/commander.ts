@@ -1,4 +1,4 @@
-import { BUILDINGS, ECONOMY, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { isVisible, knownBuildings } from "../fog";
@@ -7,6 +7,7 @@ import { findPath } from "../movement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import { bannedBy } from "../rules";
 import { planSalvage } from "./salvage";
+import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import type {
   Building,
@@ -60,17 +61,17 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Balanced",
     buildOrder: ["fab-plant", "airpad", "turret", "tech-lab", "depot", "turret", "radar"],
     harvesters: 4,
-    assaultValue: 1400,
+    assaultValue: 1700,
     harassGroup: 2
   },
-  /** Early ground pressure: attacks at half the usual army size. */
+  /** Early ground pressure: Stinger raids in packs of five, two factories, the earliest and smallest waves. */
   rush: {
     name: "rush",
     label: "Rush",
     buildOrder: ["fab-plant", "turret", "airpad", "fab-plant", "tech-lab"],
     harvesters: 4,
-    assaultValue: 800,
-    harassGroup: 3,
+    assaultValue: 1400,
+    harassGroup: 5,
     groundRaids: true
   },
   /** Airpad first: relentless wasp raids, bombers later. */
@@ -79,7 +80,7 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Air Swarm",
     buildOrder: ["airpad", "fab-plant", "turret", "tech-lab", "depot", "airpad"],
     harvesters: 4,
-    assaultValue: 1200,
+    assaultValue: 1700,
     harassGroup: 2
   },
   /** Greedy economy: extra harvesters, a forward depot, a huge late push. */
@@ -97,17 +98,17 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     label: "Skyforce",
     buildOrder: ["airpad", "turret", "tech-lab", "airpad", "fab-plant", "depot", "sam-site"],
     harvesters: 4,
-    assaultValue: 1300,
+    assaultValue: 2000,
     harassGroup: 2,
     airOnly: true
   },
-  /** Armoured column: rushes the Tech Lab for Titans, Lancers and Mortars. */
+  /** Armoured column: rushes the Tech Lab (right after a turret) for Titans, Lancers and Mortars. */
   ironclad: {
     name: "ironclad",
     label: "Ironclad",
-    buildOrder: ["fab-plant", "tech-lab", "turret", "airpad", "depot", "fab-plant", "sam-site"],
+    buildOrder: ["fab-plant", "turret", "tech-lab", "airpad", "depot", "fab-plant", "sam-site"],
     harvesters: 4,
-    assaultValue: 1800,
+    assaultValue: 1500,
     harassGroup: 3,
     heavy: true
   }
@@ -190,6 +191,13 @@ export function createAiState(strategy?: StrategyName, difficulty: Difficulty = 
 }
 
 const RETREAT_ARMY_VALUE = 350;
+/**
+ * Share of the assault threshold that must gather at the staging point
+ * before a wave launches: big waves, and a lull while the next one gathers
+ * (at 0.6 waves trickled out every 500–1,200 scrap, fighting never paused,
+ * and the side ahead at 4:00 won 87–90%).
+ */
+const WAVE_LAUNCH = 0.75;
 /** No raids before this: an opener's starting units guard home while both sides settle in. */
 const OPENING_GRACE = 45 * TICK_RATE;
 /** Enemy army value at the HQ that, if it outguns the home guard, recalls everyone. */
@@ -365,9 +373,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (s.seenAir >= 8 && s.extraSams < 2) s.extraSams = 2;
 
   // --- mode transitions ----------------------------------------------------
-  // the longer the match drags on, the lower the bar for an all-in push
+  // the longer the match drags on (from 7:00, 6% a minute, down to half), the lower the bar for an all-in push
   const minutes = w.tick / TICK_RATE / 60;
-  const lateGame = Math.max(0.5, 1 - Math.max(0, minutes - 9) * 0.06);
+  const lateGame = Math.max(0.5, 1 - Math.max(0, minutes - 7) * 0.06);
   const assaultAt = s.strategy.assaultValue * diff.assaultMult * lateGame;
   const raiders = mine.filter(
     (u) => (u.kind === "wasp" || (s.strategy.groundRaids && u.kind === "stinger")) && u.order.type === "idle"
@@ -432,6 +440,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
     }
   }
+  // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
+  for (const id of objectiveHolds(w, faction, s)) used.add(id);
 
   // --- 2. economy guard: a share of the army holds the mining line --------
   const guardShare = s.mode === "assault" ? 0.15 : 0.35;
@@ -454,6 +464,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (squad.length > 0)
       cmds.push({ type: "attackMove", faction, unitIds: squad, x: guardPoint.x, y: guardPoint.y });
   }
+
+  // --- 2b. map objectives: take Uplinks, hold them, race for supply crates --
+  const enemyHomeGuess = knownBuildings(w, faction).find((b) => b.kind === "hq");
+  cmds.push(
+    ...planObjectives(w, faction, s, {
+      mode: s.mode, hqC, guardPoint, guardNeed: guardShare * armyValue, army, used,
+      threatened: raidValue >= HOME_ALARM_VALUE,
+      enemyHqPos: enemyHomeGuess ? { x: enemyHomeGuess.tx + 1.5, y: enemyHomeGuess.ty + 1.5 } : mirror(w, hqC.x, hqC.y)
+    })
+  );
 
   // --- 3/4. offence by mode -----------------------------------------------
   const enemyHq = knownBuildings(w, faction).find((b) => b.kind === "hq");
@@ -482,7 +502,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     );
     const stagedValue = value(staged);
     // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
-    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * 0.6);
+    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, enemyHqPos);
@@ -643,7 +663,10 @@ function findThreats(
       return dist(u.x, u.y, c.x, c.y) <= DEFENSE_RADIUS;
     });
     const nearHarvester = harvesters.some((h) => dist(u.x, u.y, h.x, h.y) <= 6);
-    if (nearBuilding || nearHarvester)
+    const nearUplink = w.objectives.uplinks.some(
+      (l) => l.owner === faction && dist(u.x, u.y, l.x, l.y) <= OBJECTIVES.uplink.radius + 2
+    );
+    if (nearBuilding || nearHarvester || nearUplink)
       out.push({ id: u.id, x: u.x, y: u.y, kind: u.kind, domain: UNITS[u.kind].domain });
   }
   return out;

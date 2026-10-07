@@ -1,5 +1,5 @@
 import type Phaser from "phaser";
-import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
+import { BUILDINGS, ECONOMY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
 import { buildingBlocker, unitBlocker } from "../sim/economy";
 import { Vis } from "../sim/fog";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
@@ -40,6 +40,8 @@ export interface HudApi {
   calldowns?: () => { x: number; y: number; r: number; enemy: boolean }[];
   /** A big moment owns the screen (opener cards, the finale): no new hints, the hint clock stops. */
   busy?: () => boolean;
+  /** Extra minimap marks (map objectives), drawn over the unit blips; k = minimap px per tile. */
+  minimapOverlay?: (ctx: CanvasRenderingContext2D, k: number) => void;
 }
 
 export interface Hud {
@@ -681,7 +683,8 @@ export function createHud(api: HudApi): Hud {
       lastClock = clock;
       clockEl.textContent = clock;
       // income over the last 60 s of harvesting and salvage
-      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged;
+      const os = w.objectives.stats[PLAYER];
+      const earned = fs.stats.scrapHarvested + fs.stats.scrapSalvaged + os.uplinkScrap + os.crateScrap;
       incomeWindow.push({ t: secs, v: earned });
       while (incomeWindow.length > 1 && secs - incomeWindow[0]!.t > 60) incomeWindow.shift();
       const first = incomeWindow[0]!;
@@ -872,6 +875,7 @@ export function createHud(api: HudApi): Hud {
       }
       mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
     }
+    api.minimapOverlay?.(mctx, k); // Uplinks and supply crates (render/objectives.ts)
     // calldown reticles in flight (public: shown through the fog)
     for (const c of api.calldowns?.() ?? []) {
       mctx.strokeStyle = c.enemy ? "#ff3b30" : "#ffd23f";
@@ -980,7 +984,8 @@ export function createHud(api: HudApi): Hud {
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Openers</h3><p>Every skirmish starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
-  <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every 2 minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
+  <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every ${POWERS.hammer.cooldown / 60} minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
+  <h3>Objectives</h3><p>📡 <b>Uplinks</b> sit in the contested middle of every map: park units in the ring to fill its bar (aircraft count half, harvesters not at all; with both sides inside it freezes). Holding one pays ${OBJECTIVES.uplink.income} scrap/s, lights up the fog around it and charges your ⚡ meter. 📦 <b>Supply drops</b> land in pairs from 1:30, every 75 s, announced 10 s ahead to both sides: the first unit to reach a crate takes it (scrap, Veterans, Field Repair, ⚡ charge, or a rare free Lancer). Unclaimed crates burn out after 45 s.</p>
   <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
   <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00, win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>

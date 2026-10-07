@@ -4391,3 +4391,99 @@ button {
 .toast.passive {
   pointer-events: none;
 }
+
+
+/* ------------------------------------- map objectives: top-bar pill --- */
+/* 📡 one pip per Uplink in its holder's colour · 📦 supply-drop timer.  */
+.objpill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 2px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.objpill .ol,
+.objpill .pips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.objpill .ol b {
+  font-size: 12px;
+}
+.objpill .pip {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid #b9a978;
+  background: rgba(90, 82, 60, 0.6);
+}
+.objpill .pip.blue {
+  background: #4fa3ff;
+  border-color: #cfe6ff;
+}
+.objpill .pip.red {
+  background: #ff5a4a;
+  border-color: #ffd0c8;
+}
+.objpill .pip.busy {
+  animation: pipPulse 0.55s ease-in-out infinite alternate;
+}
+.objpill .od.hot {
+  color: var(--gold);
+  animation: odBlink 0.8s ease-in-out infinite alternate;
+}
+.objpill .od.live {
+  color: var(--gold);
+}
+@keyframes pipPulse {
+  from { box-shadow: 0 0 0 0 rgba(255, 160, 64, 0); }
+  to { box-shadow: 0 0 0 3px rgba(255, 160, 64, 0.8); }
+}
+@keyframes odBlink {
+  from { opacity: 1; }
+  to { opacity: 0.55; }
+}
+@media (orientation: portrait) {
+  .objpill {
+    padding: 1px 8px;
+    font-size: 11px;
+  }
+}
+/* spectating has no build sidebar: the minimap moves to the right edge, clear of the versus pill */
+@media (orientation: landscape) {
+  #hud.spectator .minimap-wrap {
+    right: max(8px, env(safe-area-inset-right));
+  }
+}
+/* portrait: while an announcement banner is up, toasts (Uplink alerts, crate news) drop below it
+   instead of hiding under it (landscape has no room to spare: there they keep their place) */
+@media (orientation: portrait) {
+  #hud:has(.banner:not([hidden])) .toasts {
+    top: calc(max(6px, env(safe-area-inset-top)) + 232px);
+  }
+}
+/* the end screen's objectives row (a4) makes it one row taller: on short landscape screens
+   Rematch and Main menu sit side by side so both stay on screen */
+@media (orientation: landscape) and (max-height: 420px) {
+  #endscreen .panel .cta {
+    display: inline-block;
+    width: calc(50% - 9px);
+    min-width: 0;
+    margin: 0 3px;
+    padding: 10px 8px;
+    font-size: 16px;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+}

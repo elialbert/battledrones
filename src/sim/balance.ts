@@ -317,11 +317,11 @@ export const SALVAGE = {
 export const POWERS = {
   meterMax: 100,
   /** Meter per second, always. */
-  passive: 0.1,
+  passive: 0.035,
   /** Meter per scrap of your own units and buildings destroyed (comeback-weighted). */
-  perScrapLost: 0.02,
+  perScrapLost: 0.008,
   /** Meter per scrap of enemy units and buildings you destroy. */
-  perScrapKilled: 0.007,
+  perScrapKilled: 0.002,
   barrage: {
     cost: 60, cooldown: 45, telegraph: 2.5,
     /** Shells, the seconds between them, and their scatter (tiles) around the aim point. */
@@ -347,11 +347,63 @@ export const POWERS = {
   },
   hammer: {
     /** Comes online for both sides at this match time (seconds), then recharges. */
-    unlock: 6 * 60, cooldown: 120, telegraph: 3,
+    unlock: 6 * 60, cooldown: 150, telegraph: 3,
     radius: 2.5,
     /** Units: this × (1 − 0.5·d/r), any armour, ground or air. */
     unitDamage: 260,
     /** Buildings whose footprint is in the radius: flat (an HQ loses ~22%). */
     buildingDamage: 700
+  }
+};
+
+/**
+ * Map objectives (objectives.ts): capturable Uplink relays in the contested
+ * middle of each map, and supply drops announced to both sides. They give
+ * armies a reason to fight away from the bases and the opening a goal.
+ */
+export const OBJECTIVES = {
+  uplink: {
+    /** Capture zone radius (tiles) around the relay's centre. */
+    radius: 2.5,
+    /** Presence per unit in the zone (harvesters don't count); aircraft count this much. */
+    airWeight: 0.5,
+    /** Capture bar points per second per unit present (bar spans −100…100)… */
+    perUnit: 3.5,
+    /** …capped at this (4 units): neutral → owned in ~7 s, a flip in ~14 s. */
+    maxRate: 14,
+    /** Points per second the bar drifts back to its rest (owned: full, neutral: 0) with nobody there. */
+    settle: 2,
+    /** Scrap per second to the owner (× its income multiplier). */
+    income: 1.5,
+    /** The owner sees this far (tiles) around the relay. */
+    sight: 7,
+    /** Command meter per second to the owner (powers.ts). */
+    charge: 0.06
+  },
+  drops: {
+    /** Seconds into the match the first drop lands; then one every `every` seconds. */
+    first: 90,
+    every: 75,
+    /** Seconds of public warning before a drop lands. */
+    warning: 10,
+    /** Seconds a landed crate waits before it burns out. */
+    ttl: 45,
+    /** The first non-harvester unit whose centre comes this close (tiles) claims it. */
+    claimRadius: 0.8,
+    /** Reward weights (both crates of a drop share the roll). */
+    weights: { scrap: 38, veterans: 20, repair: 15, charge: 17, unit: 10 } as Record<string, number>,
+    scrap: 200,
+    /** Veterans: +1 rank to the claimer and its allies this close. */
+    veteranRadius: 3,
+    /** Field Repair: own units this close are healed this share of their max HP. */
+    repairRadius: 4,
+    repairShare: 0.5,
+    /** Command meter added. */
+    charge: 40,
+    /** A Veterans / Repair / Charge crate that would do nothing (no one to promote or heal, meter full) pays this scrap instead. */
+    fallbackScrap: 150,
+    /** The rare drop: a free unit of this kind at this rank. */
+    unit: "lancer" as UnitKind,
+    unitRank: 1
   }
 };

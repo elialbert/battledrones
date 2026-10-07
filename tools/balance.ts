@@ -1,8 +1,9 @@
 // Headless balance harness.
 //   npx vite-node tools/balance.ts duels          cost-equal unit duel matrix
-//   npx vite-node tools/balance.ts matches [map] [--classic]
+//   npx vite-node tools/balance.ts matches [map] [--classic] [--no-objectives]
 //                                                 AI-vs-AI round robin (every map, or one), each AI
-//                                                 taking its personality's opener (--classic: none)
+//                                                 taking its personality's opener, with Uplinks and
+//                                                 supply drops (--classic: neither; --no-objectives)
 //   npx vite-node tools/balance.ts passive        each strategy vs a passive foe
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
@@ -57,12 +58,15 @@ function duels(): void {
 }
 
 const classic = process.argv.includes("--classic");
+const objectives = !classic && !process.argv.includes("--no-objectives");
 
 function match(map: string, blue: StrategyName, red: StrategyName, maxMin = 25): { winner: string; min: number; w: World } {
   const seed = mapById(map).seed;
   const w = createMapWorld(
     map,
-    classic ? {} : { openers: { blue: pickAiOpener(blue, seed, "blue"), red: pickAiOpener(red, seed, "red") } }
+    classic
+      ? {}
+      : { objectives, openers: { blue: pickAiOpener(blue, seed, "blue"), red: pickAiOpener(red, seed, "red") } }
   );
   const sb = createAiState(blue, "normal", 1);
   const sr = createAiState(red, "normal", 2);
@@ -82,6 +86,10 @@ function matches(): void {
   let salvaged = 0;
   let harvested = 0;
   const calls: Record<string, number> = {};
+  let uplinkScrap = 0;
+  let crateScrap = 0;
+  let captures = 0;
+  let crates = 0;
   const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
@@ -99,6 +107,11 @@ function matches(): void {
           salvaged += w.factions[f].stats.scrapSalvaged;
           harvested += w.factions[f].stats.scrapHarvested;
           for (const [k, v] of Object.entries(w.powers.fired[f])) calls[k] = (calls[k] ?? 0) + v;
+          const os = w.objectives.stats[f];
+          uplinkScrap += os.uplinkScrap;
+          crateScrap += os.crateScrap;
+          captures += os.captures;
+          crates += os.crates;
         }
         for (const u of w.units.values()) built[u.kind] = (built[u.kind] ?? 0) + 1;
         process.stdout.write(`${map.id} ${names[i]} vs ${names[j]}: ${winner} @ ${min.toFixed(1)}m\n`);
@@ -116,6 +129,12 @@ function matches(): void {
       .map(([k, v]) => `${k} ${(v / n / 2).toFixed(1)}`)
       .join(", ")})`
   );
+  if (objectives)
+    console.log(
+      `objectives per match: ${(captures / n).toFixed(1)} Uplink captures, ${(crates / n).toFixed(1)} crates claimed, ` +
+        `${(uplinkScrap / n).toFixed(0)} Uplink + ${(crateScrap / n).toFixed(0)} crate scrap ` +
+        `(${((100 * (uplinkScrap + crateScrap)) / Math.max(1, harvested + salvaged + uplinkScrap + crateScrap)).toFixed(1)}% of income)`
+    );
   console.log("units alive at match end:", built);
 }
 

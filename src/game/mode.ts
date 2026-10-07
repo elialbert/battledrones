@@ -38,13 +38,16 @@ export const rematchToken = (): string => (gameMode.op ? `op:${gameMode.op.id}` 
  * The sim setup for the next match, built from the menu choices. A fresh
  * random seed per match (render side, so Math.random is fine here) keeps
  * seeded events varied while each match stays internally deterministic.
+ * Skirmishes play with the map objectives (Uplinks, supply drops).
  */
 export function matchOptions(): MatchOptions {
   if (gameMode.op) return { seed: (Math.random() * 0x7fffffff) | 0, op: gameMode.op.id };
   const mutators = activeMutators();
+  const survival = gameMode.mode === "survival";
   return {
     seed: (Math.random() * 0x7fffffff) | 0,
-    ...(gameMode.mode === "survival" ? { survival: { difficulty: gameMode.difficulty } } : {}),
+    // Uplinks and supply drops: skirmish (and the Daily Op); Last Stand has its waves
+    ...(survival ? { survival: { difficulty: gameMode.difficulty } } : { objectives: true }),
     // mutators, and the Daily Op's date seed (everyone plays the same match)
     ...(mutators.length ? { mutators } : {}),
     ...(gameMode.daily ? { seed: gameMode.daily.seed } : {})

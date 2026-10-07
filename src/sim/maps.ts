@@ -1,4 +1,5 @@
 import { BUILDINGS } from "./balance";
+import { setupObjectives } from "./objectives";
 import { applyOpener, type OpenerId } from "./openers";
 import { Terrain, type Biome, type Faction, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
@@ -25,6 +26,13 @@ export interface MapDef {
   hq: [number, number];
   seed: number;
   paint(p: Painter): void;
+  /**
+   * Capturable Uplink relays (objectives.ts), in tiles: each point and its
+   * mirror image get one (a point at the exact centre is its own mirror).
+   */
+  uplinks: Pt[];
+  /** Supply-drop sites (blue-side, tiles); every drop lands a crate at one and at its mirror. */
+  dropSites: Pt[];
 }
 
 // ---------------------------------------------------------------- noise ---
@@ -135,6 +143,8 @@ export const MAPS: MapDef[] = [
     blurb: "A wide river splits the valley. One bridge, two muddy fords.",
     hq: [4, 48],
     seed: 11,
+    uplinks: [[28, 28], [45.5, 45.5]], // the bridge at the centre and the two fords
+    dropSites: [[24.5, 33.5], [16.5, 21.5], [34.5, 44.5]], // the bridgehead, the west bank by the ford, the south expansion
     paint(p) {
       // meandering river from the NW corner to the centre (mirrored to SE)
       const river: Pt[] = [[-2, 1], [5, 6], [11, 13], [17, 16], [23, 23], [28, 28]];
@@ -171,6 +181,8 @@ export const MAPS: MapDef[] = [
     blurb: "Open sands between towering mesas. Three lanes, rich wrecks.",
     hq: [4, 48],
     seed: 23,
+    uplinks: [[41.5, 41.5]], // out on the two open flanks (the oasis holds the centre)
+    dropSites: [[24.5, 31.5], [31.5, 36.5], [22.5, 35.5]], // the oasis approaches and the near crystals
     paint(p) {
       // two great mesas flank the central corridor
       p.blob(17, 23, 6.2, Terrain.Rough, 0.3, [G]);
@@ -204,6 +216,8 @@ export const MAPS: MapDef[] = [
     blurb: "A frozen sea in the middle. Short, brutal and hover-friendly.",
     hq: [4, 40],
     seed: 37,
+    uplinks: [[35.5, 35.5]], // the two lanes around the frozen sea, by the lane crystals
+    dropSites: [[9.5, 13.5], [29.5, 35.5], [12.5, 22.5]], // a lane crystal, the south lane, the western shallows
     paint(p) {
       // central icy sea — ground armies must skirt it
       p.blob(23.5, 23.5, 9.5, Terrain.Water, 0.18);
@@ -235,6 +249,8 @@ export const MAPS: MapDef[] = [
     blurb: "Lava rivers carve three plateaus. Bridges are choke points; air rules.",
     hq: [5, 55],
     seed: 53,
+    uplinks: [[44.5, 44.5]], // the outer plateaus, past the bridges
+    dropSites: [[27.5, 33.5], [12.5, 30.5], [32.5, 40.5]], // the central plateau, the west plateau, below the south bridge
     paint(p) {
       // a lava river between the blue plateau and the central one (mirrored)
       const lava: Pt[] = [[-2, 12], [8, 21], [16, 27], [26, 38], [36, 46], [44, 55], [52, 66]];
@@ -270,6 +286,8 @@ export const MAPS: MapDef[] = [
     blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
     hq: [4, 40],
     seed: 5,
+    uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
+    dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
     paint() {
       /* painted by createClassicTerrain (kept tile-exact for the test suite) */
     }
@@ -330,6 +348,8 @@ export interface MatchOptions {
   op?: string;
   /** Quick-start opener per side (see openers.ts). Default: the classic start. */
   openers?: Partial<Record<Faction, OpenerId>>;
+  /** Uplink relays and supply drops (objectives.ts). Default: off (the classic skirmish). */
+  objectives?: boolean;
 }
 
 /** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
@@ -354,12 +374,14 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   spawnUnit(w, "harvester", "blue", hx + hs + 1.5, hy + 1.5);
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
   if (opts.mutators?.length) applyMutators(w, opts.mutators);
-  // openers belong to the classic skirmish start; Last Stand and Ops set up their own
-  if (!opts.survival && !opts.op)
+  // openers and map objectives belong to the skirmish; Last Stand and Ops set up their own
+  if (!opts.survival && !opts.op) {
     for (const f of ["blue", "red"] as const) {
       const o = opts.openers?.[f];
       if (o) applyOpener(w, f, o);
     }
+    if (opts.objectives) setupObjectives(w, def.uplinks, def.dropSites);
+  }
   if (opts.survival) setupSurvival(w, opts.survival);
   if (opts.op) setupOp(w, opts.op);
   return w;

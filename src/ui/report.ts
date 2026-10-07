@@ -328,6 +328,14 @@ function statsHtml(ctx: ReportContext): string {
     rows.push(
       `<tr title="${escapeHtml(`${calldownBreakdown(calls[p].by)} · ${calldownBreakdown(calls[q].by)}`)}"><td>Calldowns</td><td>${calls[p].total}</td><td>${calls[q].total}</td></tr>`
     );
+  // map objectives (skirmish only): Uplinks captured, crates claimed, scrap they paid
+  const obj = ctx.world.objectives;
+  if (obj && obj.uplinks.length > 0) {
+    const os = (f: Faction) => obj.stats[f];
+    rows.push(row("Uplinks captured", os(p).captures, os(q).captures));
+    rows.push(row("Crates claimed", os(p).crates, os(q).crates));
+    rows.push(row("Objective scrap", os(p).uplinkScrap + os(p).crateScrap, os(q).uplinkScrap + os(q).crateScrap));
+  }
   rows.push(row("Peak army", peakArmy(ctx.chronicle.samples, p), peakArmy(ctx.chronicle.samples, q)));
   const ex = extraStatRows(st("blue"), st("red"));
   for (const r of ex) rows.push(row(r.label, p === "blue" ? r.a : r.b, p === "blue" ? r.b : r.a));
