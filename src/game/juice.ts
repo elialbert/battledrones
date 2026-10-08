@@ -1,7 +1,7 @@
 /**
  * Combat and economy "juice": the engine-free rules behind hit flashes,
  * damage-trail health bars, team combat rings, death cues, camera shake and
- * income pops. Kept free of Phaser so the timing and throttling rules are
+ * income pops. Kept free of three.js so the timing and throttling rules are
  * unit-testable (tests/juice.test.ts); render/juice-view.ts draws them.
  *
  * All times are render milliseconds (they stop while paused) unless noted.

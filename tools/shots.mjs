@@ -45,14 +45,7 @@ await page.waitForTimeout(1500);
 await page.screenshot({ path: `${out}/start-${tag}.png` });
 
 // fast-forward the sim headlessly, then look around
-const fastForward = async (ticks) =>
-  page.evaluate(async (n) => {
-    const { scene } = window.__bd;
-    for (let i = 0; i < n; i++) {
-      scene.game.loop.rawDelta = 100;
-      scene.update(0, 100);
-    }
-  }, ticks);
+const fastForward = async (ticks) => page.evaluate((n) => window.__bd.scene.step(100, n), ticks);
 
 if (spectate) {
   for (const [i, t] of [1800, 1200, 900].entries()) {
@@ -68,13 +61,10 @@ if (spectate) {
         const n = us.filter((o) => o.faction !== u.faction && Math.hypot(o.x - u.x, o.y - u.y) < 7).length;
         if (n > bestN) { bestN = n; best = u; }
       }
-      cam.centerOn(best.x * 64, best.y * 64);
+      cam.centerOn(best.x, best.y);
     });
     for (let k = 0; k < 8; k++) {
-      await page.evaluate(() => {
-        window.__bd.scene.game.loop.rawDelta = 16;
-        window.__bd.scene.update(0, 16);
-      });
+      await page.evaluate(() => window.__bd.scene.update(16));
       await page.waitForTimeout(60);
     }
     await page.screenshot({ path: `${out}/battle${i}-${tag}.png` });

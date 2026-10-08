@@ -27,7 +27,7 @@ await page.waitForTimeout(1500);
 
 // clear the stage and set up two armies facing each other in the open
 await page.evaluate(() => {
-  const { world: w, cam, scene } = window.__bd;
+  const { world: w, cam } = window.__bd;
   const cx = Math.floor(w.width / 2);
   const cy = Math.floor(w.height / 2) + 6;
   const add = (kind, faction, x, y) => {
@@ -48,16 +48,12 @@ await page.evaluate(() => {
   for (const [k, dx, dy] of red) add(k, "red", cx - 1 + dx, cy + dy);
   // real hp values so health bars read correctly
   for (const u of w.units.values()) u.hp = Math.min(u.hp, 400) * 0.8;
-  cam.setZoom(1.6 * scene.game.registry.get("dpr") / 2);
-  cam.centerOn((cx) * 64, cy * 64);
+  cam.zoom = 90;
+  cam.centerOn(cx, cy);
 });
 for (let i = 0; i < 4; i++) {
   for (let k = 0; k < (i === 0 ? 20 : 9); k++) {
-    await page.evaluate(() => {
-      const s = window.__bd.scene;
-      s.game.loop.rawDelta = 33;
-      s.update(0, 33);
-    });
+    await page.evaluate(() => window.__bd.scene.update(33));
   }
   await page.waitForTimeout(80);
   await page.screenshot({ path: `${out}/showcase-${i}.png` });

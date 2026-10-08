@@ -1,32 +1,35 @@
-import Phaser from "phaser";
+import * as THREE from "three";
 import { POWERS } from "../../sim/balance";
 import { POWER_NAMES } from "../../sim/powers";
 import type { Calldown, Faction, FxEvent, PowerKind, World } from "../../sim/types";
 import { announce } from "../announce";
 import { calldownThreatens } from "../awareness";
 import { sfx, type SfxName } from "../audio";
-import { TILE } from "../assets";
+import { glowMat } from "../three/materials";
+import { TEX, type EmitCfg } from "../three/particles";
+import { instance, podDef, type ModelInstance } from "../three/models";
+import { Ease } from "../three/tween";
+import type { View } from "../three/view";
 import type { Fx } from "./fx";
 
 /**
  * Everything the commander calldowns look and sound like: public reticles
  * (red for the enemy's, gold/cyan/blue for yours) that shrink to the moment
- * of impact, Barrage shells streaking in, the EMP shockwave and the
- * crackle on whatever it froze, Drop Pods falling with a flare and dust,
- * and the Sky Hammer's beam from orbit. Also the targeting preview, the
+ * of impact, Barrage shells streaking in from the sky, the EMP shockwave and
+ * the crackle on whatever it froze, Drop Pods falling with a flare and dust,
+ * and the Sky Hammer's lance from orbit. Also the targeting preview, the
  * warnings, and the announcer lines for the big moments.
  */
 
 export interface PowerRendererOpts {
   player: Faction;
   spectator: boolean;
-  dpr: number;
   /** Is the tile position visible to the local player (or fog off)? */
   visibleAt(x: number, y: number): boolean;
-  /** Volume for a sound at world px (x, y). */
+  /** Volume for a sound at tile point (x, y). */
   earshot(x: number, y: number): number;
-  /** Rendered position of an entity (world px), and whether it is drawn. */
-  pos(id: number): { x: number; y: number } | null;
+  /** Rendered body position of an entity (tiles + height), and whether it is drawn. */
+  pos(id: number): { x: number; y: number; h: number } | null;
   isShown(id: number): boolean;
   /** Tap-to-jump warning toast and a minimap ping. */
   alert(msg: string, x: number, y: number): void;
@@ -45,75 +48,61 @@ export interface TargetPreview {
 const ENEMY = 0xff3b30;
 const OWN: Record<PowerKind, number> = { barrage: 0xffc93c, emp: 0x7fe3ff, droppod: 0x6eb0ff, hammer: 0xffd86e };
 const EMP_BLUE = 0xbfeaff;
-/** Barrage shells appear this many sim ticks before they land, falling from this offset (world px). */
+/** Barrage shells appear this many sim ticks before they land, falling from this offset (tiles, height). */
 const SHELL_LEAD = 3.2;
-const STREAK_DX = -140;
-const STREAK_DY = -520;
-/** Above the fog (10): reticles are public and show through it. */
-const RETICLE_DEPTH = 10.4;
+const STREAK = { dx: -2.2, dy: -1.2, h: 11 };
+/** A pod's visible descent (ticks) and where it falls from. */
+const POD_FALL = 7;
+const POD_FROM = { dx: 3.2, dy: -2, h: 12 };
 
-interface Falling {
-  img: Phaser.GameObjects.Image;
-  glow: Phaser.GameObjects.Image;
-}
+const SPARKS: EmitCfg = {
+  tex: TEX.spark, additive: true, life: [120, 380], speed: [0.5, 2.4], up: [0.2, 1.5], size: [0.2, 0.28], grow: [0.1, 0.2],
+  alpha: [1, 0], tints: [0xbfeaff, 0x7fd4ff, 0xffffff], gravity: -3
+};
+const TRAIL: EmitCfg = {
+  tex: TEX.glow, additive: true, life: [180, 420], speed: [0, 0.3], up: [0, 0.2], size: [0.4, 0.6], grow: [0.1, 0.2],
+  alpha: [0.85, 0], tints: [0xffc257, 0xff7a1e, 0xffe39a]
+};
+const SMOKE: EmitCfg = {
+  tex: TEX.smoke, life: [500, 900], speed: [0, 0.1], up: [0.05, 0.2], size: [0.25, 0.35], grow: [2, 2.6],
+  alpha: [0.35, 0], tints: [0xb0aaa2, 0x8a847c]
+};
+
+const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true).translate(0, 0.5, 0);
+const streakGeo = new THREE.BoxGeometry(0.06, 0.06, 1);
 
 export class PowerRenderer {
-  private g: Phaser.GameObjects.Graphics;
-  private arcs: Phaser.GameObjects.Graphics;
-  private sparks: Phaser.GameObjects.Particles.ParticleEmitter;
-  private trail: Phaser.GameObjects.Particles.ParticleEmitter;
-  private pods = new Map<number, Falling>();
-  private landed: Phaser.GameObjects.Image[] = [];
+  private pods = new Map<number, ModelInstance>();
+  private landed: ModelInstance[] = [];
+  private lances = new Map<number, { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial }>();
   private incoming = new Set<string>();
   /** Barrage shells in the air, positioned from sim time (pauses and speeds with the game). */
-  private streaks: { img: Phaser.GameObjects.Image; x: number; y: number; tick: number; lead: number }[] = [];
+  private streaks: { mesh: THREE.Mesh; x: number; y: number; h: number; tick: number; lead: number }[] = [];
+  private streakMat = glowMat(0xffe0a0, 1);
+  private group = new THREE.Group();
   private time = 0;
   private hammerAnnounced = false;
 
   constructor(
-    private scene: Phaser.Scene,
+    private v: View,
     private world: World,
     private fx: Fx,
     private opts: PowerRendererOpts
   ) {
-    makePowerTextures(scene);
-    this.arcs = scene.add.graphics().setDepth(7.66);
-    this.g = scene.add.graphics().setDepth(RETICLE_DEPTH);
-    this.sparks = scene.add
-      .particles(0, 0, "fx-spark", {
-        emitting: false,
-        lifespan: { min: 120, max: 380 },
-        speed: { min: 30, max: 150 },
-        scale: { start: 0.9, end: 0.1 },
-        alpha: { start: 1, end: 0 },
-        tint: [0xbfeaff, 0x7fd4ff, 0xffffff],
-        blendMode: Phaser.BlendModes.ADD
-      })
-      .setDepth(7.7);
-    this.trail = scene.add
-      .particles(0, 0, "fx-glow", {
-        emitting: false,
-        lifespan: { min: 180, max: 420 },
-        speed: { min: 0, max: 18 },
-        scale: { start: 0.55, end: 0.05 },
-        alpha: { start: 0.85, end: 0 },
-        tint: [0xffc257, 0xff7a1e, 0xffe39a],
-        blendMode: Phaser.BlendModes.ADD
-      })
-      .setDepth(RETICLE_DEPTH - 0.05);
+    v.scene.add(this.group);
   }
 
   private friendly(f: Faction): boolean {
     return f === this.opts.player;
   }
 
-  private px(css: number): number {
-    return (css * this.opts.dpr) / this.scene.cameras.main.zoom;
+  /** World units spanning `css` CSS px around a point. */
+  private px(x: number, y: number, css: number): number {
+    return css * this.v.rig.worldPerPx(x, y);
   }
 
-  private onScreen(x: number, y: number, pad = 2 * TILE): boolean {
-    const v = this.scene.cameras.main.worldView;
-    return x > v.x - pad && x < v.right + pad && y > v.y - pad && y < v.bottom + pad;
+  private onScreen(x: number, y: number, padTiles = 2): boolean {
+    return this.v.rig.onScreen(x, y, padTiles * 40);
   }
 
   private sound(name: SfxName, x: number, y: number, vol = 1, floor = 0): void {
@@ -121,7 +110,11 @@ export class PowerRenderer {
   }
 
   private shake(x: number, y: number, ms: number, k: number): void {
-    if (this.onScreen(x, y, TILE)) this.scene.cameras.main.shake(ms, k);
+    if (this.onScreen(x, y, 1)) this.v.rig.shake(ms, k);
+  }
+
+  private ground(x: number, y: number): number {
+    return this.v.terrain.surfaceAt(x, y);
   }
 
   // ------------------------------------------------------------- events ---
@@ -137,7 +130,7 @@ export class PowerRenderer {
       case "stun":
         for (const id of ev.ids) {
           const p = this.opts.isShown(id) ? this.opts.pos(id) : null;
-          if (p) this.sparks.emitParticleAt(p.x, p.y, 6);
+          if (p) this.v.particles.emit(SPARKS, p.x, p.y, p.h + 0.2, 6);
         }
         break;
       case "powerOnline":
@@ -162,8 +155,7 @@ export class PowerRenderer {
   }
 
   private started(ev: Extract<FxEvent, { type: "calldown" }>): void {
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
+    const { x, y } = ev;
     const name = POWER_NAMES[ev.power];
     const ours = this.friendly(ev.faction) && !this.opts.spectator;
     // does it threaten anything of the player's? (then the siren carries off-screen too;
@@ -173,15 +165,10 @@ export class PowerRenderer {
     else this.sound("siren", x, y, 0.9, threatened || ev.power === "hammer" ? 0.5 : 0);
     if (ev.power === "hammer") this.sound("charge", x, y, 0.8, this.opts.spectator ? 0 : 0.3);
     if (ev.power === "droppod") {
-      const tint = ev.faction === "blue" ? 0xa9d0ff : 0xffb3a3;
-      const img = this.scene.add.image(x, y, "pw-pod").setDepth(RETICLE_DEPTH - 0.02).setTint(tint).setVisible(false);
-      const glow = this.scene.add
-        .image(x, y, "fx-glow")
-        .setDepth(RETICLE_DEPTH - 0.03)
-        .setTint(0xff9a3a)
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setVisible(false);
-      this.pods.set(ev.id, { img, glow });
+      const pod = instance(podDef(ev.faction));
+      pod.root.visible = false;
+      this.group.add(pod.root);
+      this.pods.set(ev.id, pod);
     }
     // (what our strikes destroy is cheered by the callouts: a kill streak named for it, "Direct hit!")
     if (this.friendly(ev.faction)) return;
@@ -209,90 +196,111 @@ export class PowerRenderer {
     if (!this.onScreen(x, y, 0)) this.opts.alert(`Enemy ${name} inbound!`, ev.x, ev.y);
   }
 
+  /** An expanding ring of light on the ground. */
+  private ring(x: number, y: number, tint: number, r0: number, r1: number, ms: number, delay = 0): void {
+    const c = new THREE.Color(tint);
+    const go = () =>
+      this.v.particles.spawn(
+        { x, y: this.ground(x, y) + 0.1, z: y, life: ms, tex: TEX.ring, flat: true, size0: r0 * 2.3, size1: r1 * 2.3, alpha0: 1, alpha1: 0, r: c.r, g: c.g, b: c.b },
+        true
+      );
+    if (delay > 0) this.v.tweens.after(delay, go);
+    else go();
+  }
+
+  private glow(x: number, y: number, h: number, tint: number, s0: number, s1: number, ms: number): void {
+    const c = new THREE.Color(tint);
+    this.v.particles.spawn({ x, y: h, z: y, life: ms, tex: TEX.glow, size0: s0, size1: s1, alpha0: 1, alpha1: 0, r: c.r, g: c.g, b: c.b }, true);
+  }
+
   private landed_(ev: Extract<FxEvent, { type: "calldownImpact" }>): void {
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
-    const s = this.scene;
+    const { x, y } = ev;
+    const g = this.ground(x, y);
     switch (ev.power) {
       case "barrage": {
-        this.fx.explosion({ type: "explosion", x: ev.x, y: ev.y, size: 1.5, air: false, kind: "impact" }, { x, y });
+        this.fx.explosion({ type: "explosion", x, y, size: 1.5, air: false, kind: "impact" }, { x, y, h: g + 0.1 });
         this.fx.pulse(x, y, 0xffb35a, 2.2);
-        for (let i = 0; i < 3; i++) this.fx.dust(x + (Math.random() - 0.5) * 50, y + (Math.random() - 0.5) * 50);
+        for (let i = 0; i < 3; i++) this.fx.dust(x + (Math.random() - 0.5) * 0.8, y + (Math.random() - 0.5) * 0.8);
         this.sound("shell", x, y, 0.9);
         this.shake(x, y, 150, 0.004);
         break;
       }
       case "emp": {
-        const R = POWERS.emp.radius * TILE;
-        for (const [delay, k] of [[0, 1], [90, 0.75]] as const) {
-          const ring = s.add
-            .image(x, y, "fx-ring")
-            .setDepth(7.9)
-            .setScale(0.2)
-            .setTint(EMP_BLUE)
-            .setBlendMode(Phaser.BlendModes.ADD);
-          s.tweens.add({ targets: ring, scale: (R * 2 * k) / 56, alpha: 0, delay, duration: 420, ease: "Cubic.easeOut", onComplete: () => ring.destroy() });
-        }
-        const glow = s.add.image(x, y, "fx-glow").setDepth(7.9).setScale(3).setTint(EMP_BLUE).setBlendMode(Phaser.BlendModes.ADD);
-        s.tweens.add({ targets: glow, alpha: 0, scale: 5, duration: 380, onComplete: () => glow.destroy() });
-        this.sparks.emitParticleAt(x, y, 24);
+        const R = POWERS.emp.radius;
+        this.ring(x, y, EMP_BLUE, 0.2, R, 420);
+        this.ring(x, y, EMP_BLUE, 0.2, R * 0.75, 420, 90);
+        this.glow(x, y, g + 0.4, EMP_BLUE, 3, 5, 380);
+        this.v.particles.emit({ ...SPARKS, speed: [1, 4], spread: R * 0.6 }, x, y, g + 0.4, 24);
         this.sound("emp", x, y, 1, 0.15);
         this.shake(x, y, 120, 0.003);
         break;
       }
       case "droppod": {
         const pod = this.pods.get(ev.id);
-        pod?.img.destroy();
-        pod?.glow.destroy();
+        if (pod) this.group.remove(pod.root);
         this.pods.delete(ev.id);
-        const tint = ev.faction === "blue" ? 0xa9d0ff : 0xffb3a3;
-        const shell = s.add.image(x, y, "pw-pod-open").setDepth(2.4).setTint(tint).setScale(0.9).setRotation(Math.random() * Math.PI * 2);
-        this.landed.push(shell);
-        s.tweens.add({ targets: shell, alpha: 0, delay: 9000, duration: 3000, onComplete: () => shell.destroy() });
-        if (this.landed.length > 12) this.landed.shift()?.destroy();
-        const flare = s.add.image(x, y, "fx-glow").setDepth(7.9).setScale(4).setTint(0xffb35a).setBlendMode(Phaser.BlendModes.ADD);
-        s.tweens.add({ targets: flare, alpha: 0, scale: 6, duration: 450, onComplete: () => flare.destroy() });
+        const open = instance(podDef(ev.faction, true));
+        open.root.position.set(x, g, y);
+        open.root.rotation.y = Math.random() * Math.PI * 2;
+        this.group.add(open.root);
+        this.landed.push(open);
+        this.v.tweens.add({
+          dur: 3000, delay: 9000,
+          update: (k) => (open.root.position.y = g - k * 0.3),
+          done: () => this.group.remove(open.root)
+        });
+        if (this.landed.length > 12) {
+          const old = this.landed.shift();
+          if (old) this.group.remove(old.root);
+        }
+        this.glow(x, y, g + 0.4, 0xffb35a, 4, 6, 450);
         this.fx.pulse(x, y, 0xe8d8b0, 2);
         for (let i = 0; i < 10; i++) {
           const a = (i / 10) * Math.PI * 2;
-          this.fx.dust(x + Math.cos(a) * 34, y + Math.sin(a) * 26);
+          this.fx.dust(x + Math.cos(a) * 0.53, y + Math.sin(a) * 0.4);
         }
         for (const id of ev.unitIds) {
           const u = this.world.units.get(id);
-          if (u && this.friendly(u.faction)) this.fx.pulse(u.x * TILE, u.y * TILE, 0x7ec1ff, 0.8);
+          if (u && this.friendly(u.faction)) this.fx.pulse(u.x, u.y, 0x7ec1ff, 0.8);
         }
         this.sound("pod", x, y, 1);
         this.shake(x, y, 140, 0.003);
         break;
       }
       case "hammer": {
-        const R = POWERS.hammer.radius * TILE;
-        const beam = s.add
-          .image(x, y - 700, "fx-beam")
-          .setDepth(RETICLE_DEPTH + 0.05)
-          .setDisplaySize(1400, 150)
-          .setRotation(Math.PI / 2)
-          .setTint(0xdff6ff)
-          .setBlendMode(Phaser.BlendModes.ADD);
-        s.tweens.add({ targets: beam, alpha: 0, displayHeight: 30, duration: 650, ease: "Quad.easeIn", onComplete: () => beam.destroy() });
-        const flash = s.add.image(x, y, "fx-glow").setDepth(RETICLE_DEPTH + 0.04).setScale(7).setTint(0xffffff).setBlendMode(Phaser.BlendModes.ADD);
-        s.tweens.add({ targets: flash, alpha: 0, scale: 11, duration: 520, onComplete: () => flash.destroy() });
-        for (const [delay, k, tint] of [[0, 1.15, 0xffffff], [120, 0.85, 0xffd27a], [260, 1.4, 0xffa040]] as const) {
-          const ring = s.add.image(x, y, "fx-ring").setDepth(7.95).setScale(0.3).setTint(tint).setBlendMode(Phaser.BlendModes.ADD);
-          s.tweens.add({ targets: ring, scale: (R * 2 * k) / 56, alpha: 0, delay, duration: 600, ease: "Cubic.easeOut", onComplete: () => ring.destroy() });
-        }
+        const R = POWERS.hammer.radius;
+        // the strike itself: a blinding column from orbit that narrows away
+        const mat = glowMat(0xdff6ff, 1);
+        const beam = new THREE.Mesh(beamGeo, mat);
+        beam.position.set(x, g, y);
+        beam.scale.set(1.2, 40, 1.2);
+        beam.renderOrder = 8;
+        this.group.add(beam);
+        this.v.tweens.add({
+          dur: 650, ease: Ease.quadIn,
+          update: (k) => {
+            mat.opacity = 1 - k;
+            beam.scale.x = beam.scale.z = 1.2 * (1 - k * 0.8);
+          },
+          done: () => {
+            this.group.remove(beam);
+            mat.dispose();
+          }
+        });
+        this.glow(x, y, g + 0.6, 0xffffff, 7, 11, 520);
+        for (const [delay, k, tint] of [[0, 1.15, 0xffffff], [120, 0.85, 0xffd27a], [260, 1.4, 0xffa040]] as const)
+          this.ring(x, y, tint, 0.3, R * k, 600, delay);
         for (let i = 0; i < 6; i++) {
           const a = (i / 6) * Math.PI * 2 + Math.random();
           const d = i === 0 ? 0 : R * (0.35 + Math.random() * 0.4);
-          s.time.delayedCall(i * 70, () =>
-            this.fx.explosion(
-              { type: "explosion", x: ev.x, y: ev.y, size: i === 0 ? 2.2 : 1, air: false, kind: "unit" },
-              { x: x + Math.cos(a) * d, y: y + Math.sin(a) * d }
-            )
+          const px = x + Math.cos(a) * d;
+          const py = y + Math.sin(a) * d;
+          this.v.tweens.after(i * 70, () =>
+            this.fx.explosion({ type: "explosion", x, y, size: i === 0 ? 2.2 : 1, air: false, kind: "unit" }, { x: px, y: py, h: this.ground(px, py) + 0.1 })
           );
         }
         this.sound("hammer", x, y, 1, 0.45);
-        if (this.onScreen(x, y, 4 * TILE)) this.scene.cameras.main.shake(520, 0.012);
+        if (this.onScreen(x, y, 4)) this.v.rig.shake(520, 0.012);
         break;
       }
     }
@@ -303,48 +311,66 @@ export class PowerRenderer {
   /** Draw reticles, falling pods and shells, stun crackle and the aim preview. */
   sync(dtMs: number, alpha: number, preview: TargetPreview | null): void {
     this.time += dtMs;
-    const g = this.g;
-    g.clear();
-    this.arcs.clear();
     const w = this.world;
     const now = w.tick - 1 + alpha; // fractional sim tick on screen
-    for (const c of w.powers.active) this.drawCalldown(c, now);
+    const live = new Set<number>();
+    for (const c of w.powers.active) {
+      live.add(c.id);
+      this.drawCalldown(c, now);
+    }
+    for (const [id, l] of this.lances)
+      if (!live.has(id)) {
+        this.group.remove(l.mesh);
+        l.mat.dispose();
+        this.lances.delete(id);
+      }
     this.flyStreaks(now);
     this.drawStuns(dtMs);
     if (preview) this.drawPreview(preview);
   }
 
   private drawCalldown(c: Calldown, now: number): void {
-    const g = this.g;
+    const g = this.v.top;
     const friendly = this.friendly(c.faction);
     const col = friendly ? OWN[c.power] : ENEMY;
-    const x = c.x * TILE;
-    const y = c.y * TILE;
-    const R = c.radius * TILE;
+    const { x, y } = c;
+    const R = c.radius;
     const span = Math.max(1, c.landTick - c.startTick);
-    const k = Phaser.Math.Clamp((now - c.startTick) / span, 0, 1);
+    const k = Math.min(1, Math.max(0, (now - c.startTick) / span));
     const blink = 0.5 + 0.5 * Math.sin(this.time * (0.01 + k * 0.02));
+    const px = (css: number) => this.px(x, y, css);
     // danger disc, brightening as it closes in
     g.fillStyle(col, 0.07 + 0.1 * k + 0.05 * blink).fillCircle(x, y, R);
-    g.lineStyle(this.px(2.5), col, 0.95).strokeCircle(x, y, R);
-    if (k < 1 && R * (1 - k) > this.px(3)) g.lineStyle(this.px(2), col, 0.75 + 0.25 * blink).strokeCircle(x, y, R * (1 - k));
+    g.lineStyle(2.5, col, 0.95).strokeCircle(x, y, R);
+    if (k < 1 && R * (1 - k) > px(3)) g.lineStyle(2, col, 0.75 + 0.25 * blink).strokeCircle(x, y, R * (1 - k));
     // four outward brackets
     const spin = c.power === "hammer" ? this.time * 0.0016 : 0;
     for (let i = 0; i < 4; i++) {
       const a = spin + (i * Math.PI) / 2;
-      const r0 = R + this.px(4);
-      const r1 = R + this.px(14);
-      g.lineStyle(this.px(3), col, 0.95).lineBetween(x + Math.sin(a) * r0, y - Math.cos(a) * r0, x + Math.sin(a) * r1, y - Math.cos(a) * r1);
+      const r0 = R + px(4);
+      const r1 = R + px(14);
+      g.lineStyle(3, col, 0.95).lineBetween(x + Math.sin(a) * r0, y - Math.cos(a) * r0, x + Math.sin(a) * r1, y - Math.cos(a) * r1);
     }
     // centre cross
-    const cc = Math.min(R * 0.22, this.px(10));
-    g.lineStyle(this.px(1.5), col, 0.9).lineBetween(x - cc, y, x + cc, y).lineBetween(x, y - cc, x, y + cc);
+    const cc = Math.min(R * 0.22, px(10));
+    g.lineStyle(1.5, col, 0.9).lineBetween(x - cc, y, x + cc, y).lineBetween(x, y - cc, x, y + cc);
 
     if (c.power === "hammer") {
       // a targeting lance from orbit, thickening as the strike charges
-      const top = y - 1100;
-      g.lineStyle(this.px(1 + 5 * k * k), friendly ? 0xfff2c0 : 0xffb0a0, 0.25 + 0.55 * k).lineBetween(x, top, x, y);
-      g.fillStyle(0xffffff, 0.15 + 0.5 * k * blink).fillCircle(x, y, this.px(4 + 10 * k));
+      let l = this.lances.get(c.id);
+      if (!l) {
+        const mat = glowMat(friendly ? 0xfff2c0 : 0xffb0a0, 0.3);
+        const mesh = new THREE.Mesh(beamGeo, mat);
+        mesh.renderOrder = 8;
+        this.group.add(mesh);
+        l = { mesh, mat };
+        this.lances.set(c.id, l);
+      }
+      const r = px(0.6 + 2.8 * k * k);
+      l.mesh.position.set(x, this.ground(x, y), y);
+      l.mesh.scale.set(r, 40, r);
+      l.mat.opacity = 0.25 + 0.55 * k;
+      g.fillStyle(0xffffff, 0.15 + 0.5 * k * blink).fillCircle(x, y, px(4 + 10 * k));
     } else if (c.power === "droppod") {
       this.drawPod(c, now, x, y);
     } else if (c.power === "barrage") {
@@ -353,7 +379,7 @@ export class PowerRenderer {
         const lead = s.tick - now;
         if (lead > 0 && lead <= SHELL_LEAD && !this.incoming.has(key)) {
           this.incoming.add(key);
-          this.shellStreak(s.x * TILE, s.y * TILE, s.tick);
+          this.shellStreak(s.x, s.y, s.tick);
         }
       });
     }
@@ -362,35 +388,36 @@ export class PowerRenderer {
   private drawPod(c: Calldown, now: number, x: number, y: number): void {
     const pod = this.pods.get(c.id);
     if (!pod) return;
-    const fall = 7; // ticks of visible descent
     const t = c.landTick - now;
     // the shadow tightens as the pod comes down
-    const k = Phaser.Math.Clamp(1 - t / (c.landTick - c.startTick), 0, 1);
-    this.g.fillStyle(0x000000, 0.12 + 0.3 * k).fillEllipse(x, y + 4, 26 + 40 * (1 - k), 14 + 22 * (1 - k));
-    if (t > fall || t < 0) {
-      pod.img.setVisible(false);
-      pod.glow.setVisible(false);
+    const k = Math.min(1, Math.max(0, 1 - t / (c.landTick - c.startTick)));
+    this.v.over.fillStyle(0x000000, 0.12 + 0.3 * k).fillEllipse(x, y, 0.4 + 0.6 * (1 - k), 0.4 + 0.6 * (1 - k));
+    if (t > POD_FALL || t < 0) {
+      pod.root.visible = false;
       return;
     }
-    const e = 1 - t / fall; // 0 → 1 as it lands
+    const e = 1 - t / POD_FALL; // 0 → 1 as it lands
     const ease = e * e;
-    const px = x + 260 * (1 - ease);
-    const py = y - 720 * (1 - ease);
-    pod.img.setVisible(true).setPosition(px, py).setScale(1.5 - 0.5 * ease).setRotation(0.35);
-    pod.glow.setVisible(true).setPosition(px + 14, py - 30).setScale(1.6 - 0.4 * ease).setAlpha(0.9);
-    this.trail.emitParticleAt(px + 10, py - 26, 2);
+    const g = this.ground(x, y);
+    const px = x + POD_FROM.dx * (1 - ease);
+    const py = y + POD_FROM.dy * (1 - ease);
+    const ph = g + POD_FROM.h * (1 - ease);
+    pod.root.visible = true;
+    pod.root.position.set(px, ph, py);
+    // nose down along its line of flight
+    pod.root.lookAt(px - POD_FROM.dx, ph - POD_FROM.h, py - POD_FROM.dy);
+    pod.root.rotateX(-Math.PI / 2);
+    this.v.particles.emit(TRAIL, px + POD_FROM.dx * 0.05, py + POD_FROM.dy * 0.05, ph + 0.8, 2);
+    if (Math.random() < 0.5) this.v.particles.emit(SMOKE, px, py, ph + 0.9, 1);
   }
 
   /** An incoming barrage shell: a bright streak that drops onto (x, y) at sim tick `tick`. */
   private shellStreak(x: number, y: number, tick: number): void {
-    const img = this.scene.add
-      .image(x + STREAK_DX, y + STREAK_DY, "fx-tracer")
-      .setDepth(RETICLE_DEPTH - 0.02)
-      .setScale(1.1, 2.2)
-      .setRotation(Math.atan2(-STREAK_DX, STREAK_DY))
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setTint(0xffe0a0);
-    this.streaks.push({ img, x, y, tick, lead: SHELL_LEAD });
+    const mesh = new THREE.Mesh(streakGeo, this.streakMat);
+    mesh.scale.set(1, 1, 0.9);
+    mesh.renderOrder = 8;
+    this.group.add(mesh);
+    this.streaks.push({ mesh, x, y, h: this.ground(x, y), tick, lead: SHELL_LEAD });
   }
 
   private flyStreaks(now: number): void {
@@ -398,13 +425,17 @@ export class PowerRenderer {
     this.streaks = this.streaks.filter((s) => {
       const left = s.tick - now;
       if (left <= 0) {
-        s.img.destroy();
+        this.group.remove(s.mesh);
         return false;
       }
       const k = Math.min(1, left / s.lead); // 1 → 0 as it comes down
       const e = k * k;
-      s.img.setPosition(s.x + STREAK_DX * e, s.y + STREAK_DY * e);
-      if (Math.random() < 0.6) this.trail.emitParticleAt(s.img.x, s.img.y, 1);
+      const px = s.x + STREAK.dx * e;
+      const py = s.y + STREAK.dy * e;
+      const ph = s.h + STREAK.h * e;
+      s.mesh.position.set(px, ph, py);
+      s.mesh.lookAt(s.x, s.h, s.y);
+      if (Math.random() < 0.6) this.v.particles.emit(TRAIL, px, py, ph, 1);
       return true;
     });
     if (this.incoming.size > 200) this.incoming.clear();
@@ -414,61 +445,53 @@ export class PowerRenderer {
   private drawStuns(dtMs: number): void {
     const st = this.world.powers.stunned;
     if (st.size === 0) return;
-    const a = this.arcs;
+    const a = this.v.top;
     for (const [id, until] of st) {
       if (until <= this.world.tick || !this.opts.isShown(id)) continue;
       const p = this.opts.pos(id);
       if (!p) continue;
       const b = this.world.buildings.get(id);
-      const r = b ? 26 : 16;
+      const r = b ? 0.42 : 0.26;
+      const h = p.h + (b ? 0.3 : 0.12);
       // a flickering blue haze says "frozen" at a glance
-      a.fillStyle(0x7fd4ff, 0.12 + 0.12 * Math.random()).fillCircle(p.x, p.y, r * 1.35);
-      if (Math.random() < dtMs / 90) this.sparks.emitParticleAt(p.x + (Math.random() - 0.5) * r, p.y + (Math.random() - 0.5) * r, 1);
+      a.fillStyle(0x7fd4ff, 0.12 + 0.12 * Math.random()).fillCircle(p.x, p.y, r * 1.35, h);
+      if (Math.random() < dtMs / 90) this.v.particles.emit(SPARKS, p.x + (Math.random() - 0.5) * r, p.y + (Math.random() - 0.5) * r, h, 1);
       // a jagged arc or two, redrawn every frame
       for (let n = 0; n < 2; n++) {
         if (Math.random() < 0.35) continue;
         let ang = Math.random() * Math.PI * 2;
-        let px = p.x + Math.cos(ang) * r;
-        let py = p.y + Math.sin(ang) * r;
-        a.lineStyle(this.px(1.6), Math.random() < 0.5 ? 0xbfeaff : 0x7fd4ff, 0.9);
-        a.beginPath();
-        a.moveTo(px, py);
+        const pts = [{ x: p.x + Math.cos(ang) * r, y: p.y + Math.sin(ang) * r }];
         for (let i = 0; i < 4; i++) {
           ang += 0.45 + Math.random() * 0.4;
           const rr = r * (0.55 + Math.random() * 0.6);
-          px = p.x + Math.cos(ang) * rr;
-          py = p.y + Math.sin(ang) * rr;
-          a.lineTo(px, py);
+          pts.push({ x: p.x + Math.cos(ang) * rr, y: p.y + Math.sin(ang) * rr });
         }
-        a.strokePath();
+        a.lineStyle(1.6, Math.random() < 0.5 ? 0xbfeaff : 0x7fd4ff, 0.9).strokePoints(pts, false, h + (Math.random() - 0.5) * 0.1);
       }
     }
   }
 
   private drawPreview(p: TargetPreview): void {
-    const g = this.g;
-    const x = p.x * TILE;
-    const y = p.y * TILE;
-    const R = POWERS[p.power].radius * TILE;
+    const g = this.v.top;
+    const { x, y } = p;
+    const R = POWERS[p.power].radius;
     const col = p.ok ? OWN[p.power] : 0x9aa3b0;
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 0.008);
+    const px = (css: number) => this.px(x, y, css);
     g.fillStyle(col, p.ok ? 0.12 + 0.06 * pulse : 0.08).fillCircle(x, y, R);
     // dashed rim
     const dashes = 28;
-    g.lineStyle(this.px(2.5), col, 0.95);
-    for (let i = 0; i < dashes; i += 1) {
-      if (i % 2) continue;
+    g.lineStyle(2.5, col, 0.95);
+    for (let i = 0; i < dashes; i += 2) {
       const a0 = (i / dashes) * Math.PI * 2 + this.time * 0.0006;
       const a1 = ((i + 1) / dashes) * Math.PI * 2 + this.time * 0.0006;
-      g.beginPath();
       g.arc(x, y, R, a0, a1);
-      g.strokePath();
     }
-    const cc = this.px(12);
-    g.lineStyle(this.px(2), col, 1).lineBetween(x - cc, y, x + cc, y).lineBetween(x, y - cc, x, y + cc);
+    const cc = px(12);
+    g.lineStyle(2, col, 1).lineBetween(x - cc, y, x + cc, y).lineBetween(x, y - cc, x, y + cc);
     if (!p.ok) {
-      const d = this.px(9);
-      g.lineStyle(this.px(3), 0xff5a4a, 1).lineBetween(x - d, y - d, x + d, y + d).lineBetween(x - d, y + d, x + d, y - d);
+      const d = px(9);
+      g.lineStyle(3, 0xff5a4a, 1).lineBetween(x - d, y - d, x + d, y + d).lineBetween(x - d, y + d, x + d, y - d);
     }
   }
 
@@ -478,92 +501,8 @@ export class PowerRenderer {
   }
 
   destroy(): void {
-    for (const p of this.pods.values()) {
-      p.img.destroy();
-      p.glow.destroy();
-    }
+    this.v.scene.remove(this.group);
     this.pods.clear();
+    this.lances.clear();
   }
-}
-
-/** Procedural pod textures: the falling capsule and the landed, opened shell. */
-function makePowerTextures(scene: Phaser.Scene): void {
-  const make = (key: string, w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void) => {
-    if (scene.textures.exists(key)) return;
-    const tex = scene.textures.createCanvas(key, w, h)!;
-    draw(tex.getContext());
-    tex.refresh();
-  };
-  // falling capsule, nose down-left (it streaks in from the upper right)
-  make("pw-pod", 44, 64, (ctx) => {
-    ctx.translate(22, 32);
-    const body = ctx.createLinearGradient(-14, 0, 14, 0);
-    body.addColorStop(0, "#8a929e");
-    body.addColorStop(0.45, "#f2f5f8");
-    body.addColorStop(1, "#5d6470");
-    ctx.fillStyle = body;
-    ctx.beginPath();
-    ctx.moveTo(0, 28);
-    ctx.quadraticCurveTo(14, 18, 13, -4);
-    ctx.lineTo(10, -22);
-    ctx.lineTo(-10, -22);
-    ctx.lineTo(-13, -4);
-    ctx.quadraticCurveTo(-14, 18, 0, 28);
-    ctx.fill();
-    ctx.fillStyle = "#3a404a";
-    ctx.fillRect(-11, -26, 22, 5); // heat shield rim
-    ctx.fillStyle = "#4c84d8";
-    ctx.fillRect(-13, 2, 26, 4); // team stripe (tinted)
-    ctx.fillStyle = "#1c2028";
-    ctx.beginPath();
-    ctx.ellipse(0, 12, 4, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    // fins
-    ctx.fillStyle = "#6c7480";
-    for (const s of [-1, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(s * 12, -14);
-      ctx.lineTo(s * 19, -24);
-      ctx.lineTo(s * 12, -22);
-      ctx.fill();
-    }
-  });
-  // landed pod seen from above: hatch open, four petals splayed
-  make("pw-pod-open", 72, 72, (ctx) => {
-    ctx.translate(36, 36);
-    const scorch = ctx.createRadialGradient(0, 0, 4, 0, 0, 34);
-    scorch.addColorStop(0, "rgba(20,16,12,0.65)");
-    scorch.addColorStop(1, "rgba(20,16,12,0)");
-    ctx.fillStyle = scorch;
-    ctx.fillRect(-36, -36, 72, 72);
-    for (let i = 0; i < 4; i++) {
-      ctx.save();
-      ctx.rotate((i * Math.PI) / 2 + Math.PI / 4);
-      const pg = ctx.createLinearGradient(0, -10, 0, -30);
-      pg.addColorStop(0, "#c9d0d8");
-      pg.addColorStop(1, "#6a727e");
-      ctx.fillStyle = pg;
-      ctx.beginPath();
-      ctx.moveTo(-8, -9);
-      ctx.lineTo(-11, -28);
-      ctx.quadraticCurveTo(0, -33, 11, -28);
-      ctx.lineTo(8, -9);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = "#4c84d8";
-      ctx.fillRect(-9, -22, 18, 3);
-      ctx.restore();
-    }
-    const core = ctx.createRadialGradient(-2, -2, 1, 0, 0, 11);
-    core.addColorStop(0, "#f4f6f8");
-    core.addColorStop(1, "#59606b");
-    ctx.fillStyle = core;
-    ctx.beginPath();
-    ctx.arc(0, 0, 11, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#20252d";
-    ctx.beginPath();
-    ctx.arc(0, 0, 5, 0, Math.PI * 2);
-    ctx.fill();
-  });
 }

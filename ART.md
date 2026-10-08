@@ -5,8 +5,18 @@ scrap and crystals, explosions, the menu key art and the app icon — was
 generated with OpenAI's **`gpt-image-2.5-sunburst`** (released 2026-09-08,
 described by OpenAI as its most capable image generation and editing
 model), then processed deterministically in Python into the assets the
-engine loads. Small procedural effects (glows, tracers, smoke puffs, beams,
-rings) are drawn at runtime in `src/game/textures.ts`.
+engine loads.
+
+> **The battlefield is now 3D (three.js).** Units, buildings, objectives,
+> trees, rocks, scrap and crystals are procedural low-poly models built in
+> code (`src/game/three/models.ts`, `three/terrain.ts`) in the same style
+> contract — gunmetal, royal-blue/crimson team panels, amber lights — and
+> particle textures are drawn at runtime (`src/game/three/textures.ts`).
+> The painted **terrain** (section 3) is draped over the 3D heightfield as
+> its albedo; the generated **unit and building art** still provides the
+> HUD portraits (`public/assets/icons/`), and the key art and icons are
+> unchanged. The sprite atlas (`public/assets/sprites/`) is still produced
+> by `process.py` but is no longer loaded by the game.
 
 The pipeline lives in `art/` (Python 3.10+, Pillow ≥ 10.1, numpy, scipy,
 and the `openai` package for generation):

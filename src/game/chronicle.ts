@@ -9,7 +9,7 @@ import { CalldownCredit, powerName } from "./calldown-credit";
  * deaths, so the after-action report can tell the story: first blood, the
  * biggest battle, the turning point, the MVP unit and one tip.
  *
- * No Phaser here: the analysis functions are pure and unit-tested.
+ * No three.js here: the analysis functions are pure and unit-tested.
  */
 
 /** Sample every 5 s of game time. */

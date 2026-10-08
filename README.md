@@ -68,9 +68,22 @@ installable as a PWA.
   frozen 3,000-scrap budget, raid with aircraft only, survive Ironclad on Hard,
   and a 10-wave Last Light. A goal pill with live stars, a briefing sheet,
   "Next op" on the end screen; ops unlock as you clear them.
-- Painted art generated with OpenAI's `gpt-image-2.5-sunburst`, rendered
-  at device resolution with turrets that track their targets, shadows,
-  particles, smooth fog of war — and fully synthesised sound.
+- **A 3D battlefield in three.js.** Every unit, building and map objective
+  is a procedural low-poly 3D model in the painted style (gunmetal hulls,
+  royal-blue or crimson team panels, amber lights): turrets track their
+  targets and kick on recoil, rotors spin, aircraft fly at altitude, bank
+  into turns and cast shadows on the ground, tanks tilt over the terrain,
+  buildings rise out of the ground when placed and smoke when hurt. The
+  landscape is a heightfield draped with each map's painted terrain — rock
+  outcrops rise into craggy mesas, rivers and lava cut real channels under
+  animated water, ice or flowing lava, fords dip under a shallow skin of
+  water, bridges are built decks — with instanced trees and boulders per
+  biome, scrap heaps and glowing crystal clusters that shrink as they're
+  mined, real-time sun shadows, drifting cloud shadows, GPU particles and a
+  fog of war on 3D surfaces. A tilted RTS camera steepens as you zoom out;
+  resolution adapts to keep weaker phones smooth. Terrain, menu art and
+  icons were painted with OpenAI's `gpt-image-2.5-sunburst`; every sound
+  is synthesised live.
 - An **adaptive soundtrack** synthesised live: each biome has its own mode,
   chords and instruments; bass, drums and an arpeggio join as fights heat up
   near your camera, an alarm motif plays when your base is under attack,
@@ -125,6 +138,7 @@ npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --shard 0/4   # pacing & s
 npx vite-node tools/pacing.ts summary out*.jsonl                    # …the table in DESIGN.md "Balance & pacing"
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --mirror      # side fairness: each personality vs itself
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
+                       # model gallery: npm run dev, then open /tools/models.html
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
@@ -153,10 +167,12 @@ npm run art:terrain    # paint every map's terrain from its grid
   numbers live in `src/sim/balance.ts`; maps in `src/sim/maps.ts`. The AI
   commander (`src/sim/ai/commander.ts`) plays by the same rules and fog as
   the player. Fully unit-tested.
-- `src/game/` — Phaser 3 rendering and input: hi-DPI canvas, interpolated
-  view of the sim (`render/`), gesture recognizer (`gestures.ts`,
-  engine-free and tested), camera, particles, procedural audio
-  (`audio.ts`).
+- `src/game/` — three.js rendering and input: the 3D engine in `three/`
+  (stage and adaptive resolution, RTS camera rig, procedural models,
+  heightfield terrain, fog-of-war shader patch, instanced particles, ground
+  marks, screen overlay), the interpolated view of the sim (`render/`),
+  gesture recognizer (`gestures.ts`, engine-free and tested), procedural
+  audio (`audio.ts`).
 - `src/ui/` — DOM-overlay HUD and menu, with portrait/landscape layouts in
   CSS.
 - `art/` — the image-generation and processing pipeline; `tools/` — map

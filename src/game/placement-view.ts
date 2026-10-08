@@ -10,21 +10,22 @@
  * why above the ghost ("Too far from base"), and a refused build shakes it
  * with a buzz.
  */
-import type Phaser from "phaser";
 import { BUILDINGS } from "../sim/balance";
 import { inBuildRange, suggestPlacement } from "../sim/placement";
 import type { BuildingKind, World } from "../sim/types";
-import { ART_SCALE, ATLAS, TILE, buildingFrame } from "./assets";
 import { sfx } from "./audio";
+import { setVariant } from "./three/materials";
+import { buildingDef, instance, type ModelInstance } from "./three/models";
+import type { Label } from "./three/screen";
+import type { View } from "./three/view";
 import { radioCue } from "./announcer";
 import { PLAYER, type Controller } from "./controller";
 import type { GesturePointer } from "./gestures";
 
 export interface PlacementHooks {
-  scene: Phaser.Scene;
+  view: View;
   world: World;
   ctrl: Controller;
-  dpr: number;
   /** Middle of the visible battlefield (tiles), clear of the HUD. */
   viewCentre(): { x: number; y: number };
   /** Is this tile point inside the visible battlefield? */
@@ -45,10 +46,11 @@ const GHOST_SLOP_PX = 14;
 const TAP_SLOP_PX = 8;
 
 export class PlacementView {
-  private ghost: Phaser.GameObjects.Image;
-  private label: Phaser.GameObjects.Text;
-  /** The footprint; drawn above the fog (depth 10) like the ghost, so a far tap still shows. */
-  private gfx: Phaser.GameObjects.Graphics;
+  /** The ghost: a translucent model of the building, green where it may stand, red where not. */
+  private ghost: ModelInstance | null = null;
+  private ghostKind: BuildingKind | null = null;
+  private ghostOk: boolean | null = null;
+  private label: Label;
   private kind: BuildingKind | null = null;
   private lastType: GesturePointer["pointerType"] = "touch";
   private drag: {
@@ -61,24 +63,7 @@ export class PlacementView {
   private zone: { key: string; runs: number[]; edges: number[] } | null = null;
 
   constructor(private h: PlacementHooks) {
-    this.gfx = h.scene.add.graphics().setDepth(10.3);
-    this.ghost = h.scene.add
-      .image(0, 0, ATLAS, buildingFrame(PLAYER, "turret"))
-      .setDepth(10.35)
-      .setAlpha(0.55)
-      .setVisible(false);
-    this.label = h.scene.add
-      .text(0, 0, "", {
-        fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif',
-        fontSize: `${Math.round(13 * h.dpr)}px`,
-        fontStyle: "bold",
-        color: "#ffb3a6",
-        backgroundColor: "rgba(10, 14, 22, 0.88)",
-        padding: { x: Math.round(7 * h.dpr), y: Math.round(3 * h.dpr) }
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(10.4)
-      .setVisible(false);
+    this.label = h.view.screen.label({ x: 0, y: 0, text: "", size: 13, color: "#ffb3a6", bg: "rgba(10, 14, 22, 0.88)", visible: false });
   }
 
   /** Placing, the building is ready, and the ghost has a spot. */
@@ -88,8 +73,7 @@ export class PlacementView {
   }
 
   private worldAt(sx: number, sy: number): { x: number; y: number } {
-    const wp = this.h.scene.cameras.main.getWorldPoint(sx * this.h.dpr, sy * this.h.dpr);
-    return { x: wp.x / TILE, y: wp.y / TILE };
+    return this.h.view.rig.ground(sx, sy);
   }
 
   /** Top-left tile for a footprint centred under world point p. */
@@ -104,7 +88,7 @@ export class PlacementView {
     if (!at || !this.h.ctrl.placing) return false;
     const size = BUILDINGS[this.h.ctrl.placing].size;
     const p = this.worldAt(sx, sy);
-    const slop = Math.max(0.3, (GHOST_SLOP_PX * this.h.dpr) / (this.h.scene.cameras.main.zoom * TILE));
+    const slop = Math.max(0.3, GHOST_SLOP_PX * this.h.view.rig.worldPerPx(p.x, p.y));
     return p.x >= at.tx - slop && p.x <= at.tx + size + slop && p.y >= at.ty - slop && p.y <= at.ty + size + slop;
   }
 
@@ -220,51 +204,63 @@ export class PlacementView {
 
   // -------------------------------------------------------------- render --
 
-  draw(g: Phaser.GameObjects.Graphics, px: (css: number) => number): void {
+  /** Draw the build zone, the footprint and the ghost (every frame). */
+  draw(): void {
     const kind = this.h.ctrl.placing;
     const at = this.h.ctrl.placeAt;
-    this.gfx.clear();
+    const v = this.h.view;
     if (!kind || !at || !this.active) {
-      this.ghost.setVisible(false);
-      this.label.setVisible(false);
+      if (this.ghost) this.ghost.root.visible = false;
+      this.label.visible = false;
       return;
     }
     const w = this.h.world;
     // where you may build: the build-range zone, tinted with a crisp outline
+    const g = v.over;
     const z = this.buildZone(w);
     g.fillStyle(0x7ef29b, 0.07);
-    for (let i = 0; i < z.runs.length; i += 3) g.fillRect(z.runs[i]! * TILE, z.runs[i + 1]! * TILE, z.runs[i + 2]! * TILE, TILE);
-    g.lineStyle(px(1.5), 0x7ef29b, 0.45).beginPath();
-    for (let i = 0; i < z.edges.length; i += 4) {
-      g.moveTo(z.edges[i]! * TILE, z.edges[i + 1]! * TILE);
-      g.lineTo(z.edges[i + 2]! * TILE, z.edges[i + 3]! * TILE);
-    }
-    g.strokePath();
+    for (let i = 0; i < z.runs.length; i += 3) g.fillRect(z.runs[i]!, z.runs[i + 1]!, z.runs[i + 2]!, 1);
+    g.lineStyle(1.5, 0x7ef29b, 0.45);
+    for (let i = 0; i < z.edges.length; i += 4) g.lineBetween(z.edges[i]!, z.edges[i + 1]!, z.edges[i + 2]!, z.edges[i + 3]!);
     const size = BUILDINGS[kind].size;
     const why = this.h.ctrl.placementProblem();
     const ok = why === null;
     const k = this.shake < SHAKE_MS ? 1 - this.shake / SHAKE_MS : 0;
-    const off = k > 0 ? Math.sin((this.shake / SHAKE_MS) * Math.PI * 6) * px(SHAKE_PX) * k : 0;
-    const x = at.tx * TILE + off;
-    const y = at.ty * TILE;
-    this.ghost
-      .setVisible(true)
-      .setFrame(buildingFrame(PLAYER, kind))
-      .setScale(ART_SCALE)
-      .setPosition(x + (size / 2) * TILE, y + (size / 2) * TILE)
-      .setTint(ok ? 0xb8ffc8 : 0xff8080);
+    const cx = at.tx + size / 2;
+    const cy = at.ty + size / 2;
+    const off = k > 0 ? Math.sin((this.shake / SHAKE_MS) * Math.PI * 6) * SHAKE_PX * v.rig.worldPerPx(cx, cy) * k : 0;
+    const x = at.tx + off;
+    const y = at.ty;
+    if (!this.ghost || this.ghostKind !== kind) {
+      if (this.ghost) v.scene.remove(this.ghost.root);
+      this.ghost = instance(buildingDef(kind, PLAYER), false);
+      this.ghost.root.renderOrder = 21;
+      this.ghost.root.traverse((o) => (o.renderOrder = 21));
+      this.ghostKind = kind;
+      this.ghostOk = null;
+      v.scene.add(this.ghost.root);
+    }
+    if (this.ghostOk !== ok) {
+      this.ghostOk = ok;
+      setVariant(this.ghost.root, ok ? "ghostOk" : "ghostBad");
+    }
+    const ground = Math.max(v.terrain.heightAt(cx, cy), v.terrain.surfaceAt(cx, cy));
+    this.ghost.root.visible = true;
+    this.ghost.root.position.set(x + size / 2, ground, y + size / 2);
     // a valid ghost breathes, inviting the tap that builds it
     const breathe = ok ? 0.7 + 0.3 * Math.sin(this.pulse / 260) : 0.95;
-    this.gfx.fillStyle(ok ? 0x37d67a : 0xe25555, 0.25).fillRect(x, y, size * TILE, size * TILE);
-    this.gfx.lineStyle(px(2), ok ? 0x37d67a : 0xe25555, breathe).strokeRect(x, y, size * TILE, size * TILE);
-    const cam = this.h.scene.cameras.main;
+    this.ghost.root.scale.set(1, ok ? 0.96 + 0.04 * breathe : 1, 1);
+    const t = v.top;
+    t.fillStyle(ok ? 0x37d67a : 0xe25555, 0.25).fillRect(x, y, size, size);
+    t.lineStyle(2, ok ? 0x37d67a : 0xe25555, breathe).strokeRect(x, y, size, size);
     if (why) {
-      if (this.label.text !== why) this.label.setText(why);
-      this.label
-        .setVisible(true)
-        .setScale(1 / cam.zoom)
-        .setPosition(x + (size / 2) * TILE, y - px(6));
-    } else this.label.setVisible(false);
+      this.label.text = why;
+      this.label.visible = true;
+      this.label.x = x + size / 2;
+      this.label.y = y + size / 2;
+      this.label.h = ground + (this.ghost.def.height ?? 1) + 0.2;
+      this.label.dy = -6;
+    } else this.label.visible = false;
   }
 
   /**
@@ -303,8 +299,7 @@ export class PlacementView {
   }
 
   destroy(): void {
-    this.gfx.destroy();
-    this.ghost.destroy();
-    this.label.destroy();
+    if (this.ghost) this.h.view.scene.remove(this.ghost.root);
+    this.h.view.screen.remove(this.label);
   }
 }

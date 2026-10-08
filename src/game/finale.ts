@@ -1,6 +1,6 @@
-import Phaser from "phaser";
-import { TILE } from "./assets";
 import type { Fx } from "./render/fx";
+import { Ease } from "./three/tween";
+import type { View } from "./three/view";
 
 /**
  * The cinematic HQ kill (render only — the sim has already stopped at the
@@ -27,7 +27,7 @@ export const FINALE = {
 };
 
 export interface FinaleOpts {
-  scene: Phaser.Scene;
+  view: View;
   fx: Fx;
   /** Dying HQ centre (tiles) and footprint size (tiles). */
   x: number;
@@ -35,9 +35,9 @@ export interface FinaleOpts {
   size: number;
   /** False when no HQ died (an op ended on its objective): no blasts, just the slow-mo, flash and banner. */
   blasts?: boolean;
-  /** World-px shift of the camera target so the HQ sits mid free area (clear of the HUD dock). */
-  shiftX?: number;
-  shiftY?: number;
+  /** Screen point (CSS px) the HQ should end up under: the middle of the free area, clear of the HUD dock. */
+  screenX?: number;
+  screenY?: number;
   /** At the flash: announce the result, play the stinger. */
   onFlash(): void;
   /** At the end: show the end screen. */
@@ -55,35 +55,53 @@ export class Finale {
     [-0.55, -0.45], [0.5, -0.5], [-0.45, 0.5], [0.55, 0.45], [0, 0]
   ];
 
+  private pan: { x0: number; y0: number; t: number } | null;
+
   constructor(private o: FinaleOpts) {
-    const s = o.scene;
-    const cam = s.cameras.main;
     this.apply(FINALE.slow);
-    cam.pan(o.x * TILE - (o.shiftX ?? 0), o.y * TILE - (o.shiftY ?? 0), FINALE.panMs, "Sine.easeInOut", true);
+    const rig = o.view.rig;
+    this.pan = { x0: rig.x, y0: rig.y, t: 0 };
+  }
+
+  /** Glide the camera so the HQ lands mid free area (recomputed as the zoom pushes in). */
+  private glide(realMs: number): void {
+    const p = this.pan;
+    if (!p) return;
+    p.t = Math.min(FINALE.panMs, p.t + realMs);
+    const rig = this.o.view.rig;
+    const to = rig.targetFor(this.o.x, this.o.y, this.o.screenX ?? rig.width / 2, this.o.screenY ?? rig.height / 2);
+    const k = Ease.sineInOut(p.t / FINALE.panMs);
+    rig.x = p.x0 + (to.x - p.x0) * k;
+    rig.y = p.y0 + (to.y - p.y0) * k;
+    rig.apply();
+    if (p.t >= FINALE.panMs) this.pan = null;
   }
 
   /** Advance with the real (unscaled) frame delta. */
   update(realMs: number): void {
     if (this.done) return;
     this.t += realMs;
-    const s = this.o.scene;
+    this.glide(realMs);
+    const v = this.o.view;
     // staged chain of blasts across the footprint, outside-in (real time,
     // like everything here, so a slow frame can't reorder the beats)
     const n = this.o.blasts === false ? 0 : Math.min(FINALE.blasts, this.spots.length);
     while (this.blasts < n && this.t >= FINALE.blastAt + this.blasts * FINALE.blastEvery) {
       const [dx, dy] = this.spots[this.blasts]!;
       const last = this.blasts === n - 1;
-      const half = (this.o.size * TILE) / 2;
+      const half = this.o.size / 2;
+      const bx = this.o.x + dx * half;
+      const by = this.o.y + dy * half;
       this.o.fx.explosion(
         { type: "explosion", x: this.o.x, y: this.o.y, size: last ? 2.2 : 1.3, air: false, kind: "building" },
-        { x: this.o.x * TILE + dx * half, y: this.o.y * TILE + dy * half }
+        { x: bx, y: by, h: v.terrain.heightAt(bx, by) + 0.4 }
       );
       this.blasts++;
     }
     if (!this.flashed && this.t >= FINALE.flashAt) {
       this.flashed = true;
-      s.cameras.main.flash(380, 255, 244, 228, true);
-      s.cameras.main.shake(520, 0.011, true);
+      v.stage.flash(380, 255, 244, 228);
+      v.rig.shake(520, 0.011);
       this.o.onFlash();
     }
     if (this.flashed) {
@@ -97,14 +115,9 @@ export class Finale {
     }
   }
 
-  /** Slow (or restore) every render clock: tweens, sprite anims, particles. */
+  /** Slow (or restore) every render clock: GameScene scales the frame delta for tweens, particles and effects by it. */
   private apply(k: number): void {
     this.timeScale = k;
-    const s = this.o.scene;
-    s.tweens.timeScale = k;
-    s.anims.globalTimeScale = k;
-    for (const obj of s.children.list)
-      if (obj instanceof Phaser.GameObjects.Particles.ParticleEmitter) obj.timeScale = k;
   }
 }
 

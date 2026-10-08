@@ -44,14 +44,7 @@ page.on("pageerror", (e) => errors.push(String(e)));
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 const shot = async (name) => { if (shots) await page.screenshot({ path: `${SHOT_DIR}/smoke-${name}-${w}x${h}.png` }); };
 /** Run the game loop n × 100 ms of sim time without waiting in real time. */
-const ff = (n) =>
-  page.evaluate((k) => {
-    const s = window.__bd.scene;
-    for (let i = 0; i < k; i++) {
-      s.game.loop.rawDelta = 100;
-      s.update(0, 100);
-    }
-  }, n);
+const ff = (n) => page.evaluate((k) => window.__bd.scene.step(100, k), n);
 const world = (fn, arg) => page.evaluate(fn, arg);
 
 await page.goto(url, { waitUntil: "networkidle" });
@@ -101,19 +94,17 @@ const placing = await world(() => window.__bd.ctrl.placing);
 if (placing !== "fab-plant") fail(`ready Fab tap did not enter placement (placing=${placing})`);
 // tap a valid spot near the HQ, found via the sim's own rules
 const spot = await world(() => {
-  const { world: w, cam, scene } = window.__bd;
+  const { world: w, cam, toScreen } = window.__bd;
   const hq = [...w.buildings.values()].find((b) => b.faction === "blue" && b.kind === "hq");
-  const dpr = scene.game.registry.get("dpr");
   for (let r = 1; r < 7; r++)
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
         const tx = hq.tx + dx, ty = hq.ty + dy;
         if (!window.__bd.canPlace(tx, ty)) continue;
-        const wx = (tx + 1) * 64, wy = (ty + 1) * 64;
-        cam.centerOn(wx, wy);
-        cam.preRender();
-        const sx = (wx - cam.worldView.x) * cam.zoom / dpr, sy = (wy - cam.worldView.y) * cam.zoom / dpr;
-        return { sx, sy, tx, ty };
+        // the footprint centre (a 2×2 Fab) on the ground, put mid-screen
+        cam.centerOn(tx + 1, ty + 1);
+        const s = toScreen(tx + 1, ty + 1);
+        return { sx: s.x, sy: s.y, tx, ty };
       }
   return null;
 });
@@ -147,15 +138,16 @@ if (!sid) fail("no Stinger was produced");
 
 // 3. select it by tapping it on the canvas, then order it somewhere
 if (sid) {
-  const pos = await world((id) => {
-    const { world: w, cam, scene } = window.__bd;
-    const u = w.units.get(id);
-    const dpr = scene.game.registry.get("dpr");
-    cam.centerOn(u.x * 64, u.y * 64);
-    cam.preRender();
-    return { sx: (u.x * 64 - cam.worldView.x) * cam.zoom / dpr, sy: (u.y * 64 - cam.worldView.y) * cam.zoom / dpr };
+  await world((id) => {
+    const u = window.__bd.world.units.get(id);
+    window.__bd.cam.centerOn(u.x, u.y);
   }, sid);
   await ff(1);
+  // where the tank is drawn (its body, on the tilted 3D view)
+  const pos = await world((id) => {
+    const s = window.__bd.screenOf(id);
+    return { sx: s.x, sy: s.y };
+  }, sid);
   await page.touchscreen.tap(pos.sx, pos.sy);
   await page.waitForTimeout(350); // let the double-tap window lapse
   const sel = await world(() => [...window.__bd.ctrl.selectedUnits]);

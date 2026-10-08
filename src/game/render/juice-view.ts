@@ -1,7 +1,6 @@
-import Phaser from "phaser";
+import * as THREE from "three";
 import { BUILDINGS, UNITS } from "../../sim/balance";
 import type { Faction, FxEvent, World } from "../../sim/types";
-import { TILE } from "../assets";
 import { sfx } from "../audio";
 import { coinPitchIn } from "../score";
 import {
@@ -16,30 +15,30 @@ import {
   ringStrength,
   shakeFor
 } from "../juice";
+import { TEX } from "../three/particles";
+import { Ease } from "../three/tween";
+import type { Label } from "../three/screen";
+import type { View } from "../three/view";
 import type { EntityRenderer } from "./entities";
-import { AIR_LIFT, type Fx } from "./fx";
+import { AIR_H } from "../three/view";
 
 /** Team colours for ground rings and death pulses. */
 const TEAM: Record<Faction, number> = { blue: 0x3d8bff, red: 0xff4a3a };
-const TRAIL_COLOR = 0xfff1c0;
-const POP_FONT = '"Rajdhani", "Segoe UI", system-ui, -apple-system, sans-serif';
-/** Text is rasterised at this size and scaled to ~POP_CSS CSS px on screen. */
-const POP_RASTER = 44;
+const TRAIL_COLOR = "#fff1c0";
 const POP_CSS = 19;
 
 export interface JuiceHost {
   world: World;
   entities: EntityRenderer;
-  fx: Fx;
   player: Faction;
   spectator: boolean;
   /** May the local player see this world point (tiles)? */
   sees(x: number, y: number): boolean;
-  /** Volume for a sound at world px (x, y): 0 far off-screen. */
+  /** Volume for a sound at tile point (x, y): 0 far off-screen. */
   earshot(x: number, y: number): number;
-  /** World px spanning `css` CSS px at the current zoom. */
-  px(css: number): number;
 }
+
+const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
 
 /**
  * Combat and economy feedback layered over the battle: hit flashes, team
@@ -48,12 +47,10 @@ export interface JuiceHost {
  * once per tick and calls update() every frame; the rules live in ../juice.ts.
  */
 export class CombatJuice {
-  private ground: Phaser.GameObjects.Graphics;
-  private air: Phaser.GameObjects.Graphics;
   private trail = new HpTrail();
   private pops = new DepositPops();
   private spend = new SpendWatch();
-  private popTexts = new Map<number, Phaser.GameObjects.Text>();
+  private popLabels = new Map<number, Label>();
   private time = 0;
   private sweepT = 0;
   private shakeUntil = 0;
@@ -61,11 +58,7 @@ export class CombatJuice {
   private lostAlertAt = -1e9;
   private resEl: HTMLElement | null = null;
 
-  constructor(private scene: Phaser.Scene, private host: JuiceHost) {
-    // rings sit under the hulls (ground units at depth 3, aircraft at 6)
-    this.ground = scene.add.graphics().setDepth(2.85);
-    this.air = scene.add.graphics().setDepth(5.9);
-  }
+  constructor(private v: View, private host: JuiceHost) {}
 
   // ------------------------------------------------------------- events ---
 
@@ -78,21 +71,15 @@ export class CombatJuice {
     }
   }
 
-  private onScreen(wx: number, wy: number): boolean {
-    return this.scene.cameras.main.worldView.contains(wx, wy);
-  }
-
   private death(ev: Extract<FxEvent, { type: "death" }>): void {
     const h = this.host;
-    const wx = ev.x * TILE;
-    const wy = ev.y * TILE - (ev.air ? AIR_LIFT : 0);
     const ours = ev.faction === h.player;
     const seen = ours || h.sees(ev.x, ev.y);
-    const visible = seen && this.onScreen(wx, wy);
+    const visible = seen && this.v.rig.onScreen(ev.x, ev.y);
     const cue = deathCue(ev, h.player, h.spectator, seen);
-    if (cue.sound === "kill") sfx.play("kill", h.earshot(wx, wy));
+    if (cue.sound === "kill") sfx.play("kill", h.earshot(ev.x, ev.y));
     else if (cue.sound === "lost") {
-      if (visible) sfx.play("lost", Math.max(0.6, h.earshot(wx, wy)));
+      if (visible) sfx.play("lost", Math.max(0.6, h.earshot(ev.x, ev.y)));
       else if (this.time - this.lostAlertAt > 1200) {
         // off-screen losses are quieter and throttled, but never silent
         this.lostAlertAt = this.time;
@@ -109,23 +96,20 @@ export class CombatJuice {
     if (!visible) return; // never shake (or pulse) for fogged / off-screen deaths
     const s = shakeFor(ev);
     if (this.time >= this.shakeUntil || s.intensity > this.shakeLevel) {
-      this.scene.cameras.main.shake(s.ms, s.intensity, true);
+      this.v.rig.shake(s.ms, s.intensity);
       this.shakeUntil = this.time + s.ms;
       this.shakeLevel = s.intensity;
     }
     // a crisp ring in the victim's colour says whose unit just popped
-    if (ev.unitKind) this.deathRing(wx, wy, TEAM[ev.faction], UNITS[ev.unitKind].radius * TILE);
-  }
-
-  /** Expanding team-coloured ring (normal blend, so it reads over the fireball's glow). */
-  private deathRing(wx: number, wy: number, color: number, radius: number): void {
-    const tex = 54; // fx-select ring radius in texture px
-    const r0 = Math.max(radius * 1.1, this.host.px(12)) / tex;
-    const img = this.scene.add.image(wx, wy, "fx-select").setDepth(7.95).setTint(color).setScale(r0).setAlpha(0.95);
-    this.scene.tweens.add({
-      targets: img, scale: r0 * 2.1, alpha: 0, duration: 480, ease: "Quad.easeOut",
-      onComplete: () => img.destroy()
-    });
+    if (ev.unitKind) {
+      const r = UNITS[ev.unitKind].radius;
+      const c = new THREE.Color(TEAM[ev.faction]);
+      const ground = this.v.terrain.surfaceAt(ev.x, ev.y);
+      this.v.particles.spawn({
+        x: ev.x, y: (ev.air ? ground + AIR_H : ground) + 0.07, z: ev.y, life: 480, tex: TEX.select, flat: true,
+        size0: Math.max(r * 2.6, 0.7), size1: Math.max(r * 2.6, 0.7) * 2.1, alpha0: 0.95, alpha1: 0, r: c.r, g: c.g, b: c.b
+      });
+    }
   }
 
   private deposit(ev: Extract<FxEvent, { type: "deposit" }>): void {
@@ -133,45 +117,33 @@ export class CombatJuice {
     if (ev.faction !== h.player) return;
     const key = Math.round(ev.x * 2) * 4096 + Math.round(ev.y * 2);
     const r = this.pops.add(key, ev.amount, this.time);
-    const wx = ev.x * TILE;
-    const wy = ev.y * TILE;
-    this.popText(key, wx, wy, r.amount, r.merged);
+    this.popText(key, ev.x, ev.y, r.amount, r.merged);
     if (h.spectator) return;
-    sfx.play("coin", this.onScreen(wx, wy) ? 0.9 : 0.3, coinPitchIn(h.world.biome, r.streak));
+    sfx.play("coin", this.v.rig.onScreen(ev.x, ev.y) ? 0.9 : 0.3, coinPitchIn(h.world.biome, r.streak));
     this.pill("bump");
   }
 
   /** A gold "+100" that rises from the drop-off; merged deliveries bump the same label. */
-  private popText(key: number, wx: number, wy: number, amount: number, merged: boolean): void {
-    const label = `+${Math.round(amount)}`;
-    const scale = this.host.px(POP_CSS) / POP_RASTER;
-    const cur = this.popTexts.get(key);
-    if (merged && cur?.active) {
-      cur.setText(label);
-      this.scene.tweens.add({ targets: cur, scale: { from: scale * 1.25, to: scale }, duration: 180 });
+  private popText(key: number, x: number, y: number, amount: number, merged: boolean): void {
+    const text = `+${Math.round(amount)}`;
+    const cur = this.popLabels.get(key);
+    if (merged && cur && this.v.screen.has(cur)) {
+      cur.text = text;
+      this.v.tweens.add({ dur: 180, update: (k) => (cur.scale = 1.25 - 0.25 * k) });
       return;
     }
-    const t = this.scene.add
-      .text(wx, wy - TILE * 0.3, label, {
-        fontFamily: POP_FONT,
-        fontSize: `${POP_RASTER}px`,
-        fontStyle: "bold",
-        color: "#ffd66e",
-        stroke: "#3a2604",
-        strokeThickness: 8
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(8.6)
-      .setScale(scale * 0.6);
-    this.popTexts.set(key, t);
-    const rise = this.host.px(38);
-    this.scene.tweens.add({ targets: t, scale, duration: 160, ease: "Back.easeOut" });
-    this.scene.tweens.add({ targets: t, y: t.y - rise, duration: 1100, ease: "Quad.easeOut" });
-    this.scene.tweens.add({
-      targets: t, alpha: 0, delay: 650, duration: 450,
-      onComplete: () => {
-        if (this.popTexts.get(key) === t) this.popTexts.delete(key);
-        t.destroy();
+    const l = this.v.screen.label({
+      x, y, h: this.v.terrain.surfaceAt(x, y) + 0.9, text, size: POP_CSS, color: "#ffd66e", stroke: "#3a2604", scale: 0.6
+    });
+    this.popLabels.set(key, l);
+    this.v.tweens.add({ dur: 160, ease: Ease.backOut, update: (k) => (l.scale = 0.6 + 0.4 * k) });
+    this.v.tweens.add({ dur: 1100, ease: Ease.quadOut, update: (k) => (l.dy = -38 * k) });
+    this.v.tweens.add({
+      dur: 450, delay: 650,
+      update: (k) => (l.alpha = 1 - k),
+      done: () => {
+        if (this.popLabels.get(key) === l) this.popLabels.delete(key);
+        this.v.screen.remove(l);
       }
     });
   }
@@ -206,9 +178,7 @@ export class CombatJuice {
     }
 
     // team rings under every unit that fired or was hit in the last ~3 s
-    const g = this.ground.clear();
-    const a = this.air.clear();
-    const lw = h.px(1.6);
+    const g = this.v.ground;
     for (const u of w.units.values()) {
       const k = ringStrength(combatAge(u, w.tick));
       if (k <= 0 || !h.entities.isShown(u.id)) continue;
@@ -216,13 +186,11 @@ export class CombatJuice {
       if (!p) continue;
       const st = UNITS[u.kind];
       const flying = st.domain === "air";
-      const gfx = flying ? a : g;
       const col = TEAM[u.faction];
-      const r = Math.max(st.radius * TILE * 1.32, h.px(11));
-      const x = flying ? p.x : p.gx;
-      const y = flying ? p.y : p.gy;
-      gfx.fillStyle(col, 0.2 * k).fillEllipse(x, y + 2, r * 2, r * 1.8);
-      gfx.lineStyle(lw, col, 0.75 * k).strokeEllipse(x, y + 2, r * 2, r * 1.8);
+      const r = Math.max(st.radius * 1.4, 11 * g.px(p.x, p.y));
+      const at = flying ? p.h - 0.08 : undefined;
+      g.fillStyle(col, 0.2 * k).fillEllipse(p.x, p.y, r * 2, r * 2, at);
+      g.lineStyle(1.6, col, 0.75 * k).strokeEllipse(p.x, p.y, r * 2, r * 2, at);
     }
   }
 
@@ -230,52 +198,38 @@ export class CombatJuice {
 
   /**
    * A health bar with a damage trail (recently lost HP in pale gold that
-   * drains away) and, for enemies near death, a 2 Hz blink. Sizes stay in
-   * whole device pixels so bars are crisp at every zoom.
+   * drains away) and, for enemies near death, a 2 Hz blink — drawn in screen
+   * space, crisp at every zoom. (x, y) is the bar's top-left in CSS px.
    */
-  healthBar(
-    g: Phaser.GameObjects.Graphics,
-    id: number,
-    x: number,
-    y: number,
-    width: number,
-    ratio: number,
-    friendly: boolean
-  ): void {
-    const px = this.host.px;
-    const minW = px(22);
+  healthBar(ctx: CanvasRenderingContext2D, id: number, x: number, y: number, width: number, ratio: number, friendly: boolean): void {
+    const minW = 22;
     if (width < minW) {
       x -= (minW - width) / 2;
       width = minW;
     }
-    const cam = this.scene.cameras.main;
-    // snap edges to device pixels; Phaser maps world → screen as
-    // floor(x + originX + 0.5) + zoom * (world - scroll - originX)
-    const z = cam.zoom;
-    const ox = cam.width * cam.originX;
-    const oy = cam.height * cam.originY;
-    const cx = Math.floor(cam.x + ox + 0.5) - z * ox;
-    const cy = Math.floor(cam.y + oy + 0.5) - z * oy;
-    const snap = (v: number, scroll: number, c: number) => (Math.round((v - scroll) * z + c) - c) / z + scroll;
-    const x0 = snap(x, cam.scrollX, cx);
-    const y0 = snap(y, cam.scrollY, cy);
-    const x1 = snap(x + width, cam.scrollX, cx);
-    const one = 1 / z; // one device pixel in world px
-    const hgt = Math.max(2, Math.round(px(4) * z)) / z;
-    const bw = x1 - x0;
+    x = Math.round(x);
+    y = Math.round(y);
+    width = Math.round(width);
+    const hgt = 4;
     const r = Math.max(0, Math.min(1, ratio));
-    const fill = (k: number) => Math.round(bw * k * z) / z;
-    const border = Math.max(one, Math.round(px(1) * z) / z);
-    g.fillStyle(0x0a0d14, 0.85).fillRect(x0 - border, y0 - border, bw + border * 2, hgt + border * 2);
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "#0a0d14";
+    ctx.fillRect(x - 1, y - 1, width + 2, hgt + 2);
     const trail = Math.max(r, Math.min(1, this.trail.value(id) ?? r));
-    const filled = fill(r);
-    if (trail > r) g.fillStyle(TRAIL_COLOR, 0.95).fillRect(x0 + filled, y0, fill(trail) - filled, hgt);
-    const col = friendly ? friendlyBarColor(r) : enemyBarColor(r);
-    g.fillStyle(col, barBlink(r, friendly, this.time)).fillRect(x0, y0, filled, hgt);
+    const filled = Math.round(width * r);
+    if (trail > r) {
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = TRAIL_COLOR;
+      ctx.fillRect(x + filled, y, Math.round(width * trail) - filled, hgt);
+    }
+    ctx.globalAlpha = barBlink(r, friendly, this.time);
+    ctx.fillStyle = hex(friendly ? friendlyBarColor(r) : enemyBarColor(r));
+    ctx.fillRect(x, y, filled, hgt);
     // segment ticks make big health pools readable at a glance
-    const segs = Math.min(10, Math.floor(bw / px(7)));
-    if (segs < 2) return;
-    g.fillStyle(0x0a0d14, 0.55);
-    for (let i = 1; i < segs; i++) g.fillRect(x0 + fill(i / segs), y0, one, hgt);
+    const segs = Math.min(10, Math.floor(width / 7));
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = "#0a0d14";
+    if (segs >= 2) for (let i = 1; i < segs; i++) ctx.fillRect(x + Math.round((width * i) / segs), y, 1, hgt);
+    ctx.globalAlpha = 1;
   }
 }

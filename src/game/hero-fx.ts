@@ -1,8 +1,9 @@
-import Phaser from "phaser";
 import { UNITS } from "../sim/balance";
 import type { Faction, FxEvent, PowerKind, World } from "../sim/types";
 import { announce } from "./announce";
-import { TILE } from "./assets";
+import type { Label } from "./three/screen";
+import { Ease } from "./three/tween";
+import type { View } from "./three/view";
 import { CalldownCredit, powerName } from "./calldown-credit";
 import { NAMED_RANK, RANK_TITLES, callsignOf, heroShort, killsLabel, stars } from "./heroes";
 
@@ -17,13 +18,12 @@ import { NAMED_RANK, RANK_TITLES, callsignOf, heroShort, killsLabel, stars } fro
 export type NoticeTone = "good" | "bad" | "info";
 
 export interface HeroPresenterOpts {
-  dpr: number;
   player: Faction;
   spectator: boolean;
   /** May the local player see this tile position? */
   seesPoint(x: number, y: number): boolean;
-  /** Rendered body position (world px) of a unit, if drawn. */
-  unitPos(id: number): { x: number; y: number } | null;
+  /** Rendered position of a unit (tiles) and the height of its top, if drawn. */
+  unitPos(id: number): { x: number; y: number; top: number } | null;
   /** Show a small HUD notice; tapping it jumps the camera to (x, y). */
   notify(msg: string, tone: NoticeTone, x: number, y: number): void;
 }
@@ -48,12 +48,12 @@ export class HeroPresenter {
   private lost: Fallen[] = [];
   private aces: Fallen[] = [];
   /** Live promotion titles, one per unit (a new one replaces the old). */
-  private titles = new Map<number, Phaser.GameObjects.Text>();
+  private titles = new Map<number, Label>();
   /** Names the Barrage / Sky Hammer that got a hero (calldown-credit.ts). */
   private credit: CalldownCredit;
 
   constructor(
-    private scene: Phaser.Scene,
+    private v: View | null,
     private w: World,
     private opts: HeroPresenterOpts
   ) {
@@ -121,10 +121,10 @@ export class HeroPresenter {
     if (!u) return;
     const mine = u.faction === this.opts.player || this.opts.spectator;
     // titles over your own units; an enemy's only once it's dangerous
-    const p = this.opts.unitPos(id) ?? { x: u.x * TILE, y: u.y * TILE };
-    const onScreen = this.scene.cameras.main.worldView.contains(p.x, p.y);
+    const p = this.opts.unitPos(id) ?? { x: u.x, y: u.y, top: UNITS[u.kind].radius };
+    const onScreen = this.v?.rig.onScreen(p.x, p.y) ?? false;
     if (onScreen && this.opts.seesPoint(u.x, u.y) && (mine || u.rank >= NAMED_RANK))
-      this.floatTitle(id, p.x, p.y - UNITS[u.kind].radius * TILE - 18, u.rank, mine);
+      this.floatTitle(id, p.x, p.y, p.top + 0.15, u.rank, mine);
     if (u.rank < NAMED_RANK || this.opts.spectator || u.faction !== this.opts.player) return;
     const name = callsignOf(this.w, u);
     const kind = UNITS[u.kind].name;
@@ -142,41 +142,32 @@ export class HeroPresenter {
   }
 
   /** "VETERAN" / "HARDENED" / "ELITE" rising over the unit. */
-  private floatTitle(id: number, x: number, y: number, rank: number, friendly: boolean): void {
+  private floatTitle(id: number, x: number, y: number, h: number, rank: number, friendly: boolean): void {
+    const v = this.v;
+    if (!v) return;
     const prev = this.titles.get(id);
     if (prev) {
-      this.scene.tweens.killTweensOf(prev);
-      prev.destroy();
+      v.tweens.kill(prev);
+      v.screen.remove(prev);
       this.titles.delete(id);
     }
     if (this.titles.size >= 8) return; // a huge brawl: the chevrons will do
     const st = TITLE_STYLE[Math.min(3, Math.max(1, rank))]!;
-    const cam = this.scene.cameras.main;
-    // a hi-res texture shown at a fixed on-screen size whatever the zoom
-    const base = 44;
-    const k = (st.size * this.opts.dpr) / cam.zoom / base;
-    const t = this.scene.add
-      .text(x, y, RANK_TITLES[Math.min(3, rank)] ?? "", {
-        fontFamily: '"Rajdhani", "Segoe UI", system-ui, sans-serif',
-        fontStyle: "bold",
-        fontSize: `${base}px`,
-        color: friendly ? st.color : "#ff9a8a",
-        stroke: "#1a1205",
-        strokeThickness: 9
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(10.6)
-      .setScale(k * 1.5)
-      .setAlpha(0);
-    t.setShadow(0, 3, "rgba(0,0,0,0.55)", 6, true, true);
-    const rise = (30 * this.opts.dpr) / cam.zoom;
-    this.scene.tweens.add({ targets: t, scale: k, alpha: 1, duration: 260, ease: "Back.easeOut" });
-    this.scene.tweens.add({ targets: t, y: y - rise, duration: 1200, ease: "Sine.easeOut" });
+    const t = v.screen.label({
+      x, y, h, text: RANK_TITLES[Math.min(3, rank)] ?? "", size: st.size, color: friendly ? st.color : "#ff9a8a",
+      stroke: "#1a1205", shadow: true, scale: 1.5, alpha: 0
+    });
+    v.tweens.add({ dur: 260, ease: Ease.backOut, owner: t, update: (k) => {
+      t.scale = 1.5 - 0.5 * k;
+      t.alpha = k;
+    } });
+    v.tweens.add({ dur: 1200, ease: Ease.sineOut, owner: t, update: (k) => (t.dy = -30 * k) });
     this.titles.set(id, t);
-    this.scene.tweens.add({
-      targets: t, alpha: 0, delay: 850, duration: 350,
-      onComplete: () => {
-        t.destroy();
+    v.tweens.add({
+      dur: 350, delay: 850, owner: t,
+      update: (k) => (t.alpha = 1 - k),
+      done: () => {
+        v.screen.remove(t);
         if (this.titles.get(id) === t) this.titles.delete(id);
       }
     });
