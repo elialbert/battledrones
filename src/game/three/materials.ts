@@ -143,11 +143,15 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
           "#include <common>",
           "#include <common>\nvarying float vGlow;\nuniform vec3 uTint;\nuniform float uFlash;\nuniform vec3 uFlashColor;\nuniform float uGlowK;\nuniform float uBleach;"
         )
-        .replace("#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= uTint;")
+        // lamps light themselves: less lit diffuse, more emission, so they stay saturated under tone mapping
+        .replace(
+          "#include <color_fragment>",
+          "#include <color_fragment>\ndiffuseColor.rgb *= uTint;\nvec3 glowBase = diffuseColor.rgb;\ndiffuseColor.rgb *= 1.0 - min( 1.0, vGlow * uGlowK ) * 0.8;"
+        )
         .replace(
           "#include <emissivemap_fragment>",
           `#include <emissivemap_fragment>
-          totalEmissiveRadiance += diffuseColor.rgb * vGlow * uGlowK * 2.4;
+          totalEmissiveRadiance += glowBase * vGlow * uGlowK * 1.05;
           totalEmissiveRadiance = mix( totalEmissiveRadiance, uFlashColor, uFlash );
           diffuseColor.rgb = mix( diffuseColor.rgb, uFlashColor, uFlash * uBleach );`
         );
