@@ -2,7 +2,7 @@
  * The adaptive soundtrack's composition rules: biome flavours (mode, chord
  * progression, timbres), voice leading, bass / drum / arp / melody patterns,
  * stinger phrases, and the battle "mood" that drives the layers. Free of
- * WebAudio and Phaser so it is unit-testable (tests/music.test.ts);
+ * WebAudio and three.js so it is unit-testable (tests/music.test.ts);
  * src/game/music.ts turns the events into sound.
  *
  * Time is counted in 16th-note steps: 16 per bar, one chord per two bars.

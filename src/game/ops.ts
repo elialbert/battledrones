@@ -5,7 +5,7 @@ import { buildingCenter, hqOf } from "../sim/world";
 import { announce, type Announcement } from "./announce";
 
 /**
- * Ops presentation (no Phaser): the opening briefing banner, countdown
+ * Ops presentation (no three.js): the opening briefing banner, countdown
  * call-outs, "star lost / secured" notices, and the result line the finale
  * shows. The sim decides everything (src/sim/ops.ts); this only narrates.
  *
@@ -31,7 +31,7 @@ export class OpsPresenter {
   constructor(private w: World, private o: OpsPresenterOpts) {
     this.op = opById(w.ops!.id)!;
     for (const [tag, ids] of Object.entries(w.ops!.tags)) this.tagAlive.set(tag, ids.length);
-    // real-time timer like the rules banner: a Phaser delayedCall can fire late headless
+    // real-time timer like the rules banner: a render-clock timer can fire late headless
     window.setTimeout(() => {
       if (this.w.winner) return;
       const at = this.op.focus ?? this.home();

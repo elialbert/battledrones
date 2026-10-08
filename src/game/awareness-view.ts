@@ -4,10 +4,9 @@
  * with a camera glide, the ⚡ jump button and the battle meter. The rules are
  * in ./awareness (engine-free, tested); the widgets in ../ui/awareness.
  */
-import type Phaser from "phaser";
 import type { Faction, FxEvent, World } from "../sim/types";
-import { TILE } from "./assets";
 import { sfx } from "./audio";
+import type { CameraRig } from "./three/camera";
 import { announce } from "./announce";
 import type { Announcer } from "./announcer";
 import {
@@ -31,11 +30,12 @@ import type { Hud } from "../ui/hud";
 import { MARKER, mountAwareness, type ArrowSpec, type AwarenessUi } from "../ui/awareness";
 
 export interface AwarenessHooks {
-  scene: Phaser.Scene;
+  rig: CameraRig;
+  /** The battlefield canvas (touching it cancels a glide). */
+  canvas: HTMLElement;
   world: World;
   player: Faction;
   spectator: boolean;
-  dpr: number;
   hud: Hud;
   radio: Announcer;
   /** Can the local player see this tile point (fog, or fog switched off)? */
@@ -101,8 +101,8 @@ export class Awareness {
     });
     // touching the battlefield cancels a glide (the player takes the camera)
     const stop = () => (this.glide = null);
-    h.scene.input.on("pointerdown", stop);
-    this.offPointer = () => h.scene.input.off("pointerdown", stop);
+    h.canvas.addEventListener("pointerdown", stop);
+    this.offPointer = () => h.canvas.removeEventListener("pointerdown", stop);
     this.syncSpeed();
   }
 
@@ -195,21 +195,9 @@ export class Awareness {
 
   /** World tiles → CSS px on screen (current camera, no one-frame lag). */
   private toScreen(x: number, y: number): { x: number; y: number } {
-    const cam = this.h.scene.cameras.main;
-    const z = cam.zoom;
-    const vx = cam.scrollX + cam.width / 2 - cam.width / (2 * z);
-    const vy = cam.scrollY + cam.height / 2 - cam.height / (2 * z);
-    return { x: ((x * TILE - vx) * z) / this.h.dpr, y: ((y * TILE - vy) * z) / this.h.dpr };
-  }
-
-  /** Camera scroll that puts world tile (x, y) at CSS point (sx, sy). */
-  private scrollFor(x: number, y: number, sx: number, sy: number): { x: number; y: number } {
-    const cam = this.h.scene.cameras.main;
-    const z = cam.zoom;
-    return {
-      x: x * TILE - cam.width / 2 + cam.width / (2 * z) - (sx * this.h.dpr) / z,
-      y: y * TILE - cam.height / 2 + cam.height / (2 * z) - (sy * this.h.dpr) / z
-    };
+    const p = this.h.rig.project(x, y);
+    // (a point behind the camera can't happen with a downward-looking rig, but keep arrows sane)
+    return p.behind ? { x: p.x, y: -1e4 } : p;
   }
 
   /** Middle of the visible battlefield (tiles), clear of the HUD. */
@@ -229,9 +217,9 @@ export class Awareness {
   glideTo(x: number, y: number): void {
     if (this.h.cinematic?.()) return;
     const p = this.ui.layout().play;
-    const to = this.scrollFor(x, y, (p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
-    const cam = this.h.scene.cameras.main;
-    this.glide = { x0: cam.scrollX, y0: cam.scrollY, x1: to.x, y1: to.y, t: 0 };
+    const to = this.h.rig.targetFor(x, y, (p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
+    const rig = this.h.rig;
+    this.glide = { x0: rig.x, y0: rig.y, x1: to.x, y1: to.y, t: 0 };
   }
 
   private goTo(s: Hotspot): void {
@@ -270,15 +258,16 @@ export class Awareness {
 
   /** Every frame, after the HUD update. */
   update(deltaMs: number, paused: boolean): void {
-    const cam = this.h.scene.cameras.main;
+    const rig = this.h.rig;
     const cinematic = !!this.h.cinematic?.();
     if (cinematic) this.glide = null; // (one already running lets go of the camera)
     if (this.glide) {
       const g = this.glide;
       g.t = Math.min(GLIDE_MS, g.t + deltaMs);
       const k = 1 - Math.pow(1 - g.t / GLIDE_MS, 3);
-      cam.scrollX = g.x0 + (g.x1 - g.x0) * k;
-      cam.scrollY = g.y0 + (g.y1 - g.y0) * k;
+      rig.x = g.x0 + (g.x1 - g.x0) * k;
+      rig.y = g.y0 + (g.y1 - g.y0) * k;
+      rig.apply();
       if (g.t >= GLIDE_MS) this.glide = null;
     }
     const L = this.ui.layout();
@@ -313,11 +302,7 @@ export class Awareness {
   }
 
   private toWorld(sx: number, sy: number): { x: number; y: number } {
-    const cam = this.h.scene.cameras.main;
-    const z = cam.zoom;
-    const vx = cam.scrollX + cam.width / 2 - cam.width / (2 * z);
-    const vy = cam.scrollY + cam.height / 2 - cam.height / (2 * z);
-    return { x: (vx + (sx * this.h.dpr) / z) / TILE, y: (vy + (sy * this.h.dpr) / z) / TILE };
+    return this.h.rig.ground(sx, sy);
   }
 
   /** Edge arrows for the off-screen hotspots: capped, merged by direction, clear of the HUD. */

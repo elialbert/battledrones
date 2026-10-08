@@ -1,9 +1,8 @@
-import Phaser from "phaser";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
-import { MAPS } from "./sim/maps";
+import { MAPS, mapById } from "./sim/maps";
 import { sfx } from "./game/audio";
 import { music } from "./game/music";
-import { mapAssetBase } from "./game/assets";
+import { loadTerrainArt, mapAssetBase } from "./game/assets";
 import { GameScene } from "./game/GameScene";
 import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
@@ -76,33 +75,25 @@ fullscreen.restoreOnGesture();
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
-function startGame(): void {
+async function startGame(): Promise<void> {
   const hud = document.getElementById("hud")!;
   const loading = document.createElement("div");
   loading.id = "loading";
   loading.className = "screen";
   loading.innerHTML = `<div class="loadbox"><p>Deploying to ${MAPS.find((m) => m.id === gameMode.mapId)?.name ?? "battlefield"}…</p><div class="loadtrack"><div id="loadbar"></div></div></div>`;
   hud.appendChild(loading);
-
-  const r = dpr();
-  const game = new Phaser.Game({
-    type: Phaser.AUTO,
-    parent: "game",
-    backgroundColor: "#070a10",
-    scale: {
-      mode: Phaser.Scale.NONE,
-      width: Math.round(window.innerWidth * r),
-      height: Math.round(window.innerHeight * r),
-      zoom: 1 / r
-    },
-    render: { antialias: true, pixelArt: false, mipmapFilter: "LINEAR_MIPMAP_LINEAR", powerPreference: "high-performance" },
-    input: { activePointers: 4 },
-    scene: [GameScene]
+  const bar = loading.querySelector<HTMLElement>("#loadbar");
+  const def = mapById(gameMode.mapId);
+  // the painted terrain is draped over the 3D landscape; a failed chunk falls back to flat colours
+  const art = await loadTerrainArt(def.id, def.size, (k) => {
+    if (bar) bar.style.width = `${Math.round(k * 90)}%`;
   });
-  game.registry.set("dpr", r);
-  const resize = () => game.scale.resize(Math.round(window.innerWidth * r), Math.round(window.innerHeight * r));
-  window.addEventListener("resize", resize);
-  window.addEventListener("orientationchange", () => setTimeout(resize, 200));
+  if (bar) bar.style.width = "100%";
+  // (let the full bar paint before the scene build blocks the main thread)
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  const scene = new GameScene(document.getElementById("game")!, dpr(), art);
+  window.addEventListener("resize", () => scene.resize());
+  window.addEventListener("orientationchange", () => setTimeout(() => scene.resize(), 200));
 }
 
 function showMenu(): void {
@@ -281,7 +272,7 @@ function showMenu(): void {
     await fullscreen.enter(); // (Android/desktop; iOS Safari's dvh layout covers it)
     offMute();
     menu.remove();
-    startGame();
+    void startGame();
   };
   menu.querySelector("#play")!.addEventListener("click", () => {
     if (gameMode.mode !== "ops") return void begin(false);
@@ -307,7 +298,7 @@ function showMenu(): void {
   if (rematch) {
     offMute();
     menu.remove();
-    startGame();
+    void startGame();
     // audio needs a gesture: sfx.unlockOnGesture() (above) starts it on the first touch
   }
 }

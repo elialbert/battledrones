@@ -1,4 +1,3 @@
-import type Phaser from "phaser";
 import {
   THEME_COUNTERS,
   survivalStatus,
@@ -10,8 +9,8 @@ import { TICK_RATE } from "../sim/balance";
 import type { FxEvent, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
 import { announce } from "./announce";
-import { TILE } from "./assets";
 import { sfx } from "./audio";
+import type { GroundGfx } from "./three/ground-gfx";
 
 /**
  * Last Stand presentation: wave announcements, the on-map spawn marker,
@@ -117,8 +116,8 @@ export class SurvivalPresenter {
       difficulty: SurvivalDifficulty;
       spectator: boolean;
       ping(x: number, y: number): void;
-      /** Drawn above the fog: where the waves come from is public. */
-      gfx: Phaser.GameObjects.Graphics;
+      /** Drawn above the fog: where the waves come from is public (null: no marker). */
+      gfx: GroundGfx | null;
     }
   ) {
     this.difficulty = opts.difficulty;
@@ -177,35 +176,34 @@ export class SurvivalPresenter {
   }
 
   /** Pulsing marker and chevrons at the edge the next (or current) wave comes from. */
-  drawOverlay(px: (css: number) => number, now: number): void {
+  drawOverlay(now: number): void {
     const g = this.opts.gfx;
-    g.clear();
+    if (!g) return;
     const st = survivalStatus(this.w);
     // shown while the wave is announced and as it enters, not for its whole life
     if (!st?.site || (!st.warned && this.w.tick - this.spawnedAt > 15 * TICK_RATE)) return;
     const boss = (st.warned ? st.nextTheme : this.w.survival?.theme) === "boss";
     const col = boss ? 0xffd66e : 0xff5a4a;
-    const x = st.site.x * TILE;
-    const y = st.site.y * TILE;
+    const { x, y } = st.site;
     const t = (now % 1200) / 1200;
-    g.lineStyle(px(2.5), col, 0.9 * (1 - t)).strokeCircle(x, y, TILE * (1 + t * 2.2));
-    g.lineStyle(px(1.5), col, 0.55).strokeCircle(x, y, TILE * 1.1);
+    g.lineStyle(2.5, col, 0.9 * (1 - t)).strokeCircle(x, y, 1 + t * 2.2);
+    g.lineStyle(1.5, col, 0.55).strokeCircle(x, y, 1.1);
     // chevrons marching toward the base
     const hq = hqOf(this.w, this.w.survival?.defender ?? "blue");
     if (!hq) return;
     const c = buildingCenter(hq);
-    const dx = c.x - st.site.x;
-    const dy = c.y - st.site.y;
+    const dx = c.x - x;
+    const dy = c.y - y;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len;
     const uy = dy / len;
     for (let i = 0; i < 3; i++) {
       const k = ((i + t) / 3) * 3.2 + 1.6;
-      const cx = (st.site.x + ux * k) * TILE;
-      const cy = (st.site.y + uy * k) * TILE;
-      const s = TILE * 0.55;
+      const cx = x + ux * k;
+      const cy = y + uy * k;
+      const s = 0.55;
       const a = 0.85 * (1 - (i + t) / 3);
-      g.lineStyle(px(3), col, a);
+      g.lineStyle(3, col, a);
       g.lineBetween(cx - ux * s - uy * s, cy - uy * s + ux * s, cx, cy);
       g.lineBetween(cx, cy, cx - ux * s + uy * s, cy - uy * s - ux * s);
     }

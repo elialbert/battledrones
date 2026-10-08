@@ -3,9 +3,8 @@
  * presentation layers (callouts, chronicle, report, hotspots, music), the
  * battlefield medals, and which modes allow calldowns.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-vi.mock("phaser", () => ({ default: {} })); // hero-fx imports Phaser; the toast logic doesn't need it
 
 import { AWARDS, computeMedals, strikesDodged, type MatchRecap, type RecapStrike } from "../src/sim/awards";
 import { POWERS, TICK_RATE } from "../src/sim/balance";
@@ -280,8 +279,8 @@ describe("hotspots and hero toasts", () => {
   it("names the strike that killed a hero", () => {
     const w = arena();
     const notes: string[] = [];
-    const hp = new HeroPresenter({} as never, w, {
-      dpr: 1, player: "blue", spectator: false, seesPoint: () => true, unitPos: () => null,
+    const hp = new HeroPresenter(null, w, {
+      player: "blue", spectator: false, seesPoint: () => true, unitPos: () => null,
       notify: (m) => notes.push(m)
     });
     const vet = { id: 501, faction: "blue" as Faction, rank: 2, kills: 7, killerId: hqOf(w, "red")!.id };

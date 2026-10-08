@@ -26,21 +26,22 @@ personalities and difficulty levels, painted art and procedural audio.
 
 | Decision | Choice |
 |---|---|
-| Platform | Web PWA — TypeScript, Phaser 3 (WebGL), rendered at device pixel ratio (≤ 2×) |
+| Platform | Web PWA — TypeScript, three.js (WebGL), rendered at device pixel ratio (≤ 2×, adaptive) |
 | Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, Last Stand waves, or the Ops campaign |
 | Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
 | Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can; Ops: the op's objective) |
 | Roster size | 11 units, 8 buildings |
-| Art | Painted top-down sprites and terrain generated with OpenAI `gpt-image-2.5-sunburst` (see ART.md) |
+| Art | Procedural low-poly 3D models; painted terrain (OpenAI `gpt-image-2.5-sunburst`, see ART.md) draped over a 3D heightfield |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
 
 ## Tech stack
 
 - **Language:** TypeScript, strict mode.
-- **Engine:** [Phaser 3](https://phaser.io/) for WebGL rendering, texture
-  atlases (mipmapped), particles, tweens and camera. Game *logic* stays in
-  plain TS modules that don't import Phaser, so the simulation is
-  unit-testable headlessly.
+- **Engine:** [three.js](https://threejs.org/) for WebGL rendering, with a
+  small purpose-built layer on top (`src/game/three/`, see **3D view**
+  below): camera rig, procedural models, terrain, particles, tweens. Game
+  *logic* stays in plain TS modules that don't import three.js, so the
+  simulation is unit-testable headlessly.
 - **Build tooling:** Vite + `vite-plugin-pwa` (service worker, installable,
   offline-capable after first play of each map).
 - **Testing:** Vitest for the simulation (economy, pathfinding, combat,
@@ -916,7 +917,7 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   them); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives "🎯 Enemy
   ace … down" ("… down to your Sky Hammer").
 - **Finale** (`game/finale.ts`): when an HQ falls the render clocks (tweens,
-  sprite anims, particles, tracers) drop to 0.3×, the camera glides and
+  particles, tracers, model animation) drop to 0.3×, the camera glides and
   zooms onto the wreck (centred in the area the dock leaves free), five
   staged blasts roll across it, then a white flash, a shake, the result
   banner and the stinger at 1.5 s; time eases back and the report appears at
@@ -1270,19 +1271,75 @@ camera frame.
 
 ## Art
 
-See **ART.md** for the generation pipeline (prompts, processing, atlases,
-terrain painting). Summary: every sprite, terrain material, decoration,
-the key art and the app icon were generated with OpenAI's
-`gpt-image-2.5-sunburst` using native transparency; sprites are drawn
-top-down facing north and rotated in engine, with separately rotating
-turrets, drop shadows, and red team colours derived by hue-shifting the
-blue originals.
+See **ART.md** for the generation pipeline (prompts, processing, terrain
+painting). Summary: the terrain materials, decorations, HUD portraits, the
+key art and the app icon were generated with OpenAI's
+`gpt-image-2.5-sunburst`; the battlefield itself is 3D (below).
+
+## 3D view
+
+The battle is drawn with three.js (`src/game/three/`, wired up by
+`game/GameScene.ts`). World units are tiles: x east, z south (the sim's y),
+y up.
+
+- **Camera** (`three/camera.ts`): a perspective rig looking north and down
+  at a ground point. Zoom is CSS px per tile at that point (18–110); the
+  pitch eases from 62° zoomed out (a strategic, near top-down read) to 47°
+  close in. Pan keeps the ground under the finger, pinch/wheel zoom keeps
+  the point under the anchor, and every screen↔ground conversion (taps,
+  edge arrows, the minimap's view trapezoid, earshot) goes through it.
+  Shake is an offset in the camera plane.
+- **Terrain** (`three/terrain.ts`): the map grid becomes a heightfield
+  (3 samples per tile): each terrain type has a base height (rock +0.95,
+  water and lava −0.55, fords −0.2) blended over about a tile, plus
+  terrain-weighted fractal noise (craggy rock, lumpy rough ground). The
+  painted terrain chunks are draped over it as the albedo, so the painted
+  hillshade and the real lighting agree. On top: a water/lava/ice surface
+  whose opacity and colour come from the depth under it (shore foam,
+  sparkles; lava flows and crusts), bridge decks with railings, instanced
+  trees and boulders per biome, scrap heaps and crystal clusters (instance
+  matrices shrink as they're mined), and an earthen slab edge round the
+  map. Units ride the surface: ground vehicles pitch and roll with the
+  slope, fords sink them a little, hover tanks ride over water.
+- **Models** (`three/models.ts`, `three/builder.ts`): every unit, building
+  and objective is built from primitives in code, merged into one
+  vertex-coloured geometry per moving part (hull, turret/head, rotor,
+  cargo) so a vehicle is a couple of draw calls. Units face −Z and are
+  scaled to the sizes the painted sprites had (×1.12 for 3D readability).
+  A per-vertex glow weight lights lamps, engines and crystals.
+- **Materials** (`three/materials.ts`): one shared, flat-shaded model
+  material with uniform variants — hit flash (white), building hit (warm),
+  damaged, burnt wreck, elite shimmer (gold), and green/red placement
+  ghosts — that share one shader program, so swapping is free. Every lit
+  material is patched to sample the **fog of war** texture (a texel per
+  tile, blurred on the CPU, smoothed in the shader) by world position, and
+  the ground also takes the drifting **cloud shadows**.
+- **Effects** (`three/particles.ts`): two instanced quad pools (additive
+  light, alpha-blended matter) for fire, smoke, sparks, dust, debris,
+  trails, flashes, shock rings and scorch decals; quads face the camera or
+  lie on the ground. Tracers, missiles, shells, beams, pods and crates are
+  small meshes.
+- **Ground marks** (`three/ground-gfx.ts`): an immediate-mode API in the
+  shape of Phaser's Graphics (rings, arcs, lines, discs, rectangles) that
+  drapes thick lines over the terrain with widths in CSS px — selection and
+  combat rings, order lines, reticles, capture rings, the build zone. Three
+  layers: under the fog, through the fog, and on top of everything.
+- **Screen overlay** (`three/screen.ts`): a 2D canvas over the WebGL view
+  for health and production bars, chevrons, the box select and floating
+  labels ("+100", "VETERAN"), re-projected every frame.
+- **Quality** (`three/stage.ts`): shadows from a sun in the north-west (the
+  painted art's light), the shadow box following the view; 1024² shadow
+  maps on touch devices, 2048² on desktop. Shaders compile during loading.
+  An adaptive controller watches the frame time and, when a device can't
+  keep up, steps down in cost order — resolution to 1×, a smaller shadow
+  map, no shadows, then resolution below 1× — and creeps back up when
+  there's headroom. Software GL (a blocklisted GPU) starts at the cheap end.
 
 ## Architecture
 
 ```
 src/
-  sim/        # Pure TS, no Phaser. The authoritative game state.
+  sim/        # Pure TS, no engine. The authoritative game state.
     world.ts        # entities, tile grid, occupancy, passability
     balance.ts      # every tunable number: units, buildings, terrain, damage table
     maps.ts         # the 5 maps (seeded painter) + createMapWorld
@@ -1305,8 +1362,10 @@ src/
     ai/salvage.ts   # the commander's wreck sweeps
     ai/powers.ts    # the commander's calldowns and its dodge reflex
     ai/objectives.ts # capture squads, Uplink garrisons, crate races
-  game/       # Phaser: scene, camera, input, rendering
-    render/         # world-view (terrain, piles, fog), entities, fx, juice-view, wrecks, powers (reticles, strikes), objectives
+  game/       # three.js: scene, camera, input, rendering
+    three/          # the 3D layer: stage (renderer, lights, adaptive quality), camera rig, builder + models,
+                    #   terrain (heightfield, water, props, fog of war), materials, particles, ground-gfx, screen overlay, tweens
+    render/         # entities, fx, juice-view, wrecks, powers (reticles, strikes), objectives
     juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
     audio.ts        # AudioContext, sfx/music/voice buses, settings, procedural SFX
     score.ts        # music rules: harmony, patterns, stingers, battle mood (tested)

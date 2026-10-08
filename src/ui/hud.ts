@@ -1,10 +1,9 @@
-import type Phaser from "phaser";
 import { BUILDINGS, ECONOMY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
 import { buildingBlocker, unitBlocker } from "../sim/economy";
 import { Vis } from "../sim/fog";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
-import { TILE, mapAssetBase } from "../game/assets";
+import { mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
@@ -23,8 +22,8 @@ import { fullscreen } from "./fullscreen";
 export interface HudApi {
   world: World;
   ctrl: Controller;
-  camera: Phaser.Cameras.Scene2D.Camera;
-  dpr: number;
+  /** The ground the camera sees (tiles; a trapezoid under the tilted view), outlined on the minimap. */
+  viewQuad(): { x: number; y: number }[];
   centerCamera(wx: number, wy: number): void;
   zoomBy(factor: number): void;
   matchSeconds(): number;
@@ -938,10 +937,13 @@ export function createHud(api: HudApi): Hud {
       mctx.stroke();
     }
     surv?.drawMinimap(mctx, k, performance.now());
-    const cam = api.camera.worldView;
+    const quad = api.viewQuad();
     mctx.strokeStyle = "rgba(255,255,255,0.85)";
     mctx.lineWidth = 1.5;
-    mctx.strokeRect((cam.x / TILE) * k, (cam.y / TILE) * k, (cam.width / TILE) * k, (cam.height / TILE) * k);
+    mctx.beginPath();
+    quad.forEach((p, i) => (i === 0 ? mctx.moveTo(p.x * k, p.y * k) : mctx.lineTo(p.x * k, p.y * k)));
+    mctx.closePath();
+    mctx.stroke();
   }
 
   function showEnd(winner: Faction): void {

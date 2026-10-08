@@ -1,15 +1,20 @@
-import Phaser from "phaser";
+import * as THREE from "three";
 import { SALVAGE, TICK_RATE, UNITS } from "../../sim/balance";
 import { incomeOf } from "../../sim/rules";
 import type { Faction, FxEvent, UnitKind, World, Wreck } from "../../sim/types";
 import { announce } from "../announce";
-import { ART_SCALE, ATLAS, TILE, frameOrigin, mountOffset, turretFrame, unitFrame } from "../assets";
 import { sfx } from "../audio";
+import { discMat, setVariant } from "../three/materials";
+import { instance, unitDef, unitScale, type ModelInstance } from "../three/models";
+import { TEX, type EmitCfg } from "../three/particles";
+import type { Label } from "../three/screen";
+import { Ease } from "../three/tween";
+import type { View } from "../three/view";
 import type { Fx } from "./fx";
 
 /**
- * Battlefield wrecks (sim: salvage.ts). A destroyed combat unit's own
- * sprite stays on the field as a charred hull with its turret blown off,
+ * Battlefield wrecks (sim: salvage.ts). A destroyed combat unit's own model
+ * stays on the field as a charred hull with its turret blown off,
  * smoulders while it is too hot to touch, then glints gold: loot. Aircraft
  * tumble out of the sky first. Picking one up pops a gold "+52" (and a coin
  * blip for your own). Wrecks show only where you have vision; a wreck you
@@ -17,12 +22,11 @@ import type { Fx } from "./fx";
  * would have burnt out anyway.
  */
 
-/** Last rendered pose of a unit (EntityRenderer.pose): body (lifted) and ground px, hull and turret angles. */
+/** Last rendered pose of a unit (EntityRenderer.pose): ground point, body height, hull and turret angles. */
 export interface UnitPose {
-  bx: number;
-  by: number;
   gx: number;
   gy: number;
+  bh: number;
   face: number;
   aim: number;
   visible: boolean;
@@ -35,7 +39,6 @@ export interface WreckRendererOpts {
   pose(id: number): UnitPose | null;
   player: Faction;
   spectator: boolean;
-  dpr: number;
   /**
    * One-time "what are these?" hint (paced by the HUD's hint queue; tapping it
    * jumps to x, y). `shown` runs once it is actually on screen.
@@ -46,16 +49,13 @@ export interface WreckRendererOpts {
 interface WreckView {
   id: number;
   kind: UnitKind;
-  /** Resting spot (world px). */
+  /** Resting spot (tiles) and ground height there. */
   x: number;
   y: number;
-  body: Phaser.GameObjects.Image;
-  shadow: Phaser.GameObjects.Image;
-  turret?: Phaser.GameObjects.Image;
-  aura: Phaser.GameObjects.Image;
-  glint: Phaser.GameObjects.Image;
-  /** Every image, for visibility/alpha/teardown. */
-  parts: Phaser.GameObjects.Image[];
+  ground: number;
+  m: ModelInstance;
+  aura: THREE.Mesh;
+  auraMat: THREE.MeshBasicMaterial;
   /** The player has seen it (remembered after that). */
   seen: boolean;
   /** Removed from the sim (kept as a remembered ghost until seen gone). */
@@ -71,9 +71,6 @@ interface WreckView {
   phase: number;
 }
 
-/** Charred hull: the painted art multiplied down to a warm soot grey (team colours still read faintly). */
-const BURNT = 0x5f5850;
-const BURNT_TURRET = 0x6c645b;
 const GOLD = 0xffd66e;
 /** Remembered wrecks beyond the sim cap (ghosts) — keep the scene light. */
 const MAX_VIEWS = SALVAGE.maxWrecks + 15;
@@ -81,6 +78,17 @@ const MAX_VIEWS = SALVAGE.maxWrecks + 15;
 const HAUL_WINDOW = 9000;
 const HAUL_AT = 400;
 const HINT_KEY = "battledrones.hint.salvage";
+
+const SMOKE: EmitCfg = {
+  tex: TEX.smoke, life: [1100, 1900], speed: [0.05, 0.15], up: [0.25, 0.45], size: [0.18, 0.24], grow: [3, 4],
+  alpha: [0.38, 0], tints: [0x4d4944, 0x5f5a54, 0x3d3a37], spin: 1
+};
+const EMBERS: EmitCfg = {
+  tex: TEX.glow, additive: true, life: [200, 460], speed: [0.03, 0.15], up: [0.2, 0.5], size: [0.2, 0.28], grow: [0.1, 0.2],
+  alpha: [0.9, 0], tints: [0xffc257, 0xff7a1e, 0xffe39a]
+};
+
+const auraGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
 /** Small deterministic hash → [0, 1) so a wreck looks the same every time it's drawn. */
 const rnd = (id: number, k: number) => {
@@ -97,43 +105,17 @@ export class WreckRenderer {
   private lastHaul = -1e9;
   private hinted = false;
   private time = 0;
-  /** Thin smoke wisps and embers over burning hulls (lighter than a building fire). */
-  private smoke: Phaser.GameObjects.Particles.ParticleEmitter;
-  private embers: Phaser.GameObjects.Particles.ParticleEmitter;
   /** Live "+52" pops: pickups landing together merge into one running total. */
-  private floats: { text: Phaser.GameObjects.Text; x: number; y: number; amount: number; color: string; born: number }[] = [];
+  private floats: { label: Label; x: number; y: number; amount: number; color: string; born: number }[] = [];
+  private group = new THREE.Group();
 
   constructor(
-    private scene: Phaser.Scene,
+    private v: View,
     private world: World,
     private fx: Fx,
     private opts: WreckRendererOpts
   ) {
-    makeGlintTexture(scene);
-    this.smoke = scene.add
-      .particles(0, 0, "fx-smoke", {
-        emitting: false,
-        lifespan: { min: 1100, max: 1900 },
-        speed: { min: 8, max: 24 },
-        angle: { min: 250, max: 290 },
-        scale: { start: 0.2, end: 0.75 },
-        alpha: { start: 0.38, end: 0 },
-        rotate: { min: 0, max: 360 },
-        tint: [0x4d4944, 0x5f5a54, 0x3d3a37]
-      })
-      .setDepth(7.15);
-    this.embers = scene.add
-      .particles(0, 0, "fx-glow", {
-        emitting: false,
-        lifespan: { min: 200, max: 460 },
-        speed: { min: 4, max: 20 },
-        angle: { min: 235, max: 305 },
-        scale: { start: 0.3, end: 0.04 },
-        alpha: { start: 0.9, end: 0 },
-        tint: [0xffc257, 0xff7a1e, 0xffe39a],
-        blendMode: Phaser.BlendModes.ADD
-      })
-      .setDepth(1.66);
+    v.scene.add(this.group);
     try {
       // (no tip on a frozen economy — an op's: wrecks pay its side nothing)
       this.hinted = opts.spectator || incomeOf(world, opts.player) <= 0 || localStorage.getItem(HINT_KEY) === "1";
@@ -156,23 +138,21 @@ export class WreckRenderer {
 
   private pickedUp(ev: Extract<FxEvent, { type: "salvage" }>): void {
     const mine = ev.faction === this.opts.player && !this.opts.spectator;
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
     if (!mine && !this.opts.visibleAt(ev.x, ev.y)) return;
     const amount = Math.round(ev.value);
     if (mine) {
       sfx.play("coin", 0.8);
-      this.floatText(x, y, amount, "#ffd66e", 19);
+      this.floatText(ev.x, ev.y, amount, "#ffd66e", 19);
       this.trackHaul(amount, ev.x, ev.y);
     } else {
       // spectating: each side's haul in its team colour; playing: the enemy's in muted red
-      this.floatText(x, y, amount, this.opts.spectator && ev.faction === "blue" ? "#9fd0ff" : "#ff9a8a", 13);
+      this.floatText(ev.x, ev.y, amount, this.opts.spectator && ev.faction === "blue" ? "#9fd0ff" : "#ff9a8a", 13);
     }
   }
 
   /** A burst of own salvage (sweeping a wreck field) is a moment worth calling out. */
   private trackHaul(amount: number, x: number, y: number): void {
-    const now = this.scene.time.now;
+    const now = performance.now();
     this.haul.push({ t: now, v: amount });
     while (this.haul.length && now - this.haul[0]!.t > HAUL_WINDOW) this.haul.shift();
     const sum = this.haul.reduce((s, h) => s + h.v, 0);
@@ -203,7 +183,7 @@ export class WreckRenderer {
 
     for (const [id, v] of this.views) {
       if (live.has(id)) continue;
-      const visibleNow = this.opts.visibleAt(v.x / TILE, v.y / TILE);
+      const visibleNow = this.opts.visibleAt(v.x, v.y);
       if (!v.gone) {
         v.gone = true;
         if (!v.seen) {
@@ -237,51 +217,45 @@ export class WreckRenderer {
   /** Wrecks the player currently knows about (tile coords), for minimap dots. */
   dots(): { x: number; y: number }[] {
     const out: { x: number; y: number }[] = [];
-    for (const v of this.views.values()) if (v.seen && !v.landing) out.push({ x: v.x / TILE, y: v.y / TILE });
+    for (const v of this.views.values()) if (v.seen && !v.landing) out.push({ x: v.x, y: v.y });
     return out;
   }
 
   // ------------------------------------------------------------ views ---
 
   private create(r: Wreck): WreckView {
-    const s = this.scene;
     const air = UNITS[r.kind].domain === "air";
-    const frame = unitFrame(r.faction, r.kind);
-    const [ox, oy] = air ? [0.5, 0.5] : frameOrigin(frame);
-    const x = r.x * TILE;
-    const y = r.y * TILE;
-    // a slight twist: it slewed as it died
+    const m = instance(unitDef(r.kind, r.faction));
+    setVariant(m.root, "burnt");
+    const ground = this.v.terrain.surfaceAt(r.x, r.y);
+    // a slight twist: it slewed as it died; aircraft come down nose-first and broken
     const face = r.facing + (rnd(r.id, 1) - 0.5) * 0.5;
-    const scale = ART_SCALE * (air ? 0.9 : 0.97);
-    const shadow = s.add
-      .image(x + 3, y + 4, ATLAS, frame).setOrigin(ox, oy).setScale(scale).setRotation(face)
-      .setTint(0x000000).setAlpha(0.28).setDepth(1.58);
-    const body = s.add.image(x, y, ATLAS, frame).setOrigin(ox, oy).setScale(scale).setRotation(face).setTint(BURNT).setDepth(1.6);
-    const aura = s.add
-      .image(x, y, "fx-glow").setDepth(1.56).setScale(1.25).setTint(0xffb53d).setAlpha(0)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    const glint = s.add.image(x, y, "fx-glint").setDepth(1.7).setScale(0).setTint(0xffe9a8).setBlendMode(Phaser.BlendModes.ADD);
+    m.body.rotation.order = "YXZ";
+    m.body.rotation.set(air ? -0.25 : (rnd(r.id, 9) - 0.5) * 0.12, -face, air ? (rnd(r.id, 10) - 0.5) * 0.7 : (rnd(r.id, 11) - 0.5) * 0.15);
+    m.root.scale.setScalar(unitScale(r.kind) * 0.95);
+    m.root.position.set(r.x, ground - (air ? 0.06 : 0.02), r.y);
+    for (const ro of m.rotors) ro.obj.visible = rnd(r.id, 12) < 0.5;
+    if (m.turret) {
+      // turret blown off its ring: tossed a little way, knocked askew
+      const a = rnd(r.id, 4) * Math.PI * 2;
+      const d = 0.1 + rnd(r.id, 5) * 0.08;
+      m.turret.position.x += Math.sin(a) * d;
+      m.turret.position.z += Math.cos(a) * d;
+      m.turret.position.y -= 0.03;
+      m.turret.rotation.set((rnd(r.id, 7) - 0.5) * 0.7, (rnd(r.id, 6) - 0.5) * 2.4, (rnd(r.id, 8) - 0.5) * 0.7);
+    }
+    const auraMat = discMat(0xffb53d, 0);
+    const aura = new THREE.Mesh(auraGeo, auraMat);
+    aura.scale.setScalar(1.2);
+    aura.position.set(r.x, ground + 0.05, r.y);
+    aura.renderOrder = 3;
+    this.group.add(m.root, aura);
     const v: WreckView = {
-      id: r.id, kind: r.kind, x, y, body, shadow, aura, glint, parts: [shadow, body, aura, glint],
+      id: r.id, kind: r.kind, x: r.x, y: r.y, ground, m, aura, auraMat,
       seen: false, gone: false,
       expireTick: this.world.tick + r.ttl, coolTick: this.world.tick + r.hot,
       landing: false, smokeT: 0, glintT: 600 + rnd(r.id, 2) * 1800, phase: rnd(r.id, 3) * Math.PI * 2
     };
-    if (UNITS[r.kind].turret) {
-      // turret blown off its ring: tossed a little way, knocked askew
-      const [mx, my] = mountOffset(r.kind);
-      const c = Math.cos(face);
-      const sn = Math.sin(face);
-      const tf = turretFrame(r.faction, r.kind);
-      const [tox, toy] = frameOrigin(tf);
-      const a = rnd(r.id, 4) * Math.PI * 2;
-      const d = 6 + rnd(r.id, 5) * 5;
-      const tx = x + (mx * c - my * sn) * TILE + Math.sin(a) * d;
-      const ty = y + (mx * sn + my * c) * TILE - Math.cos(a) * d;
-      const rot = face + (rnd(r.id, 6) - 0.5) * 2.4;
-      v.turret = s.add.image(tx, ty, ATLAS, tf).setOrigin(tox, toy).setScale(scale).setRotation(rot).setTint(BURNT_TURRET).setDepth(1.62);
-      v.parts.push(v.turret);
-    }
     this.views.set(r.id, v);
 
     // fresh off a death this frame: start from where the unit was drawn
@@ -289,62 +263,83 @@ export class WreckRenderer {
     if (death?.pose?.visible) {
       const p = death.pose;
       v.seen = true;
-      if (air) this.fall(v, p, face);
-      else if (Math.hypot(p.gx - x, p.gy - y) > 2) this.slide(v, p.gx, p.gy);
+      if (air) this.fall(v, p);
+      else if (Math.hypot(p.gx - r.x, p.gy - r.y) > 0.03) this.slide(v, p.gx, p.gy);
     }
     return v;
   }
 
   /** An aircraft drops from flying height, tumbling, onto its resting spot. */
-  private fall(v: WreckView, p: UnitPose, face: number): void {
+  private fall(v: WreckView, p: UnitPose): void {
     v.landing = true;
+    const root = v.m.root;
     const spin = (rnd(v.id, 7) < 0.5 ? -1 : 1) * (0.7 + rnd(v.id, 8) * 0.5);
-    v.body.setPosition(p.bx, p.by).setRotation(face - spin).setScale(ART_SCALE).setTint(0xb0a090);
-    v.shadow.setPosition(p.gx + 12, p.gy + 16).setScale(ART_SCALE * 0.8).setAlpha(0.18);
-    const dur = 280;
-    this.scene.tweens.add({
-      targets: v.body, x: v.x, y: v.y, rotation: face, scale: ART_SCALE * 0.9, duration: dur, ease: "Quad.easeIn",
-      onComplete: () => {
+    const from = new THREE.Vector3(p.gx, p.bh, p.gy);
+    const to = root.position.clone();
+    const ry = v.m.body.rotation.y;
+    setVariant(root, "damaged");
+    this.v.tweens.add({
+      dur: 320, ease: Ease.quadIn, owner: v,
+      update: (k) => {
+        root.position.lerpVectors(from, to, k);
+        v.m.body.rotation.y = ry + spin * (1 - k);
+      },
+      done: () => {
         v.landing = false;
-        v.body.setTint(BURNT);
-        for (let i = 0; i < 4; i++) this.fx.dust(v.x + (rnd(v.id, 20 + i) - 0.5) * 30, v.y + (rnd(v.id, 30 + i) - 0.5) * 20);
+        setVariant(root, "burnt");
+        for (let i = 0; i < 4; i++) this.fx.dust(v.x + (rnd(v.id, 20 + i) - 0.5) * 0.5, v.y + (rnd(v.id, 30 + i) - 0.5) * 0.3);
       }
     });
-    this.scene.tweens.add({ targets: v.shadow, x: v.x + 3, y: v.y + 4, scale: ART_SCALE * 0.9, alpha: 0.28, duration: dur, ease: "Quad.easeIn" });
+    root.position.copy(from);
   }
 
   /** Slid off a building / out of the water onto the nearest ground. */
   private slide(v: WreckView, fromX: number, fromY: number): void {
     v.landing = true;
-    const dx = fromX - v.x;
-    const dy = fromY - v.y;
-    for (const o of v.parts) o.setPosition(o.x + dx, o.y + dy);
-    this.scene.tweens.add({
-      targets: v.parts, x: `-=${dx}`, y: `-=${dy}`, duration: 260, ease: "Quad.easeOut",
-      onComplete: () => (v.landing = false)
+    const root = v.m.root;
+    const to = root.position.clone();
+    const from = new THREE.Vector3(fromX, this.v.terrain.surfaceAt(fromX, fromY), fromY);
+    root.position.copy(from);
+    this.v.tweens.add({
+      dur: 260, ease: Ease.quadOut, owner: v,
+      update: (k) => root.position.lerpVectors(from, to, k),
+      done: () => (v.landing = false)
     });
   }
 
   /** An aircraft lost over water or lava: it drops and is swallowed. */
   private sink(kind: UnitKind, faction: Faction, p: UnitPose): void {
-    const img = this.scene.add
-      .image(p.bx, p.by, ATLAS, unitFrame(faction, kind)).setScale(ART_SCALE).setRotation(p.face)
-      .setTint(0x9a8a7a).setDepth(1.6);
-    this.scene.tweens.add({
-      targets: img, x: p.gx, y: p.gy, scale: ART_SCALE * 0.55, alpha: 0, rotation: p.face + 1.1,
-      duration: 420, ease: "Quad.easeIn", onComplete: () => img.destroy()
+    const m = instance(unitDef(kind, faction));
+    setVariant(m.root, "damaged");
+    m.root.scale.setScalar(unitScale(kind));
+    m.body.rotation.y = -p.face;
+    this.group.add(m.root);
+    const from = new THREE.Vector3(p.gx, p.bh, p.gy);
+    const to = new THREE.Vector3(p.gx, this.v.terrain.heightAt(p.gx, p.gy) - 0.3, p.gy);
+    this.v.tweens.add({
+      dur: 520, ease: Ease.quadIn,
+      update: (k) => {
+        m.root.position.lerpVectors(from, to, k);
+        m.body.rotation.x = -k * 0.9;
+        m.body.rotation.z = k * 1.1;
+      },
+      done: () => {
+        this.group.remove(m.root);
+        this.fx.dust(p.gx, p.gy, 3);
+      }
     });
   }
 
   private update(v: WreckView, dtMs: number): void {
     const w = this.world;
-    const visibleNow = this.opts.visibleAt(v.x / TILE, v.y / TILE);
+    const visibleNow = this.opts.visibleAt(v.x, v.y);
     if (visibleNow) v.seen = true;
     const shown = v.seen;
-    for (const o of v.parts) o.setVisible(shown);
+    v.m.root.visible = shown;
+    v.aura.visible = shown;
     if (!shown) return;
     if (!this.hinted && visibleNow && !v.gone && w.tick >= v.coolTick)
-      this.opts.hint("Glinting wrecks hold scrap: roll any ground unit over them.", v.x / TILE, v.y / TILE, () => {
+      this.opts.hint("Glinting wrecks hold scrap: roll any ground unit over them.", v.x, v.y, () => {
         this.hinted = true;
         try {
           localStorage.setItem(HINT_KEY, "1");
@@ -353,30 +348,26 @@ export class WreckRenderer {
         }
       });
 
-    // burns out over its last 10 s
+    // burns out over its last 10 s: it settles into the ground
     const left = (v.expireTick - w.tick) / TICK_RATE;
-    const fade = Phaser.Math.Clamp(left / 10, 0, 1);
-    if (!v.landing) {
-      v.body.setAlpha(fade);
-      v.shadow.setAlpha(0.28 * fade);
-      v.turret?.setAlpha(fade);
-    }
+    const fade = Math.min(1, Math.max(0, left / 10));
+    if (!v.landing) v.m.root.position.y = v.ground - 0.02 - (1 - fade) * 0.4;
     const hot = w.tick < v.coolTick;
     // loot glow: a slow warm breath once it's cool enough to salvage
-    const auraA = hot || v.landing ? 0 : (0.13 + 0.07 * Math.sin(this.time / 520 + v.phase)) * fade;
-    v.aura.setAlpha(auraA);
+    v.auraMat.opacity = hot || v.landing ? 0 : (0.22 + 0.1 * Math.sin(this.time / 520 + v.phase)) * fade;
     if (!visibleNow || dtMs <= 0) return;
 
     // smoulder: fire and thick smoke while hot, a thin wisp for a few seconds after
     const age = (w.tick - (v.coolTick - Math.round(SALVAGE.hot * TICK_RATE))) / TICK_RATE;
+    const h = v.ground + 0.25;
     if (age < 7) {
       v.smokeT -= dtMs;
       if (v.smokeT <= 0) {
         v.smokeT = hot ? 200 + rnd(v.id, w.tick) * 120 : 600 + age * 110;
-        const sx = v.x + (rnd(v.id, w.tick + 1) - 0.5) * 18;
-        const sy = v.y + (rnd(v.id, w.tick + 2) - 0.5) * 14;
-        this.smoke.emitParticleAt(sx, sy, 1);
-        if (hot) this.embers.emitParticleAt(sx, sy, 1 + Math.round(rnd(v.id, w.tick + 3) * 2));
+        const sx = v.x + (rnd(v.id, w.tick + 1) - 0.5) * 0.28;
+        const sy = v.y + (rnd(v.id, w.tick + 2) - 0.5) * 0.22;
+        this.v.particles.emit(SMOKE, sx, sy, h, 1);
+        if (hot) this.v.particles.emit(EMBERS, sx, sy, h - 0.05, 1 + Math.round(rnd(v.id, w.tick + 3) * 2));
       }
     }
     // the glint that says "loot"
@@ -384,10 +375,14 @@ export class WreckRenderer {
       v.glintT -= dtMs;
       if (v.glintT <= 0) {
         v.glintT = 1700 + rnd(v.id, Math.floor(this.time / 1000)) * 1200;
-        const gx = v.x + (rnd(v.id, Math.floor(this.time)) - 0.5) * 26;
-        const gy = v.y + (rnd(v.id, Math.floor(this.time) + 9) - 0.5) * 22;
-        v.glint.setPosition(gx, gy).setScale(0).setAlpha(fade).setRotation(0);
-        this.scene.tweens.add({ targets: v.glint, scale: 0.9, rotation: 0.5, duration: 200, yoyo: true, ease: "Sine.easeOut" });
+        const c = new THREE.Color(0xffe9a8);
+        this.v.particles.spawn(
+          {
+            x: v.x + (rnd(v.id, Math.floor(this.time)) - 0.5) * 0.4, y: h + 0.05, z: v.y + (rnd(v.id, Math.floor(this.time) + 9) - 0.5) * 0.35,
+            life: 420, tex: TEX.glint, size0: 0.7 * fade, size1: 0.05, alpha0: fade, alpha1: 0.2, spin: 2.4, r: c.r, g: c.g, b: c.b
+          },
+          true
+        );
       }
     }
   }
@@ -395,39 +390,49 @@ export class WreckRenderer {
   /** Scooped up: the hull shrinks into a gold sparkle. */
   private popAway(v: WreckView): void {
     this.views.delete(v.id);
-    const ring = this.scene.add.image(v.x, v.y, "fx-ring").setDepth(7.9).setScale(0.25).setTint(GOLD).setBlendMode(Phaser.BlendModes.ADD);
-    this.scene.tweens.add({ targets: ring, scale: 0.9, alpha: 0, duration: 380, onComplete: () => ring.destroy() });
+    this.v.tweens.kill(v);
+    const g = new THREE.Color(GOLD);
+    const h = v.ground + 0.2;
+    this.v.particles.spawn({ x: v.x, y: v.ground + 0.08, z: v.y, life: 380, tex: TEX.ring, flat: true, size0: 0.4, size1: 1.4, alpha0: 1, alpha1: 0, r: g.r, g: g.g, b: g.b }, true);
     for (let i = 0; i < 5; i++) {
       const a = (i / 5) * Math.PI * 2 + rnd(v.id, 40);
-      const g = this.scene.add.image(v.x, v.y, "fx-glint").setDepth(7.95).setScale(0.45).setTint(GOLD).setBlendMode(Phaser.BlendModes.ADD);
-      this.scene.tweens.add({
-        targets: g, x: v.x + Math.sin(a) * 34, y: v.y - Math.cos(a) * 26 - 16, scale: 0, rotation: 1.2,
-        duration: 420, ease: "Quad.easeOut", onComplete: () => g.destroy()
-      });
+      this.v.particles.spawn(
+        { x: v.x, y: h, z: v.y, vx: Math.sin(a) * 1.2, vz: -Math.cos(a) * 1.0, vy: 1.2, life: 420, tex: TEX.glint, size0: 0.45, size1: 0, alpha0: 1, alpha1: 0.4, spin: 3, r: g.r, g: g.g, b: g.b },
+        true
+      );
     }
-    for (const o of v.parts) this.scene.tweens.killTweensOf(o);
-    v.aura.destroy();
-    v.glint.destroy();
-    const hull = v.parts.filter((o) => o !== v.glint && o !== v.aura);
-    this.scene.tweens.add({
-      targets: hull, alpha: 0, scale: ART_SCALE * 0.55, duration: 220, ease: "Quad.easeIn",
-      onComplete: () => hull.forEach((o) => o.destroy())
+    this.group.remove(v.aura);
+    v.auraMat.dispose();
+    const root = v.m.root;
+    const s0 = root.scale.x;
+    this.v.tweens.add({
+      dur: 220, ease: Ease.quadIn,
+      update: (k) => root.scale.setScalar(s0 * (1 - 0.6 * k)),
+      done: () => this.group.remove(root)
     });
   }
 
   private fadeAway(v: WreckView, ms: number): void {
     this.views.delete(v.id);
-    const parts = v.parts;
-    for (const o of parts) this.scene.tweens.killTweensOf(o);
-    this.scene.tweens.add({ targets: parts, alpha: 0, duration: ms, onComplete: () => parts.forEach((o) => o.destroy()) });
+    this.v.tweens.kill(v);
+    const root = v.m.root;
+    const y0 = root.position.y;
+    const o0 = v.auraMat.opacity;
+    this.v.tweens.add({
+      dur: ms,
+      update: (k) => {
+        root.position.y = y0 - k * 0.4;
+        v.auraMat.opacity = o0 * (1 - k);
+      },
+      done: () => this.destroy(v)
+    });
   }
 
   private destroy(v: WreckView): void {
     this.views.delete(v.id);
-    for (const o of v.parts) {
-      this.scene.tweens.killTweensOf(o);
-      o.destroy();
-    }
+    this.v.tweens.kill(v);
+    this.group.remove(v.m.root, v.aura);
+    v.auraMat.dispose();
   }
 
   /**
@@ -435,68 +440,38 @@ export class WreckRenderer {
    * land together (a tank rolling through a wreck field) add up in one pop.
    */
   private floatText(x: number, y: number, amount: number, color: string, cssPx: number): void {
-    const now = this.scene.time.now;
-    this.floats = this.floats.filter((f) => f.text.active);
-    const near = this.floats.find(
-      (f) => f.color === color && now - f.born < 600 && Math.abs(f.x - x) < 110 && Math.abs(f.y - y) < 90
-    );
+    const now = performance.now();
+    this.floats = this.floats.filter((f) => this.v.screen.has(f.label));
+    const near = this.floats.find((f) => f.color === color && now - f.born < 600 && Math.abs(f.x - x) < 1.7 && Math.abs(f.y - y) < 1.4);
     if (near) {
       near.amount += amount;
       near.born = now;
-      this.launchFloat(near.text, near.x, near.y, `+${near.amount}`);
+      this.launch(near.label, `+${near.amount}`);
       return;
     }
-    const cam = this.scene.cameras.main;
-    const z = cam.zoom / this.opts.dpr; // CSS px per world px
-    const size = Math.round(Phaser.Math.Clamp(cssPx / z, 16, 70));
-    const text = this.scene.add
-      .text(x, y, "", {
-        fontFamily: '"Rajdhani", "Segoe UI", system-ui, sans-serif',
-        fontStyle: "bold",
-        fontSize: `${size}px`,
-        color,
-        stroke: "#1b1306",
-        strokeThickness: Math.max(3, Math.round(size / 5))
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(8.8)
-      .setResolution(Math.max(1, Math.min(2, cam.zoom)));
-    this.floats.push({ text, x, y, amount, color, born: now });
-    this.launchFloat(text, x, y, `+${amount}`);
+    const label = this.v.screen.label({ x, y, h: this.v.terrain.surfaceAt(x, y) + 0.5, text: "", size: cssPx, color, stroke: "#1b1306" });
+    this.floats.push({ label, x, y, amount, color, born: now });
+    this.launch(label, `+${amount}`);
   }
 
-  private launchFloat(t: Phaser.GameObjects.Text, x: number, y: number, label: string): void {
-    this.scene.tweens.killTweensOf(t);
-    const size = parseFloat(String(t.style.fontSize)) || 24;
-    t.setText(label).setPosition(x, y - 14).setAlpha(1).setScale(0.7);
-    this.scene.tweens.add({ targets: t, scale: 1, duration: 170, ease: "Back.easeOut" });
-    this.scene.tweens.add({
-      targets: t, y: y - 14 - size * 1.6, alpha: 0, delay: 520, duration: 900, ease: "Quad.easeIn",
-      onComplete: () => t.destroy()
+  private launch(l: Label, text: string): void {
+    this.v.tweens.kill(l);
+    l.text = text;
+    l.dy = 0;
+    l.alpha = 1;
+    l.scale = 0.7;
+    this.v.tweens.add({ dur: 170, ease: Ease.backOut, owner: l, update: (k) => (l.scale = 0.7 + 0.3 * k) });
+    this.v.tweens.add({
+      dur: 900, delay: 520, ease: Ease.quadIn, owner: l,
+      update: (k) => {
+        l.dy = -l.size * 1.6 * k;
+        l.alpha = 1 - k;
+      },
+      done: () => this.v.screen.remove(l)
     });
   }
-}
 
-/** Four-point star: the "there's loot here" sparkle. */
-function makeGlintTexture(scene: Phaser.Scene): void {
-  if (scene.textures.exists("fx-glint")) return;
-  const tex = scene.textures.createCanvas("fx-glint", 48, 48)!;
-  const ctx = tex.getContext();
-  const g = ctx.createRadialGradient(24, 24, 0, 24, 24, 10);
-  g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 48, 48);
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
-  for (const [w, h] of [[2.2, 23], [23, 2.2]] as const) {
-    ctx.beginPath();
-    ctx.moveTo(24 - w, 24);
-    ctx.lineTo(24, 24 - h);
-    ctx.lineTo(24 + w, 24);
-    ctx.lineTo(24, 24 + h);
-    ctx.closePath();
-    ctx.fill();
+  destroyAll(): void {
+    this.v.scene.remove(this.group);
   }
-  tex.refresh();
 }
-

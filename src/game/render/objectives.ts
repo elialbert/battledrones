@@ -1,29 +1,31 @@
-import Phaser from "phaser";
+import * as THREE from "three";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
 import { CRATE_NAMES } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Uplink, World } from "../../sim/types";
 import { buildingCenter, hqOf } from "../../sim/world";
 import { announce } from "../announce";
 import { sfx, type SfxName } from "../audio";
-import { ART_SCALE, ATLAS, TILE, frameOrigin, mountOffset } from "../assets";
+import { discMat, glowMat } from "../three/materials";
+import { chuteGeometry, crateDef, instance, modelMesh, uplinkDef, type ModelInstance } from "../three/models";
+import { Ease } from "../three/tween";
+import type { View } from "../three/view";
 import type { Fx } from "./fx";
 
 /**
  * How the map objectives look and sound: the Uplink relays (a neutral
  * platform whose dish turns for whoever holds it, a team-coloured capture
- * ring and bar that read through the fog), supply crates (a gold beacon the
- * moment one is announced, a striped parachute bringing it down, a glinting
- * crate with a burn-out timer) and the claim pop. Also the announcer lines,
- * warnings and the minimap marks for both.
+ * ring and bar that read through the fog), supply crates (a gold light
+ * pillar the moment one is announced, a striped parachute bringing it down
+ * out of the sky, a glinting crate with a burn-out timer) and the claim pop.
+ * Also the announcer lines, warnings and the minimap marks for both.
  */
 
 export interface ObjectiveRendererOpts {
   player: Faction;
   spectator: boolean;
-  dpr: number;
   /** Is the tile position visible to the local player (or fog off)? */
   visibleAt(x: number, y: number): boolean;
-  /** Volume for a sound at world px (x, y). */
+  /** Volume for a sound at tile point (x, y). */
   earshot(x: number, y: number): number;
   /** Tap-to-jump warning toast, a plain toast, a minimap ping, a one-time tip. */
   alert(msg: string, x: number, y: number): void;
@@ -36,25 +38,21 @@ const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
 const TEAM_CSS: Record<Faction, string> = { blue: "#7ec1ff", red: "#ff8a7a" };
 const NEUTRAL = 0xe8c66a;
 const GOLD = 0xffd66e;
-/** Ground layer (under wrecks and units) and the through-the-fog layer (fog is 10). */
-const GROUND_DEPTH = 1.51;
-const OVER_FOG = 10.25;
-const CRATE_DEPTH = 2.45;
 /** Sim ticks of visible parachute descent before a crate lands. */
 const FALL = 26;
-/** Drawn height of a crate high above its landing spot (screen-up = altitude, as for aircraft). */
-const FALL_LIFT = 230;
+/** How high a crate starts its descent (world units). */
+const FALL_H = 7;
 const HINT_KEY = "battledrones.hint.uplinks";
+
+const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+const pillarGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, 0.5, 0);
 
 interface UplinkView {
   l: Uplink;
-  base: Phaser.GameObjects.Image;
-  shadow: Phaser.GameObjects.Image;
-  head: Phaser.GameObjects.Image;
-  headShadow: Phaser.GameObjects.Image;
-  glow: Phaser.GameObjects.Image;
-  hx: number;
-  hy: number;
+  m: ModelInstance;
+  glow: THREE.Mesh;
+  glowMat: THREE.MeshBasicMaterial;
+  h: number;
   spin: number;
   /** Seconds left of the capture flash. */
   flash: number;
@@ -63,64 +61,57 @@ interface UplinkView {
 
 interface CrateView {
   c: Crate;
-  crate: Phaser.GameObjects.Image;
-  chute: Phaser.GameObjects.Image;
-  glow: Phaser.GameObjects.Image;
-  pillar: Phaser.GameObjects.Image;
+  crate: ModelInstance;
+  chute: THREE.Mesh;
+  glow: THREE.Mesh;
+  glowMat: THREE.MeshBasicMaterial;
+  pillar: THREE.Mesh;
+  pillarMat: THREE.MeshBasicMaterial;
+  h: number;
   landed: boolean;
 }
 
 export class ObjectiveRenderer {
-  private ground: Phaser.GameObjects.Graphics;
-  private over: Phaser.GameObjects.Graphics;
-  private lines: Phaser.GameObjects.Graphics;
   private uplinks: UplinkView[] = [];
   private crates = new Map<number, CrateView>();
   private announced = new Set<number>();
+  private group = new THREE.Group();
   private time = 0;
   private hinted = false;
 
   constructor(
-    private scene: Phaser.Scene,
+    private v: View,
     private world: World,
     private fx: Fx,
     private opts: ObjectiveRendererOpts
   ) {
-    makeObjectiveTextures(scene);
-    this.ground = scene.add.graphics().setDepth(GROUND_DEPTH + 0.01);
-    this.over = scene.add.graphics().setDepth(OVER_FOG);
-    this.lines = scene.add.graphics().setDepth(OVER_FOG + 0.02);
+    v.scene.add(this.group);
     for (const l of world.objectives.uplinks) this.uplinks.push(this.makeUplink(l));
   }
 
   private makeUplink(l: Uplink): UplinkView {
-    const s = this.scene;
-    const x = l.x * TILE;
-    const y = l.y * TILE;
-    const shadow = s.add.image(x + 7, y + 9, ATLAS, "obj/uplink").setScale(ART_SCALE).setTint(0x000000).setAlpha(0.32).setDepth(GROUND_DEPTH - 0.004);
-    const base = s.add.image(x, y, ATLAS, "obj/uplink").setScale(ART_SCALE).setDepth(GROUND_DEPTH - 0.003);
-    const glow = s.add.image(x, y, "fx-glow").setScale(2.2).setAlpha(0).setBlendMode(Phaser.BlendModes.ADD).setDepth(GROUND_DEPTH - 0.002);
-    const [mx, my] = mountOffset("uplink");
-    const [ox, oy] = frameOrigin("obj/uplink-head");
-    const hx = x + mx * TILE;
-    const hy = y + my * TILE;
-    const headShadow = s.add.image(hx + 6, hy + 8, ATLAS, "obj/uplink-head").setOrigin(ox, oy).setScale(ART_SCALE).setTint(0x000000).setAlpha(0.3).setDepth(GROUND_DEPTH - 0.001);
-    const head = s.add.image(hx, hy, ATLAS, "obj/uplink-head").setOrigin(ox, oy).setScale(ART_SCALE).setDepth(GROUND_DEPTH);
-    const spin = (l.id * 1.7) % (Math.PI * 2);
-    return { l, base, shadow, head, headShadow, glow, hx, hy, spin, flash: 0, lastAlert: -1e9 };
+    const h = this.v.terrain.heightAt(l.x, l.y);
+    const m = instance(uplinkDef());
+    m.root.position.set(l.x, h, l.y);
+    const glowMat_ = discMat(NEUTRAL, 0);
+    const glow = new THREE.Mesh(discGeo, glowMat_);
+    glow.position.set(l.x, h + 0.2, l.y);
+    glow.scale.setScalar(3.2);
+    glow.renderOrder = 3;
+    this.group.add(m.root, glow);
+    return { l, m, glow, glowMat: glowMat_, h, spin: (l.id * 1.7) % (Math.PI * 2), flash: 0, lastAlert: -1e9 };
   }
 
   private friendly(f: Faction): boolean {
     return f === this.opts.player;
   }
 
-  private px(css: number): number {
-    return (css * this.opts.dpr) / this.scene.cameras.main.zoom;
+  private px(x: number, y: number, css: number): number {
+    return css * this.v.rig.worldPerPx(x, y);
   }
 
-  private onScreen(x: number, y: number, pad = 0): boolean {
-    const v = this.scene.cameras.main.worldView;
-    return x > v.x - pad && x < v.right + pad && y > v.y - pad && y < v.bottom + pad;
+  private onScreen(x: number, y: number): boolean {
+    return this.v.rig.onScreen(x, y);
   }
 
   private sound(name: SfxName, x: number, y: number, vol = 1, floor = 0): void {
@@ -147,7 +138,7 @@ export class ObjectiveRenderer {
         if (!v || this.time - v.lastAlert < 20000) break;
         v.lastAlert = this.time;
         this.opts.ping(ev.x, ev.y);
-        if (!this.onScreen(ev.x * TILE, ev.y * TILE)) {
+        if (!this.onScreen(ev.x, ev.y)) {
           sfx.play("alert", 0.7);
           this.opts.alert("Uplink under attack!", ev.x, ev.y);
         }
@@ -168,13 +159,19 @@ export class ObjectiveRenderer {
         const v = this.crates.get(ev.id);
         if (!v) break;
         this.crates.delete(ev.id);
-        this.fx.dust(ev.x * TILE, ev.y * TILE);
-        this.scene.tweens.add({
-          targets: [v.crate, v.glow], alpha: 0, duration: 700,
-          onComplete: () => this.destroyCrate(v)
+        this.fx.dust(ev.x, ev.y, 2);
+        this.group.remove(v.pillar, v.chute);
+        const root = v.crate.root;
+        const y0 = root.position.y;
+        const g0 = v.glowMat.opacity;
+        this.v.tweens.add({
+          dur: 700,
+          update: (k) => {
+            root.position.y = y0 - k * 0.5;
+            v.glowMat.opacity = g0 * (1 - k);
+          },
+          done: () => this.destroyCrate(v)
         });
-        v.pillar.destroy();
-        v.chute.destroy();
         break;
       }
     }
@@ -182,8 +179,7 @@ export class ObjectiveRenderer {
 
   private flipped(ev: Extract<FxEvent, { type: "uplinkFlip" }>): void {
     const v = this.uplinks.find((u) => u.l.id === ev.id);
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
+    const { x, y } = ev;
     if (v) v.flash = 1;
     const col = ev.owner ? TEAM[ev.owner] : NEUTRAL;
     this.fx.pulse(x, y, col, 2.6);
@@ -219,23 +215,25 @@ export class ObjectiveRenderer {
   }
 
   private incoming(ev: Extract<FxEvent, { type: "crateIncoming" }>): void {
-    const s = this.scene;
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
-    const crate = s.add.image(x, y, ATLAS, "obj/crate").setScale(ART_SCALE).setDepth(CRATE_DEPTH).setVisible(false);
-    const chute = s.add.image(x, y, "obj-chute").setDepth(OVER_FOG + 0.03).setVisible(false);
-    const glow = s.add.image(x, y, "fx-glow").setTint(GOLD).setBlendMode(Phaser.BlendModes.ADD).setDepth(CRATE_DEPTH - 0.01).setAlpha(0);
-    const pillar = s.add
-      .image(x, y - 380, "fx-beam")
-      .setDisplaySize(760, 46)
-      .setRotation(Math.PI / 2)
-      .setTint(GOLD)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setAlpha(0.35)
-      .setDepth(OVER_FOG - 0.01);
     const c = this.world.objectives.crates.find((k) => k.id === ev.id);
     if (!c) return;
-    this.crates.set(ev.id, { c, crate, chute, glow, pillar, landed: false });
+    const h = this.v.terrain.surfaceAt(ev.x, ev.y);
+    const crate = instance(crateDef());
+    crate.root.visible = false;
+    const chute = modelMesh(chuteGeometry(), false);
+    chute.visible = false;
+    const gm = discMat(GOLD, 0);
+    const glow = new THREE.Mesh(discGeo, gm);
+    glow.position.set(ev.x, h + 0.08, ev.y);
+    glow.scale.setScalar(1.6);
+    glow.renderOrder = 3;
+    const pm = glowMat(GOLD, 0.3);
+    const pillar = new THREE.Mesh(pillarGeo, pm);
+    pillar.position.set(ev.x, h, ev.y);
+    pillar.scale.set(0.32, 14, 0.32);
+    pillar.renderOrder = 8;
+    this.group.add(crate.root, chute, glow, pillar);
+    this.crates.set(ev.id, { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false });
     if (this.announced.has(ev.drop)) return;
     this.announced.add(ev.drop);
     // one banner per drop, pointing at the crate on our side
@@ -260,39 +258,51 @@ export class ObjectiveRenderer {
   private land(v: CrateView): void {
     if (v.landed) return;
     v.landed = true;
-    const x = v.c.x * TILE;
-    const y = v.c.y * TILE;
-    v.crate.setVisible(true).setPosition(x, y).setScale(ART_SCALE).setRotation(0);
-    v.pillar.destroy();
+    const { x, y } = v.c;
+    v.crate.root.visible = true;
+    v.crate.root.position.set(x, v.h, y);
+    v.crate.root.rotation.set(0, v.c.id * 0.7, 0);
+    this.group.remove(v.pillar);
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
-      this.fx.dust(x + Math.cos(a) * 30, y + Math.sin(a) * 22);
+      this.fx.dust(x + Math.cos(a) * 0.47, y + Math.sin(a) * 0.34);
     }
     this.fx.pulse(x, y, GOLD, 1.3);
     this.sound("pod", x, y, 0.45);
-    // the canopy sags and slides off on the breeze
+    // the canopy collapses and slides off on the breeze
     const chute = v.chute;
-    chute.setVisible(true).setPosition(x + 6, y - 26).setScale(0.75).setAlpha(0.95);
-    this.scene.tweens.add({
-      targets: chute, x: x + 54, y: y - 6, scaleY: 0.22, scaleX: 0.6, alpha: 0, rotation: 0.7,
-      duration: 900, ease: "Quad.easeIn", onComplete: () => chute.setVisible(false)
+    chute.visible = true;
+    const from = new THREE.Vector3(x, v.h + 0.45, y);
+    this.v.tweens.add({
+      dur: 900, ease: Ease.quadIn,
+      update: (k) => {
+        chute.position.set(from.x + k * 0.9, from.y - k * 0.35, from.z - k * 0.2);
+        chute.scale.set(1 - 0.3 * k, Math.max(0.05, 1 - k), 1 - 0.3 * k);
+        chute.rotation.set(0, 0, k * 1.1);
+      },
+      done: () => (chute.visible = false)
     });
   }
 
   private claimed(ev: Extract<FxEvent, { type: "crateClaimed" }>): void {
     const v = this.crates.get(ev.id);
-    const x = ev.x * TILE;
-    const y = ev.y * TILE;
+    const { x, y } = ev;
     if (v) {
       this.crates.delete(ev.id);
-      v.pillar.destroy();
-      v.chute.destroy();
-      v.crate.setVisible(true);
-      this.scene.tweens.add({
-        targets: v.crate, scale: ART_SCALE * 1.6, alpha: 0, duration: 320, ease: "Quad.easeOut",
-        onComplete: () => this.destroyCrate(v)
+      this.group.remove(v.pillar, v.chute);
+      const root = v.crate.root;
+      root.visible = true;
+      const g0 = v.glowMat.opacity;
+      this.v.tweens.add({
+        dur: 320, ease: Ease.quadOut,
+        update: (k) => {
+          root.scale.setScalar(1 + 0.6 * k);
+          root.position.y = v.h + k * 0.6;
+          v.glowMat.opacity = g0 * (1 - k);
+          v.glow.scale.setScalar(1.6 + 2.4 * k);
+        },
+        done: () => this.destroyCrate(v)
       });
-      this.scene.tweens.add({ targets: v.glow, scale: 4, alpha: 0, duration: 420 });
     }
     const mine = this.friendly(ev.faction) && !this.opts.spectator;
     this.fx.pulse(x, y, mine || this.opts.spectator ? GOLD : 0xff8a7a, 1.8);
@@ -302,7 +312,7 @@ export class ObjectiveRenderer {
     if (this.opts.visibleAt(ev.x, ev.y)) this.floatLabel(x, y, label, color, mine || this.opts.spectator ? 20 : 15);
     for (const id of ev.unitIds) {
       const u = this.world.units.get(id);
-      if (u && this.opts.visibleAt(u.x, u.y)) this.fx.pulse(u.x * TILE, u.y * TILE, ev.reward === "repair" ? 0x7ef29b : GOLD, 0.9);
+      if (u && this.opts.visibleAt(u.x, u.y)) this.fx.pulse(u.x, u.y, ev.reward === "repair" ? 0x7ef29b : GOLD, 0.9);
     }
     if (this.opts.spectator) return;
     const what = ev.scrap > 0 && ev.reward !== "scrap" ? `${CRATE_NAMES[ev.reward]} (+${Math.round(ev.scrap)} scrap)` : CRATE_NAMES[ev.reward];
@@ -312,34 +322,22 @@ export class ObjectiveRenderer {
   }
 
   private destroyCrate(v: CrateView): void {
-    v.crate.destroy();
-    v.glow.destroy();
-    v.chute.destroy();
-    v.pillar.destroy();
+    this.group.remove(v.crate.root, v.glow, v.chute, v.pillar);
+    v.glowMat.dispose();
+    v.pillarMat.dispose();
   }
 
   /** Reward pop: a bold label that bounces up from the crate and drifts away. */
-  private floatLabel(x: number, y: number, label: string, color: string, cssPx: number): void {
-    const cam = this.scene.cameras.main;
-    const z = cam.zoom / this.opts.dpr;
-    const size = Math.round(Phaser.Math.Clamp(cssPx / z, 16, 76));
-    const t = this.scene.add
-      .text(x, y - 18, label, {
-        fontFamily: '"Rajdhani", "Segoe UI", system-ui, sans-serif',
-        fontStyle: "bold",
-        fontSize: `${size}px`,
-        color,
-        stroke: "#1b1306",
-        strokeThickness: Math.max(3, Math.round(size / 5))
-      })
-      .setOrigin(0.5, 1)
-      .setDepth(8.8)
-      .setScale(0.6)
-      .setResolution(Math.max(1, Math.min(2, cam.zoom)));
-    this.scene.tweens.add({ targets: t, scale: 1, duration: 200, ease: "Back.easeOut" });
-    this.scene.tweens.add({
-      targets: t, y: y - 18 - size * 1.8, alpha: 0, delay: 1100, duration: 1000, ease: "Quad.easeIn",
-      onComplete: () => t.destroy()
+  private floatLabel(x: number, y: number, text: string, color: string, cssPx: number): void {
+    const l = this.v.screen.label({ x, y, h: this.v.terrain.surfaceAt(x, y) + 0.7, text, size: cssPx, color, stroke: "#1b1306", scale: 0.6 });
+    this.v.tweens.add({ dur: 200, ease: Ease.backOut, update: (k) => (l.scale = 0.6 + 0.4 * k) });
+    this.v.tweens.add({
+      dur: 1000, delay: 1100, ease: Ease.quadIn,
+      update: (k) => {
+        l.dy = -cssPx * 1.8 * k;
+        l.alpha = 1 - k;
+      },
+      done: () => this.v.screen.remove(l)
     });
   }
 
@@ -347,9 +345,6 @@ export class ObjectiveRenderer {
 
   sync(dtMs: number, alpha: number): void {
     this.time += dtMs;
-    this.ground.clear();
-    this.over.clear();
-    this.lines.clear();
     const dt = dtMs / 1000;
     for (const v of this.uplinks) this.drawUplink(v, dt);
     const now = this.world.tick - 1 + alpha;
@@ -359,128 +354,113 @@ export class ObjectiveRenderer {
 
   private drawUplink(v: UplinkView, dt: number): void {
     const l = v.l;
-    const x = l.x * TILE;
-    const y = l.y * TILE;
+    const { x, y } = l;
     const owner = l.owner;
     const col = owner ? TEAM[owner] : NEUTRAL;
     // the dish: idles on a slow scan, turns for its owner, spins up while being captured
     const rate = l.pushing ? 2.6 : owner ? 0.7 : 0;
     v.spin = rate > 0 ? v.spin + rate * dt : Math.sin(this.time * 0.0004 + l.id) * 0.9;
-    v.head.setRotation(v.spin);
-    v.headShadow.setRotation(v.spin);
+    if (v.m.turret) v.m.turret.rotation.y = -v.spin;
     v.flash = Math.max(0, v.flash - dt * 1.2);
     const breathe = 0.5 + 0.5 * Math.sin(this.time * 0.003 + l.id);
-    v.glow.setTint(col).setAlpha(owner ? 0.28 + 0.14 * breathe + 0.5 * v.flash : 0.08 + 0.4 * v.flash);
-    v.glow.setScale(2.2 + v.flash * 1.5);
+    v.glowMat.color.setHex(col);
+    v.glowMat.opacity = owner ? 0.28 + 0.14 * breathe + 0.5 * v.flash : 0.08 + 0.4 * v.flash;
+    v.glow.scale.setScalar(3.2 + v.flash * 2);
 
     const seen = this.opts.visibleAt(l.x, l.y);
-    const g = seen ? this.ground : this.over;
+    const g = this.v.over;
     const k = seen ? 1 : 0.7;
-    const R = OBJECTIVES.uplink.radius * TILE;
+    const R = OBJECTIVES.uplink.radius;
     // the capture zone: a dashed ring in the owner's colour, turning while contested
     const dashes = 28;
     const turn = l.pushing || l.contested ? this.time * 0.0009 : 0;
-    g.lineStyle(this.px(owner ? 2.2 : 1.6), col, (owner ? 0.75 : 0.55) * k);
+    g.lineStyle(owner ? 2.2 : 1.6, col, (owner ? 0.75 : 0.55) * k);
     for (let i = 0; i < dashes; i += 2) {
       const a0 = (i / dashes) * Math.PI * 2 + turn;
-      g.beginPath();
       g.arc(x, y, R, a0, a0 + (Math.PI * 2) / dashes);
-      g.strokePath();
     }
     if (owner && seen) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
     // the capture bar: a ring around the platform, filled toward whoever is winning it
-    const ar = 1.38 * TILE;
+    const ar = 1.38;
     const p = l.progress / 100;
-    g.lineStyle(this.px(7), 0x0b0f16, 0.6 * k).strokeCircle(x, y, ar);
+    const bh = v.h + 0.2;
+    g.lineStyle(7, 0x0b0f16, 0.6 * k).strokeCircle(x, y, ar, bh);
     if (Math.abs(p) > 0.001) {
       const pc = p > 0 ? TEAM.blue : TEAM.red;
       const a0 = -Math.PI / 2;
       const a1 = a0 + Math.PI * 2 * Math.abs(p);
-      g.lineStyle(this.px(4.5), pc, 0.95 * k);
-      g.beginPath();
-      g.arc(x, y, ar, a0, a1);
-      g.strokePath();
+      g.lineStyle(4.5, pc, 0.95 * k).arc(x, y, ar, a0, a1, bh + 0.005);
       if (l.pushing) {
         // a bright tip on the moving edge
         const tip = 4 + 2 * Math.sin(this.time * 0.02);
-        g.fillStyle(0xffffff, 0.9 * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(tip));
+        g.fillStyle(0xffffff, 0.9 * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(x, y, tip), bh + 0.01);
       }
     }
     if (l.contested) {
       const pulse = 0.5 + 0.5 * Math.sin(this.time * 0.012);
-      g.lineStyle(this.px(3), 0xffa040, (0.4 + 0.5 * pulse) * k).strokeCircle(x, y, ar + this.px(7));
+      g.lineStyle(3, 0xffa040, (0.4 + 0.5 * pulse) * k).strokeCircle(x, y, ar + this.px(x, y, 7), bh);
     }
-    if (v.flash > 0) g.lineStyle(this.px(5), 0xffffff, v.flash * 0.8).strokeCircle(x, y, R * (1.15 - 0.15 * v.flash));
+    if (v.flash > 0) g.lineStyle(5, 0xffffff, v.flash * 0.8).strokeCircle(x, y, R * (1.15 - 0.15 * v.flash));
   }
 
   private drawCrate(v: CrateView, now: number): void {
     const c = v.c;
-    const x = c.x * TILE;
-    const y = c.y * TILE;
-    const g = this.over;
+    const { x, y } = c;
+    const g = this.v.over;
     const left = c.landTick - now;
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 0.008);
+    const px = (css: number) => this.px(x, y, css);
     if (!v.landed && left <= 0) this.land(v);
     if (!v.landed) {
       // announced: a gold landing marker and a light pillar, both through the fog
-      const k = Phaser.Math.Clamp(1 - left / (c.landTick - c.announcedTick), 0, 1);
-      const r = (0.95 - 0.25 * k) * TILE;
-      g.lineStyle(this.px(2.5), GOLD, 0.65 + 0.3 * pulse).strokeCircle(x, y, r);
-      g.lineStyle(this.px(1.5), GOLD, 0.5).strokeCircle(x, y, r * (1.55 - 0.3 * pulse));
+      const k = Math.min(1, Math.max(0, 1 - left / (c.landTick - c.announcedTick)));
+      const r = 0.95 - 0.25 * k;
+      g.lineStyle(2.5, GOLD, 0.65 + 0.3 * pulse).strokeCircle(x, y, r);
+      g.lineStyle(1.5, GOLD, 0.5).strokeCircle(x, y, r * (1.55 - 0.3 * pulse));
       for (let i = 0; i < 4; i++) {
         const a = (i * Math.PI) / 2 + Math.PI / 4;
-        g.lineStyle(this.px(3), GOLD, 0.9).lineBetween(
-          x + Math.cos(a) * (r + this.px(5)), y + Math.sin(a) * (r + this.px(5)),
-          x + Math.cos(a) * (r + this.px(13)), y + Math.sin(a) * (r + this.px(13))
+        g.lineStyle(3, GOLD, 0.9).lineBetween(
+          x + Math.cos(a) * (r + px(5)), y + Math.sin(a) * (r + px(5)),
+          x + Math.cos(a) * (r + px(13)), y + Math.sin(a) * (r + px(13))
         );
       }
       g.fillStyle(GOLD, 0.08 + 0.08 * pulse).fillCircle(x, y, r);
-      v.pillar.setAlpha(0.22 + 0.2 * pulse);
+      v.pillarMat.opacity = 0.18 + 0.16 * pulse;
       // the last couple of seconds: it comes down under a striped canopy
       if (left <= FALL) {
-        const e = Phaser.Math.Clamp(1 - left / FALL, 0, 1);
-        const h = (1 - e) * (1 - e * 0.35);
-        const sc = 1 + 1.3 * h;
-        const sway = Math.sin(this.time * 0.004 + c.id) * 0.14 * h;
-        const cy = y - FALL_LIFT * h;
+        const e = Math.min(1, Math.max(0, 1 - left / FALL));
+        const hgt = (1 - e) * (1 - e * 0.35);
+        const sway = Math.sin(this.time * 0.004 + c.id) * 0.2 * hgt;
+        const ch = v.h + FALL_H * hgt;
         // ground shadow tightens as it nears
-        this.ground.fillStyle(0x000000, 0.12 + 0.3 * e).fillEllipse(x + 6, y + 6, 34 + 50 * h, 22 + 32 * h);
-        v.crate.setVisible(true).setDepth(OVER_FOG + 0.01).setPosition(x, cy).setScale(ART_SCALE * sc).setRotation(sway * 0.5);
-        const chuteY = cy - (52 + 26 * h) * sc * 0.6;
-        v.chute.setVisible(true).setPosition(x + sway * 30, chuteY).setScale(0.7 * sc).setRotation(sway);
-        // suspension lines from the canopy rim to the crate
-        const rim = 46 * 0.7 * sc;
-        this.lines.lineStyle(this.px(1), 0xe8e2cc, 0.8);
-        for (const dx of [-1, -0.4, 0.4, 1])
-          this.lines.lineBetween(x + sway * 30 + dx * rim, chuteY + 10 * sc, x + dx * 14 * sc, cy - 10 * sc);
+        g.fillStyle(0x000000, 0.12 + 0.3 * e).fillEllipse(x + 0.1, y + 0.1, 0.5 + 0.8 * hgt, 0.5 + 0.8 * hgt);
+        const root = v.crate.root;
+        root.visible = true;
+        root.position.set(x + sway * 0.4, ch, y);
+        root.rotation.set(sway * 0.4, c.id * 0.7, sway * 0.3);
+        v.chute.visible = true;
+        v.chute.position.set(x + sway * 0.4, ch + 0.42, y);
+        v.chute.rotation.set(sway * 0.3, 0, sway * 0.5);
+        v.chute.scale.setScalar(1);
       }
       return;
     }
-    v.crate.setDepth(CRATE_DEPTH);
     // landed: a warm glow, a blinking beacon and a burn-out ring
-    const ttl = Phaser.Math.Clamp((c.expireTick - now) / (c.expireTick - c.landTick), 0, 1);
+    const ttl = Math.min(1, Math.max(0, (c.expireTick - now) / (c.expireTick - c.landTick)));
     const hurry = ttl < 10 / OBJECTIVES.drops.ttl;
     const blink = hurry ? 0.5 + 0.5 * Math.sin(this.time * 0.02) : pulse;
-    v.glow.setPosition(x, y).setAlpha(0.32 + 0.25 * blink).setScale(1.5 + 0.25 * blink);
+    v.glowMat.opacity = 0.32 + 0.25 * blink;
+    v.glow.scale.setScalar(1.5 + 0.3 * blink);
     const seen = this.opts.visibleAt(c.x, c.y);
-    const rg = seen ? this.ground : g;
-    const rr = 0.78 * TILE;
-    rg.lineStyle(this.px(4), 0x0b0f16, 0.55).strokeCircle(x, y, rr);
-    rg.lineStyle(this.px(3), hurry ? 0xff7a4a : GOLD, 0.95);
-    rg.beginPath();
-    rg.arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ttl);
-    rg.strokePath();
+    const rr = 0.78;
+    g.lineStyle(4, 0x0b0f16, 0.55).strokeCircle(x, y, rr);
+    g.lineStyle(3, hurry ? 0xff7a4a : GOLD, 0.95).arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ttl);
     if (!seen) {
       // out of sight: a gold diamond marks it through the fog
-      const d = this.px(8 + 2 * blink);
-      g.fillStyle(GOLD, 0.85).fillPoints([
-        new Phaser.Math.Vector2(x, y - d), new Phaser.Math.Vector2(x + d, y),
-        new Phaser.Math.Vector2(x, y + d), new Phaser.Math.Vector2(x - d, y)
-      ], true);
-      g.lineStyle(this.px(1.5), 0x1b1306, 0.9).strokePoints([
-        new Phaser.Math.Vector2(x, y - d), new Phaser.Math.Vector2(x + d, y),
-        new Phaser.Math.Vector2(x, y + d), new Phaser.Math.Vector2(x - d, y)
-      ], true);
+      const d = px(8 + 2 * blink);
+      const pts = [{ x, y: y - d }, { x: x + d, y }, { x, y: y + d }, { x: x - d, y }];
+      g.fillStyle(GOLD, 0.85).fillPoints(pts, v.h + 0.6);
+      g.lineStyle(1.5, 0x1b1306, 0.9).strokePoints(pts, true, v.h + 0.6);
     }
   }
 
@@ -547,6 +527,7 @@ export class ObjectiveRenderer {
   destroy(): void {
     for (const v of this.crates.values()) this.destroyCrate(v);
     this.crates.clear();
+    this.v.scene.remove(this.group);
   }
 }
 
@@ -565,53 +546,4 @@ export function rewardLabel(reward: CrateReward, amount: number, scrap: number):
     case "unit":
       return "FREE LANCER!";
   }
-}
-
-/** A top-down parachute canopy: eight gores in hazard gold and cream around a vent. */
-function makeObjectiveTextures(scene: Phaser.Scene): void {
-  if (scene.textures.exists("obj-chute")) return;
-  const S = 132;
-  const tex = scene.textures.createCanvas("obj-chute", S, S)!;
-  const ctx = tex.getContext();
-  const c = S / 2;
-  const R = 60;
-  for (let i = 0; i < 8; i++) {
-    const a0 = (i / 8) * Math.PI * 2 - Math.PI / 2;
-    const a1 = ((i + 1) / 8) * Math.PI * 2 - Math.PI / 2;
-    const g = ctx.createRadialGradient(c - 10, c - 12, 4, c, c, R);
-    if (i % 2) {
-      g.addColorStop(0, "#fff3c4");
-      g.addColorStop(0.7, "#f2b632");
-      g.addColorStop(1, "#a8701a");
-    } else {
-      g.addColorStop(0, "#ffffff");
-      g.addColorStop(0.7, "#ece4cf");
-      g.addColorStop(1, "#9c937e");
-    }
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.moveTo(c, c);
-    // scalloped rim: each gore bulges a little past the chord
-    ctx.arc(c, c, R, a0, a1);
-    ctx.closePath();
-    ctx.fill();
-  }
-  ctx.strokeStyle = "rgba(60,44,20,0.55)";
-  ctx.lineWidth = 1.5;
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
-    ctx.beginPath();
-    ctx.moveTo(c, c);
-    ctx.lineTo(c + Math.cos(a) * R, c + Math.sin(a) * R);
-    ctx.stroke();
-  }
-  ctx.beginPath();
-  ctx.arc(c, c, R - 1, 0, Math.PI * 2);
-  ctx.stroke();
-  // the vent at the apex
-  ctx.fillStyle = "#3a2f1e";
-  ctx.beginPath();
-  ctx.arc(c, c, 7, 0, Math.PI * 2);
-  ctx.fill();
-  tex.refresh();
 }

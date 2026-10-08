@@ -7,7 +7,7 @@ import type { Faction, UnitKind, World } from "../sim/types";
  * ("Hardened") the game uses it — in the selection panel, in toasts when it
  * is promoted or falls, and on the after-action report's MVP card.
  *
- * Presentation only (no Phaser, no sim state): callsigns live in a per-world
+ * Presentation only (no three.js, no sim state): callsigns live in a per-world
  * registry so every HUD piece agrees on a unit's name. The first choice is a
  * pure hash of the unit id; a name the same side has already used this match
  * is skipped, so two living "Vipers" never share a squad.

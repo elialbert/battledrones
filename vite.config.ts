@@ -10,15 +10,15 @@ export default defineConfig({
     target: "es2022",
     outDir: "docs",
     chunkSizeWarningLimit: 1600,
-    // the engine in its own chunk: game updates don't re-download Phaser
-    rollupOptions: { output: { manualChunks: { phaser: ["phaser"] } } }
+    // the engine in its own chunk: game updates don't re-download three.js
+    rollupOptions: { output: { manualChunks: { three: ["three"] } } }
   },
   plugins: [
     VitePWA({
       registerType: "autoUpdate",
-      // precache the shell, sprites, icons and menu art; painted map terrain
+      // precache the shell, icons and menu art; painted map terrain
       // (a few MB per map) is cached on first play instead
-      includeAssets: ["assets/sprites/*", "assets/icons/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
+      includeAssets: ["assets/icons/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
       workbox: {
         globPatterns: ["**/*.{js,css,html}"],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,

@@ -4,7 +4,6 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("phaser", () => ({ default: {} })); // finale.ts imports Phaser; finaleOutcome doesn't need it
 
 import { createMapWorld } from "../src/sim/maps";
 import { OPS } from "../src/sim/ops";
