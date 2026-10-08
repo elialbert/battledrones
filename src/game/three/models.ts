@@ -427,7 +427,7 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
     b.cyl(0.84, 0.92, 0.5, 8, [0, 0.37, 0], GM, { rot: [0, Math.PI / 8, 0] });
     b.cyl(0.86, 0.86, 0.08, 8, [0, 0.5, 0], t.main, { rot: [0, Math.PI / 8, 0] });
     b.cyl(0.7, 0.84, 0.08, 8, [0, 0.66, 0], GM_L, { rot: [0, Math.PI / 8, 0] });
-    b.sphere(0.48, [0, 0.66, 0], 0xff9a34, { glow: 0.9, w: 14, h: 6, phi: Math.PI / 2 });
+    b.sphere(0.48, [0, 0.66, 0], 0xff8a24, { glow: 1, w: 14, h: 6, phi: Math.PI / 2 });
     b.torus(0.5, 0.03, [0, 0.72, 0], GM_D, { rot: [Math.PI / 2, 0, 0], seg: 20 });
     b.torus(0.38, 0.025, [0, 0.95, 0], GM_D, { rot: [Math.PI / 2, 0, 0], seg: 18 });
     b.torus(0.48, 0.025, [0, 0.66, 0], GM_D, { seg: 20 });
@@ -479,14 +479,16 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
   "sam-site": (t) => {
     const b = new ModelBuilder();
     b.slab(0.86, 0.18, 0.86, [0, 0.09, 0], GM_D, 0.06);
-    for (const x of [-0.36, 0.36]) for (const z of [-0.36, 0.36]) b.box(0.16, 0.2, 0.16, [x, 0.1, z], t.main);
+    for (const x of [-0.34, 0.34]) for (const z of [-0.34, 0.34]) b.box(0.13, 0.03, 0.13, [x, 0.19, z], t.main);
+    b.pair(0.03, 0.06, 0.4, [0.43, 0.1, 0], t.main);
     const hull = b.build();
     const h = new ModelBuilder();
     h.cyl(0.22, 0.25, 0.08, 8, [0, 0.04, 0], GM);
     h.pair(0.04, 0.22, 0.12, [0.21, 0.17, 0.02], GM_D);
     const pitch = 0.34;
     h.box(0.36, 0.2, 0.42, [0, 0.26, -0.02], GM, { rot: [pitch, 0, 0] });
-    h.box(0.37, 0.03, 0.3, [0, 0.37, 0.0], t.main, { rot: [pitch, 0, 0] });
+    h.pair(0.02, 0.09, 0.34, [0.185, 0.27, -0.02], t.main, { rot: [pitch, 0, 0] });
+    h.box(0.3, 0.02, 0.12, [0, 0.38, 0.1], GM_D, { rot: [pitch, 0, 0] });
     for (const x of [-0.11, 0, 0.11])
       for (const y of [0.21, 0.3]) {
         const base: Vec3 = [x, y, 0.12];
