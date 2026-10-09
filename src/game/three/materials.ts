@@ -5,28 +5,60 @@ import { discTexture } from "./textures";
  * Shared materials and the shader patches every lit object gets:
  *
  * - **Fog of war**: one (w+2)×(h+2) texture, a texel per tile, sampled by
- *   world position in every fogged material (terrain, models, trees, decals)
- *   and blended toward the fog colour — so the battlefield darkens under the
- *   fog exactly like the old 2D overlay did, but on 3D surfaces.
- * - **Cloud shadows**: a tiling noise texture drifting over the world.
+ *   world position in every fogged material (terrain, models, trees, decals).
+ *   Explored ground fades to a dimmed, greyed memory of itself; unexplored
+ *   ground disappears under an opaque, biome-tinted shroud with slow drifting
+ *   wisps, whose edge billows outward (never inward) — so it hides at least
+ *   everything the old flat black did.
+ * - **Cloud shadows**: a tiling noise texture drifting over the world, the
+ *   shade a little bluer than the sunlit ground.
  * - **Model shading**: vertex-coloured, flat-shaded models with a per-vertex
- *   glow attribute (lights, engines, crystals), and uniform variants for the
- *   hit flash, burnt wrecks, damaged buildings, elite shimmer and placement
- *   ghosts — variants share one shader program, so swapping is cheap.
+ *   glow attribute (lights, engines, crystals), walls darkening toward the
+ *   ground they stand on, and uniform variants for the hit flash, burnt
+ *   wrecks, damaged buildings, elite shimmer and placement ghosts — variants
+ *   share one shader program, so swapping is cheap.
  */
 
-export const FOW_COLOR = 0x06090f;
+export const FOW_COLOR = 0x0b1219;
+
+/**
+ * Fog colours are display-space (the fog mixes in after tone mapping), so
+ * they're stored as given: `setHex(hex, LinearSRGBColorSpace)` skips the
+ * sRGB → linear conversion.
+ */
+const raw = (hex: number) => new THREE.Color().setHex(hex, THREE.LinearSRGBColorSpace);
 
 export const fowUniforms = {
   uFowMap: { value: null as THREE.Texture | null },
   uFowSize: { value: new THREE.Vector2(1, 1) },
   uFowOn: { value: 1 },
-  uFowColor: { value: new THREE.Color(FOW_COLOR) },
+  uFowColor: { value: raw(FOW_COLOR) },
+  uFowWisp: { value: raw(0x1c2a35) },
+  uFowMemory: { value: new THREE.Color(0.86, 0.96, 1.12) },
   uCloudMap: { value: null as THREE.Texture | null },
   uCloudOffset: { value: new THREE.Vector2() },
   uCloudK: { value: 0.3 },
+  uCloudTint: { value: new THREE.Color(1, 0.92, 0.8) },
   uTime: { value: 0 }
 };
+
+/** A biome's fog of war and cloud shade (display-space). */
+export interface FogLook {
+  /** The unexplored shroud and its drifting wisps. */
+  shroud: number;
+  wisp: number;
+  /** Tint of explored-but-unseen ground (multiplies its greyed brightness; keep its luminance ≤ 1). */
+  memory: [number, number, number];
+  /** How much of each channel a cloud's shade takes (less blue: a cooler shade). */
+  cloud: [number, number, number];
+}
+
+export function setFogLook(l: FogLook): void {
+  fowUniforms.uFowColor.value.setHex(l.shroud, THREE.LinearSRGBColorSpace);
+  fowUniforms.uFowWisp.value.setHex(l.wisp, THREE.LinearSRGBColorSpace);
+  fowUniforms.uFowMemory.value.setRGB(...l.memory, THREE.LinearSRGBColorSpace);
+  fowUniforms.uCloudTint.value.setRGB(...l.cloud, THREE.LinearSRGBColorSpace);
+}
 
 const VERT_DECL = /* glsl */ `
 varying vec3 vFowW;
@@ -46,19 +78,46 @@ uniform sampler2D uFowMap;
 uniform vec2 uFowSize;
 uniform float uFowOn;
 uniform vec3 uFowColor;
+uniform vec3 uFowWisp;
+uniform vec3 uFowMemory;
 uniform sampler2D uCloudMap;
 uniform vec2 uCloudOffset;
 uniform float uCloudK;
+uniform vec3 uCloudTint;
 uniform float uTime;
 float fowAt( vec2 p ) { return texture2D( uFowMap, ( p + 1.0 ) / uFowSize ).r; }
 `;
+// fog texels: 0 visible, 0.5 explored, 0.94 unexplored (blurred between)
 const fragCode = (clouds: boolean) => /* glsl */ `
   {
     vec2 fp = vFowW.xz;
-    float fw = fowAt( fp );
-    fw = fw * fw * ( 3.0 - 2.0 * fw );
-    ${clouds ? "float cl = texture2D( uCloudMap, fp * 0.032 + uCloudOffset ).r; gl_FragColor.rgb *= 1.0 - cl * uCloudK;" : ""}
-    gl_FragColor.rgb = mix( gl_FragColor.rgb, uFowColor, fw * uFowOn );
+    ${clouds ? "float cl = texture2D( uCloudMap, fp * 0.032 + uCloudOffset ).r; gl_FragColor.rgb *= 1.0 - cl * uCloudK * uCloudTint;" : ""}
+    float fw = 0.0;
+    if ( uFowOn > 0.5 ) fw = fowAt( fp );
+    // visible ground (most of the screen in play) skips the rest
+    if ( fw > 0.002 ) {
+      // the wisps only touch the shroud (fw > 0.5): elsewhere they'd change nothing, so skip the lookup.
+      // They're looked up where this pixel's view ray meets the ground, so a tree or rock in the
+      // shroud is exactly the shroud behind it: no silhouettes. (Explicit LOD: this branch isn't uniform.)
+      float mist = 0.0;
+      if ( fw > 0.5 ) {
+        vec2 gp = cameraPosition.xz + ( vFowW.xz - cameraPosition.xz ) * ( cameraPosition.y / max( 0.01, cameraPosition.y - vFowW.y ) );
+        mist = textureLod( uCloudMap, gp * 0.09 + vec2( uTime * 0.005, uTime * -0.0035 ), 0.0 ).r;
+        // the shroud's edge billows outward, never in
+        fw = min( 1.0, fw + mist * 0.45 * smoothstep( 0.5, 0.6, fw ) * ( 1.0 - smoothstep( 0.86, 0.94, fw ) ) );
+      }
+      fw = fw * fw * ( 3.0 - 2.0 * fw );
+      // at every fog level the ground shows through no more than under the old flat darkening:
+      // explored ground is greyed to the same half brightness, and the shroud then covers it
+      // at least as fast as the darkening did
+      vec3 col = gl_FragColor.rgb;
+      vec3 memory = mix( col, dot( col, vec3( 0.3, 0.59, 0.11 ) ) * uFowMemory, 0.5 ) * 0.5;
+      float shroud = clamp( fw * 2.2 - 1.1, 0.0, 1.0 );
+      col = mix( col, memory, min( 1.0, fw * 2.0 ) );
+      col = mix( col, mix( uFowColor, uFowWisp, mist ), shroud );
+      // a faint mist bank where the shroud meets the known map
+      gl_FragColor.rgb = col + uFowWisp * ( shroud * ( 1.0 - shroud ) * 0.5 );
+    }
   }
 `;
 
@@ -89,71 +148,99 @@ export type Variant = "normal" | "flash" | "warm" | "burnt" | "damaged" | "elite
 
 interface VariantSpec {
   tint: number;
+  /** Light added on top of the shaded model (so it keeps its form). */
   flash: number;
   flashColor: number;
   glow: number;
   /** How far the flash also bleaches the diffuse colour. */
   bleach?: number;
+  /** Flash light thrown on the paint (scales with it, so the hue survives: a fire's glow, not a coat of orange). */
+  flashLit?: number;
+  /** Greys the paint first (0 keeps it, 1 is all grey). */
+  desat?: number;
+  /** Elite gold, ghost scan: an edge light plus a glint sweeping across the hull. */
+  sheen?: number;
+  sheenColor?: number;
+  roughness?: number;
+  metalness?: number;
   ghost?: boolean;
 }
 
 const VARIANTS: Record<Variant, VariantSpec> = {
   normal: { tint: 0xffffff, flash: 0, flashColor: 0xffffff, glow: 1 },
-  flash: { tint: 0xffffff, flash: 0.85, flashColor: 0xffffff, glow: 1 },
-  warm: { tint: 0xffffff, flash: 0.35, flashColor: 0xffc890, glow: 1 },
-  burnt: { tint: 0x4a4440, flash: 0, flashColor: 0x000000, glow: 0 },
-  damaged: { tint: 0xb0a89f, flash: 0, flashColor: 0x000000, glow: 0.6 },
-  elite: { tint: 0xffffff, flash: 0.12, flashColor: 0xffb020, glow: 1.2, bleach: 0 },
-  ghostOk: { tint: 0xb8ffc8, flash: 0.35, flashColor: 0x37d67a, glow: 1, ghost: true },
-  ghostBad: { tint: 0xff9090, flash: 0.45, flashColor: 0xe25555, glow: 1, ghost: true }
+  flash: { tint: 0xffffff, flash: 0.42, flashColor: 0xfff4e4, glow: 1, bleach: 0.3 },
+  warm: { tint: 0xffffff, flash: 0.03, flashColor: 0xffa860, glow: 1, bleach: 0, flashLit: 0.55 },
+  burnt: { tint: 0x9a9088, flash: 0, flashColor: 0x000000, glow: 0, desat: 1, roughness: 0.92, metalness: 0.1 },
+  damaged: { tint: 0xa8a098, flash: 0, flashColor: 0x000000, glow: 0.6, desat: 0.35 },
+  elite: { tint: 0xffffff, flash: 0, flashColor: 0x000000, glow: 1.2, sheenColor: 0xffb428 },
+  ghostOk: { tint: 0xb8ffc8, flash: 0.35, flashColor: 0x37d67a, glow: 1, sheen: 0.5, sheenColor: 0x9affc0, ghost: true },
+  ghostBad: { tint: 0xff9090, flash: 0.45, flashColor: 0xe25555, glow: 1, sheen: 0.5, sheenColor: 0xff9a8a, ghost: true }
 };
 
-/** The elite shimmer's strength (animated by the entity renderer). */
+/** The elite shimmer's strength (animated by the entity renderer, 0.04–0.16). */
 export const eliteUniform = { value: 0.12 };
+/** …scaled up into the elite sheen's colour. */
+const ELITE_SHEEN = 6;
 
 function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({
     vertexColors: true,
     flatShading: true,
-    roughness: 0.58,
-    metalness: 0.35,
+    roughness: v.roughness ?? 0.58,
+    metalness: v.metalness ?? 0.35,
     side: THREE.DoubleSide,
     transparent: !!v.ghost,
     opacity: v.ghost ? 0.6 : 1,
     depthWrite: !v.ghost
   });
-  const tint = { value: new THREE.Color(v.tint) };
-  const flash = elite ? eliteUniform : { value: v.flash };
-  const flashColor = { value: new THREE.Color(v.flashColor) };
-  const glowK = { value: v.glow };
-  const bleach = { value: v.bleach ?? 0.5 };
+  const uniforms = {
+    uTint: { value: new THREE.Color(v.tint) },
+    uFlash: { value: v.flash },
+    uFlashColor: { value: new THREE.Color(v.flashColor) },
+    uGlowK: { value: v.glow },
+    uBleach: { value: v.bleach ?? 0.5 },
+    uFlashLit: { value: v.flashLit ?? 0 },
+    uDesat: { value: v.desat ?? 0 },
+    uSheen: elite ? eliteUniform : { value: v.sheen ?? 0 },
+    uSheenColor: { value: new THREE.Color(v.sheenColor ?? 0xffffff).multiplyScalar(elite ? ELITE_SHEEN : 1) }
+  };
   return fogged(m, {
     key: `model${v.ghost ? "g" : ""}`,
     also: (s) => {
-      s.uniforms.uTint = tint;
-      s.uniforms.uFlash = flash;
-      s.uniforms.uFlashColor = flashColor;
-      s.uniforms.uGlowK = glowK;
-      s.uniforms.uBleach = bleach;
+      Object.assign(s.uniforms, uniforms);
       s.vertexShader = s.vertexShader
         .replace("#include <common>", "#include <common>\nattribute float glow;\nvarying float vGlow;")
         .replace("#include <color_vertex>", "#include <color_vertex>\nvGlow = glow;");
       s.fragmentShader = s.fragmentShader
         .replace(
           "#include <common>",
-          "#include <common>\nvarying float vGlow;\nuniform vec3 uTint;\nuniform float uFlash;\nuniform vec3 uFlashColor;\nuniform float uGlowK;\nuniform float uBleach;"
+          `#include <common>
+          varying float vGlow;
+          uniform vec3 uTint; uniform float uFlash; uniform vec3 uFlashColor; uniform float uGlowK; uniform float uBleach;
+          uniform float uFlashLit; uniform float uDesat; uniform float uSheen; uniform vec3 uSheenColor;`
         )
         // lamps light themselves: less lit diffuse, more emission, so they stay saturated under tone mapping
         .replace(
           "#include <color_fragment>",
-          "#include <color_fragment>\ndiffuseColor.rgb *= uTint;\nvec3 glowBase = diffuseColor.rgb;\ndiffuseColor.rgb *= 1.0 - min( 1.0, vGlow * uGlowK ) * 0.8;"
+          `#include <color_fragment>
+          diffuseColor.rgb = mix( diffuseColor.rgb, vec3( dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) ) ), uDesat ) * uTint;
+          vec3 glowBase = diffuseColor.rgb;
+          diffuseColor.rgb *= 1.0 - min( 1.0, vGlow * uGlowK ) * 0.8;`
         )
         .replace(
           "#include <emissivemap_fragment>",
           `#include <emissivemap_fragment>
-          totalEmissiveRadiance += glowBase * vGlow * uGlowK * 1.05;
-          totalEmissiveRadiance = mix( totalEmissiveRadiance, uFlashColor, uFlash );
-          diffuseColor.rgb = mix( diffuseColor.rgb, uFlashColor, uFlash * uBleach );`
+          // contact shade: walls darken toward the ground they stand on (roofs and lamps don't)
+          float wall = 1.0 - max( 0.0, dot( normal, viewMatrix[ 1 ].xyz ) );
+          diffuseColor.rgb *= 1.0 - 0.38 * wall * ( 1.0 - smoothstep( -0.02, 0.32, vFowW.y ) ) * ( 1.0 - min( 1.0, vGlow ) );
+          totalEmissiveRadiance += glowBase * vGlow * uGlowK * 1.05 + uFlashColor * ( uFlash + glowBase * uFlashLit );
+          diffuseColor.rgb = mix( diffuseColor.rgb, uFlashColor, uFlash * uBleach );
+          if ( uSheen > 0.0 ) {
+            float edge = 1.0 - abs( dot( normal, normalize( vViewPosition ) ) );
+            float band = fract( ( vFowW.x - vFowW.z ) * 0.35 - uTime * 0.45 );
+            float glint = smoothstep( 0.0, 0.04, band ) - smoothstep( 0.04, 0.13, band );
+            totalEmissiveRadiance += uSheenColor * ( uSheen * ( edge * edge + glint * 1.6 ) );
+          }`
         );
     }
   });
