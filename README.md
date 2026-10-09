@@ -142,6 +142,7 @@ npx vite-node tools/pacing.ts summary out*.jsonl                    # …the tab
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --mirror      # side fairness: each personality vs itself
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
                        # model gallery: npm run dev, then open /tools/models.html
+                       # vehicles reference page: /vehicles.html (built into docs/ too)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```

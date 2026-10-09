@@ -11,7 +11,11 @@ export default defineConfig({
     outDir: "docs",
     chunkSizeWarningLimit: 1600,
     // the engine in its own chunk: game updates don't re-download three.js
-    rollupOptions: { output: { manualChunks: { three: ["three"] } } }
+    rollupOptions: {
+      // the game, plus the standalone vehicles reference page
+      input: { main: "index.html", vehicles: "vehicles.html" },
+      output: { manualChunks: { three: ["three"] } }
+    }
   },
   plugins: [
     VitePWA({
