@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { sfx, type SfxName } from "../audio";
 import type { Biome, Faction, FxEvent, Projectile, WeaponFx } from "../../sim/types";
 import { ModelBuilder } from "../three/builder";
-import { glowMat, modelMat } from "../three/materials";
+import { fowUniforms, glowMat, modelMat } from "../three/materials";
 import { GM_D, modelMesh, rubbleGeometry } from "../three/models";
 import { TEX, type EmitCfg } from "../three/particles";
 import { AIR_H, type P3, type View } from "../three/view";
@@ -19,6 +19,8 @@ interface Flier {
   t: number;
   dur: number;
   trail: boolean;
+  /** Distance flown since the last trail puff (tiles). */
+  acc: number;
   onHit?: () => void;
 }
 
@@ -26,26 +28,56 @@ const LASER_TINT: Record<Faction, number> = { blue: 0x7fd4ff, red: 0xff6a4a };
 const DUST_TINT: Record<Biome, number> = {
   temperate: 0x8a7453, desert: 0xd8b77a, arctic: 0xf2f6ff, volcanic: 0x5d5752
 };
+/** Smoke leans gently downwind: away from the sun, to the south-east. */
+const WIND: [number, number] = [0.16, 0.08];
+/** A missile or shell leaves a puff of trail every this many tiles. */
+const TRAIL_STEP = 0.09;
 
+/** Thick, sun-lit battle smoke: dark at the source, thinning to grey as it climbs. */
 const SMOKE: EmitCfg = {
-  tex: TEX.smoke, life: [900, 1800], speed: [0.06, 0.3], up: [0.3, 0.75], size: [0.45, 0.6], grow: [2.4, 3.2],
-  alpha: [0.55, 0], tints: [0x3a3a3a, 0x555555, 0x2a2826], drag: 0.6, spin: 1.2
+  tex: TEX.puff, tex2: TEX.puff2, life: [1000, 1800], speed: [0.06, 0.3], up: [0.35, 0.75], size: [0.42, 0.56], grow: [2.2, 3],
+  alpha: [0.72, 0], tints: [0x47433f, 0x3a3734, 0x524d47], end: 0x8f8a83, drag: 0.6, spin: 0.5, rot: 0.4, wind: WIND, fadeIn: 0.1, easeOut: true
 };
+/** Grey smoke off a damaged building's roof. */
+const DAMAGE_SMOKE: EmitCfg = {
+  ...SMOKE, life: [1500, 2400], up: [0.5, 0.85], size: [0.38, 0.5], grow: [2.6, 3.4], alpha: [0.62, 0],
+  tints: [0x6e6962, 0x7a756d], end: 0xa8a39b, wind: [0.4, 0.2]
+};
+/** Black smoke billowing off a burning one. Both lean well downwind, so the plume shows against the ground, not just the dark roof. */
+const BURN_SMOKE: EmitCfg = {
+  ...SMOKE, life: [1800, 2800], up: [0.6, 1.0], size: [0.5, 0.65], grow: [2.8, 3.6], alpha: [0.82, 0],
+  tints: [0x3a3633, 0x45403b, 0x4f4a44], end: 0x8a857e, wind: [0.4, 0.2]
+};
+/** Pale gun smoke at a muzzle. */
+const GUNSMOKE: EmitCfg = {
+  tex: TEX.puff, tex2: TEX.puff2, life: [450, 800], speed: [0.05, 0.2], up: [0.15, 0.35], size: [0.16, 0.22], grow: [2, 2.8],
+  alpha: [0.5, 0], tints: [0xb8b2a8, 0xa39d94], end: 0xd6d1c8, drag: 0.5, spin: 0.4, rot: 0.4, wind: WIND, fadeIn: 0.15, easeOut: true
+};
+/** Flames licking a burning building: hot yellow cooling to red as they rise and shrink. */
 const FIRE: EmitCfg = {
-  tex: TEX.glow, additive: true, life: [250, 600], speed: [0.15, 0.9], up: [0.3, 1.1], size: [0.55, 0.8], grow: [0.15, 0.3],
-  alpha: [0.9, 0], tints: [0xffc257, 0xff7a1e, 0xffe39a], drag: 0.5
+  tex: TEX.fire, additive: true, life: [320, 620], speed: [0.05, 0.3], up: [0.6, 1.2], size: [0.55, 0.75], grow: [0.45, 0.7],
+  alpha: [0.85, 0], tints: [0xffc257, 0xff9a2e, 0xffd98a], end: 0xc23a10, drag: 0.5, spin: 2.5
 };
 const SPARKS: EmitCfg = {
   tex: TEX.spark, additive: true, life: [150, 450], speed: [1, 4], up: [0.5, 2.6], size: [0.18, 0.26], grow: [0.2, 0.3],
-  alpha: [1, 0], tints: [0xffffff], gravity: -6
+  alpha: [1, 0], tints: [0xffffff, 0xfff0c0], end: 0xff8a2a, gravity: -6
+};
+/** Glowing bits tossed out of a big blast that drift down. */
+const EMBERS: EmitCfg = {
+  tex: TEX.glow, additive: true, life: [600, 1100], speed: [0.5, 1.7], up: [1.4, 3], size: [0.1, 0.15], grow: [0.4, 0.6],
+  alpha: [1, 0], tints: [0xffd27a, 0xffb347], end: 0xff3a0a, gravity: -2.6, drag: 0.55
 };
 const DEBRIS: EmitCfg = {
-  tex: TEX.debris, life: [550, 900], speed: [0.8, 2.6], up: [2, 3.6], size: [0.1, 0.18], grow: [0.7, 0.9],
-  alpha: [1, 0.3], tints: [0x2b2b2b, 0x3a342e], gravity: -9.5, spin: 14
+  tex: TEX.chunk, tex2: TEX.debris, life: [600, 950], speed: [0.8, 2.6], up: [2, 3.6], size: [0.12, 0.2], grow: [0.8, 1],
+  alpha: [1, 0.5], tints: [0x5d6168, 0x4c4741, 0x6e655a, 0x3c3f44], gravity: -9.5, spin: 14
 };
 const TRAIL: EmitCfg = {
-  tex: TEX.smoke, life: [300, 550], speed: [0, 0.08], up: [0.05, 0.15], size: [0.16, 0.2], grow: [2.2, 2.8],
-  alpha: [0.45, 0], tints: [0xcfcfcf]
+  tex: TEX.smoke, life: [380, 700], speed: [0, 0.06], up: [0.04, 0.14], size: [0.13, 0.17], grow: [2.4, 3.2],
+  alpha: [0.5, 0], tints: [0xdedad3], end: 0xb4b0aa, wind: WIND, fadeIn: 0.08, easeOut: true
+};
+/** The rocket motor's flame at the tail (a fresh one every frame reads as a steady burn). */
+const EXHAUST: EmitCfg = {
+  tex: TEX.fire, additive: true, life: [50, 90], size: [0.13, 0.17], grow: [0.5, 0.7], alpha: [0.9, 0], tints: [0xffd27a, 0xffb347], end: 0xff6a1e
 };
 const HEAL: EmitCfg = {
   tex: TEX.spark, additive: true, life: [300, 600], speed: [0.1, 0.4], up: [0.4, 0.9], size: [0.22, 0.3], grow: [0, 0.1],
@@ -58,6 +90,21 @@ let missileGeo: THREE.BufferGeometry | null = null;
 let shellGeo: THREE.BufferGeometry | null = null;
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
 const up = new THREE.Vector3(0, 1, 0);
+const tmpV = new THREE.Vector3();
+const tmpC = new THREE.Color();
+/** Tracers stay at least this many CSS px thick and long, so they still read zoomed out. */
+const TRACER_MIN_W = 1.7;
+const TRACER_MIN_L = 13;
+
+/** Is tile point (x, y) out of the player's sight? Read from the fog texture the terrain keeps (a texel per tile, plus a border). */
+function fogged(x: number, y: number): boolean {
+  const tex = fowUniforms.uFowMap.value as THREE.DataTexture | null;
+  if (!tex || fowUniforms.uFowOn.value === 0) return false;
+  const { data, width, height } = tex.image as { data: Uint8Array; width: number; height: number };
+  const tx = Math.min(width - 1, Math.max(0, Math.floor(x) + 1));
+  const ty = Math.min(height - 1, Math.max(0, Math.floor(y) + 1));
+  return data[ty * width + tx]! > 64;
+}
 
 function missile(): THREE.BufferGeometry {
   if (missileGeo) return missileGeo;
@@ -83,6 +130,11 @@ export class Fx {
   private shells = new Map<number, THREE.Mesh>();
   private rubbles: THREE.Object3D[] = [];
   private dustCfg: EmitCfg;
+  /** Dirt thrown out along the ground by a blast. */
+  private kickCfg: EmitCfg;
+  /** Blast smoke: paler ash over the dark volcanic ground, where black smoke would vanish. */
+  private smoke: EmitCfg;
+  private plumeTints: number[];
 
   constructor(
     private v: View,
@@ -90,10 +142,18 @@ export class Fx {
     /** Volume for a sound at tile point (x, y): 0 when far off-screen. */
     private earshot: (x: number, y: number) => number
   ) {
+    const dust = DUST_TINT[biome];
     this.dustCfg = {
-      tex: TEX.smoke, life: [500, 900], speed: [0.03, 0.15], up: [0.05, 0.22], size: [0.22, 0.3], grow: [2.4, 3],
-      alpha: [0.4, 0], tints: [DUST_TINT[biome]], drag: 0.7
+      tex: TEX.puff, tex2: TEX.puff2, life: [500, 900], speed: [0.03, 0.15], up: [0.05, 0.22], size: [0.2, 0.28], grow: [2.4, 3],
+      alpha: [0.42, 0], tints: [dust], drag: 0.7, rot: 0.5, fadeIn: 0.1, easeOut: true
     };
+    this.kickCfg = {
+      tex: TEX.puff, tex2: TEX.puff2, life: [550, 950], speed: [1.3, 2.4], up: [0.05, 0.3], size: [0.2, 0.3], grow: [2, 2.8],
+      alpha: [0.6, 0], tints: [dust], drag: 0.06, rot: 0.5, fadeIn: 0.05, easeOut: true
+    };
+    const ash = biome === "volcanic";
+    this.smoke = ash ? { ...SMOKE, tints: [0x6a645d, 0x5d5852, 0x77716a], end: 0xaaa49c } : SMOKE;
+    this.plumeTints = ash ? [0x57524c, 0x625c56, 0x6d6760] : [0x2c2a28, 0x353230, 0x403b37];
     tracerMat ??= glowMat(0xffe2a0, 1);
   }
 
@@ -110,21 +170,22 @@ export class Fx {
   /** A weapon fired from `from` toward `to` (tiles + height). `faction` colours lasers. */
   shot(ev: ShotEvent, from: P3, to: P3, faction: Faction): void {
     const fx: WeaponFx = ev.fx;
-    const flash = (scale: number, tint = 0xffd27a) => this.flash(from, scale, tint);
+    const flash = (scale: number, tint = 0xffd27a) => this.muzzle(from, scale, tint);
     switch (fx) {
       case "cannon":
         flash(0.5);
+        this.emit(GUNSMOKE, from, 1);
         this.tracer(from, to, 1, () => this.impact(to, 0.35, ev.air));
         this.sound("cannon", from.x, from.y, 0.8);
         break;
       case "heavy-cannon":
-        flash(1.0);
-        this.emit(SMOKE, from, 2);
+        flash(0.95);
+        this.emit({ ...GUNSMOKE, size: [0.22, 0.3] }, from, 2);
         this.tracer(from, to, 1.8, () => this.impact(to, 0.7, ev.air));
         this.sound("heavy", from.x, from.y);
         break;
       case "mg":
-        flash(0.32);
+        flash(0.34);
         this.tracer(from, to, 0.6);
         this.sound("mg", from.x, from.y, 0.6);
         break;
@@ -132,8 +193,8 @@ export class Fx {
         flash(0.42);
         this.tracer(from, to, 0.7, () => {
           const p = { x: to.x + (Math.random() - 0.5) * 0.45, y: to.y + (Math.random() - 0.5) * 0.45, h: to.h + (Math.random() - 0.3) * 0.4 };
-          this.flash(p, 0.6, 0xffb35a);
-          this.emit(SMOKE, p, 1);
+          this.flash(p, 0.55, 0xffb35a);
+          this.emit({ ...this.smoke, size: [0.22, 0.28], life: [600, 1000] }, p, 1);
           this.emit(SPARKS, p, 3);
         });
         this.sound("flak", from.x, from.y, 0.7);
@@ -147,10 +208,12 @@ export class Fx {
           const o = { x: from.x + (nx / len) * 0.11 * side, y: from.y + (ny / len) * 0.11 * side, h: from.h };
           this.missile(o, to, 240 + side * 30, false, () => this.impact(to, 0.45, ev.air));
         }
+        this.flash(from, 0.35, 0xffc070, 0.7);
         this.sound("rocket", from.x, from.y, 0.7);
         break;
       case "missile":
         this.missile(from, to, 420, true, () => this.impact(to, 0.5, ev.air));
+        this.flash(from, 0.3, 0xffc070, 0.7);
         this.sound("missile", from.x, from.y, 0.7);
         break;
       case "laser":
@@ -162,7 +225,7 @@ export class Fx {
         break;
       case "shell":
         flash(0.85);
-        this.emit(SMOKE, from, 3);
+        this.emit({ ...GUNSMOKE, size: [0.22, 0.3] }, from, 3);
         this.sound("shell", from.x, from.y);
         break;
       case "bomb":
@@ -173,20 +236,34 @@ export class Fx {
 
   /** A quick additive bloom. */
   flash(p: P3, scale: number, tint: number, alpha = 1): void {
-    const c = new THREE.Color(tint);
+    tmpC.setHex(tint);
     this.v.particles.spawn(
-      { x: p.x, y: p.h, z: p.y, life: 110, tex: TEX.glow, size0: scale * 1.1, size1: scale * 1.6, alpha0: alpha, alpha1: 0, r: c.r, g: c.g, b: c.b },
+      { x: p.x, y: p.h, z: p.y, life: 110, tex: TEX.glow, size0: scale * 1.1, size1: scale * 1.6, alpha0: alpha, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b },
       true
     );
+  }
+
+  /** A muzzle flash: a ragged burst over a small bloom, gone in a few frames. */
+  private muzzle(p: P3, scale: number, tint: number): void {
+    tmpC.setHex(tint);
+    const pt = this.v.particles;
+    pt.spawn(
+      { x: p.x, y: p.h, z: p.y, life: 75, tex: TEX.flare, size0: scale * 1.05, size1: scale * 1.35, alpha0: 1, alpha1: 0.2, r: tmpC.r, g: tmpC.g, b: tmpC.b, rot: Math.random() * Math.PI * 2 },
+      true
+    );
+    pt.spawn({ x: p.x, y: p.h, z: p.y, life: 110, tex: TEX.glow, size0: scale * 0.8, size1: scale * 1.2, alpha0: 0.7, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
   }
 
   private tracer(from: P3, to: P3, scale: number, onHit?: () => void): void {
     const d = Math.hypot(to.x - from.x, to.y - from.y, to.h - from.h);
     const m = new THREE.Mesh(tracerGeo, tracerMat!);
-    m.scale.set(scale, scale, 0.32 * scale);
+    // zoomed out, a true-to-scale tracer is thinner than a pixel: keep it legible
+    const wpp = this.v.rig.worldPerPx(from.x, from.y, from.h);
+    const w = Math.max(0.035 * scale, TRACER_MIN_W * wpp) / 0.035;
+    m.scale.set(w, w, Math.max(0.32 * scale, TRACER_MIN_L * wpp));
     m.renderOrder = 7;
     this.v.scene.add(m);
-    this.fliers.push({ obj: m, a: from, b: to, c: null, t: 0, dur: Math.min(180, Math.max(50, d * 22)), trail: false, onHit });
+    this.fliers.push({ obj: m, a: from, b: to, c: null, t: 0, dur: Math.min(180, Math.max(50, d * 22)), trail: false, acc: 0, onHit });
     this.place(m, from, to);
   }
 
@@ -203,7 +280,7 @@ export class Fx {
         h: Math.max(from.h, to.h) + 0.6
       };
     } else c = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2, h: Math.max(from.h, to.h) + 0.25 };
-    this.fliers.push({ obj: m, a: from, b: to, c, t: 0, dur, trail: true, onHit });
+    this.fliers.push({ obj: m, a: from, b: to, c, t: 0, dur, trail: true, acc: 0, onHit });
     this.place(m, from, to);
   }
 
@@ -212,7 +289,12 @@ export class Fx {
     o.lookAt(toward.x, toward.h, toward.y);
   }
 
-  /** A glowing beam between two points that fades over `dur` ms. */
+  /**
+   * A glowing beam between two points that fades over `dur` ms: a white-hot
+   * core in a sheath of the beam's colour. The sheath is alpha-blended, not
+   * additive, so a blue or red laser keeps its team colour over bright sand
+   * and snow instead of washing out to white.
+   */
   beam(from: P3, to: P3, tint: number, width: number, dur: number): void {
     const a = new THREE.Vector3(from.x, from.h, from.y);
     const b = new THREE.Vector3(to.x, to.h, to.y);
@@ -221,13 +303,14 @@ export class Fx {
     const dir = b.clone().sub(a).normalize();
     const q = new THREE.Quaternion().setFromUnitVectors(up, dir);
     const parts: { m: THREE.Mesh; mat: THREE.MeshBasicMaterial; o: number }[] = [];
-    for (const [r, o, col] of [[width * 0.008, 1, 0xffffff], [width * 0.022, 0.55, tint]] as const) {
+    for (const [r, o, col] of [[width * 0.017, 0.62, tint], [width * 0.007, 1, 0xffffff]] as const) {
       const mat = glowMat(col, o);
+      if (col !== 0xffffff) mat.blending = THREE.NormalBlending;
       const m = new THREE.Mesh(beamGeo, mat);
       m.position.copy(a).addScaledVector(dir, len / 2);
       m.quaternion.copy(q);
       m.scale.set(r, len, r);
-      m.renderOrder = 7;
+      m.renderOrder = col === 0xffffff ? 7.1 : 7; // core over its sheath
       this.v.scene.add(m);
       parts.push({ m, mat, o });
     }
@@ -255,7 +338,7 @@ export class Fx {
   }
 
   sparks(p: P3, n: number, tints?: number[]): void {
-    this.emit(tints ? { ...SPARKS, tints, gravity: -2 } : SPARKS, p, n);
+    this.emit(tints ? { ...SPARKS, tints, end: tints[0], gravity: -2 } : SPARKS, p, n);
   }
 
   // --------------------------------------------------------- explosions ---
@@ -263,29 +346,81 @@ export class Fx {
   private impact(p: P3, size: number, air: boolean): void {
     this.emit(SPARKS, p, Math.round(3 + size * 4));
     if (size > 0.4) this.boom(p, size * 0.6, air, false, 1, 0.7);
-    else this.flash(p, size * 1.3, 0xffc26a);
+    else {
+      this.flash(p, size * 1.2, 0xffc26a);
+      this.muzzle(p, size * 1.3, 0xffe2b0);
+    }
     if (!air && size > 0.3) this.dust(p.x, p.y);
   }
 
   /**
-   * A fireball (layered additive puffs), smoke and a scorch mark. `flashK`/
-   * `flashA` size the bloom: small deaths keep it modest so the fight
-   * underneath stays readable; building deaths keep the full flare.
+   * A layered blast: a brief white-hot flash, a fireball of ragged flame
+   * that cools from yellow to dark red as it swells, a column of sun-lit
+   * smoke that outlives it, and on the ground a shock ring, a skirt of
+   * kicked-up dust and a scorch mark. `flashK`/`flashA` size the bloom:
+   * small deaths keep it modest so the fight underneath stays readable;
+   * building deaths keep the full flare.
    */
   private boom(p: P3, size: number, air: boolean, decal: boolean, flashK = 1.5, flashA = 1): void {
     const pt = this.v.particles;
     // big blasts overlap many additive puffs: dim each so the fireball stays orange, not white
     const k = size > 1 ? 1 / Math.sqrt(size) : 1;
-    this.flash(p, size * flashK, 0xffa640, flashA * k);
-    const c = new THREE.Color(0xfff0c0);
-    pt.spawn({ x: p.x, y: p.h + 0.1, z: p.y, life: 200, tex: TEX.glow, size0: size * 0.7, size1: size * 1.25, alpha0: 0.9 * k, alpha1: 0, r: c.r, g: c.g, b: c.b }, true);
+    this.flash(p, size * flashK, 0xffc870, flashA * k);
+    tmpC.setHex(0xfff2d0);
+    pt.spawn({ x: p.x, y: p.h + 0.1, z: p.y, life: 130, tex: TEX.glow, size0: size * 0.75, size1: size * 1.2, alpha0: 0.9 * k * Math.min(1, flashA + 0.1), alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
+    const n = (a: number, b: number) => Math.round(a + size * b);
+    // smoke first, so the fire draws over it
     pt.emit(
-      { ...FIRE, size: [0.5 * size + 0.15, 0.75 * size + 0.2], grow: [1.3, 1.8], life: [300, 650], alpha: [0.75 * k, 0], tints: [0xff9a2e, 0xff6a1a, 0xffc257] },
-      p.x, p.y, p.h + 0.1, Math.round(size < 1 ? 2 + size * 4 : 4 + size * 4)
+      { ...this.smoke, size: [0.32 * size + 0.18, 0.45 * size + 0.22], life: [1100 + size * 300, 1900 + size * 500], up: [0.4, 0.75 + size * 0.2], speed: [0.1, 0.25 + size * 0.2] },
+      p.x, p.y, p.h + 0.15, n(1.5, 2.5)
     );
-    pt.emit(FIRE, p.x, p.y, p.h, Math.round(size < 1 ? 1 + size * 3 : 3 + size * 4));
-    pt.emit({ ...SMOKE, size: [0.35 * size + 0.2, 0.5 * size + 0.25] }, p.x, p.y, p.h + 0.15, Math.round(size < 1 ? 1 + size * 2 : 2 + size * 3));
+    // the fireball's body: opaque flame that cools into smoke (reads on snow and sand alike)
+    pt.emit(
+      {
+        tex: TEX.fire, life: [320 + size * 60, 560 + size * 120], speed: [0.25 * size, 0.8 * size + 0.2], up: [0.3, 0.9], drag: 0.12,
+        size: [0.38 * size + 0.12, 0.52 * size + 0.16], grow: [1.6, 2.2], easeOut: true, spin: 1.6,
+        alpha: [1, 0], tints: [0xffdc8a, 0xffc060, 0xffa848], end: 0xb8360c
+      },
+      p.x, p.y, p.h + 0.1, n(2, 3)
+    );
+    // its glow
+    pt.emit(
+      {
+        tex: TEX.fire, additive: true, life: [200, 380 + size * 60], speed: [0.15 * size, 0.5 * size], up: [0.2, 0.6], drag: 0.2,
+        size: [0.42 * size + 0.12, 0.6 * size + 0.15], grow: [1.3, 1.7], easeOut: true, spin: 1.6,
+        alpha: [0.65 * k, 0], tints: [0xff9a2e, 0xffb347], end: 0x9a2a08
+      },
+      p.x, p.y, p.h + 0.1, n(1, 2)
+    );
+    if (size >= 0.9) this.emit(EMBERS, p, n(-1, 3));
+    if (!air && size >= 0.5) {
+      this.shock(p.x, p.y, size, 0xffd9a0, 0.32);
+      if (size >= 0.6) this.kick(p.x, p.y, n(1, 3));
+    }
     if (decal && !air) this.decal(p.x, p.y, size);
+  }
+
+  /** A blast front racing out along the ground. */
+  shock(x: number, y: number, size: number, tint: number, alpha = 0.6, ms = 300): void {
+    tmpC.setHex(tint);
+    this.v.particles.spawn(
+      {
+        x, y: this.v.terrain.surfaceAt(x, y) + 0.06, z: y, life: ms, tex: TEX.shock, flat: true, easeOut: true,
+        size0: 0.4 * size + 0.2, size1: 1.7 * size + 0.5, alpha0: alpha, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b
+      },
+      true
+    );
+  }
+
+  /** A slow pillar of dark smoke over a big blast (buildings, orbital strikes). */
+  plume(x: number, y: number, h: number, size: number, n: number): void {
+    this.v.particles.emit(
+      {
+        ...SMOKE, life: [2400, 3600], up: [0.5, 1.0], speed: [0.05, 0.25], size: [0.5 * size, 0.7 * size], grow: [2.4, 3.2],
+        alpha: [0.75, 0], tints: this.plumeTints, end: 0x8a857e, spread: 0.35 * size, fadeIn: 0.2
+      },
+      x, y, h, n
+    );
   }
 
   explosion(ev: Extract<FxEvent, { type: "explosion" }>, at: P3): void {
@@ -293,31 +428,37 @@ export class Fx {
       const size = ev.size;
       for (let i = 0; i < 3 + size * 2; i++) {
         const o = { x: at.x + (Math.random() - 0.5) * size * 0.8, y: at.y + (Math.random() - 0.5) * size * 0.8, h: at.h + Math.random() * 0.5 };
-        this.v.tweens.after(i * 110, () => this.boom(o, 1.2 + Math.random() * 0.8, false, i === 0));
+        this.v.tweens.after(i * 110, () => this.boom(o, 1.2 + Math.random() * 0.8, false, i === 0, 1.2, 0.75));
       }
-      this.emit({ ...DEBRIS, speed: [1.2, 3.4], size: [0.12, 0.26] }, { ...at, h: at.h + 0.4 }, 16);
+      this.emit({ ...DEBRIS, speed: [1.2, 3.4], size: [0.14, 0.28] }, { ...at, h: at.h + 0.4 }, 16);
+      this.shock(at.x, at.y, size * 0.9, 0xffe0b0, 0.6, 420);
+      this.v.tweens.after(250, () => this.plume(at.x, at.y, at.h + 0.3, 0.8 + size * 0.25, 3 + Math.round(size * 2)));
       // camera shake is decided by render/juice-view.ts (on-screen deaths only)
       this.sound("bigExplosion", at.x, at.y);
     } else if (ev.kind === "unit") {
-      // small hulls pop smaller; Titans and Hornets keep their big fireball
-      this.boom(at, ev.size >= 1 ? 0.8 + ev.size : 0.5 + ev.size * 0.85, ev.air, true, 0.9, 0.85);
-      this.emit(DEBRIS, at, 7);
+      // small hulls pop smaller; Titans and Hornets keep their big fireball. A ground
+      // unit's wreck appears where it died: the blast erupts out of it, not hidden inside it
+      const c = ev.air ? at : { x: at.x, y: at.y, h: at.h + 0.22 };
+      this.boom(c, ev.size >= 1 ? 0.8 + ev.size : 0.5 + ev.size * 0.85, ev.air, true, 0.9, 0.85);
+      this.emit(DEBRIS, c, 7);
+      this.emit(SPARKS, c, 5);
       this.sound("explosion", at.x, at.y, 0.9);
       if (ev.air) {
         // the wreck falls to the ground and burns out there
-        this.v.tweens.after(300, () => this.boom({ x: at.x, y: at.y, h: this.v.terrain.surfaceAt(at.x, at.y) + 0.1 }, 0.6, false, true));
+        this.v.tweens.after(300, () => this.boom({ x: at.x, y: at.y, h: this.v.terrain.surfaceAt(at.x, at.y) + 0.3 }, 0.6, false, true));
       }
     } else {
       this.boom(at, 0.5 + ev.size * 0.7, false, true, 1.1, 0.8);
+      this.emit(DEBRIS, at, 3);
       this.sound("explosion", at.x, at.y, 0.7);
     }
   }
 
   private decal(x: number, y: number, size: number): void {
     const h = this.v.terrain.surfaceAt(x, y) + 0.03;
-    const c = new THREE.Color(0x14100c);
-    const s = 0.55 + size * 0.55;
-    this.v.particles.spawn({ x, y: h, z: y, life: 38000, tex: TEX.scorch, size0: s, size1: s * 1.05, alpha0: 0.8, alpha1: 0, r: c.r, g: c.g, b: c.b, flat: true, rot: Math.random() * 6.28 });
+    tmpC.setHex(0x14100c);
+    const s = 0.6 + size * 0.6;
+    this.v.particles.spawn({ x, y: h, z: y, life: 38000, tex: TEX.scorch, size0: s, size1: s * 1.05, alpha0: 0.6, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b, flat: true, rot: Math.random() * 6.28 });
   }
 
   /** Rubble left where a building stood (+ scorch). */
@@ -341,18 +482,42 @@ export class Fx {
     this.v.particles.emit(this.dustCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.05, n);
   }
 
+  /** Dirt thrown outward along the ground (a landing, a blast). */
+  kick(x: number, y: number, n: number): void {
+    this.v.particles.emit(this.kickCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.08, n);
+  }
+
+  /** Shards of metal or rock tossed up. */
+  debris(p: P3, n: number): void {
+    this.emit(DEBRIS, p, n);
+  }
+
+  /**
+   * Damage smoke off a building's roof; `burning` (badly hurt) adds flames and
+   * blacker smoke. Not under the fog: a remembered enemy building is drawn
+   * from memory, and a plume would give away how hurt it is now.
+   */
   buildingSmoke(p: P3, burning: boolean): void {
-    this.emit(SMOKE, p, 1);
-    if (burning) this.emit(FIRE, p, 1);
+    if (fogged(p.x, p.y)) return;
+    const pt = this.v.particles;
+    // (lifted clear of the roof, or the hull hides the puff's lower half until it climbs)
+    pt.emit(burning ? BURN_SMOKE : DAMAGE_SMOKE, p.x, p.y, p.h + 0.35, 1);
+    if (burning) {
+      pt.emit(FIRE, p.x, p.y, p.h + 0.18, 2);
+      // the fire lights the smoke around it
+      tmpC.setHex(0xff7a1e);
+      pt.spawn({ x: p.x, y: p.h + 0.35, z: p.y, life: 280, tex: TEX.glow, size0: 1.2, size1: 1.4, alpha0: 0.45, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
+      if (Math.random() < 0.35) this.emit(EMBERS, p, 1);
+    }
   }
 
   /** An expanding ring on the ground. */
   pulse(x: number, y: number, tint: number, scale = 1.2, h?: number): void {
-    const c = new THREE.Color(tint);
+    tmpC.setHex(tint);
     this.v.particles.spawn(
       {
         x, y: (h ?? this.v.terrain.surfaceAt(x, y)) + 0.06, z: y, life: 500, tex: TEX.ring, flat: h === undefined,
-        size0: 0.35 * scale, size1: 1.55 * scale, alpha0: 1, alpha1: 0, r: c.r, g: c.g, b: c.b
+        size0: 0.35 * scale, size1: 1.55 * scale, alpha0: 1, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b
       },
       true
     );
@@ -360,18 +525,19 @@ export class Fx {
 
   /** A command marker where the player tapped (move / attack). */
   marker(x: number, y: number, tint: number): void {
-    const c = new THREE.Color(tint);
+    tmpC.setHex(tint);
     this.v.particles.spawn({
       x, y: this.v.terrain.surfaceAt(x, y) + 0.06, z: y, life: 450, tex: TEX.select, flat: true,
-      size0: 1.0, size1: 0.25, alpha0: 0.95, alpha1: 0.1, r: c.r, g: c.g, b: c.b
+      size0: 1.0, size1: 0.25, alpha0: 0.95, alpha1: 0.1, r: tmpC.r, g: tmpC.g, b: tmpC.b
     });
   }
 
   // ------------------------------------------------------------ per frame ---
 
   update(dtMs: number): void {
-    const keep: Flier[] = [];
-    const pos = new THREE.Vector3();
+    let n = 0;
+    const pos = tmpV;
+    const pt = this.v.particles;
     for (const f of this.fliers) {
       f.t += dtMs;
       const k = Math.min(1, f.t / f.dur);
@@ -391,30 +557,45 @@ export class Fx {
         h = f.a.h + (f.b.h - f.a.h) * k;
       }
       pos.set(x, h, y);
-      if (pos.distanceToSquared(f.obj.position) > 1e-8) f.obj.lookAt(pos.x + (pos.x - f.obj.position.x), pos.y + (pos.y - f.obj.position.y), pos.z + (pos.z - f.obj.position.z));
+      const moved = pos.distanceTo(f.obj.position);
+      if (moved > 1e-4) f.obj.lookAt(pos.x + (pos.x - f.obj.position.x), pos.y + (pos.y - f.obj.position.y), pos.z + (pos.z - f.obj.position.z));
+      if (f.trail && dtMs > 0) {
+        // a puff per stretch flown, laid back along the path, so the trail is as dense at 30 fps as at 60
+        const ox = f.obj.position.x;
+        const oy = f.obj.position.y;
+        const oz = f.obj.position.z;
+        f.acc += moved;
+        while (f.acc >= TRAIL_STEP) {
+          f.acc -= TRAIL_STEP;
+          const s = moved > 0 ? 1 - f.acc / moved : 1;
+          pt.emit(TRAIL, ox + (pos.x - ox) * s, oz + (pos.z - oz) * s, oy + (pos.y - oy) * s, 1);
+        }
+        pt.emit(EXHAUST, x, y, h, 1);
+      }
       f.obj.position.copy(pos);
-      if (f.trail && Math.random() < 0.8) this.v.particles.emit(TRAIL, x, y, h, 1);
       if (k >= 1) {
         this.v.scene.remove(f.obj);
         f.onHit?.();
-      } else keep.push(f);
+      } else this.fliers[n++] = f;
     }
-    this.fliers = keep;
+    this.fliers.length = n;
   }
 
   /** Draw the sim's slow projectiles (shells arc, bombs fall). */
   projectiles(list: Projectile[], alpha: number, prev: Map<number, { x: number; y: number }>): void {
-    const seen = new Set<number>();
     const t = this.v.terrain;
+    for (const m of this.shells.values()) m.userData.seen = false;
     for (const p of list) {
-      seen.add(p.id);
       let m = this.shells.get(p.id);
       if (!m) {
         m = modelMesh(shell());
+        m.userData.acc = 0;
+        m.userData.fresh = true;
         this.v.scene.add(m);
         this.shells.set(p.id, m);
       }
-      const pp = prev.get(p.id) ?? { x: p.x, y: p.y };
+      m.userData.seen = true;
+      const pp = prev.get(p.id) ?? p;
       const x = pp.x + (p.x - pp.x) * alpha;
       const y = pp.y + (p.y - pp.y) * alpha;
       const total = Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1;
@@ -424,13 +605,24 @@ export class Fx {
       let h: number;
       if (p.fromAir) h = g0 + AIR_H * (1 - k) * (1 - k * 0.2) + (g1 - g0) * k;
       else h = g0 + 0.55 * (1 - k) + (g1 - g0) * k + 4 * k * (1 - k) * Math.min(2.2, total * 0.32);
-      const prevPos = m.position.clone();
+      tmpV.copy(m.position);
       m.position.set(x, h, y);
-      if (prevPos.distanceToSquared(m.position) > 1e-8) m.lookAt(prevPos.multiplyScalar(-1).add(m.position.clone().multiplyScalar(2)));
-      if (!p.fromAir && Math.random() < 0.5) this.v.particles.emit(TRAIL, x, y, h, 1);
+      const fresh = m.userData.fresh as boolean;
+      m.userData.fresh = false;
+      const moved = fresh ? 0 : tmpV.distanceTo(m.position);
+      if (moved > 1e-4) m.lookAt(2 * m.position.x - tmpV.x, 2 * m.position.y - tmpV.y, 2 * m.position.z - tmpV.z);
+      if (!p.fromAir && moved > 0) {
+        let acc = (m.userData.acc as number) + moved;
+        while (acc >= TRAIL_STEP * 1.4) {
+          acc -= TRAIL_STEP * 1.4;
+          const s = 1 - acc / moved;
+          this.v.particles.emit(TRAIL, tmpV.x + (x - tmpV.x) * s, tmpV.z + (y - tmpV.z) * s, tmpV.y + (h - tmpV.y) * s, 1);
+        }
+        m.userData.acc = acc;
+      }
     }
     for (const [id, m] of this.shells)
-      if (!seen.has(id)) {
+      if (!m.userData.seen) {
         this.v.scene.remove(m);
         this.shells.delete(id);
       }

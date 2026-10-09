@@ -79,13 +79,24 @@ const HAUL_WINDOW = 9000;
 const HAUL_AT = 400;
 const HINT_KEY = "battledrones.hint.salvage";
 
+/** Oily black smoke off a burning hull, greying as it climbs and leaning downwind. */
 const SMOKE: EmitCfg = {
-  tex: TEX.smoke, life: [1100, 1900], speed: [0.05, 0.15], up: [0.25, 0.45], size: [0.18, 0.24], grow: [3, 4],
-  alpha: [0.38, 0], tints: [0x4d4944, 0x5f5a54, 0x3d3a37], spin: 1
+  tex: TEX.puff, tex2: TEX.puff2, life: [1300, 2100], speed: [0.04, 0.14], up: [0.3, 0.55], size: [0.2, 0.27], grow: [3, 4],
+  alpha: [0.62, 0], tints: [0x3a3633, 0x45403b, 0x2f2c2a], end: 0x8a857e, spin: 0.4, rot: 0.4, wind: [0.16, 0.08], fadeIn: 0.12, easeOut: true
+};
+/** Low flames licking the hull while it's too hot to touch. */
+const FLAMES: EmitCfg = {
+  tex: TEX.fire, additive: true, life: [220, 480], speed: [0.03, 0.15], up: [0.25, 0.6], size: [0.24, 0.32], grow: [0.4, 0.65],
+  alpha: [0.9, 0], tints: [0xffc257, 0xff9a2e, 0xffe39a], end: 0xc2380e, spin: 2.5
 };
 const EMBERS: EmitCfg = {
-  tex: TEX.glow, additive: true, life: [200, 460], speed: [0.03, 0.15], up: [0.2, 0.5], size: [0.2, 0.28], grow: [0.1, 0.2],
-  alpha: [0.9, 0], tints: [0xffc257, 0xff7a1e, 0xffe39a]
+  tex: TEX.glow, additive: true, life: [500, 900], speed: [0.1, 0.4], up: [0.6, 1.3], size: [0.06, 0.09], grow: [0.4, 0.6],
+  alpha: [1, 0], tints: [0xffd27a], end: 0xff4a10, gravity: -0.8, drag: 0.6
+};
+/** A splash where an aircraft goes into the water (or a gout of fire from lava). */
+const SPLASH: EmitCfg = {
+  tex: TEX.puff, tex2: TEX.puff2, life: [450, 800], speed: [0.4, 1.1], up: [1.2, 2.4], size: [0.16, 0.24], grow: [1.8, 2.4],
+  alpha: [0.75, 0], tints: [0xe8f4ff, 0xcfe6f5], end: 0xffffff, gravity: -4, drag: 0.5, rot: 0.5, easeOut: true
 };
 
 const auraGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
@@ -325,6 +336,15 @@ export class WreckRenderer {
       },
       done: () => {
         this.group.remove(m.root);
+        const g = this.v.terrain.surfaceAt(p.gx, p.gy);
+        // (deep water and lava sit well below the ground; rock and roofs just take the dust)
+        if (this.v.terrain.heightAt(p.gx, p.gy) < -0.3) {
+          if (this.world.biome === "volcanic") {
+            // swallowed by the lava: a gout of fire
+            this.fx.flash({ x: p.gx, y: p.gy, h: g + 0.2 }, 1.1, 0xff9a2e, 0.8);
+            this.fx.sparks({ x: p.gx, y: p.gy, h: g + 0.15 }, 8, [0xffc257, 0xff7a1e]);
+          } else this.v.particles.emit(SPLASH, p.gx, p.gy, g + 0.05, 7);
+        }
         this.fx.dust(p.gx, p.gy, 3);
       }
     });
@@ -359,7 +379,7 @@ export class WreckRenderer {
 
     // smoulder: fire and thick smoke while hot, a thin wisp for a few seconds after
     const age = (w.tick - (v.coolTick - Math.round(SALVAGE.hot * TICK_RATE))) / TICK_RATE;
-    const h = v.ground + 0.25;
+    const h = v.ground + 0.36; // (above the hull, or it hides the base of each puff)
     if (age < 7) {
       v.smokeT -= dtMs;
       if (v.smokeT <= 0) {
@@ -367,7 +387,10 @@ export class WreckRenderer {
         const sx = v.x + (rnd(v.id, w.tick + 1) - 0.5) * 0.28;
         const sy = v.y + (rnd(v.id, w.tick + 2) - 0.5) * 0.22;
         this.v.particles.emit(SMOKE, sx, sy, h, 1);
-        if (hot) this.v.particles.emit(EMBERS, sx, sy, h - 0.05, 1 + Math.round(rnd(v.id, w.tick + 3) * 2));
+        if (hot) {
+          this.v.particles.emit(FLAMES, sx, sy, h - 0.08, 1 + Math.round(rnd(v.id, w.tick + 3)));
+          if (rnd(v.id, w.tick + 4) < 0.35) this.v.particles.emit(EMBERS, sx, sy, h, 1);
+        }
       }
     }
     // the glint that says "loot"

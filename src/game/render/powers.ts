@@ -57,19 +57,25 @@ const POD_FROM = { dx: 3.2, dy: -2, h: 12 };
 
 const SPARKS: EmitCfg = {
   tex: TEX.spark, additive: true, life: [120, 380], speed: [0.5, 2.4], up: [0.2, 1.5], size: [0.2, 0.28], grow: [0.1, 0.2],
-  alpha: [1, 0], tints: [0xbfeaff, 0x7fd4ff, 0xffffff], gravity: -3
+  alpha: [1, 0], tints: [0xbfeaff, 0x7fd4ff, 0xffffff], end: 0x4aa8ff, gravity: -3
 };
+/** Re-entry flame streaming off a falling pod or shell: hot yellow cooling to red. */
 const TRAIL: EmitCfg = {
-  tex: TEX.glow, additive: true, life: [180, 420], speed: [0, 0.3], up: [0, 0.2], size: [0.4, 0.6], grow: [0.1, 0.2],
-  alpha: [0.85, 0], tints: [0xffc257, 0xff7a1e, 0xffe39a]
+  tex: TEX.fire, additive: true, life: [220, 420], speed: [0, 0.3], up: [0, 0.2], size: [0.42, 0.6], grow: [0.55, 0.85],
+  alpha: [0.85, 0], tints: [0xffc257, 0xff9a2e, 0xffe39a], end: 0xc2380e, spin: 3
 };
 const SMOKE: EmitCfg = {
-  tex: TEX.smoke, life: [500, 900], speed: [0, 0.1], up: [0.05, 0.2], size: [0.25, 0.35], grow: [2, 2.6],
-  alpha: [0.35, 0], tints: [0xb0aaa2, 0x8a847c]
+  tex: TEX.puff, tex2: TEX.puff2, life: [700, 1200], speed: [0, 0.1], up: [0.05, 0.2], size: [0.25, 0.35], grow: [2, 2.6],
+  alpha: [0.45, 0], tints: [0x8a847c, 0x77716a], end: 0xb8b2aa, rot: 0.4, fadeIn: 0.15, easeOut: true
 };
+/** The Sky Hammer column: a white-hot core in a soft cyan sheath (radius, opacity, colour). */
+const LANCE_LAYERS: [number, number, number][] = [[0.3, 1, 0xffffff], [0.72, 0.45, 0xcdeeff], [1.5, 0.16, 0x8fd2ff]];
+/** Barrage shells and falling pods leave a puff of flame every this many tiles. */
+const STREAK_STEP = 0.3;
 
-const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true).translate(0, 0.5, 0);
+const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, 0.5, 0);
 const streakGeo = new THREE.BoxGeometry(0.06, 0.06, 1);
+const tmpC = new THREE.Color();
 
 export class PowerRenderer {
   private pods = new Map<number, ModelInstance>();
@@ -77,7 +83,9 @@ export class PowerRenderer {
   private lances = new Map<number, { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial }>();
   private incoming = new Set<string>();
   /** Barrage shells in the air, positioned from sim time (pauses and speeds with the game). */
-  private streaks: { mesh: THREE.Mesh; x: number; y: number; h: number; tick: number; lead: number }[] = [];
+  private streaks: { mesh: THREE.Mesh; x: number; y: number; h: number; tick: number; lead: number; acc: number }[] = [];
+  /** Distance each falling pod has dropped since its last flame puff (tiles). */
+  private podTrail = new Map<number, number>();
   private streakMat = glowMat(0xffe0a0, 1);
   private group = new THREE.Group();
   private time = 0;
@@ -196,21 +204,22 @@ export class PowerRenderer {
     if (!this.onScreen(x, y, 0)) this.opts.alert(`Enemy ${name} inbound!`, ev.x, ev.y);
   }
 
-  /** An expanding ring of light on the ground. */
-  private ring(x: number, y: number, tint: number, r0: number, r1: number, ms: number, delay = 0): void {
-    const c = new THREE.Color(tint);
-    const go = () =>
+  /** An expanding ring of light on the ground (`additive` false: a painted ring that keeps a saturated colour on bright ground). */
+  private ring(x: number, y: number, tint: number, r0: number, r1: number, ms: number, delay = 0, additive = true): void {
+    const go = () => {
+      tmpC.setHex(tint);
       this.v.particles.spawn(
-        { x, y: this.ground(x, y) + 0.1, z: y, life: ms, tex: TEX.ring, flat: true, size0: r0 * 2.3, size1: r1 * 2.3, alpha0: 1, alpha1: 0, r: c.r, g: c.g, b: c.b },
-        true
+        { x, y: this.ground(x, y) + 0.1, z: y, life: ms, tex: TEX.ring, flat: true, easeOut: true, size0: r0 * 2.3, size1: r1 * 2.3, alpha0: 1, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b },
+        additive
       );
+    };
     if (delay > 0) this.v.tweens.after(delay, go);
     else go();
   }
 
-  private glow(x: number, y: number, h: number, tint: number, s0: number, s1: number, ms: number): void {
-    const c = new THREE.Color(tint);
-    this.v.particles.spawn({ x, y: h, z: y, life: ms, tex: TEX.glow, size0: s0, size1: s1, alpha0: 1, alpha1: 0, r: c.r, g: c.g, b: c.b }, true);
+  private glow(x: number, y: number, h: number, tint: number, s0: number, s1: number, ms: number, alpha = 1, flat = false): void {
+    tmpC.setHex(tint);
+    this.v.particles.spawn({ x, y: h, z: y, life: ms, tex: TEX.glow, size0: s0, size1: s1, alpha0: alpha, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b, flat }, true);
   }
 
   private landed_(ev: Extract<FxEvent, { type: "calldownImpact" }>): void {
@@ -220,16 +229,20 @@ export class PowerRenderer {
       case "barrage": {
         this.fx.explosion({ type: "explosion", x, y, size: 1.5, air: false, kind: "impact" }, { x, y, h: g + 0.1 });
         this.fx.pulse(x, y, 0xffb35a, 2.2);
-        for (let i = 0; i < 3; i++) this.fx.dust(x + (Math.random() - 0.5) * 0.8, y + (Math.random() - 0.5) * 0.8);
+        this.fx.sparks({ x, y, h: g + 0.2 }, 6);
         this.sound("shell", x, y, 0.9);
         this.shake(x, y, 150, 0.004);
         break;
       }
       case "emp": {
         const R = POWERS.emp.radius;
-        this.ring(x, y, EMP_BLUE, 0.2, R, 420);
-        this.ring(x, y, EMP_BLUE, 0.2, R * 0.75, 420, 90);
-        this.glow(x, y, g + 0.4, EMP_BLUE, 3, 5, 380);
+        // electric blue whatever the ground: a painted ring under a ring of light
+        this.ring(x, y, 0x2f8fff, 0.2, R, 420, 0, false);
+        this.ring(x, y, EMP_BLUE, 0.2, R * 0.97, 420);
+        this.ring(x, y, 0x2f8fff, 0.2, R * 0.75, 420, 90, false);
+        this.fx.shock(x, y, R * 0.8, 0x7fd4ff, 0.7, 380);
+        this.glow(x, y, g + 0.4, EMP_BLUE, 3, 5, 380, 0.85);
+        this.glow(x, y, g + 0.08, 0x4aa8ff, R * 1.6, R * 2.2, 520, 0.45, true);
         this.v.particles.emit({ ...SPARKS, speed: [1, 4], spread: R * 0.6 }, x, y, g + 0.4, 24);
         this.sound("emp", x, y, 1, 0.15);
         this.shake(x, y, 120, 0.003);
@@ -239,6 +252,7 @@ export class PowerRenderer {
         const pod = this.pods.get(ev.id);
         if (pod) this.group.remove(pod.root);
         this.pods.delete(ev.id);
+        this.podTrail.delete(ev.id);
         const open = instance(podDef(ev.faction, true));
         open.root.position.set(x, g, y);
         open.root.rotation.y = Math.random() * Math.PI * 2;
@@ -253,12 +267,17 @@ export class PowerRenderer {
           const old = this.landed.shift();
           if (old) this.group.remove(old.root);
         }
-        this.glow(x, y, g + 0.4, 0xffb35a, 4, 6, 450);
+        // a hard landing: a flash, a ring of thrown dirt, a dust skirt and a little smoke off the hot shell
+        this.glow(x, y, g + 0.4, 0xffb35a, 3, 4.5, 380, 0.8);
         this.fx.pulse(x, y, 0xe8d8b0, 2);
+        this.fx.shock(x, y, 1, 0xffe2b0, 0.5);
+        this.fx.kick(x, y, 9);
+        this.fx.debris({ x, y, h: g + 0.2 }, 8);
         for (let i = 0; i < 10; i++) {
           const a = (i / 10) * Math.PI * 2;
           this.fx.dust(x + Math.cos(a) * 0.53, y + Math.sin(a) * 0.4);
         }
+        this.v.particles.emit(SMOKE, x, y, g + 0.6, 3);
         for (const id of ev.unitIds) {
           const u = this.world.units.get(id);
           if (u && this.friendly(u.faction)) this.fx.pulse(u.x, u.y, 0x7ec1ff, 0.8);
@@ -269,27 +288,38 @@ export class PowerRenderer {
       }
       case "hammer": {
         const R = POWERS.hammer.radius;
-        // the strike itself: a blinding column from orbit that narrows away
-        const mat = glowMat(0xdff6ff, 1);
-        const beam = new THREE.Mesh(beamGeo, mat);
-        beam.position.set(x, g, y);
-        beam.scale.set(1.2, 40, 1.2);
-        beam.renderOrder = 8;
-        this.group.add(beam);
+        // the strike itself: a blinding column from orbit (a white-hot core in a soft cyan
+        // sheath) that narrows away, over molten ground
+        const layers = LANCE_LAYERS.map(([r, o, col]) => {
+          const mat = glowMat(col, o);
+          const mesh = new THREE.Mesh(beamGeo, mat);
+          mesh.position.set(x, g - 0.2, y);
+          mesh.scale.set(r, 40, r);
+          mesh.renderOrder = 8;
+          this.group.add(mesh);
+          return { mesh, mat, r, o };
+        });
         this.v.tweens.add({
           dur: 650, ease: Ease.quadIn,
           update: (k) => {
-            mat.opacity = 1 - k;
-            beam.scale.x = beam.scale.z = 1.2 * (1 - k * 0.8);
+            for (const l of layers) {
+              l.mat.opacity = l.o * (1 - k);
+              l.mesh.scale.x = l.mesh.scale.z = l.r * (1 - k * 0.8);
+            }
           },
           done: () => {
-            this.group.remove(beam);
-            mat.dispose();
+            for (const l of layers) {
+              this.group.remove(l.mesh);
+              l.mat.dispose();
+            }
           }
         });
-        this.glow(x, y, g + 0.6, 0xffffff, 7, 11, 520);
+        this.glow(x, y, g + 0.6, 0xffffff, 6, 9, 480, 0.9);
+        this.glow(x, y, g + 0.06, 0xffc070, R * 1.3, R * 1.8, 1100, 0.7, true);
+        this.fx.shock(x, y, R * 0.9, 0xeaf8ff, 0.9, 520);
         for (const [delay, k, tint] of [[0, 1.15, 0xffffff], [120, 0.85, 0xffd27a], [260, 1.4, 0xffa040]] as const)
           this.ring(x, y, tint, 0.3, R * k, 600, delay);
+        this.v.tweens.after(350, () => this.fx.plume(x, y, g + 0.4, 1.7, 8));
         for (let i = 0; i < 6; i++) {
           const a = (i / 6) * Math.PI * 2 + Math.random();
           const d = i === 0 ? 0 : R * (0.35 + Math.random() * 0.4);
@@ -402,13 +432,26 @@ export class PowerRenderer {
     const px = x + POD_FROM.dx * (1 - ease);
     const py = y + POD_FROM.dy * (1 - ease);
     const ph = g + POD_FROM.h * (1 - ease);
+    const was = pod.root.visible ? pod.root.position : null;
+    const moved = was ? Math.hypot(px - was.x, ph - was.y, py - was.z) : 0;
     pod.root.visible = true;
     pod.root.position.set(px, ph, py);
     // nose down along its line of flight
     pod.root.lookAt(px - POD_FROM.dx, ph - POD_FROM.h, py - POD_FROM.dy);
     pod.root.rotateX(-Math.PI / 2);
-    this.v.particles.emit(TRAIL, px + POD_FROM.dx * 0.05, py + POD_FROM.dy * 0.05, ph + 0.8, 2);
-    if (Math.random() < 0.5) this.v.particles.emit(SMOKE, px, py, ph + 0.9, 1);
+    // re-entry flame and smoke streaming off its tail, a puff per stretch fallen
+    let acc = (this.podTrail.get(c.id) ?? 0) + moved;
+    const n = Math.floor(acc / STREAK_STEP);
+    acc -= n * STREAK_STEP;
+    this.podTrail.set(c.id, acc);
+    const len = Math.hypot(POD_FROM.dx, POD_FROM.dy, POD_FROM.h);
+    for (let i = 0; i < n; i++) {
+      const d = (moved * (i + 1)) / (n + 1) / len;
+      const tx = px + POD_FROM.dx * (0.05 + d);
+      const ty = py + POD_FROM.dy * (0.05 + d);
+      this.v.particles.emit(TRAIL, tx, ty, ph + 0.8 + POD_FROM.h * d, 1);
+      if (i % 2 === 0) this.v.particles.emit(SMOKE, tx, ty, ph + 0.9 + POD_FROM.h * d, 1);
+    }
   }
 
   /** An incoming barrage shell: a bright streak that drops onto (x, y) at sim tick `tick`. */
@@ -417,7 +460,7 @@ export class PowerRenderer {
     mesh.scale.set(1, 1, 0.9);
     mesh.renderOrder = 8;
     this.group.add(mesh);
-    this.streaks.push({ mesh, x, y, h: this.ground(x, y), tick, lead: SHELL_LEAD });
+    this.streaks.push({ mesh, x, y, h: this.ground(x, y), tick, lead: SHELL_LEAD, acc: 0 });
   }
 
   private flyStreaks(now: number): void {
@@ -433,9 +476,21 @@ export class PowerRenderer {
       const px = s.x + STREAK.dx * e;
       const py = s.y + STREAK.dy * e;
       const ph = s.h + STREAK.h * e;
+      const fresh = s.acc === 0 && s.mesh.position.lengthSq() === 0;
+      const moved = fresh ? 0 : Math.hypot(px - s.mesh.position.x, ph - s.mesh.position.y, py - s.mesh.position.z);
       s.mesh.position.set(px, ph, py);
       s.mesh.lookAt(s.x, s.h, s.y);
-      if (Math.random() < 0.6) this.v.particles.emit(TRAIL, px, py, ph, 1);
+      // a hot head, and a flame trail laid along the path flown since last frame
+      tmpC.setHex(0xfff0c8);
+      this.v.particles.spawn({ x: px, y: ph, z: py, life: 45, tex: TEX.glow, size0: 0.55, size1: 0.5, alpha0: 0.9, alpha1: 0.6, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
+      s.acc += moved;
+      const n = Math.floor(s.acc / STREAK_STEP);
+      s.acc -= n * STREAK_STEP;
+      const len = Math.hypot(STREAK.dx, STREAK.dy, STREAK.h);
+      for (let i = 0; i < n; i++) {
+        const d = moved * ((i + 1) / (n + 1));
+        this.v.particles.emit(TRAIL, px + (STREAK.dx / len) * d, py + (STREAK.dy / len) * d, ph + (STREAK.h / len) * d, 1);
+      }
       return true;
     });
     if (this.incoming.size > 200) this.incoming.clear();
