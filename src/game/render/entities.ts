@@ -78,6 +78,9 @@ export class EntityRenderer {
   private sold = new Set<number>();
   private time = 0;
   private flashes = new FlashClock();
+  /** Ids synced this frame, and the chevron record ranked() hands out: reused, no per-frame garbage. */
+  private seen = new Set<number>();
+  private rankRec = { x: 0, y: 0, h: 0, rank: 0, pop: 1 };
   readonly group = new THREE.Group();
 
   constructor(
@@ -157,10 +160,18 @@ export class EntityRenderer {
     v.warmUntil = now + JUICE.buildingFlashMs;
   }
 
-  /** Units with ranks, for the chevrons the overlay draws. */
+  /** Units with ranks, for the chevrons the overlay draws (one record, refilled per unit: read it before the next). */
   *ranked(): Generator<{ x: number; y: number; h: number; rank: number; pop: number }> {
+    const r = this.rankRec;
     for (const v of this.views.values())
-      if (v.kind === "unit" && v.visible && v.rank > 0) yield { x: v.gx, y: v.gy, h: v.bh + v.top, rank: v.rank, pop: v.chevronPop };
+      if (v.kind === "unit" && v.visible && v.rank > 0) {
+        r.x = v.gx;
+        r.y = v.gy;
+        r.h = v.bh + v.top;
+        r.rank = v.rank;
+        r.pop = v.chevronPop;
+        yield r;
+      }
   }
 
   // ------------------------------------------------------------- sync ---
@@ -169,7 +180,8 @@ export class EntityRenderer {
     const w = this.world;
     this.time += dtMs;
     eliteUniform.value = 0.1 + 0.06 * Math.sin(this.time / 260);
-    const seen = new Set<number>();
+    const seen = this.seen;
+    seen.clear();
     const turnK = 1 - Math.pow(0.0005, dtMs / 1000); // fast but smooth turning
 
     for (const u of w.units.values()) {

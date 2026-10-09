@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
 import { CRATE_NAMES } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Uplink, World } from "../../sim/types";
@@ -38,6 +39,8 @@ const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
 const TEAM_CSS: Record<Faction, string> = { blue: "#7ec1ff", red: "#ff8a7a" };
 const NEUTRAL = 0xe8c66a;
 const GOLD = 0xffd66e;
+/** The dark track under the capture bar and a crate's burn-out ring. */
+const TRACK = 0x0b0f16;
 /** Sim ticks of visible parachute descent before a crate lands. */
 const FALL = 26;
 /** How high a crate starts its descent (world units). */
@@ -45,7 +48,26 @@ const FALL_H = 7;
 const HINT_KEY = "battledrones.hint.uplinks";
 
 const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-const pillarGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, 0.5, 0);
+
+/**
+ * The supply-drop light pillar (unit height): three nested open shells, the
+ * core brightest, each fading out with height through its vertex colours —
+ * a beam of light rather than a solid column. One mesh, one draw.
+ */
+const pillarGeo = (() => {
+  const shells: [number, number][] = [[0.07, 1], [0.15, 0.55], [0.28, 0.24]];
+  return mergeGeometries(
+    shells.map(([r, k]) => {
+      const g = new THREE.CylinderGeometry(r, r, 1, 14, 5, true).translate(0, 0.5, 0);
+      const pos = g.attributes.position!;
+      const col = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) col.fill(k * Math.pow(1 - pos.getY(i), 2.6), i * 3, i * 3 + 3);
+      g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+      return g;
+    }),
+    false
+  )!;
+})();
 
 interface UplinkView {
   l: Uplink;
@@ -78,6 +100,9 @@ export class ObjectiveRenderer {
   private group = new THREE.Group();
   private time = 0;
   private hinted = false;
+  /** Scratch points for a landing chevron and the fogged crate's diamond. */
+  private chev = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  private diamond = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
 
   constructor(
     private v: View,
@@ -90,7 +115,8 @@ export class ObjectiveRenderer {
   }
 
   private makeUplink(l: Uplink): UplinkView {
-    const h = this.v.terrain.heightAt(l.x, l.y);
+    // (on the surface: a relay on a bridge stands on the deck, not the riverbed under it)
+    const h = this.v.terrain.surfaceAt(l.x, l.y);
     const m = instance(uplinkDef());
     m.root.position.set(l.x, h, l.y);
     const glowMat_ = discMat(NEUTRAL, 0);
@@ -228,9 +254,10 @@ export class ObjectiveRenderer {
     glow.scale.setScalar(1.6);
     glow.renderOrder = 3;
     const pm = glowMat(GOLD, 0.3);
+    pm.vertexColors = true;
     const pillar = new THREE.Mesh(pillarGeo, pm);
     pillar.position.set(ev.x, h, ev.y);
-    pillar.scale.set(0.32, 14, 0.32);
+    pillar.scale.set(1, 14, 1);
     pillar.renderOrder = 8;
     this.group.add(crate.root, chute, glow, pillar);
     this.crates.set(ev.id, { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false });
@@ -380,27 +407,33 @@ export class ObjectiveRenderer {
       g.arc(x, y, R, a0, a0 + (Math.PI * 2) / dashes);
     }
     if (owner && seen) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
-    // the capture bar: a ring around the platform, filled toward whoever is winning it
+    // the capture bar: a ring around the platform, filled toward whoever is winning it,
+    // on a dark track notched into quarters like the health bars' segments
     const ar = 1.38;
     const p = l.progress / 100;
     const bh = v.h + 0.2;
-    g.lineStyle(7, 0x0b0f16, 0.6 * k).strokeCircle(x, y, ar, bh);
-    if (Math.abs(p) > 0.001) {
-      const pc = p > 0 ? TEAM.blue : TEAM.red;
-      const a0 = -Math.PI / 2;
-      const a1 = a0 + Math.PI * 2 * Math.abs(p);
-      g.lineStyle(4.5, pc, 0.95 * k).arc(x, y, ar, a0, a1, bh + 0.005);
-      if (l.pushing) {
-        // a bright tip on the moving edge
-        const tip = 4 + 2 * Math.sin(this.time * 0.02);
-        g.fillStyle(0xffffff, 0.9 * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(x, y, tip), bh + 0.01);
-      }
+    g.lineStyle(8, TRACK, 0.62 * k, 0).strokeCircle(x, y, ar, bh);
+    const a0 = -Math.PI / 2;
+    const a1 = a0 + Math.PI * 2 * Math.abs(p);
+    if (Math.abs(p) > 0.001) g.lineStyle(5, p > 0 ? TEAM.blue : TEAM.red, 0.95 * k, 0).arc(x, y, ar, a0, a1, bh + 0.005);
+    const notch = this.px(x, y, 4.5);
+    g.lineStyle(1.5, TRACK, 0.8 * k, 0);
+    for (let i = 0; i < 4; i++) {
+      const a = a0 + (i * Math.PI) / 2;
+      const cx = Math.cos(a);
+      const cy = Math.sin(a);
+      g.lineBetween(x + cx * (ar - notch), y + cy * (ar - notch), x + cx * (ar + notch), y + cy * (ar + notch), bh + 0.01);
+    }
+    if (Math.abs(p) > 0.001 && Math.abs(p) < 0.999) {
+      // a bright tip on the leading edge, pulsing while it moves
+      const tip = l.pushing ? 4.5 + 1.5 * Math.sin(this.time * 0.02) : 3.5;
+      g.fillStyle(0xffffff, (l.pushing ? 0.95 : 0.7) * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(x, y, tip), bh + 0.015);
     }
     if (l.contested) {
       const pulse = 0.5 + 0.5 * Math.sin(this.time * 0.012);
-      g.lineStyle(3, 0xffa040, (0.4 + 0.5 * pulse) * k).strokeCircle(x, y, ar + this.px(x, y, 7), bh);
+      g.lineStyle(3, 0xffa040, (0.4 + 0.5 * pulse) * k).strokeCircle(x, y, ar + this.px(x, y, 8), bh);
     }
-    if (v.flash > 0) g.lineStyle(5, 0xffffff, v.flash * 0.8).strokeCircle(x, y, R * (1.15 - 0.15 * v.flash));
+    if (v.flash > 0) g.lineStyle(5, 0xffffff, v.flash * 0.8, 0.5).strokeCircle(x, y, R * (1.15 - 0.15 * v.flash));
   }
 
   private drawCrate(v: CrateView, now: number): void {
@@ -415,17 +448,28 @@ export class ObjectiveRenderer {
       // announced: a gold landing marker and a light pillar, both through the fog
       const k = Math.min(1, Math.max(0, 1 - left / (c.landTick - c.announcedTick)));
       const r = 0.95 - 0.25 * k;
+      g.fillStyle(GOLD, 0.08 + 0.08 * pulse).fillCircle(x, y, r);
       g.lineStyle(2.5, GOLD, 0.65 + 0.3 * pulse).strokeCircle(x, y, r);
       g.lineStyle(1.5, GOLD, 0.5).strokeCircle(x, y, r * (1.55 - 0.3 * pulse));
+      // four chevrons closing in on the landing spot
+      g.lineStyle(3, GOLD, 0.95);
+      const ch = this.chev;
       for (let i = 0; i < 4; i++) {
         const a = (i * Math.PI) / 2 + Math.PI / 4;
-        g.lineStyle(3, GOLD, 0.9).lineBetween(
-          x + Math.cos(a) * (r + px(5)), y + Math.sin(a) * (r + px(5)),
-          x + Math.cos(a) * (r + px(13)), y + Math.sin(a) * (r + px(13))
-        );
+        const ux = Math.cos(a);
+        const uy = Math.sin(a);
+        const d0 = r + px(5 + 3 * pulse);
+        const d1 = d0 + px(8);
+        const s = px(7);
+        ch[0]!.x = x + ux * d1 - uy * s;
+        ch[0]!.y = y + uy * d1 + ux * s;
+        ch[1]!.x = x + ux * d0;
+        ch[1]!.y = y + uy * d0;
+        ch[2]!.x = x + ux * d1 + uy * s;
+        ch[2]!.y = y + uy * d1 - ux * s;
+        g.strokePoints(ch);
       }
-      g.fillStyle(GOLD, 0.08 + 0.08 * pulse).fillCircle(x, y, r);
-      v.pillarMat.opacity = 0.18 + 0.16 * pulse;
+      v.pillarMat.opacity = 0.36 + 0.2 * pulse;
       // the last couple of seconds: it comes down under a striped canopy
       if (left <= FALL) {
         const e = Math.min(1, Math.max(0, 1 - left / FALL));
@@ -453,14 +497,19 @@ export class ObjectiveRenderer {
     v.glow.scale.setScalar(1.5 + 0.3 * blink);
     const seen = this.opts.visibleAt(c.x, c.y);
     const rr = 0.78;
-    g.lineStyle(4, 0x0b0f16, 0.55).strokeCircle(x, y, rr);
-    g.lineStyle(3, hurry ? 0xff7a4a : GOLD, 0.95).arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ttl);
+    g.lineStyle(6, TRACK, 0.6, 0).strokeCircle(x, y, rr);
+    g.lineStyle(3.5, hurry ? 0xff7a4a : GOLD, 0.95, 0).arc(x, y, rr, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ttl);
     if (!seen) {
       // out of sight: a gold diamond marks it through the fog
       const d = px(8 + 2 * blink);
-      const pts = [{ x, y: y - d }, { x: x + d, y }, { x, y: y + d }, { x: x - d, y }];
+      const pts = this.diamond;
+      for (let i = 0; i < 4; i++) {
+        const a = (i * Math.PI) / 2;
+        pts[i]!.x = x + Math.sin(a) * d;
+        pts[i]!.y = y - Math.cos(a) * d;
+      }
       g.fillStyle(GOLD, 0.85).fillPoints(pts, v.h + 0.6);
-      g.lineStyle(1.5, 0x1b1306, 0.9).strokePoints(pts, true, v.h + 0.6);
+      g.lineStyle(1.5, 0x1b1306, 0.9, 0).strokePoints(pts, true, v.h + 0.6);
     }
   }
 

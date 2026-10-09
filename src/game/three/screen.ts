@@ -4,7 +4,8 @@ import type { CameraRig } from "./camera";
  * A 2D canvas laid over the WebGL view for crisp screen-space marks: health
  * bars, rank chevrons, the box-select rectangle and floating labels ("+100",
  * "VETERAN", "Too far from base"). Labels are anchored to a world point and
- * re-projected every frame, so they ride along with the camera.
+ * re-projected every frame, so they ride along with the camera; they are
+ * snapped to whole device pixels so text stays sharp at any pixel ratio.
  */
 
 export const LABEL_FONT = '"Rajdhani", "Segoe UI", system-ui, -apple-system, sans-serif';
@@ -21,6 +22,12 @@ export interface Label {
   stroke?: string;
   /** Optional backing plate (placement reasons). */
   bg?: string;
+  /** The plate's rim colour (default: a faint light edge). */
+  border?: string;
+  /** The plate points down at its anchor with a small tail. */
+  tail?: boolean;
+  /** Keep the label at least this many CSS px inside the screen edges. */
+  pin?: number;
   /** Screen offset (CSS px), animated by the owner. */
   dx: number;
   dy: number;
@@ -32,11 +39,21 @@ export interface Label {
   visible: boolean;
 }
 
+/** Plate padding (CSS px) and corner radius, shared by every plated label. */
+const PLATE_PAD_X = 9;
+const PLATE_PAD_Y = 4;
+const PLATE_R = 6;
+const TAIL = 6;
+
 export class ScreenLayer {
   readonly canvas: HTMLCanvasElement;
   readonly ctx: CanvasRenderingContext2D;
   private labels = new Set<Label>();
   private dpr = 1;
+  private w = 1;
+  private h = 1;
+  /** Font strings by half-pixel size (labels tween their scale every frame). */
+  private fonts = new Map<number, string>();
 
   constructor(parent: HTMLElement, private rig: CameraRig) {
     this.canvas = document.createElement("canvas");
@@ -48,6 +65,8 @@ export class ScreenLayer {
 
   resize(w: number, h: number, dpr: number): void {
     this.dpr = dpr;
+    this.w = w;
+    this.h = h;
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
   }
@@ -79,6 +98,21 @@ export class ScreenLayer {
     return this.labels.has(l);
   }
 
+  /** Snap a CSS-px coordinate to the device pixel grid. */
+  private snap(v: number): number {
+    return Math.round(v * this.dpr) / this.dpr;
+  }
+
+  private font(size: number): string {
+    const k = Math.round(size * 2);
+    let f = this.fonts.get(k);
+    if (!f) {
+      f = `bold ${(k / 2).toFixed(1)}px ${LABEL_FONT}`;
+      this.fonts.set(k, f);
+    }
+    return f;
+  }
+
   /** Draw every live label (after the frame's bars and marks). */
   drawLabels(): void {
     const ctx = this.ctx;
@@ -90,17 +124,45 @@ export class ScreenLayer {
       if (size < 2) continue;
       ctx.save();
       ctx.globalAlpha = Math.min(1, l.alpha);
-      ctx.font = `bold ${size.toFixed(1)}px ${LABEL_FONT}`;
+      ctx.font = this.font(size);
       ctx.textAlign = "center";
       ctx.textBaseline = l.oy === 0.5 ? "middle" : "alphabetic";
-      const x = p.x + l.dx;
-      const y = p.y + l.dy - (l.oy === 0.5 ? 0 : size * 0.18);
+      const ax = p.x + l.dx;
+      let x = ax;
+      let y = p.y + l.dy - (l.oy === 0.5 ? 0 : size * 0.18);
       if (l.bg) {
-        const w = ctx.measureText(l.text).width + 14;
-        const hh = size + 6;
+        const w = Math.round(ctx.measureText(l.text).width + PLATE_PAD_X * 2);
+        const hh = Math.round(size + PLATE_PAD_Y * 2);
+        // the plate spans the cap height and descenders round the baseline y
+        const above = size * 0.78 + PLATE_PAD_Y;
+        const tail = l.tail ? TAIL : 0;
+        y -= tail;
+        if (l.pin !== undefined) {
+          const m = l.pin;
+          x = Math.min(this.w - m - w / 2, Math.max(m + w / 2, x));
+          y = Math.min(this.h - m - tail - (hh - above), Math.max(m + above, y));
+        }
+        x = this.snap(x);
+        y = this.snap(y);
+        // (the 1 px rim sits on the device pixel grid: half-pixel offset when it spans an odd count)
+        const o = (Math.round(this.dpr) % 2) / (2 * this.dpr);
+        const top = Math.round(y - above) + o;
+        const left = Math.round(x - w / 2) + o;
+        // a soft drop shadow lifts the plate off busy terrain
+        ctx.shadowColor = "rgba(0,0,0,0.45)";
+        ctx.shadowBlur = 8;
+        ctx.shadowOffsetY = 2;
+        plate(ctx, left, top, w, hh, PLATE_R, l.tail ? Math.min(left + w - PLATE_R - TAIL, Math.max(left + PLATE_R + TAIL, ax)) : null);
         ctx.fillStyle = l.bg;
-        roundRect(ctx, x - w / 2, y - hh + size * 0.25, w, hh, 5);
         ctx.fill();
+        ctx.shadowColor = "transparent";
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = l.border ?? "rgba(255,255,255,0.14)";
+        ctx.stroke();
+      } else {
+        if (l.pin !== undefined) x = Math.min(this.w - l.pin, Math.max(l.pin, x));
+        x = this.snap(x);
+        y = this.snap(y);
       }
       if (l.shadow) {
         ctx.shadowColor = "rgba(0,0,0,0.55)";
@@ -136,6 +198,25 @@ export function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** A rounded plate path; with `tailX`, a small tail under it points down at that x. */
+function plate(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number, tailX: number | null): void {
+  if (tailX === null) {
+    roundRect(ctx, x, y, w, h, r);
+    return;
+  }
+  const b = y + h;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, b, r);
+  ctx.arcTo(x + w, b, x, b, r);
+  ctx.lineTo(tailX + TAIL, b);
+  ctx.lineTo(tailX, b + TAIL);
+  ctx.lineTo(tailX - TAIL, b);
+  ctx.arcTo(x, b, x, y, r);
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
