@@ -104,8 +104,9 @@ export class Stage {
     const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
     const size = coarse ? 1024 : 2048;
     sun.shadow.mapSize.set(size, size);
-    // soft edges for free: the same 5 PCF taps, spread over ~2 texels of the 1024 map
-    sun.shadow.radius = size / 512;
+    // soft edges for free: the same 5 PCF taps, spread over ~2 texels of the 1024 map (2.5 of the
+    // 2048: spread wider, five taps show as a crawling dither at 1x DPR)
+    sun.shadow.radius = size > 1024 ? 2.5 : 2;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
     sun.shadow.camera.near = 1;

@@ -92,14 +92,20 @@ const fragCode = (clouds: boolean) => /* glsl */ `
   {
     vec2 fp = vFowW.xz;
     ${clouds ? "float cl = texture2D( uCloudMap, fp * 0.032 + uCloudOffset ).r; gl_FragColor.rgb *= 1.0 - cl * uCloudK * uCloudTint;" : ""}
-    if ( uFowOn > 0.5 ) {
-      float fw = fowAt( fp );
-      // wisps are looked up where this pixel's view ray meets the ground, so a tree or rock
-      // in the shroud is exactly the shroud behind it: no silhouettes
-      vec2 gp = cameraPosition.xz + ( vFowW.xz - cameraPosition.xz ) * ( cameraPosition.y / max( 0.01, cameraPosition.y - vFowW.y ) );
-      float mist = texture2D( uCloudMap, gp * 0.09 + vec2( uTime * 0.005, uTime * -0.0035 ) ).r;
-      // the shroud's edge billows outward, never in
-      fw = min( 1.0, fw + mist * 0.45 * smoothstep( 0.5, 0.6, fw ) * ( 1.0 - smoothstep( 0.86, 0.94, fw ) ) );
+    float fw = 0.0;
+    if ( uFowOn > 0.5 ) fw = fowAt( fp );
+    // visible ground (most of the screen in play) skips the rest
+    if ( fw > 0.002 ) {
+      // the wisps only touch the shroud (fw > 0.5): elsewhere they'd change nothing, so skip the lookup.
+      // They're looked up where this pixel's view ray meets the ground, so a tree or rock in the
+      // shroud is exactly the shroud behind it: no silhouettes. (Explicit LOD: this branch isn't uniform.)
+      float mist = 0.0;
+      if ( fw > 0.5 ) {
+        vec2 gp = cameraPosition.xz + ( vFowW.xz - cameraPosition.xz ) * ( cameraPosition.y / max( 0.01, cameraPosition.y - vFowW.y ) );
+        mist = textureLod( uCloudMap, gp * 0.09 + vec2( uTime * 0.005, uTime * -0.0035 ), 0.0 ).r;
+        // the shroud's edge billows outward, never in
+        fw = min( 1.0, fw + mist * 0.45 * smoothstep( 0.5, 0.6, fw ) * ( 1.0 - smoothstep( 0.86, 0.94, fw ) ) );
+      }
       fw = fw * fw * ( 3.0 - 2.0 * fw );
       // at every fog level the ground shows through no more than under the old flat darkening:
       // explored ground is greyed to the same half brightness, and the shroud then covers it
@@ -148,6 +154,8 @@ interface VariantSpec {
   glow: number;
   /** How far the flash also bleaches the diffuse colour. */
   bleach?: number;
+  /** Flash light thrown on the paint (scales with it, so the hue survives: a fire's glow, not a coat of orange). */
+  flashLit?: number;
   /** Greys the paint first (0 keeps it, 1 is all grey). */
   desat?: number;
   /** Elite gold, ghost scan: an edge light plus a glint sweeping across the hull. */
@@ -161,8 +169,8 @@ interface VariantSpec {
 const VARIANTS: Record<Variant, VariantSpec> = {
   normal: { tint: 0xffffff, flash: 0, flashColor: 0xffffff, glow: 1 },
   flash: { tint: 0xffffff, flash: 0.42, flashColor: 0xfff4e4, glow: 1, bleach: 0.3 },
-  warm: { tint: 0xffffff, flash: 0.32, flashColor: 0xff9448, glow: 1, bleach: 0.1 },
-  burnt: { tint: 0x857c74, flash: 0, flashColor: 0x000000, glow: 0, desat: 0.85, roughness: 0.92, metalness: 0.1 },
+  warm: { tint: 0xffffff, flash: 0.03, flashColor: 0xffa860, glow: 1, bleach: 0, flashLit: 0.55 },
+  burnt: { tint: 0x9a9088, flash: 0, flashColor: 0x000000, glow: 0, desat: 1, roughness: 0.92, metalness: 0.1 },
   damaged: { tint: 0xa8a098, flash: 0, flashColor: 0x000000, glow: 0.6, desat: 0.35 },
   elite: { tint: 0xffffff, flash: 0, flashColor: 0x000000, glow: 1.2, sheenColor: 0xffb428 },
   ghostOk: { tint: 0xb8ffc8, flash: 0.35, flashColor: 0x37d67a, glow: 1, sheen: 0.5, sheenColor: 0x9affc0, ghost: true },
@@ -191,6 +199,7 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
     uFlashColor: { value: new THREE.Color(v.flashColor) },
     uGlowK: { value: v.glow },
     uBleach: { value: v.bleach ?? 0.5 },
+    uFlashLit: { value: v.flashLit ?? 0 },
     uDesat: { value: v.desat ?? 0 },
     uSheen: elite ? eliteUniform : { value: v.sheen ?? 0 },
     uSheenColor: { value: new THREE.Color(v.sheenColor ?? 0xffffff).multiplyScalar(elite ? ELITE_SHEEN : 1) }
@@ -208,7 +217,7 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
           `#include <common>
           varying float vGlow;
           uniform vec3 uTint; uniform float uFlash; uniform vec3 uFlashColor; uniform float uGlowK; uniform float uBleach;
-          uniform float uDesat; uniform float uSheen; uniform vec3 uSheenColor;`
+          uniform float uFlashLit; uniform float uDesat; uniform float uSheen; uniform vec3 uSheenColor;`
         )
         // lamps light themselves: less lit diffuse, more emission, so they stay saturated under tone mapping
         .replace(
@@ -224,7 +233,7 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
           // contact shade: walls darken toward the ground they stand on (roofs and lamps don't)
           float wall = 1.0 - max( 0.0, dot( normal, viewMatrix[ 1 ].xyz ) );
           diffuseColor.rgb *= 1.0 - 0.38 * wall * ( 1.0 - smoothstep( -0.02, 0.32, vFowW.y ) ) * ( 1.0 - min( 1.0, vGlow ) );
-          totalEmissiveRadiance += glowBase * vGlow * uGlowK * 1.05 + uFlashColor * uFlash;
+          totalEmissiveRadiance += glowBase * vGlow * uGlowK * 1.05 + uFlashColor * ( uFlash + glowBase * uFlashLit );
           diffuseColor.rgb = mix( diffuseColor.rgb, uFlashColor, uFlash * uBleach );
           if ( uSheen > 0.0 ) {
             float edge = 1.0 - abs( dot( normal, normalize( vViewPosition ) ) );
