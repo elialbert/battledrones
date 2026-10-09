@@ -2,6 +2,7 @@ import { createAiState, tickAi, type Difficulty, type Strategy, type StrategyNam
 import { BUILDINGS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { canPlaceBuilding, nearestReachableResource, unitBlocker } from "../src/sim/economy";
 import { isVisible, knownBuildings } from "../src/sim/fog";
+import { isInfantry } from "../src/sim/infantry";
 import { createMapWorld } from "../src/sim/maps";
 import { survivalStatus } from "../src/sim/modes/survival";
 import { opAiState, opById, type OpResult } from "../src/sim/ops";
@@ -52,6 +53,8 @@ const centroid = (us: Unit[]): Pt => ({
   y: us.reduce((a, u) => a + u.y, 0) / Math.max(1, us.length)
 });
 const armyValue = (us: Unit[]) => us.reduce((v, u) => v + UNITS[u.kind].cost, 0);
+/** How many of these units are vehicles (not robot infantry). */
+const vehicles = (us: Unit[]) => us.filter((u) => !isInfantry(u.kind)).length;
 
 /** Closest legal spot for a building to an anchor (what a player taps). */
 function spotFor(w: World, kind: BuildingKind, anchor: Pt): { tx: number; ty: number } | null {
@@ -339,8 +342,9 @@ export const PILOTS: Record<string, Record<string, PilotFactory>> = {
     rusher: scriptPilot({
       build: [],
       harvesters: 0,
-      fab: (_w, f) => (f.length % 3 === 0 ? "titan" : "stinger"),
-      air: (_w, f) => (f.length % 2 === 0 ? "hornet" : "raptor"),
+      // the mix alternates by vehicles built so far (the starting Trooper Squad doesn't shift it)
+      fab: (_w, f) => (vehicles(f) % 3 === 0 ? "titan" : "stinger"),
+      air: (_w, f) => (vehicles(f) % 2 === 0 ? "hornet" : "raptor"),
       hold: () => ({ x: 12, y: 36 }),
       attackAt: 2600,
       targets: ["turret"]

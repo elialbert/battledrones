@@ -45,7 +45,8 @@ describe("Last Stand setup", () => {
     const w = createMapWorld("riverlands");
     expect(w.survival).toBeFalsy();
     expect(hqOf(w, "red")).not.toBeNull();
-    expect(red(w)).toHaveLength(1);
+    // red keeps its starting harvester and Trooper Squad
+    expect(red(w).map((u) => u.kind).sort()).toEqual(["harvester", "trooper"]);
   });
 
   it("removes the red base and economy and schedules wave 1", () => {

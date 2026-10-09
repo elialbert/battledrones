@@ -5,6 +5,7 @@ import { SALVAGE, TICK_RATE, UNITS } from "../src/sim/balance";
 import { canPlaceBuilding } from "../src/sim/economy";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
+import { isInfantry } from "../src/sim/infantry";
 import { pickAiOpener } from "../src/sim/openers";
 import { wreckRestingSpot, wreckValue } from "../src/sim/salvage";
 import { step } from "../src/sim/sim";
@@ -49,7 +50,9 @@ describe("wrecks", () => {
     kill(w, spawnUnit(w, "harvester", "blue", 5.5, 5.5));
     expect(w.wrecks).toHaveLength(0);
     expect(wreckValue("harvester")).toBe(0);
-    for (const k of Object.keys(UNITS) as UnitKind[]) if (k !== "harvester") expect(wreckValue(k)).toBeGreaterThan(0);
+    // every other vehicle leaves a hull; robot infantry leave nothing either
+    for (const k of Object.keys(UNITS) as UnitKind[])
+      if (k !== "harvester") expect(wreckValue(k) > 0).toBe(!isInfantry(k));
   });
 
   it("aircraft wrecks land where they die, nudged onto the nearest passable ground", () => {

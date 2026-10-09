@@ -1,4 +1,5 @@
-import { COMBAT, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "./balance";
+import { COMBAT, INFANTRY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "./balance";
+import { isInfantry } from "./infantry";
 import { worldPick, worldRandom } from "./rand";
 import type { Crate, CrateReward, Faction, ObjectiveState, Unit, Uplink, World } from "./types";
 import { buildingAtTile, inBounds, passable, spawnUnit } from "./world";
@@ -8,7 +9,7 @@ import { buildingAtTile, inBounds, passable, spawnUnit } from "./world";
  *
  * UPLINK RELAYS sit at contested spots (2–3 per map, mirrored for fairness).
  * Units standing in an Uplink's zone push its capture bar toward their side
- * (harvesters don't count, aircraft count half); with both sides inside the
+ * (harvesters don't count, aircraft count half, infantry squads double); with both sides inside the
  * bar freezes. Holding one pays a trickle of scrap, lights up the fog around
  * it and charges the Command meter. Uplinks are not buildings: nothing
  * occupies their tiles and nothing can shoot them, so combat never sees them.
@@ -76,7 +77,7 @@ export function nextDropTick(w: World): number | null {
   return w.objectives.dropSites.length > 0 ? dropAnnounceTick(w.objectives.drops) : null;
 }
 
-/** Capture-zone presence: units inside, harvesters excluded, aircraft at half weight. */
+/** Capture-zone presence: units inside, harvesters excluded, aircraft at half weight, infantry at double. */
 export function presence(w: World, l: Uplink): Record<Faction, number> {
   const p = { blue: 0, red: 0 };
   const r2 = U.radius * U.radius;
@@ -85,7 +86,7 @@ export function presence(w: World, l: Uplink): Record<Faction, number> {
     const dx = u.x - l.x;
     const dy = u.y - l.y;
     if (dx * dx + dy * dy > r2) continue;
-    p[u.faction] += UNITS[u.kind].domain === "air" ? U.airWeight : 1;
+    p[u.faction] += UNITS[u.kind].domain === "air" ? U.airWeight : isInfantry(u.kind) ? INFANTRY.captureWeight : 1;
   }
   return p;
 }

@@ -1,4 +1,5 @@
 import { SALVAGE, TICK_RATE, UNITS } from "./balance";
+import { isInfantry } from "./infantry";
 import type { Faction, Unit, World, Wreck } from "./types";
 import { incomeOf } from "./rules";
 import { buildingAtTile, groundPassable } from "./world";
@@ -12,9 +13,12 @@ import { buildingAtTile, groundPassable } from "./world";
  * the snowball.
  */
 
-/** Wreck value of a unit kind (0 for harvesters: they spill their cargo, not a hull). */
+/**
+ * Wreck value of a unit kind (0 for harvesters: they spill their cargo, not a
+ * hull; and 0 for robot infantry: a fallen squad leaves nothing worth hauling).
+ */
 export function wreckValue(kind: Unit["kind"], share: number = SALVAGE.share): number {
-  if (kind === "harvester") return 0;
+  if (kind === "harvester" || isInfantry(kind)) return 0;
   return Math.round(UNITS[kind].cost * share);
 }
 

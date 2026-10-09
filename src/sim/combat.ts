@@ -1,8 +1,10 @@
-import { BUILDINGS, COMBAT, DAMAGE_VS, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
+import { BUILDINGS, COMBAT, DAMAGE_VS, INFANTRY, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
+import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
 import { moveUnitToward } from "./movement";
 import { isStunned } from "./powers";
 import { leaveWreck } from "./salvage";
-import type { ArmorClass, Building, Domain, Faction, TargetDomain, Unit, World } from "./types";
+import { bailOut, canBailOut } from "./transport";
+import { Terrain, type ArmorClass, type Building, type Domain, type Faction, type TargetDomain, type Unit, type World } from "./types";
 import { rulesOf } from "./rules";
 import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
 
@@ -24,7 +26,8 @@ interface TargetRef {
 
 /**
  * Best valid enemy (unit or building) within `radius` of (x, y): nearest,
- * with armed units preferred over unarmed ones and buildings.
+ * with armed units preferred over unarmed ones and buildings. A Sniper Team
+ * concealed from `faction` in Woods (infantry.ts) is never picked.
  */
 export function findTarget(
   w: World,
@@ -42,6 +45,7 @@ export function findTarget(
     if (u.faction === faction || !canHit(targets, unitDomain(u))) continue;
     const d = Math.hypot(u.x - x, u.y - y);
     if (d > radius || d < minRange) continue;
+    if (concealedFrom(w, faction, u)) continue;
     const s = d + (UNITS[u.kind].targets === "none" && !UNITS[u.kind].heal ? 1.5 : 0);
     if (s < bestScore) {
       bestScore = s;
@@ -83,14 +87,20 @@ function distTo(w: World, id: number, x: number, y: number): number {
   return u ? Math.hypot(u.x - x, u.y - y) : Infinity;
 }
 
-/** Armor + cover multiplier for a hit of `dmgType` on entity `id`. */
+/**
+ * Armor + cover multiplier for a hit of `dmgType` on entity `id`. Woods give
+ * ground units cover; robot infantry use it best (INFANTRY.woodsCover).
+ */
 function damageMult(w: World, id: number, dmgType: keyof typeof DAMAGE_VS): number {
   const u = w.units.get(id);
   let armor: ArmorClass = "structure";
   let cover = 1;
   if (u) {
     armor = UNITS[u.kind].armor;
-    if (unitDomain(u) === "ground") cover = TERRAIN[terrainAt(w, Math.floor(u.x), Math.floor(u.y))].cover;
+    if (unitDomain(u) === "ground") {
+      const t = terrainAt(w, Math.floor(u.x), Math.floor(u.y));
+      cover = t === Terrain.Forest && isInfantry(u.kind) ? INFANTRY.woodsCover : TERRAIN[t].cover;
+    }
   }
   return DAMAGE_VS[dmgType][armor] * cover;
 }
@@ -205,7 +215,9 @@ function fire(w: World, attacker: Attacker, targetId: number, incidents: Inciden
     attacker.building.facing = angle;
   }
   const rank = isUnit ? attacker.unit.rank : 0;
-  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage) * rulesOf(w).dmgMult;
+  // a squad hits as hard as the robots it still has standing (infantry.ts)
+  const squad = isUnit ? squadFirepower(attacker.unit) : 1;
+  const damage = shotDamage(stats) * (1 + rank * COMBAT.rankDamage) * rulesOf(w).dmgMult * squad;
   const dmgType = stats.dmgType ?? "kinetic";
   const fromAir = isUnit && unitDomain(attacker.unit) === "air";
   const vsAir = t.domain === "air" ? stats.airMult ?? 1 : 1;
@@ -325,8 +337,8 @@ export function tickCombat(w: World): Set<number> {
     let targetId: number | null = null;
     if (u.order.type === "attack") {
       const t = targetPosition(w, u.order.targetId);
-      if (!t || !canHit(stats.targets, t.domain)) {
-        u.order = { type: "idle" };
+      if (!t || !canHit(stats.targets, t.domain) || hidden(w, u.faction, u.order.targetId)) {
+        u.order = { type: "idle" }; // gone, out of reach, or vanished into the woods
       } else {
         targetId = u.order.targetId;
       }
@@ -336,7 +348,7 @@ export function tickCombat(w: World): Set<number> {
       const acquire = stats.range + COMBAT.acquireBonus;
       if (u.autoTargetId !== null) {
         const d = distTo(w, u.autoTargetId, u.x, u.y);
-        if (d > acquire + 0.5 || d < minRange) u.autoTargetId = null;
+        if (d > acquire + 0.5 || d < minRange || hidden(w, u.faction, u.autoTargetId)) u.autoTargetId = null;
       }
       if (u.autoTargetId === null && (u.order.type === "idle" || u.order.type === "attackMove")) {
         const found = findTarget(w, u.faction, stats.targets, u.x, u.y, acquire, minRange);
@@ -370,6 +382,12 @@ export function tickCombat(w: World): Set<number> {
   tickProjectiles(w, incidents);
   retaliate(w, incidents);
   return engaged;
+}
+
+/** Is unit `id` an enemy Sniper Team hidden from `faction` in Woods? (Buildings never are.) */
+function hidden(w: World, faction: Faction, id: number): boolean {
+  const u = w.units.get(id);
+  return !!u && concealedFrom(w, faction, u);
 }
 
 /** Idle victims (and idle armed neighbours) turn on whoever shot them. */
@@ -443,14 +461,30 @@ function killerOf(w: World, id: number | null): { killerId: number | null; kille
  * Remove dead entities, emit explosions, and settle the winner. Two passes:
  * every kill is credited while all of this tick's dead are still on the map
  * (so mutual kills credit both sides whatever the id order), then they go.
+ *
+ * A Condor shot down with squads aboard (transport.ts): over ground they
+ * could stand on they bail out, hurt; otherwise they go down with it, each
+ * a unit lost and killed with its own `death` event (the Condor's killer
+ * gets the credit).
  */
 export function cleanupDeaths(w: World): void {
   const deadUnits: { u: Unit; killer: ReturnType<typeof killerOf> }[] = [];
   const deadBuildings: { b: Building; killer: ReturnType<typeof killerOf> }[] = [];
+  /** Passengers lost with their Condor (over water or rock), and Condors whose squads bail out. */
+  const lost: { u: Unit; carrier: Unit; killer: ReturnType<typeof killerOf> }[] = [];
+  const bail: Unit[] = [];
   for (const u of w.units.values()) {
     if (u.hp > 0) continue;
-    deadUnits.push({ u, killer: killerOf(w, u.lastAttackerId) });
+    const killer = killerOf(w, u.lastAttackerId);
+    deadUnits.push({ u, killer });
     creditKill(w, u.faction, u.lastAttackerId, UNITS[u.kind].cost, false);
+    if (!u.passengers?.length) continue;
+    if (canBailOut(w, u)) bail.push(u);
+    else
+      for (const p of u.passengers) {
+        lost.push({ u: p, carrier: u, killer });
+        creditKill(w, p.faction, u.lastAttackerId, UNITS[p.kind].cost, false);
+      }
   }
   for (const b of w.buildings.values()) {
     if (b.hp > 0) continue;
@@ -469,6 +503,15 @@ export function cleanupDeaths(w: World): void {
     });
     leaveWreck(w, u); // combat units leave salvage (salvage.ts)
   }
+  for (const c of bail) bailOut(w, c); // squads aboard jump clear
+  for (const { u, carrier, killer } of lost) {
+    w.factions[u.faction].stats.unitsLost++;
+    w.fx.push({
+      type: "death", id: u.id, faction: u.faction, unitKind: u.kind, buildingKind: null,
+      x: carrier.x, y: carrier.y, air: true, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
+    });
+  }
+  for (const { carrier } of lost) carrier.passengers = [];
   for (const { b, killer } of deadBuildings) {
     removeBuilding(w, b);
     w.factions[b.faction].stats.buildingsLost++;

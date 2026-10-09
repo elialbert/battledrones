@@ -1,4 +1,5 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
+import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
 import { inBounds, moveClassOf, passable, terrainMult, terrainSpeed, type MoveClass } from "./world";
 
@@ -249,8 +250,15 @@ export function approachPoint(
   };
 }
 
-/** Per-tick movement for move / attack-move orders (combat may pause it). */
+/**
+ * Per-tick movement for move / attack-move orders (combat may pause it),
+ * then separation, then crushing: a Titan that drove this tick rolls over
+ * the enemy squads under it (infantry.ts).
+ */
 export function tickMovement(w: World, pausedIds: Set<number>): void {
+  /** Where each crusher stood before it moved (to tell who actually drove). */
+  const crushers: { u: Unit; x: number; y: number }[] = [];
+  for (const u of w.units.values()) if (crushes(u.kind)) crushers.push({ u, x: u.x, y: u.y });
   for (const u of w.units.values()) {
     const o = u.order;
     if (pausedIds.has(u.id)) continue;
@@ -273,23 +281,34 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
       }
     }
   }
+  const moved = crushers.filter((c) => c.u.x !== c.x || c.u.y !== c.y).map((c) => c.u);
   separate(w);
+  if (moved.length > 0) tickCrush(w, moved);
 }
 
 const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS).map((k, i) => [k, i]));
 
-/** Gentle separation so same-domain units don't stack. */
+/**
+ * Gentle separation so same-domain units don't stack. Robot infantry give
+ * way: a squad and a FRIENDLY vehicle part by moving only the squad (it
+ * steps aside), and a squad and an ENEMY vehicle don't part at all (tanks
+ * roll through squads — and Titans crush them). Squads among themselves,
+ * and vehicles among themselves, share the push as usual.
+ */
 function separate(w: World): void {
   const units = [...w.units.values()];
   for (let i = 0; i < units.length; i++) {
     const a = units[i]!;
     const da = UNITS[a.kind].domain;
+    const ia = isInfantry(a.kind);
     for (let j = i + 1; j < units.length; j++) {
       const b = units[j]!;
       if (UNITS[b.kind].domain !== da) continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) continue;
+      const ib = isInfantry(b.kind);
+      if (ia !== ib && a.faction !== b.faction) continue; // enemy vehicle and squad: drive through
       const d = Math.hypot(dx, dy);
       const minD = Math.max(0.7, UNITS[a.kind].radius + UNITS[b.kind].radius);
       if (d >= minD) continue;
@@ -312,10 +331,35 @@ function separate(w: World): void {
         ux = dx / d;
         uy = dy / d;
       }
+      if (ia !== ib) {
+        // a squad steps aside for a friendly vehicle: it takes the whole push
+        const [veh, squad, sx, sy] = ia ? [b, a, -ux, -uy] : [a, b, ux, uy];
+        const s = stepAside(veh, sx, sy);
+        nudge(w, squad, s.x * push * 2, s.y * push * 2);
+        continue;
+      }
       nudge(w, a, -ux * push, -uy * push);
       nudge(w, b, ux * push, uy * push);
     }
   }
+}
+
+/**
+ * Which way a squad in a vehicle's way gives ground: straight away from it,
+ * or — when it stands in front — sideways off the vehicle's line of travel,
+ * to whichever side it is already on (dead ahead: the vehicle's right, which
+ * turns with the vehicle, so mirror-image pairs part as mirror images).
+ * (dx, dy) is the unit vector from the vehicle to the squad.
+ */
+function stepAside(v: Unit, dx: number, dy: number): { x: number; y: number } {
+  const fx = Math.sin(v.facing);
+  const fy = -Math.cos(v.facing);
+  if (dx * fx + dy * fy <= 0) return { x: dx, y: dy }; // beside or behind it: just back off
+  const rx = -fy; // the vehicle's right hand
+  const ry = fx;
+  const side = dx * rx + dy * ry;
+  const s = side < -1e-6 ? -1 : 1;
+  return { x: rx * s, y: ry * s };
 }
 
 function nudge(w: World, u: Unit, dx: number, dy: number): void {

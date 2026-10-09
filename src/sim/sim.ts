@@ -14,6 +14,7 @@ import { tickOps } from "./ops";
 import { tickObjectives } from "./objectives";
 import { applyCalldown, chargePowers, tickPowers } from "./powers";
 import { tickSalvage } from "./salvage";
+import { applyTransportCommand, tickTransport } from "./transport";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
@@ -28,7 +29,8 @@ export function step(w: World, commands: Command[]): void {
   tickTrickle(w);
   tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
-  tickMovement(w, engaged);
+  tickTransport(w); // squads board Condors, Condors fly drops (transport.ts)
+  tickMovement(w, engaged); // (then separation, and Titans crushing squads)
   cleanupDeaths(w);
   tickSalvage(w);
   tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)
@@ -73,6 +75,7 @@ function applyCommand(w: World, c: Command): void {
       break;
     }
     case "stop":
+      // (also how a Condor's drop is called off: its unload order goes)
       for (const id of c.unitIds) {
         const u = w.units.get(id);
         if (!u || u.faction !== c.faction) continue;
@@ -80,6 +83,10 @@ function applyCommand(w: World, c: Command): void {
         u.path = null;
         u.autoTargetId = null;
       }
+      break;
+    case "board":
+    case "unload":
+      applyTransportCommand(w, c);
       break;
     case "callWave":
       callWaveEarly(w, c.faction);
