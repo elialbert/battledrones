@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import { BUILDINGS, ECONOMY, UNITS } from "../../sim/balance";
-import type { Building, Unit, World } from "../../sim/types";
+import type { Building, BuildingKind, Faction, Unit, World } from "../../sim/types";
 import { eliteUniform, setVariant, type Variant } from "../three/materials";
-import { buildingDef, instance, unitDef, unitScale, type ModelInstance } from "../three/models";
+import { buildingDef, instance, unitDef, unitScale, type ModelDef, type ModelInstance } from "../three/models";
 import { AIR_H, HOVER_H, type P3, type View } from "../three/view";
 import { Ease } from "../three/tween";
 import type { Fx } from "./fx";
@@ -40,18 +40,28 @@ interface UnitView {
 interface BuildingView {
   kind: "building";
   m: ModelInstance;
+  faction: Faction;
   face: number;
   recoil: number;
   lastFired: number;
   smokeT: number;
   size: number;
+  /** Footprint's top-left tile. */
+  tx: number;
+  ty: number;
   cx: number;
   cy: number;
   base: number;
   visible: boolean;
+  /** Can the local player see (part of) its footprint right now? Else it is drawn as last seen. */
+  seen: boolean;
+  /** Health ratio as last seen (live while seen): the fog of war hides the rest. */
+  hp: number;
   variant: Variant;
   warmUntil: number;
   top: number;
+  /** Roof heights over the middle of the footprint (see roofOf). */
+  roof: Float32Array;
 }
 
 type View3 = UnitView | BuildingView;
@@ -65,6 +75,79 @@ function angleDelta(a: number, b: number): number {
 }
 
 const tmp = new THREE.Vector3();
+/** A smoke puff's source point, refilled per puff (Fx reads it at once). */
+const puffAt: P3 = { x: 0, y: 0, h: 0 };
+
+/** Roof heights over a 3×3 grid across the middle half of each kind of building, found once per kind. */
+const roofs = new Map<BuildingKind, Float32Array>();
+/** roofOf's sample points (three close together per grid point) and the highest surface over each. */
+const roofX = new Float32Array(27);
+const roofZ = new Float32Array(27);
+const roofH = new Float32Array(27);
+const roofMid = [0, 0, 0];
+
+/**
+ * Where smoke leaves a damaged building's roof: heights (above the model's
+ * base) at a 3×3 grid spanning the middle half of its footprint — the top
+ * surface of the model, hull and turret, over each point. Each is the median
+ * of three nearby points, so a lone mast or antenna doesn't count as roof.
+ * One pass over the triangles, well under a millisecond a kind: it runs the
+ * first time each kind appears, maybe mid-match (a raycaster, with a hit
+ * object per surface crossed, took up to ~20 ms, and several times that on
+ * a phone).
+ */
+function roofOf(kind: BuildingKind, def: ModelDef, size: number): Float32Array {
+  let r = roofs.get(kind);
+  if (r) return r;
+  for (let j = 0; j < 3; j++)
+    for (let i = 0; i < 3; i++)
+      for (let k = 0; k < 3; k++) {
+        const n = (j * 3 + i) * 3 + k;
+        roofX[n] = ((i - 1) * size) / 4 + (k === 1 ? 0.12 : 0);
+        roofZ[n] = ((j - 1) * size) / 4 + (k === 2 ? 0.12 : 0);
+        roofH[n] = 0;
+      }
+  topsOf(def.hull, 0, 0, 0);
+  if (def.turret) topsOf(def.turret, ...def.mount);
+  r = new Float32Array(9);
+  for (let n = 0; n < 9; n++) {
+    for (let k = 0; k < 3; k++) roofMid[k] = roofH[n * 3 + k]!;
+    roofMid.sort((a, b) => a - b);
+    r[n] = roofMid[1]!;
+  }
+  roofs.set(kind, r);
+  return r;
+}
+
+/** Raise each of roofOf's sample points to the height of any triangle of `geo` (moved by ox, oy, oz) above it. */
+function topsOf(geo: THREE.BufferGeometry, ox: number, oy: number, oz: number): void {
+  const pos = geo.getAttribute("position");
+  const index = geo.getIndex();
+  const n = index ? index.count : pos.count;
+  for (let t = 0; t + 2 < n; t += 3) {
+    const a = index ? index.getX(t) : t;
+    const b = index ? index.getX(t + 1) : t + 1;
+    const c = index ? index.getX(t + 2) : t + 2;
+    const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
+    const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
+    const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
+    // (seen from above, edge-on walls cover nothing)
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    const x0 = Math.min(ax, bx, cx), x1 = Math.max(ax, bx, cx);
+    const z0 = Math.min(az, bz, cz), z1 = Math.max(az, bz, cz);
+    for (let s = 0; s < 27; s++) {
+      const px = roofX[s]!;
+      const pz = roofZ[s]!;
+      if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
+      const u = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+      const v = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+      if (u < 0 || v < 0 || u + v > 1) continue;
+      const h = u * (pos.getY(a) + oy) + v * (pos.getY(b) + oy) + (1 - u - v) * (pos.getY(c) + oy);
+      if (h > roofH[s]!) roofH[s] = h;
+    }
+  }
+}
 
 /**
  * Units and buildings as 3D models: hulls that turn and tilt over the
@@ -121,6 +204,16 @@ export class EntityRenderer {
     return this.views.get(id)?.visible ?? false;
   }
 
+  /**
+   * A building's health ratio while the player can see it; null while it is
+   * only remembered (its look keeps the health last seen, but no live bar:
+   * one that vanished when it died out of sight would give that away).
+   */
+  shownHp(id: number): number | null {
+    const v = this.views.get(id);
+    return v?.kind === "building" && v.visible && v.seen ? v.hp : null;
+  }
+
   /** Where a shot leaves the shooter's barrel. */
   muzzle(id: number): P3 | null {
     const v = this.views.get(id);
@@ -156,7 +249,8 @@ export class EntityRenderer {
       this.flashes.hit(id, now);
       return;
     }
-    if (!this.flashes.hit(id, now, JUICE.buildingFlashMs, JUICE.buildingFlashGapMs)) return;
+    // (a remembered building out of sight keeps its last-seen look)
+    if (!v.seen || !this.flashes.hit(id, now, JUICE.buildingFlashMs, JUICE.buildingFlashGapMs)) return;
     v.warmUntil = now + JUICE.buildingFlashMs;
   }
 
@@ -204,6 +298,10 @@ export class EntityRenderer {
     for (const [id, v] of this.views) {
       if (seen.has(id)) continue;
       const root = v.m.root;
+      // an enemy building destroyed out of sight stays standing, as remembered (the minimap's
+      // memory too), until we see its footprint again — or the match is decided
+      if (v.kind === "building" && v.visible && !this.sold.has(id) && !this.isFriendly(v.faction) && !w.winner && !this.footprintSeen(v))
+        continue;
       if (v.kind === "building") {
         if (!this.sold.has(id) && v.visible) this.fx.rubble(v.cx, v.cy, v.size);
         if (this.sold.has(id)) {
@@ -354,8 +452,9 @@ export class EntityRenderer {
     m.root.position.set(cx, base - 0.02, cy);
     this.group.add(m.root);
     const v: BuildingView = {
-      kind: "building", m, face: b.facing, recoil: 0, lastFired: b.firedTick,
-      smokeT: 0, size, cx, cy, base, visible: true, variant: "normal", warmUntil: 0, top: m.def.height
+      kind: "building", m, faction: b.faction, face: b.facing, recoil: 0, lastFired: b.firedTick,
+      smokeT: 0, size, tx: b.tx, ty: b.ty, cx, cy, base, visible: true, seen: true, hp: b.hp / BUILDINGS[b.kind].hp,
+      variant: "normal", warmUntil: 0, top: m.def.height, roof: roofOf(b.kind, m.def, size)
     };
     if (this.world.tick > 1) {
       // freshly placed: it rises from the ground in a puff of dust
@@ -367,37 +466,50 @@ export class EntityRenderer {
     return v;
   }
 
+  /** Can the local player see any tile of a building's footprint (the sim's rule for seeing it)? */
+  private footprintSeen(v: BuildingView): boolean {
+    for (let dy = 0; dy < v.size; dy++)
+      for (let dx = 0; dx < v.size; dx++) if (this.visibleAt(v.tx + dx + 0.5, v.ty + dy + 0.5)) return true;
+    return false;
+  }
+
   private updateBuilding(b: Building, v: BuildingView, dtMs: number, turnK: number): void {
-    const stats = BUILDINGS[b.kind];
-    const visible = this.isFriendly(b.faction) || this.buildingShown(b);
+    const friendly = this.isFriendly(b.faction);
+    const visible = friendly || this.buildingShown(b);
     v.visible = visible;
     v.m.root.visible = visible;
     if (!visible) return;
-    const ratio = b.hp / stats.hp;
-    this.setVariant(v, performance.now() < v.warmUntil ? "warm" : ratio < 0.5 ? "damaged" : "normal");
+    // a remembered enemy building out of sight keeps the health it had when last seen
+    v.seen = friendly || this.footprintSeen(v);
+    if (v.seen) v.hp = b.hp / BUILDINGS[b.kind].hp;
+    const ratio = v.hp;
+    this.setVariant(v, v.seen && performance.now() < v.warmUntil ? "warm" : ratio < 0.5 ? "damaged" : "normal");
     if (v.m.turret) {
-      if (b.kind === "radar") v.face += dtMs / 900; // radar sweeps continuously
-      else v.face += angleDelta(v.face, b.facing) * turnK;
-      if (b.firedTick !== v.lastFired) {
-        v.lastFired = b.firedTick;
-        v.recoil = 1;
+      // out of sight it holds its last-seen pose: a radar that swept on (then froze as it died in
+      // the fog) or a turret that kept tracking would show what the fog hides. (A shot we're shown
+      // still swings it round and kicks it: fired().)
+      if (v.seen) {
+        if (b.kind === "radar") v.face += dtMs / 900; // radar sweeps continuously
+        else v.face += angleDelta(v.face, b.facing) * turnK;
+        if (b.firedTick !== v.lastFired) v.recoil = 1;
       }
+      v.lastFired = b.firedTick;
       v.recoil = Math.max(0, v.recoil - dtMs / 160);
       const kick = v.recoil * 0.05;
       const mount = v.m.def.mount;
       v.m.turret.rotation.y = -v.face;
       v.m.turret.position.set(mount[0] - Math.sin(v.face) * kick, mount[1], mount[2] + Math.cos(v.face) * kick);
     }
-    // damage smoke and fire
-    if (ratio < 0.5) {
+    // damage smoke and fire, rising off the roof (not while out of sight: the fog hides it)
+    if (v.seen && ratio < 0.5) {
       v.smokeT -= dtMs;
       if (v.smokeT <= 0) {
         v.smokeT = ratio < 0.25 ? 110 : 260;
-        const half = v.size / 2;
-        this.fx.buildingSmoke(
-          { x: v.cx + (Math.random() - 0.5) * half, y: v.cy + (Math.random() - 0.5) * half, h: v.base + v.top * (0.45 + Math.random() * 0.3) },
-          ratio < 0.25
-        );
+        const i = Math.floor(Math.random() * 9);
+        puffAt.x = v.cx + (((i % 3) - 1) * v.size) / 4 + (Math.random() - 0.5) * 0.12;
+        puffAt.y = v.cy + ((Math.floor(i / 3) - 1) * v.size) / 4 + (Math.random() - 0.5) * 0.12;
+        puffAt.h = v.base - 0.02 + v.roof[i]!;
+        this.fx.buildingSmoke(puffAt, ratio < 0.25);
       }
     }
   }

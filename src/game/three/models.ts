@@ -74,6 +74,15 @@ const partB = () => new ModelBuilder({ grade: 0.26 });
 /** Buildings and objectives: a gentler grade, occlusion over a taller band. */
 const siteB = () => new ModelBuilder({ grade: 0.22, ao: [0.3, 0.38] });
 
+/**
+ * Rear rotor rings: halfway from the team's dark shade to its main colour, so
+ * the front pair still reads as the nose but the rear stays team-bright over
+ * dark ground (team-dark alone sinks into ash and shadow).
+ */
+function rearRing(t: Team): number {
+  return ((t.main >> 1) & 0x7f7f7f) + ((t.dark >> 1) & 0x7f7f7f);
+}
+
 /** A barrel of length `len` from base point `at`, pitched up by `pitch`, along -Z. */
 function barrel(b: ModelBuilder, at: Vec3, r: number, len: number, pitch: number, hex: number, seg = 6): void {
   const dy = Math.sin(pitch);
@@ -300,7 +309,7 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
     const at: Vec3[] = [];
     for (const [x, z] of [[0.14, -0.14], [-0.14, -0.14], [0.14, 0.14], [-0.14, 0.14]] as [number, number][]) {
       b.cyl(0.03, 0.03, 0.05, 8, [x, 0.005, z], GM);
-      b.torus(0.085, 0.015, [x, 0.02, z], z < 0 ? t.main : t.dark, { rot: [Math.PI / 2, 0, 0], seg: 14 });
+      b.torus(0.085, 0.015, [x, 0.02, z], z < 0 ? t.main : rearRing(t), { rot: [Math.PI / 2, 0, 0], seg: 14 });
       at.push([x, 0.04, z]);
     }
     b.block(0.08, 0.03, 0.09, [0, 0.055, 0.02], t.main, { bevel: 0.012 });
@@ -368,7 +377,7 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
     for (const [x, z] of [[0.38, -0.28], [-0.38, -0.28], [0.38, 0.3], [-0.38, 0.3]] as [number, number][]) {
       const len = Math.hypot(x, z);
       b.box(0.05, 0.035, len, [x / 2, 0, z / 2], GM_D, { rot: [0, Math.atan2(x, z), 0] });
-      b.torus(0.15, 0.03, [x, 0.01, z], z < 0 ? t.main : t.dark, { rot: [Math.PI / 2, 0, 0], seg: 16 });
+      b.torus(0.15, 0.03, [x, 0.01, z], z < 0 ? t.main : rearRing(t), { rot: [Math.PI / 2, 0, 0], seg: 16 });
       b.cyl(0.04, 0.05, 0.06, 8, [x, 0.0, z], GM);
       at.push([x, 0.035, z]);
     }
@@ -715,10 +724,10 @@ function rubbleGeo(size: number, seed: number): THREE.BufferGeometry {
   const metal = [GM_D, GM, 0x3c3a37];
   const pick = (a: number[]) => a[Math.floor(rnd() * a.length)]!;
   // the scorched foundation, cracked into tilted, shifted plates (some missing)
-  const k = size + 1;
-  const cell = (half * 2) / k;
-  for (let i = 0; i < k; i++)
-    for (let j = 0; j < k; j++) {
+  const plates = size + 1;
+  const cell = (half * 2) / plates;
+  for (let i = 0; i < plates; i++)
+    for (let j = 0; j < plates; j++) {
       if (rnd() < 0.15) continue;
       const w = cell * (0.72 + rnd() * 0.2);
       const x = -half + cell * (i + 0.5) + (rnd() - 0.5) * cell * 0.2;

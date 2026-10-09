@@ -53,6 +53,12 @@ const MAX_ZOOM = 110;
 const DEFAULT_ZOOM = 42;
 /** The look-at point may wander this far past the map edge (tiles). */
 const EDGE_PAD = 2;
+/** Radius of an order's waypoint ring (CSS px). */
+const WAYPOINT_PX = 7;
+/** Box-select dashes (CSS px), their dark rims (each 1 px longer at both ends), and none. */
+const DASH = [6, 4];
+const DASH_RIM = [8, 2];
+const NO_DASH: number[] = [];
 
 /**
  * The battle: the deterministic sim at a fixed 10 Hz, interpolated into a
@@ -103,6 +109,10 @@ export class GameScene {
   private objPill: ObjectivePill | null = null;
   private gest!: GestureRecognizer;
   private boxRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** This frame's order waypoints (one per shared target), reused: no per-frame garbage. */
+  private waypoints: { key: number; x: number; y: number; col: number }[] = [];
+  /** This frame's rank chevrons (x, y, scale per chevron), reused. */
+  private chevrons: number[] = [];
   private hud!: Hud;
   private ended = false;
   /** The clock waits for the player's opener pick. */
@@ -684,7 +694,7 @@ export class GameScene {
         break;
       }
       case "explosion":
-        if (!this.seesPoint(ev.x, ev.y) && ev.kind !== "building") return;
+        if (ev.kind === "building" ? !this.buildingBlastShown(ev.x, ev.y, ev.size) : !this.seesPoint(ev.x, ev.y)) return;
         this.fx.explosion(ev, this.at(ev.x, ev.y, ev.air, ev.kind === "building" ? 0.4 : 0.2));
         break;
       case "heal": {
@@ -751,46 +761,102 @@ export class GameScene {
     return this.tileVisible(c.x, c.y);
   }
 
-  /** Selection rings, order lines, building selection and range, the wave marker, placement. */
+  /**
+   * Does the blast of a building dying at (x, y) go off on screen? Its own
+   * sight dies with it (the fog may already be recomputed without it: every
+   * third tick, at the end of the step), so ours always do. So does every
+   * blast in the tick that decides the match, the HQ's among them: the finale
+   * glides onto it and the match is over (render/entities.ts drops its
+   * ghosts then too). Otherwise an enemy's goes off only where we can see
+   * part of its footprint — one that falls in the fog stays standing, as
+   * remembered, until we look again (render/entities.ts).
+   */
+  private buildingBlastShown(x: number, y: number, size: number): boolean {
+    if (!this.ctrl.showFog || this.world.winner) return true;
+    // (the death event right after the explosion says whose it was)
+    for (const e of this.world.fx)
+      if (e.type === "death" && e.buildingKind !== null && e.x === x && e.y === y) {
+        if (e.faction === PLAYER) return true;
+        break;
+      }
+    const x0 = x - size / 2;
+    const y0 = y - size / 2;
+    for (let dy = 0; dy < size; dy++)
+      for (let dx = 0; dx < size; dx++) if (this.tileVisible(x0 + dx + 0.5, y0 + dy + 0.5)) return true;
+    return false;
+  }
+
+  /**
+   * Selection rings, order lines and waypoints, building selection and range,
+   * the wave marker, placement. Selection outranks the combat rings under it
+   * (bolder, fully opaque, a faint fill under our own units); a selection's
+   * orders share one waypoint per target, joined by thin unhaloed lines.
+   */
   private drawWorldMarks(): void {
     const g = this.view.ground;
     const w = this.world;
+    const marks = this.waypoints;
+    let nMarks = 0;
     for (const id of this.ctrl.selectedUnits) {
       const u = w.units.get(id);
       const p = this.entities.pos(id);
       if (!u || !p) continue;
       const air = UNITS[u.kind].domain === "air";
       const r = UNITS[u.kind].radius * 1.12 + 0.14;
-      const col = u.faction === PLAYER ? 0x7ef29b : 0xff7a6a;
+      const own = u.faction === PLAYER;
       // aircraft: ring the craft itself (at altitude), not the ground under it
-      g.lineStyle(2, col, 0.95).strokeEllipse(p.x, p.y, r * 2.1, r * 2.1, air ? p.h - 0.1 : undefined);
-      if (u.faction !== PLAYER) continue;
+      const at = air ? p.h - 0.1 : undefined;
+      if (own) g.fillStyle(0x7ef29b, 0.1).fillEllipse(p.x, p.y, r * 2.1, r * 2.1, at);
+      g.lineStyle(2.5, own ? 0x7ef29b : 0xff7a6a, 1).strokeEllipse(p.x, p.y, r * 2.1, r * 2.1, at);
+      if (!own) continue;
       const o = u.order;
-      let tx: number | null = null;
-      let ty: number | null = null;
-      let lineCol = 0x7ef29b;
+      let tx = 0;
+      let ty = 0;
+      let key = 0;
+      let col = 0x7ef29b;
       if (o.type === "move" || o.type === "attackMove") {
         tx = o.x;
         ty = o.y;
-        lineCol = o.type === "move" ? 0x7ec1ff : 0x7ef29b;
+        // (orders to the same tile share a waypoint: one tap sends the whole selection there)
+        key = (Math.floor(o.x) * 4096 + Math.floor(o.y)) * 2 + (o.type === "move" ? 2 : 1);
+        col = o.type === "move" ? 0x7ec1ff : 0x7ef29b;
       } else if (o.type === "attack") {
         const t = this.entities.pos(o.targetId);
-        if (t && this.entities.isShown(o.targetId)) {
-          tx = t.gx;
-          ty = t.gy;
-          lineCol = 0xff5a4a;
-        }
+        if (!t || !this.entities.isShown(o.targetId)) continue;
+        tx = t.gx;
+        ty = t.gy;
+        key = -1 - o.targetId;
+        col = 0xff5a4a;
+      } else continue;
+      let m = 0;
+      while (m < nMarks && marks[m]!.key !== key) m++;
+      if (m === nMarks) {
+        const mk = marks[nMarks] ?? (marks[nMarks] = { key: 0, x: 0, y: 0, col: 0 });
+        mk.key = key;
+        mk.x = tx;
+        mk.y = ty;
+        mk.col = col;
+        nMarks++;
       }
-      if (tx !== null && ty !== null) {
-        g.lineStyle(1.2, lineCol, 0.35).lineBetween(p.gx, p.gy, tx, ty);
-        g.fillStyle(lineCol, 0.5).fillCircle(tx, ty, 3 * g.px(tx, ty));
-      }
+      const mk = marks[m]!;
+      // the line stops at the waypoint's ring
+      const dx = mk.x - p.gx;
+      const dy = mk.y - p.gy;
+      const d = Math.hypot(dx, dy);
+      const stop = WAYPOINT_PX * g.px(mk.x, mk.y);
+      if (d > stop) g.lineStyle(1.2, col, 0.35, 0).lineBetween(p.gx, p.gy, mk.x - (dx / d) * stop, mk.y - (dy / d) * stop);
+    }
+    for (let i = 0; i < nMarks; i++) {
+      const mk = marks[i]!;
+      const px = g.px(mk.x, mk.y);
+      g.lineStyle(1.5, mk.col, 0.85).strokeCircle(mk.x, mk.y, WAYPOINT_PX * px);
+      g.fillStyle(mk.col, 0.9).fillCircle(mk.x, mk.y, 2.5 * px);
     }
 
     const sb = this.ctrl.selectedBuilding !== null ? w.buildings.get(this.ctrl.selectedBuilding) : null;
     if (sb) {
       const size = BUILDINGS[sb.kind].size;
-      g.lineStyle(2, 0x7ef29b, 0.95).strokeRect(sb.tx + 0.03, sb.ty + 0.03, size - 0.06, size - 0.06);
+      g.lineStyle(2.5, 0x7ef29b, 1).strokeRect(sb.tx + 0.03, sb.ty + 0.03, size - 0.06, size - 0.06);
       const st = BUILDINGS[sb.kind];
       const c = buildingCenter(sb);
       if (st.range > 0) g.lineStyle(1.2, 0xffffff, 0.3).strokeCircle(c.x, c.y, st.range + size / 2);
@@ -820,60 +886,87 @@ export class GameScene {
       if (s.behind) continue;
       const bw = Math.min(64, Math.max(30, (UNITS[u.kind].radius * 2.2) / rig.worldPerPx(p.x, p.y)));
       this.juice.healthBar(ctx, u.id, s.x - bw / 2, s.y - 10, bw, u.hp / max, u.faction === PLAYER);
-      if (harvesterLoad) {
-        const k = u.cargo / ECONOMY.harvesterCapacity;
-        ctx.fillStyle = "rgba(16,20,28,0.8)";
-        ctx.fillRect(Math.round(s.x - bw / 2), Math.round(s.y - 4), Math.round(bw), 3);
-        ctx.fillStyle = "#ffd66e";
-        ctx.fillRect(Math.round(s.x - bw / 2), Math.round(s.y - 4), Math.round(bw * k), 2);
-      }
+      // the load rides 2 px under the health bar, in the same frame style
+      if (harvesterLoad) this.juice.meter(ctx, s.x - bw / 2, s.y - 4, bw, 3, u.cargo / ECONOMY.harvesterCapacity, "#ffd66e");
     }
     for (const b of w.buildings.values()) {
-      const max = BUILDINGS[b.kind].hp;
       const size = BUILDINGS[b.kind].size;
       if (!this.entities.isShown(b.id)) continue;
       const p = this.entities.pos(b.id);
       if (!p) continue;
       const bw = Math.min(150, Math.max(36, (size * 0.8) / rig.worldPerPx(p.x, p.y)));
-      if (b.hp < max || this.ctrl.selectedBuilding === b.id) {
+      // (none on an enemy building we only remember: its health is out of sight)
+      const ratio = this.entities.shownHp(b.id);
+      if (ratio !== null && (ratio < 1 || this.ctrl.selectedBuilding === b.id)) {
         const s = rig.project(p.x, p.y, p.top + 0.1);
-        if (!s.behind) this.juice.healthBar(ctx, b.id, s.x - bw / 2, s.y - 10, bw, b.hp / max, b.faction === PLAYER);
+        if (!s.behind) this.juice.healthBar(ctx, b.id, s.x - bw / 2, s.y - 11, bw, ratio, b.faction === PLAYER, 5);
       }
       // production progress under our factories
       const head = b.queue[0];
       if (head && b.faction === PLAYER) {
         const total = UNITS[head.kind].buildTime * TICK_RATE;
-        const k = 1 - head.remaining / total;
         const s = rig.project(p.x, b.ty + size, p.h - 0.4);
-        if (!s.behind) {
-          const x = Math.round(s.x - bw / 2);
-          const y = Math.round(s.y - 9);
-          ctx.fillStyle = "rgba(16,20,28,0.75)";
-          ctx.fillRect(x, y, Math.round(bw), 5);
-          ctx.fillStyle = "#6eb0ff";
-          ctx.fillRect(x + 1, y + 1, Math.round((bw - 2) * k), 3);
-        }
+        if (!s.behind) this.juice.meter(ctx, s.x - bw / 2, s.y - 8, bw, 4, 1 - head.remaining / total, "#6eb0ff");
       }
     }
-    // veterancy chevrons float above the unit
+    // veterancy chevrons float above the unit, on the device pixel grid (crisp, and no shimmer as the camera glides)
+    const dpr = this.dpr;
+    const chev = this.chevrons;
+    let n = 0;
     for (const r of this.entities.ranked()) {
       const s = rig.project(r.x, r.y, r.h + 0.12);
       if (s.behind) continue;
+      const y = Math.round((s.y - 20) * dpr) / dpr;
       for (let i = 0; i < r.rank; i++) {
         const last = i === r.rank - 1;
-        const k = last ? 0.8 + (1 - r.pop) * 0.8 : 0.8;
-        chevron(ctx, s.x - (r.rank - 1) * 7 + i * 14, s.y - 20, k);
+        chev[n++] = Math.round((s.x - (r.rank - 1) * 7 + i * 14) * dpr) / dpr;
+        chev[n++] = y;
+        chev[n++] = last ? 0.8 + (1 - r.pop) * 0.8 : 0.8;
       }
+    }
+    if (n > 0) {
+      // a soft drop shadow lifts the gold off sand and snow: the same shapes a pixel lower, dark with a
+      // feathered rim (one path for them all, and no canvas shadowBlur, which blurs a mask per draw)
+      const drop = Math.max(1, Math.round(dpr)) / dpr;
+      ctx.beginPath();
+      for (let i = 0; i < n; i += 3) chevron(ctx, chev[i]!, chev[i + 1]! + drop, chev[i + 2]!);
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fill();
+      ctx.lineWidth = 2.6;
+      ctx.strokeStyle = "rgba(0,0,0,0.2)";
+      ctx.stroke();
+      ctx.beginPath();
+      for (let i = 0; i < n; i += 3) chevron(ctx, chev[i]!, chev[i + 1]!, chev[i + 2]!);
+      ctx.fillStyle = "#ffd66e";
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = "#3a2a00";
+      ctx.stroke();
     }
     if (this.boxRect) {
       const b = this.boxRect;
-      const x = Math.min(b.x0, b.x1);
-      const y = Math.min(b.y0, b.y1);
-      ctx.strokeStyle = "rgba(126,242,155,0.9)";
-      ctx.lineWidth = 1.5;
+      // edges through device pixel centres: the strokes sit on the pixel grid instead of straddling it
+      const x = pxCentre(Math.min(b.x0, b.x1), dpr);
+      const y = pxCentre(Math.min(b.y0, b.y1), dpr);
+      const bw = pxCentre(Math.max(b.x0, b.x1), dpr) - x;
+      const bh = pxCentre(Math.max(b.y0, b.y1), dpr) - y;
       ctx.fillStyle = "rgba(126,242,155,0.08)";
-      ctx.fillRect(x, y, Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
-      ctx.strokeRect(x, y, Math.abs(b.x1 - b.x0), Math.abs(b.y1 - b.y0));
+      ctx.fillRect(x, y, bw, bh);
+      // marching green dashes, each with a 1 px dark rim (a dash 1 px longer at both ends): the edge
+      // reads on snow, and on sand the gaps stay sand instead of making a dark frame
+      const march = (performance.now() / 40) % 10;
+      ctx.setLineDash(DASH_RIM);
+      ctx.lineDashOffset = 1 - march;
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = "rgba(4,7,12,0.55)";
+      ctx.strokeRect(x, y, bw, bh);
+      ctx.setLineDash(DASH);
+      ctx.lineDashOffset = -march;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(126,242,155,0.95)";
+      ctx.strokeRect(x, y, bw, bh);
+      ctx.setLineDash(NO_DASH);
+      ctx.lineDashOffset = 0;
     }
     this.stage.screen.drawLabels();
   }
@@ -1144,23 +1237,18 @@ export class GameScene {
   }
 }
 
-/** A gold rank chevron centred on (x, y), scaled by k. */
+/** The centre of the device pixel under CSS coordinate `v`. */
+function pxCentre(v: number, dpr: number): number {
+  return (Math.floor(v * dpr) + 0.5) / dpr;
+}
+
+/** Add a rank chevron centred on (x, y), scaled by k, to the current path (drawn gold by drawScreen). */
 function chevron(ctx: CanvasRenderingContext2D, x: number, y: number, k: number): void {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(k, k);
-  ctx.fillStyle = "#ffd66e";
-  ctx.strokeStyle = "#3a2a00";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(-9, -2);
-  ctx.lineTo(0, -6.5);
-  ctx.lineTo(9, -2);
-  ctx.lineTo(9, 4);
-  ctx.lineTo(0, -0.5);
-  ctx.lineTo(-9, 4);
+  ctx.moveTo(x - 9 * k, y - 2 * k);
+  ctx.lineTo(x, y - 6.5 * k);
+  ctx.lineTo(x + 9 * k, y - 2 * k);
+  ctx.lineTo(x + 9 * k, y + 4 * k);
+  ctx.lineTo(x, y - 0.5 * k);
+  ctx.lineTo(x - 9 * k, y + 4 * k);
   ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
 }
