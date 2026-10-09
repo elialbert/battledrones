@@ -93,11 +93,6 @@ const EMBERS: EmitCfg = {
   tex: TEX.glow, additive: true, life: [500, 900], speed: [0.1, 0.4], up: [0.6, 1.3], size: [0.06, 0.09], grow: [0.4, 0.6],
   alpha: [1, 0], tints: [0xffd27a], end: 0xff4a10, gravity: -0.8, drag: 0.6
 };
-/** A splash where an aircraft goes into the water (or a gout of fire from lava). */
-const SPLASH: EmitCfg = {
-  tex: TEX.puff, tex2: TEX.puff2, life: [450, 800], speed: [0.4, 1.1], up: [1.2, 2.4], size: [0.16, 0.24], grow: [1.8, 2.4],
-  alpha: [0.75, 0], tints: [0xe8f4ff, 0xcfe6f5], end: 0xffffff, gravity: -4, drag: 0.5, rot: 0.5, easeOut: true
-};
 
 const auraGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
@@ -339,11 +334,9 @@ export class WreckRenderer {
         const g = this.v.terrain.surfaceAt(p.gx, p.gy);
         // (deep water and lava sit well below the ground; rock and roofs just take the dust)
         if (this.v.terrain.heightAt(p.gx, p.gy) < -0.3) {
-          if (this.world.biome === "volcanic") {
-            // swallowed by the lava: a gout of fire
-            this.fx.flash({ x: p.gx, y: p.gy, h: g + 0.2 }, 1.1, 0xff9a2e, 0.8);
-            this.fx.sparks({ x: p.gx, y: p.gy, h: g + 0.15 }, 8, [0xffc257, 0xff7a1e]);
-          } else this.v.particles.emit(SPLASH, p.gx, p.gy, g + 0.05, 7);
+          // swallowed by the lava (a gout of fire) or the water (a splash)
+          if (this.world.biome === "volcanic") this.fx.flash({ x: p.gx, y: p.gy, h: g + 0.2 }, 1.1, 0xff9a2e, 0.8);
+          this.fx.splash(p.gx, p.gy, 7);
         }
         this.fx.dust(p.gx, p.gy, 3);
       }

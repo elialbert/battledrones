@@ -70,8 +70,10 @@ const SMOKE: EmitCfg = {
 };
 /** The Sky Hammer column: a white-hot core in a soft cyan sheath (radius, opacity, colour). */
 const LANCE_LAYERS: [number, number, number][] = [[0.3, 1, 0xffffff], [0.72, 0.45, 0xcdeeff], [1.5, 0.16, 0x8fd2ff]];
-/** Barrage shells and falling pods leave a puff of flame every this many tiles. */
+/** Falling pods leave a puff of flame every this many tiles (and smoke every other one)… */
 const STREAK_STEP = 0.3;
+/** …and Barrage shells, which leave no smoke, closer together, so the shrinking puffs still join up. */
+const SHELL_STEP = 0.18;
 
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, 0.5, 0);
 const streakGeo = new THREE.BoxGeometry(0.06, 0.06, 1);
@@ -242,7 +244,7 @@ export class PowerRenderer {
         this.ring(x, y, 0x2f8fff, 0.2, R * 0.75, 420, 90, false);
         this.fx.shock(x, y, R * 0.8, 0x7fd4ff, 0.7, 380);
         this.glow(x, y, g + 0.4, EMP_BLUE, 3, 5, 380, 0.85);
-        this.glow(x, y, g + 0.08, 0x4aa8ff, R * 1.6, R * 2.2, 520, 0.45, true);
+        this.glow(x, y, g + 0.08, 0x4aa8ff, R * 1.2, R * 1.7, 520, 0.5, true);
         this.v.particles.emit({ ...SPARKS, speed: [1, 4], spread: R * 0.6 }, x, y, g + 0.4, 24);
         this.sound("emp", x, y, 1, 0.15);
         this.shake(x, y, 120, 0.003);
@@ -484,8 +486,8 @@ export class PowerRenderer {
       tmpC.setHex(0xfff0c8);
       this.v.particles.spawn({ x: px, y: ph, z: py, life: 45, tex: TEX.glow, size0: 0.55, size1: 0.5, alpha0: 0.9, alpha1: 0.6, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
       s.acc += moved;
-      const n = Math.floor(s.acc / STREAK_STEP);
-      s.acc -= n * STREAK_STEP;
+      const n = Math.floor(s.acc / SHELL_STEP);
+      s.acc -= n * SHELL_STEP;
       const len = Math.hypot(STREAK.dx, STREAK.dy, STREAK.h);
       for (let i = 0; i < n; i++) {
         const d = moved * ((i + 1) / (n + 1));

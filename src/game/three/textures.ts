@@ -146,7 +146,19 @@ function puffCell(seed: number): (u: number, v: number) => [number, number] {
   };
 }
 
+/** The atlas is painted once per session (the pixel cells cost real start-up time); each scene wraps it in its own texture. */
+let atlasCanvas: HTMLCanvasElement | null = null;
+
 export function particleAtlas(): THREE.CanvasTexture {
+  atlasCanvas ??= paintAtlas();
+  const tex = new THREE.CanvasTexture(atlasCanvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  return tex;
+}
+
+function paintAtlas(): HTMLCanvasElement {
   const [c, ctx] = canvas(CELL * 4, CELL * 4);
   const cell = (i: number, draw: (ctx: CanvasRenderingContext2D, r: number) => void) => {
     ctx.save();
@@ -315,12 +327,7 @@ export function particleAtlas(): THREE.CanvasTexture {
     ctx.lineTo(r * 0.3, r * 0.4);
     ctx.stroke();
   });
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = true;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  return tex;
+  return c;
 }
 
 /** Soft blobs wrapped around the edges so the texture tiles seamlessly (R = shadow). */

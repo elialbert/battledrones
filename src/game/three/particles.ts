@@ -44,6 +44,8 @@ export interface Particle {
   flat: boolean;
   /** Fraction of the life spent fading in (0: born at full alpha). */
   fadeIn: number;
+  /** Alpha falls off fast, then lingers faint (a flame that burns out) instead of thinning evenly. */
+  fadeFast: boolean;
   /** Grow fast then settle (a blast front) instead of linearly. */
   easeOut: boolean;
 }
@@ -77,6 +79,7 @@ export interface EmitCfg {
   /** Constant drift added to the horizontal velocity (units/s, +x east, +z south): smoke leans downwind. */
   wind?: [number, number];
   fadeIn?: number;
+  fadeFast?: boolean;
   easeOut?: boolean;
 }
 
@@ -120,7 +123,7 @@ const col = new THREE.Color();
 function blank(): Particle {
   return {
     x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 1, t: 0, size0: 1, size1: 1, alpha0: 1, alpha1: 0,
-    r: 1, g: 1, b: 1, r1: 1, g1: 1, b1: 1, tex: 0, rot: 0, spin: 0, gravity: 0, drag: 1, flat: false, fadeIn: 0, easeOut: false
+    r: 1, g: 1, b: 1, r1: 1, g1: 1, b1: 1, tex: 0, rot: 0, spin: 0, gravity: 0, drag: 1, flat: false, fadeIn: 0, fadeFast: false, easeOut: false
   };
 }
 
@@ -135,7 +138,7 @@ class Pool {
   private geo: THREE.InstancedBufferGeometry;
   private attrs: THREE.InstancedBufferAttribute[];
 
-  constructor(private cap: number, map: THREE.Texture, additive: boolean, order: number) {
+  constructor(readonly cap: number, map: THREE.Texture, additive: boolean, order: number) {
     const quad = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
     geo.index = quad.index;
@@ -182,28 +185,30 @@ class Pool {
     p.drag = 1;
     p.flat = false;
     p.fadeIn = 0;
+    p.fadeFast = false;
     p.easeOut = false;
     return p;
   }
 
   add(p: Particle): void {
-    // full: the oldest goes (the list is in spawn order)
-    if (this.list.length >= this.cap) this.free.push(this.list.shift()!);
+    // (over the cap, the oldest go at the next update: the list is in spawn order)
     this.list.push(p);
   }
 
   get count(): number {
-    return this.list.length;
+    return Math.min(this.list.length, this.cap);
   }
 
   update(dtMs: number): void {
     const dt = dtMs / 1000;
     const list = this.list;
     let n = 0;
+    // full: the oldest make way
+    const over = list.length - this.cap;
     for (let i = 0; i < list.length; i++) {
       const p = list[i]!;
       p.t += dtMs;
-      if (p.t >= p.life) {
+      if (p.t >= p.life || i < over) {
         this.free.push(p);
         continue;
       }
@@ -222,7 +227,7 @@ class Pool {
       }
       const k = p.t / p.life;
       const sk = p.easeOut ? 1 - (1 - k) * (1 - k) : k;
-      let a = p.alpha0 + (p.alpha1 - p.alpha0) * k;
+      let a = p.alpha0 + (p.alpha1 - p.alpha0) * (p.fadeFast ? 1 - (1 - k) * (1 - k) : k);
       if (p.fadeIn > 0 && k < p.fadeIn) a *= k / p.fadeIn;
       this.pos[n * 3] = p.x;
       this.pos[n * 3 + 1] = p.y;
@@ -324,6 +329,7 @@ export class Particles {
       p.drag = cfg.drag ?? 1;
       p.flat = cfg.flat ?? false;
       p.fadeIn = cfg.fadeIn ?? 0;
+      p.fadeFast = cfg.fadeFast ?? false;
       p.easeOut = cfg.easeOut ?? false;
       pool.add(p);
     }
@@ -337,6 +343,11 @@ export class Particles {
 
   get count(): number {
     return this.ground.count + this.norm.count + this.add.count;
+  }
+
+  /** How full the smoke-and-matter pool is (0–1): optional puffs (missile trails) thin out as it fills, so they never crowd out longer smoke. */
+  get load(): number {
+    return this.norm.count / this.norm.cap;
   }
 
   clear(): void {

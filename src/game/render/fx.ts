@@ -5,6 +5,7 @@ import { ModelBuilder } from "../three/builder";
 import { fowUniforms, glowMat, modelMat } from "../three/materials";
 import { GM_D, modelMesh, rubbleGeometry } from "../three/models";
 import { TEX, type EmitCfg } from "../three/particles";
+import { WATER_LEVEL } from "../three/terrain";
 import { AIR_H, type P3, type View } from "../three/view";
 
 type ShotEvent = Extract<FxEvent, { type: "shot" }>;
@@ -30,8 +31,8 @@ const DUST_TINT: Record<Biome, number> = {
 };
 /** Smoke leans gently downwind: away from the sun, to the south-east. */
 const WIND: [number, number] = [0.16, 0.08];
-/** A missile or shell leaves a puff of trail every this many tiles. */
-const TRAIL_STEP = 0.09;
+/** A missile or shell leaves a puff of trail every this many tiles (more sparsely as the smoke pool fills). */
+const TRAIL_STEP = 0.15;
 
 /** Thick, sun-lit battle smoke: dark at the source, thinning to grey as it climbs. */
 const SMOKE: EmitCfg = {
@@ -72,12 +73,27 @@ const DEBRIS: EmitCfg = {
   alpha: [1, 0.5], tints: [0x5d6168, 0x4c4741, 0x6e655a, 0x3c3f44], gravity: -9.5, spin: 14
 };
 const TRAIL: EmitCfg = {
-  tex: TEX.smoke, life: [380, 700], speed: [0, 0.06], up: [0.04, 0.14], size: [0.13, 0.17], grow: [2.4, 3.2],
+  tex: TEX.smoke, life: [320, 600], speed: [0, 0.06], up: [0.04, 0.14], size: [0.16, 0.21], grow: [2.4, 3.2],
   alpha: [0.5, 0], tints: [0xdedad3], end: 0xb4b0aa, wind: WIND, fadeIn: 0.08, easeOut: true
 };
 /** The rocket motor's flame at the tail (a fresh one every frame reads as a steady burn). */
 const EXHAUST: EmitCfg = {
   tex: TEX.fire, additive: true, life: [50, 90], size: [0.13, 0.17], grow: [0.5, 0.7], alpha: [0.9, 0], tints: [0xffd27a, 0xffb347], end: 0xff6a1e
+};
+/** Spray thrown up where a blast or a falling hull hits the water. */
+const SPLASH: EmitCfg = {
+  tex: TEX.puff, tex2: TEX.puff2, life: [450, 800], speed: [0.4, 1.1], up: [1.2, 2.4], size: [0.16, 0.24], grow: [1.8, 2.4],
+  alpha: [0.75, 0], tints: [0xe8f4ff, 0xcfe6f5], end: 0xffffff, gravity: -4, drag: 0.5, rot: 0.5, easeOut: true
+};
+/** Mist kicked off the water (a hover hull's wake, a small splash). */
+const SPRAY: EmitCfg = {
+  tex: TEX.puff, tex2: TEX.puff2, life: [350, 650], speed: [0.05, 0.2], up: [0.1, 0.3], size: [0.14, 0.2], grow: [2, 2.6],
+  alpha: [0.45, 0], tints: [0xeef6ff, 0xd6e8f4], drag: 0.6, rot: 0.5, fadeIn: 0.1, easeOut: true
+};
+/** Molten spatter flung up where something plunges into the lava, crusting dark as it falls back (light would vanish on the glow). */
+const LAVA_GOUT: EmitCfg = {
+  tex: TEX.fire, life: [380, 650], speed: [0.4, 1.1], up: [1.4, 2.6], size: [0.13, 0.19], grow: [0.8, 1],
+  alpha: [1, 0.35], tints: [0xffc040, 0xff9a2e], end: 0x3a1a10, gravity: -6, drag: 0.7, spin: 3
 };
 const HEAL: EmitCfg = {
   tex: TEX.spark, additive: true, life: [300, 600], speed: [0.1, 0.4], up: [0.4, 0.9], size: [0.22, 0.3], grow: [0, 0.1],
@@ -135,6 +151,8 @@ export class Fx {
   /** Blast smoke: paler ash over the dark volcanic ground, where black smoke would vanish. */
   private smoke: EmitCfg;
   private plumeTints: number[];
+  /** The map's liquid is lava (else water or icy water). */
+  private lava: boolean;
 
   constructor(
     private v: View,
@@ -154,6 +172,7 @@ export class Fx {
     const ash = biome === "volcanic";
     this.smoke = ash ? { ...SMOKE, tints: [0x6a645d, 0x5d5852, 0x77716a], end: 0xaaa49c } : SMOKE;
     this.plumeTints = ash ? [0x57524c, 0x625c56, 0x6d6760] : [0x2c2a28, 0x353230, 0x403b37];
+    this.lava = biome === "volcanic";
     tracerMat ??= glowMat(0xffe2a0, 1);
   }
 
@@ -355,11 +374,13 @@ export class Fx {
 
   /**
    * A layered blast: a brief white-hot flash, a fireball of ragged flame
-   * that cools from yellow to dark red as it swells, a column of sun-lit
-   * smoke that outlives it, and on the ground a shock ring, a skirt of
-   * kicked-up dust and a scorch mark. `flashK`/`flashA` size the bloom:
-   * small deaths keep it modest so the fight underneath stays readable;
-   * building deaths keep the full flare.
+   * that cools from yellow to red and burns out fast as it swells (so it
+   * hands over to the smoke instead of lingering as a muddy ball), a hot
+   * core glowing inside the smoke a moment longer, a column of sun-lit
+   * smoke that outlives it all, and on the ground a shock ring, a skirt of
+   * kicked-up dust and a scorch mark (spray and no scorch on water).
+   * `flashK`/`flashA` size the bloom: small deaths keep it modest so the
+   * fight underneath stays readable; building deaths keep the full flare.
    */
   private boom(p: P3, size: number, air: boolean, decal: boolean, flashK = 1.5, flashA = 1): void {
     const pt = this.v.particles;
@@ -374,21 +395,22 @@ export class Fx {
       { ...this.smoke, size: [0.32 * size + 0.18, 0.45 * size + 0.22], life: [1100 + size * 300, 1900 + size * 500], up: [0.4, 0.75 + size * 0.2], speed: [0.1, 0.25 + size * 0.2] },
       p.x, p.y, p.h + 0.15, n(1.5, 2.5)
     );
-    // the fireball's body: opaque flame that cools into smoke (reads on snow and sand alike)
+    // the fireball's body: opaque flame (reads on snow and sand alike), loosely clustered so it
+    // billows rather than merging into one disc, that burns out fast into the smoke behind it
     pt.emit(
       {
-        tex: TEX.fire, life: [320 + size * 60, 560 + size * 120], speed: [0.25 * size, 0.8 * size + 0.2], up: [0.3, 0.9], drag: 0.12,
-        size: [0.38 * size + 0.12, 0.52 * size + 0.16], grow: [1.6, 2.2], easeOut: true, spin: 1.6,
-        alpha: [1, 0], tints: [0xffdc8a, 0xffc060, 0xffa848], end: 0xb8360c
+        tex: TEX.fire, life: [280 + size * 40, 460 + size * 90], speed: [0.2 * size, 0.9 * size + 0.2], up: [0.3, 0.9], drag: 0.12,
+        size: [0.3 * size + 0.1, 0.55 * size + 0.16], grow: [1.5, 2.3], easeOut: true, spin: 1.6, spread: 0.14 * size,
+        alpha: [1, 0], fadeFast: true, tints: [0xffdc8a, 0xffc060, 0xffa848], end: 0xc4400e
       },
       p.x, p.y, p.h + 0.1, n(2, 3)
     );
-    // its glow
+    // its hot core, still glowing inside the smoke a moment after the flames are spent
     pt.emit(
       {
-        tex: TEX.fire, additive: true, life: [200, 380 + size * 60], speed: [0.15 * size, 0.5 * size], up: [0.2, 0.6], drag: 0.2,
-        size: [0.42 * size + 0.12, 0.6 * size + 0.15], grow: [1.3, 1.7], easeOut: true, spin: 1.6,
-        alpha: [0.65 * k, 0], tints: [0xff9a2e, 0xffb347], end: 0x9a2a08
+        tex: TEX.fire, additive: true, life: [300, 480 + size * 90], speed: [0.05 * size, 0.25 * size], up: [0.2, 0.5], drag: 0.2,
+        size: [0.36 * size + 0.1, 0.5 * size + 0.12], grow: [1.2, 1.5], easeOut: true, spin: 1.6,
+        alpha: [0.65 * k, 0], tints: [0xffa040, 0xffb347], end: 0xa82c08
       },
       p.x, p.y, p.h + 0.1, n(1, 2)
     );
@@ -443,10 +465,9 @@ export class Fx {
       this.emit(DEBRIS, c, 7);
       this.emit(SPARKS, c, 5);
       this.sound("explosion", at.x, at.y, 0.9);
-      if (ev.air) {
-        // the wreck falls to the ground and burns out there
+      // the wreck falls to the ground and burns out there (over water or lava it sinks: render/wrecks.ts splashes it)
+      if (ev.air && !this.liquid(at.x, at.y))
         this.v.tweens.after(300, () => this.boom({ x: at.x, y: at.y, h: this.v.terrain.surfaceAt(at.x, at.y) + 0.3 }, 0.6, false, true));
-      }
     } else {
       this.boom(at, 0.5 + ev.size * 0.7, false, true, 1.1, 0.8);
       this.emit(DEBRIS, at, 3);
@@ -455,6 +476,7 @@ export class Fx {
   }
 
   private decal(x: number, y: number, size: number): void {
+    if (this.liquid(x, y)) return; // (nothing scorches water or lava)
     const h = this.v.terrain.surfaceAt(x, y) + 0.03;
     tmpC.setHex(0x14100c);
     const s = 0.6 + size * 0.6;
@@ -478,13 +500,34 @@ export class Fx {
 
   // ------------------------------------------------------ ambient bits ---
 
-  dust(x: number, y: number, n = 1): void {
-    this.v.particles.emit(this.dustCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.05, n);
+  /**
+   * Is tile point (x, y) open water or lava? (Not a bridge deck, which sits
+   * above the waterline, nor the very edge of a ford.)
+   */
+  liquid(x: number, y: number): boolean {
+    const t = this.v.terrain;
+    return t.heightAt(x, y) < WATER_LEVEL - 0.03 && t.surfaceAt(x, y) <= WATER_LEVEL;
   }
 
-  /** Dirt thrown outward along the ground (a landing, a blast). */
+  /** A puff of dust off the ground (mist off water). */
+  dust(x: number, y: number, n = 1): void {
+    const wet = !this.lava && this.liquid(x, y);
+    this.v.particles.emit(wet ? SPRAY : this.dustCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.05, n);
+  }
+
+  /** Dirt thrown outward along the ground (a landing, a blast); spray or fire off water or lava. */
   kick(x: number, y: number, n: number): void {
-    this.v.particles.emit(this.kickCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.08, n);
+    if (this.liquid(x, y)) this.splash(x, y, n);
+    else this.v.particles.emit(this.kickCfg, x, y, this.v.terrain.surfaceAt(x, y) + 0.08, n);
+  }
+
+  /** Something hits the water (spray) or plunges into the lava (a gout of fire and sparks). */
+  splash(x: number, y: number, n: number): void {
+    const h = this.v.terrain.surfaceAt(x, y);
+    if (this.lava) {
+      this.v.particles.emit(LAVA_GOUT, x, y, h + 0.1, n);
+      this.sparks({ x, y, h: h + 0.15 }, n, [0xffc257, 0xff7a1e]);
+    } else this.v.particles.emit(SPLASH, x, y, h + 0.05, n);
   }
 
   /** Shards of metal or rock tossed up. */
@@ -534,10 +577,20 @@ export class Fx {
 
   // ------------------------------------------------------------ per frame ---
 
+  /**
+   * Distance between trail puffs: TRAIL_STEP while the smoke pool has room,
+   * up to four times that as it fills, so in a big air fight the contrails
+   * thin out instead of evicting the battle and building smoke.
+   */
+  private trailStep(): number {
+    return TRAIL_STEP * (1 + Math.max(0, this.v.particles.load - 0.5) * 6);
+  }
+
   update(dtMs: number): void {
     let n = 0;
     const pos = tmpV;
     const pt = this.v.particles;
+    const step = this.trailStep();
     for (const f of this.fliers) {
       f.t += dtMs;
       const k = Math.min(1, f.t / f.dur);
@@ -565,8 +618,8 @@ export class Fx {
         const oy = f.obj.position.y;
         const oz = f.obj.position.z;
         f.acc += moved;
-        while (f.acc >= TRAIL_STEP) {
-          f.acc -= TRAIL_STEP;
+        while (f.acc >= step) {
+          f.acc -= step;
           const s = moved > 0 ? 1 - f.acc / moved : 1;
           pt.emit(TRAIL, ox + (pos.x - ox) * s, oz + (pos.z - oz) * s, oy + (pos.y - oy) * s, 1);
         }
@@ -584,6 +637,7 @@ export class Fx {
   /** Draw the sim's slow projectiles (shells arc, bombs fall). */
   projectiles(list: Projectile[], alpha: number, prev: Map<number, { x: number; y: number }>): void {
     const t = this.v.terrain;
+    const step = this.trailStep() * 1.4;
     for (const m of this.shells.values()) m.userData.seen = false;
     for (const p of list) {
       let m = this.shells.get(p.id);
@@ -613,8 +667,8 @@ export class Fx {
       if (moved > 1e-4) m.lookAt(2 * m.position.x - tmpV.x, 2 * m.position.y - tmpV.y, 2 * m.position.z - tmpV.z);
       if (!p.fromAir && moved > 0) {
         let acc = (m.userData.acc as number) + moved;
-        while (acc >= TRAIL_STEP * 1.4) {
-          acc -= TRAIL_STEP * 1.4;
+        while (acc >= step) {
+          acc -= step;
           const s = 1 - acc / moved;
           this.v.particles.emit(TRAIL, tmpV.x + (x - tmpV.x) * s, tmpV.z + (y - tmpV.z) * s, tmpV.y + (h - tmpV.y) * s, 1);
         }
