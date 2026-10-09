@@ -101,13 +101,15 @@ button {
 }
 .res {
   height: 30px;
-  padding-top: 0;
+  /* the 30 px pill: the one-em row (line-height 1) centred by its top padding, so
+     the rate keeps the digits' baseline */
+  padding-top: calc(14px - 0.5em);
   padding-bottom: 0;
   font-size: 19px;
   line-height: 1;
   color: var(--gold);
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
 }
 .res .gear {
@@ -330,8 +332,12 @@ button {
   color: #ff8a7a;
 }
 @media (orientation: portrait) {
+  /* (a stacked column, no row to line up with: the two lines get their breathing room) */
   .versus {
     max-width: calc(100vw - 236px);
+    height: auto;
+    padding: 3px 10px 4px;
+    line-height: 1.25;
   }
 }
 
@@ -760,6 +766,14 @@ button {
 .card td:nth-child(even) {
   font-weight: 700;
 }
+/* the toast entrance, keeping each orientation's centring transform (toastIn alone
+   swept the card in from half its size away) */
+@keyframes cardInP {
+  from { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(0.96); }
+}
+@keyframes cardInL {
+  from { opacity: 0; transform: translateY(-50%) translateY(-10px) scale(0.96); }
+}
 .card .good {
   color: var(--green);
   font-size: 13px;
@@ -804,15 +818,20 @@ button {
     }
     .res {
       font-size: 17px;
-      padding: 4px 10px;
+      padding-left: 10px;
+      padding-right: 10px;
       max-width: calc(100vw - 232px);
     }
   }
   .card {
     left: 50%;
     transform: translateX(-50%);
-    /* clear of the dock (chip row, selection panel): measured by src/ui/layout.ts */
+    /* clear of the dock (chip row, selection panel) and under the top band:
+       measured by src/ui/layout.ts; on a very short screen it scrolls, ✕ in view */
     bottom: var(--card-bottom, calc(150px + env(safe-area-inset-bottom)));
+    max-height: calc(100% - var(--card-bottom, calc(150px + env(safe-area-inset-bottom))) - max(8px, env(safe-area-inset-top)));
+    overflow-y: auto;
+    animation-name: cardInP;
   }
   /* the battlefield darkens softly into the dock, so the chip row reads on bright
      snow and sand and the build bar grows out of the scene instead of sitting on it */
@@ -836,9 +855,11 @@ button {
     transform: none;
     flex-direction: column;
     /* one instrument column: every pill (and the battle meter under them) shares
-       the widest one's edges instead of a ragged stack of stickers */
+       the widest one's edges instead of a ragged stack of stickers; at least the
+       scrap pill's widest, so the column holds still as the scrap ticks */
     align-items: stretch;
     gap: 4px;
+    min-width: min(calc(100vw - 248px), 160px);
   }
   /* never under the minimap: (round buttons 102 px) + (minimap + gap) */
   .res {
@@ -905,6 +926,7 @@ button {
     right: calc(186px + env(safe-area-inset-right));
     top: 50%;
     transform: translateY(-50%);
+    animation-name: cardInL;
   }
   /* centred at 50vw − 90px; never under the round buttons (right edge ~102 px) or the
      minimap (left edge 100vw − 302 px): a pill that doesn't fit wraps to a second row */
@@ -1319,7 +1341,8 @@ button {
 /* ------------------------------------------- sound settings (music.ts) --- */
 /* menu: the same one-tap master mute as in game, top-left over the key art */
 .menu-mute {
-  position: fixed;
+  /* scrolls with the menu (its scroller), so it never sits on How to play */
+  position: absolute;
   top: max(10px, env(safe-area-inset-top));
   left: max(10px, env(safe-area-inset-left));
   z-index: 2;
@@ -1960,7 +1983,7 @@ button {
 }
 .sq.on {
   border-color: var(--green);
-  box-shadow: 0 0 0 1px var(--green) inset, 0 0 8px rgba(126, 242, 155, 0.35);
+  box-shadow: 0 0 0 1px var(--green) inset, 0 0 8px rgba(126, 242, 155, 0.35), var(--lift);
 }
 .sq.on .sqn {
   color: var(--green);
@@ -1969,14 +1992,14 @@ button {
 .sq.hurt {
   border-color: #ff5a4a;
   background: #3a1414;
-  box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 12px rgba(255, 90, 74, 0.75);
+  box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 12px rgba(255, 90, 74, 0.75), var(--lift);
   animation: sqHurt 0.45s ease-in-out infinite alternate;
 }
 .sq.hurt .sqn {
   color: #ffb3a6;
 }
 @keyframes sqHurt {
-  to { box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 4px rgba(255, 90, 74, 0.3); background: #241016; }
+  to { box-shadow: 0 0 0 1px #ff5a4a inset, 0 0 4px rgba(255, 90, 74, 0.3), var(--lift); background: #241016; }
 }
 .sq.saved {
   animation: sqSaved 0.35s ease-out;
@@ -1994,7 +2017,7 @@ button {
   color: #0d1a12;
   background: #4fdc86;
   border-color: #7ef29b;
-  box-shadow: 0 0 12px rgba(79, 220, 134, 0.45);
+  box-shadow: 0 0 12px rgba(79, 220, 134, 0.45), var(--lift);
 }
 .chip.place.go:active {
   background: #3bbf70;
@@ -2155,9 +2178,13 @@ button {
   }
   .res {
     font-size: 16px;
-    padding: 4px 9px;
+    padding-left: 9px;
+    padding-right: 9px;
     gap: 5px;
     max-width: calc(100vw - 224px);
+  }
+  .topbar {
+    min-width: min(calc(100vw - 224px), 160px);
   }
   .res .rate {
     font-size: 11px;
@@ -2234,8 +2261,8 @@ button {
   color: var(--gold);
 }
 @keyframes wavehot {
-  from { box-shadow: 0 0 0 rgba(255, 90, 74, 0); }
-  to { box-shadow: 0 0 16px rgba(255, 90, 74, 0.7); }
+  from { box-shadow: 0 0 0 rgba(255, 90, 74, 0), var(--lift); }
+  to { box-shadow: 0 0 16px rgba(255, 90, 74, 0.7), var(--lift); }
 }
 @media (orientation: portrait) {
   /* the top bar is a narrow column between the round buttons and the minimap */

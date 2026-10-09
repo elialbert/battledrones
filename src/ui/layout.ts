@@ -19,7 +19,9 @@
  *   edges): where they like to be (centred / 38% down), but below a banner's
  *   slot and above the chip row.
  * - the **info card** (portrait): just above the dock, however tall the chip
- *   row and selection panel make it.
+ *   row and selection panel make it, but never up into the band: when it
+ *   doesn't fit between the two it overlaps the dock instead (down to its old
+ *   fixed spot).
  *
  * Results are CSS custom properties on the HUD root (`--tick-top`, `--tick-w`,
  * `--banner-top`, `--banner-x`, `--banner-max`, `--pw-top`, `--zoom-top`,
@@ -33,8 +35,10 @@ interface Box {
   bottom: number;
 }
 
-/** Gaps kept under the band, CSS px. */
+/** Gaps kept under the band (and, for the info card, above the dock), CSS px. */
 const GAP = { ticker: 6, banner: 8, card: 8 } as const;
+/** The portrait info card's old fixed bottom (CSS px): the lowest it goes to stay under the band. */
+const CARD_FLOOR = 150;
 /** Battle meter size until it has been seen once (it hangs under the top bar). */
 const METER_DEFAULT = { w: 156, h: 20, gap: 5 } as const;
 /** Height reserved for one ticker line (two text lines) above a portrait banner. */
@@ -162,9 +166,20 @@ export function mountHudLayout(root: HTMLElement): HudLayout {
       if (shown(powers)) pwTop = place(H / 2 - powers.offsetHeight / 2, powers.offsetHeight);
       const zoom = q(".zoombtns");
       if (shown(zoom)) zoomTop = place(H * 0.38, zoom.offsetHeight);
-      // the info card opens above the dock, not over half of its chip row
+      // the info card opens above the dock, not over half of its chip row; a dock grown
+      // tall (a big mixed selection on a short phone) would push it up over the band, so
+      // there it overlaps the dock instead, but no lower than its old fixed spot
       const dock = q(".dock");
-      if (shown(dock)) cardBottom = Math.round(H - dock.getBoundingClientRect().top + GAP.card);
+      if (shown(dock)) {
+        cardBottom = H - dock.getBoundingClientRect().top + GAP.card;
+        const card = q("#card");
+        if (shown(card)) {
+          const x0 = W / 2 - card.offsetWidth / 2;
+          const fit = H - (below(pieces, x0, x0 + card.offsetWidth, top0) + GAP.card) - card.offsetHeight;
+          cardBottom = Math.max(Math.min(cardBottom, fit), Math.min(cardBottom, CARD_FLOOR));
+        }
+        cardBottom = Math.round(cardBottom);
+      }
     }
 
     const vars = `${tickNow}|${tickW}|${Math.round(bannerTop)}|${Math.round(cx)}|${under}|${pwTop}|${zoomTop}|${cardBottom}`;
