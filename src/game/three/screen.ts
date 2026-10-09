@@ -28,6 +28,8 @@ export interface Label {
   tail?: boolean;
   /** Keep the label at least this many CSS px inside the screen edges. */
   pin?: number;
+  /** Screen rects (CSS px, HUD widgets) a plated label slides sideways off. */
+  avoid?: readonly ScreenRect[];
   /** Screen offset (CSS px), animated by the owner. */
   dx: number;
   dy: number;
@@ -37,6 +39,13 @@ export interface Label {
   /** Origin: 1 = bottom-centre (the default), 0.5 = centre. */
   oy?: number;
   visible: boolean;
+}
+
+export interface ScreenRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
 }
 
 /** Plate padding (CSS px) and corner radius, shared by every plated label. */
@@ -137,11 +146,22 @@ export class ScreenLayer {
         const above = size * 0.78 + PLATE_PAD_Y;
         const tail = l.tail ? TAIL : 0;
         y -= tail;
+        const m = l.pin ?? 0;
         if (l.pin !== undefined) {
-          const m = l.pin;
           x = Math.min(this.w - m - w / 2, Math.max(m + w / 2, x));
           y = Math.min(this.h - m - tail - (hh - above), Math.max(m + above, y));
         }
+        if (l.avoid)
+          for (const r of l.avoid) {
+            // under a HUD widget: slide to whichever side of it is nearer and still on screen
+            if (x + w / 2 <= r.x0 || x - w / 2 >= r.x1 || y - above + hh + tail <= r.y0 || y - above >= r.y1) continue;
+            const toL = r.x0 - 4 - w / 2;
+            const toR = r.x1 + 4 + w / 2;
+            const okL = toL >= m + w / 2;
+            const okR = toR <= this.w - m - w / 2;
+            if (okL && (!okR || x - toL <= toR - x)) x = toL;
+            else if (okR) x = toR;
+          }
         x = this.snap(x);
         y = this.snap(y);
         // (the 1 px rim sits on the device pixel grid: half-pixel offset when it spans an odd count)

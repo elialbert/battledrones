@@ -28,7 +28,13 @@ export interface GroundGfxOpts {
   lift?: number;
 }
 
-/** The contrast halo round every stroke: colour, width (CSS px) and strength (× the stroke's alpha). */
+/**
+ * The contrast halo round every stroke: colour, width (CSS px) and peak
+ * strength. It is there for the bold marks, so it scales with the square of
+ * the stroke's alpha and narrows on lines under 2 px: faint ambient strokes
+ * (order lines, range rings) stay light, and a 2 px selection ring outweighs
+ * a 1.6 px combat ring.
+ */
 const HALO_COLOR = 0x04070c;
 const HALO_PX = 1.6;
 const HALO_ALPHA = 0.7;
@@ -279,7 +285,8 @@ export class GroundGfx {
     const Y = this.sy;
     const k = this.lc;
     if (k[3] === 0) return;
-    const haloA = Math.round(k[3]! * HALO_ALPHA * this.halo);
+    const ka = k[3]! / 255;
+    const haloA = Math.round(255 * HALO_ALPHA * ka * ka * this.halo);
     const halo = haloA > 0;
     // the profile across the line, in CSS px from its centre (scaled per point)
     const off = this.off;
@@ -290,7 +297,7 @@ export class GroundGfx {
       // the full width stays solid; its edge shades into the dark rim, which fades out
       const core = hw;
       const edge = hw + FEATHER_PX;
-      const out = edge + HALO_PX * this.halo;
+      const out = edge + HALO_PX * this.halo * Math.min(1, Math.max(0.5, hw));
       K = this.prof(K, -out, HALO_RGB, 0);
       K = this.prof(K, -edge, HALO_RGB, haloA);
       K = this.prof(K, -core, k, k[3]!);
@@ -504,7 +511,7 @@ export class GroundGfx {
     return this.fan(x, y, w / 2, hgt / 2, h);
   }
 
-  /** Filled rectangle, split into a grid of ~1/3-tile cells so it hugs the terrain. */
+  /** Filled rectangle, split into a grid of ~2/3-tile cells so it hugs the terrain. */
   fillRect(x: number, y: number, w: number, hgt: number, h?: number): this {
     if (w <= 0 || hgt <= 0 || this.fc[3] === 0) return this;
     const step = h === undefined ? DRAPE_STEP * 2 : Infinity;

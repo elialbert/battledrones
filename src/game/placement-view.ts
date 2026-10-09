@@ -16,7 +16,7 @@ import type { BuildingKind, World } from "../sim/types";
 import { sfx } from "./audio";
 import { setVariant } from "./three/materials";
 import { buildingDef, instance, type ModelInstance } from "./three/models";
-import type { Label } from "./three/screen";
+import type { Label, ScreenRect } from "./three/screen";
 import type { View } from "./three/view";
 import { radioCue } from "./announcer";
 import { PLAYER, type Controller } from "./controller";
@@ -50,6 +50,9 @@ const BAD = 0xe25555;
 const GHOST_SLOP_PX = 14;
 /** A press on the ghost that moves less than this is a tap (CSS px). */
 const TAP_SLOP_PX = 8;
+/** The HUD rails the reason plate slides off (the calldown stack, zoom buttons, minimap), re-measured this often (ms). */
+const RAILS = "[data-edge-avoid], .zoombtns, .minimap-wrap";
+const RAILS_MS = 300;
 
 export class PlacementView {
   /** The ghost: a translucent model of the building, green where it may stand, red where not. */
@@ -69,6 +72,8 @@ export class PlacementView {
   private zone: { key: string; runs: number[]; loops: Pt[][] } | null = null;
   /** Scratch points for a footprint corner bracket. */
   private bracket: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  private rails: ScreenRect[] = [];
+  private railsAt = -Infinity;
 
   constructor(private h: PlacementHooks) {
     this.label = h.view.screen.label({
@@ -295,7 +300,21 @@ export class PlacementView {
       this.label.y = y + size / 2;
       this.label.h = ground + (this.ghost.def.height ?? 1) + 0.2;
       this.label.dy = -6;
+      this.label.avoid = this.hudRails();
     } else this.label.visible = false;
+  }
+
+  /** Where the HUD's side rails cover the battlefield (CSS px), measured a few times a second while a reason shows. */
+  private hudRails(): ScreenRect[] {
+    const now = performance.now();
+    if (now - this.railsAt < RAILS_MS) return this.rails;
+    this.railsAt = now;
+    this.rails.length = 0;
+    document.querySelectorAll(RAILS).forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) this.rails.push({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom });
+    });
+    return this.rails;
   }
 
   /**

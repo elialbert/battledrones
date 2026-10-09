@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
 import { CRATE_NAMES } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Uplink, World } from "../../sim/types";
@@ -50,24 +49,44 @@ const HINT_KEY = "battledrones.hint.uplinks";
 const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
 /**
- * The supply-drop light pillar (unit height): three nested open shells, the
- * core brightest, each fading out with height through its vertex colours —
- * a beam of light rather than a solid column. One mesh, one draw.
+ * The supply-drop light pillar (unit size): one upright quad facing the
+ * camera (the rig never turns), painted with a soft beam — a pale-gold core
+ * in a gold glow that fades out across its width and up into the sky. It
+ * uses the glow discs' textured additive program, so the first drop
+ * compiles no new shader mid-battle. One mesh, one draw.
  */
-const pillarGeo = (() => {
-  const shells: [number, number][] = [[0.07, 1], [0.15, 0.55], [0.28, 0.24]];
-  return mergeGeometries(
-    shells.map(([r, k]) => {
-      const g = new THREE.CylinderGeometry(r, r, 1, 14, 5, true).translate(0, 0.5, 0);
-      const pos = g.attributes.position!;
-      const col = new Float32Array(pos.count * 3);
-      for (let i = 0; i < pos.count; i++) col.fill(k * Math.pow(1 - pos.getY(i), 2.6), i * 3, i * 3 + 3);
-      g.setAttribute("color", new THREE.BufferAttribute(col, 3));
-      return g;
-    }),
-    false
-  )!;
-})();
+const pillarGeo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+let beam: THREE.DataTexture | null = null;
+function beamTexture(): THREE.DataTexture {
+  if (beam) return beam;
+  const W = 32;
+  const H = 128;
+  const px = new Uint8Array(W * H * 4);
+  // (sRGB bytes, like the hex colours)
+  const gold = [(GOLD >> 16) / 255, ((GOLD >> 8) & 255) / 255, (GOLD & 255) / 255];
+  for (let j = 0; j < H; j++) {
+    // row 0 is the foot: it melts into the ground over the first ~0.4 tiles, then fades up into the sky
+    const t = j / (H - 1);
+    const up = Math.pow(1 - t, 2) * Math.min(1, t / 0.03);
+    for (let i = 0; i < W; i++) {
+      const d = Math.abs((i + 0.5) / W - 0.5) * 2;
+      const core = Math.exp(-((d / 0.2) ** 2));
+      const glow = 0.6 * Math.exp(-((d / 0.55) ** 2)) * (1 - d);
+      // pale gold at the core, deep gold in the glow
+      const w = (0.6 * core) / (core + glow + 1e-6);
+      const o = (j * W + i) * 4;
+      for (let c = 0; c < 3; c++) px[o + c] = 255 * (gold[c]! + (1 - gold[c]!) * w);
+      px[o + 3] = 255 * Math.min(1, core + glow) * up;
+    }
+  }
+  beam = new THREE.DataTexture(px, W, H);
+  beam.colorSpace = THREE.SRGBColorSpace;
+  beam.magFilter = THREE.LinearFilter;
+  beam.minFilter = THREE.LinearMipmapLinearFilter;
+  beam.generateMipmaps = true;
+  beam.needsUpdate = true;
+  return beam;
+}
 
 interface UplinkView {
   l: Uplink;
@@ -253,11 +272,11 @@ export class ObjectiveRenderer {
     glow.position.set(ev.x, h + 0.08, ev.y);
     glow.scale.setScalar(1.6);
     glow.renderOrder = 3;
-    const pm = glowMat(GOLD, 0.3);
-    pm.vertexColors = true;
+    const pm = glowMat(0xffffff, 0.3);
+    pm.map = beamTexture();
     const pillar = new THREE.Mesh(pillarGeo, pm);
     pillar.position.set(ev.x, h, ev.y);
-    pillar.scale.set(1, 14, 1);
+    pillar.scale.set(0.9, 14, 1);
     pillar.renderOrder = 8;
     this.group.add(crate.root, chute, glow, pillar);
     this.crates.set(ev.id, { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false });
@@ -469,7 +488,7 @@ export class ObjectiveRenderer {
         ch[2]!.y = y + uy * d1 - ux * s;
         g.strokePoints(ch);
       }
-      v.pillarMat.opacity = 0.36 + 0.2 * pulse;
+      v.pillarMat.opacity = 0.6 + 0.25 * pulse;
       // the last couple of seconds: it comes down under a striped canopy
       if (left <= FALL) {
         const e = Math.min(1, Math.max(0, 1 - left / FALL));
