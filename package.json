@@ -14,7 +14,8 @@
     "balance": "vite-node tools/balance.ts",
     "art:generate": "python3 art/generate.py",
     "art:process": "python3 art/process.py",
-    "art:terrain": "python3 art/terrain.py"
+    "art:terrain": "python3 art/terrain.py",
+    "art:textures": "python3 art/textures.py"
   },
   "dependencies": {
     "three": "^0.185.1"

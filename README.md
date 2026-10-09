@@ -75,12 +75,15 @@ installable as a PWA.
   into turns and cast shadows on the ground, tanks tilt over the terrain,
   buildings rise out of the ground when placed and smoke when hurt. The
   landscape is a heightfield draped with each map's painted terrain — rock
-  outcrops rise into craggy mesas, rivers and lava cut real channels under
-  animated water, ice or flowing lava, fords dip under a shallow skin of
-  water, bridges are built decks — with instanced trees and boulders per
-  biome, scrap heaps and glowing crystal clusters that shrink as they're
-  mined, real-time sun shadows, drifting cloud shadows, GPU particles and a
-  fog of war on 3D surfaces. A tilted RTS camera steepens as you zoom out;
+  outcrops rise into mesas whose cliffs and crags are textured with the
+  painted stone of their biome, rivers and lava cut real channels under
+  animated water, drifting ice floes or crusted, glowing lava, fords dip
+  under a shallow skin of water, bridges are decks laid along each
+  crossing, and the land carries on past the map's edge — with instanced
+  trees per biome, salvage heaps and glowing crystal clusters that shrink
+  as they're mined, real-time sun shadows, drifting cloud shadows, layered
+  GPU explosions and smoke, and a fog of war that drapes unexplored ground
+  in a drifting shroud. A tilted RTS camera steepens as you zoom out;
   resolution adapts to keep weaker phones smooth. Terrain, menu art and
   icons were painted with OpenAI's `gpt-image-2.5-sunburst`; every sound
   is synthesised live.
@@ -152,7 +155,8 @@ generation) — see **ART.md**:
 ```bash
 npm run art:generate   # call the OpenAI Images API for any missing raw art
 npm run art:process    # raw art → sprite atlas, icons, key art, PWA icons
-npm run art:terrain    # paint every map's terrain from its grid
+npm run art:terrain    # paint every map's terrain from its grid (then refreshes the rock textures)
+npm run art:textures   # just the biome rock textures the 3D cliffs and crags use
 ```
 
 - **`DESIGN.md`** — the game design: roster, terrain, combat model, AI,
