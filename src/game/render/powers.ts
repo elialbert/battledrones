@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { POWERS } from "../../sim/balance";
+import { BUILDINGS, POWERS } from "../../sim/balance";
 import { POWER_NAMES } from "../../sim/powers";
 import type { Calldown, Faction, FxEvent, PowerKind, World } from "../../sim/types";
 import { announce } from "../announce";
@@ -109,6 +109,24 @@ export class PowerRenderer {
     return f === this.opts.player;
   }
 
+  /**
+   * Is the entity drawn as it is now? An enemy building we only remember (its
+   * footprint out of sight, or fallen in the fog and still standing) is drawn
+   * as last seen (render/entities.ts): a crackle on it would show it stunned,
+   * and one that cut off as it died would give that away.
+   */
+  private seenNow(id: number): boolean {
+    if (!this.opts.isShown(id)) return false;
+    if (this.world.units.has(id)) return true;
+    const b = this.world.buildings.get(id);
+    if (!b) return false;
+    if (this.friendly(b.faction)) return true;
+    const n = BUILDINGS[b.kind].size;
+    for (let dy = 0; dy < n; dy++)
+      for (let dx = 0; dx < n; dx++) if (this.opts.visibleAt(b.tx + dx + 0.5, b.ty + dy + 0.5)) return true;
+    return false;
+  }
+
   /** World units spanning `css` CSS px around a point. */
   private px(x: number, y: number, css: number): number {
     return css * this.v.rig.worldPerPx(x, y);
@@ -142,7 +160,7 @@ export class PowerRenderer {
         break;
       case "stun":
         for (const id of ev.ids) {
-          const p = this.opts.isShown(id) ? this.opts.pos(id) : null;
+          const p = this.seenNow(id) ? this.opts.pos(id) : null;
           if (p) this.v.particles.emit(SPARKS, p.x, p.y, p.h + 0.2, 6);
         }
         break;
@@ -507,7 +525,7 @@ export class PowerRenderer {
     if (st.size === 0) return;
     const a = this.v.top;
     for (const [id, until] of st) {
-      if (until <= this.world.tick || !this.opts.isShown(id)) continue;
+      if (until <= this.world.tick || !this.seenNow(id)) continue;
       const p = this.opts.pos(id);
       if (!p) continue;
       const b = this.world.buildings.get(id);

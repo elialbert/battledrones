@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { UNITS } from "../../sim/balance";
+import { BUILDINGS, UNITS } from "../../sim/balance";
 import type { Faction, FxEvent, World } from "../../sim/types";
 import { sfx } from "../audio";
 import { coinPitchIn } from "../score";
@@ -80,7 +80,8 @@ export class CombatJuice {
   private death(ev: Extract<FxEvent, { type: "death" }>): void {
     const h = this.host;
     const ours = ev.faction === h.player;
-    const seen = ours || h.sees(ev.x, ev.y);
+    // (a building is seen where any tile of its footprint is: the sim's rule, and its blast's)
+    const seen = ours || (ev.buildingKind ? this.footprintSeen(ev.x, ev.y, BUILDINGS[ev.buildingKind].size) : h.sees(ev.x, ev.y));
     const visible = seen && this.v.rig.onScreen(ev.x, ev.y);
     const cue = deathCue(ev, h.player, h.spectator, seen);
     if (cue.sound === "kill") sfx.play("kill", h.earshot(ev.x, ev.y));
@@ -116,6 +117,15 @@ export class CombatJuice {
         size0: Math.max(r * 2.6, 0.7), size1: Math.max(r * 2.6, 0.7) * 2.1, alpha0: 0.95, alpha1: 0, r: c.r, g: c.g, b: c.b
       });
     }
+  }
+
+  /** May the local player see any tile of the footprint of a building centred on (x, y)? */
+  private footprintSeen(x: number, y: number, size: number): boolean {
+    const x0 = x - size / 2 + 0.5;
+    const y0 = y - size / 2 + 0.5;
+    for (let dy = 0; dy < size; dy++)
+      for (let dx = 0; dx < size; dx++) if (this.host.sees(x0 + dx, y0 + dy)) return true;
+    return false;
   }
 
   private deposit(ev: Extract<FxEvent, { type: "deposit" }>): void {

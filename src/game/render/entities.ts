@@ -78,47 +78,75 @@ const tmp = new THREE.Vector3();
 /** A smoke puff's source point, refilled per puff (Fx reads it at once). */
 const puffAt: P3 = { x: 0, y: 0, h: 0 };
 
-/** Roof heights over a 3×3 grid across the middle half of each kind of building, cast once per kind. */
+/** Roof heights over a 3×3 grid across the middle half of each kind of building, found once per kind. */
 const roofs = new Map<BuildingKind, Float32Array>();
-const caster = new THREE.Raycaster();
-const castHits: THREE.Intersection[] = [];
-const DOWN = new THREE.Vector3(0, -1, 0);
-/** (double-sided: a ray must stop at the first roof it meets, whichever way its faces wind) */
-const castMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
-const castHeights = [0, 0, 0];
+/** roofOf's sample points (three close together per grid point) and the highest surface over each. */
+const roofX = new Float32Array(27);
+const roofZ = new Float32Array(27);
+const roofH = new Float32Array(27);
+const roofMid = [0, 0, 0];
 
 /**
  * Where smoke leaves a damaged building's roof: heights (above the model's
- * base) at a 3×3 grid spanning the middle half of its footprint, found by
- * casting down onto the model, hull and turret. Each is the median of three
- * nearby rays, so a lone mast or antenna doesn't count as roof.
+ * base) at a 3×3 grid spanning the middle half of its footprint — the top
+ * surface of the model, hull and turret, over each point. Each is the median
+ * of three nearby points, so a lone mast or antenna doesn't count as roof.
+ * One pass over the triangles, well under a millisecond a kind: it runs the
+ * first time each kind appears, maybe mid-match (a raycaster, with a hit
+ * object per surface crossed, took up to ~20 ms, and several times that on
+ * a phone).
  */
 function roofOf(kind: BuildingKind, def: ModelDef, size: number): Float32Array {
   let r = roofs.get(kind);
   if (r) return r;
-  const parts: THREE.Mesh[] = [new THREE.Mesh(def.hull, castMat)];
-  if (def.turret) {
-    const t = new THREE.Mesh(def.turret, castMat);
-    t.position.set(...def.mount);
-    parts.push(t);
-  }
-  for (const p of parts) p.updateMatrixWorld(true);
-  r = new Float32Array(9);
   for (let j = 0; j < 3; j++)
-    for (let i = 0; i < 3; i++) {
-      const x = ((i - 1) * size) / 4;
-      const z = ((j - 1) * size) / 4;
+    for (let i = 0; i < 3; i++)
       for (let k = 0; k < 3; k++) {
-        caster.set(tmp.set(x + (k === 1 ? 0.12 : 0), 20, z + (k === 2 ? 0.12 : 0)), DOWN);
-        castHits.length = 0;
-        caster.intersectObjects(parts, false, castHits);
-        castHeights[k] = castHits.length > 0 ? 20 - castHits[0]!.distance : 0;
+        const n = (j * 3 + i) * 3 + k;
+        roofX[n] = ((i - 1) * size) / 4 + (k === 1 ? 0.12 : 0);
+        roofZ[n] = ((j - 1) * size) / 4 + (k === 2 ? 0.12 : 0);
+        roofH[n] = 0;
       }
-      castHeights.sort((a, b) => a - b);
-      r[j * 3 + i] = castHeights[1]!;
-    }
+  topsOf(def.hull, 0, 0, 0);
+  if (def.turret) topsOf(def.turret, ...def.mount);
+  r = new Float32Array(9);
+  for (let n = 0; n < 9; n++) {
+    for (let k = 0; k < 3; k++) roofMid[k] = roofH[n * 3 + k]!;
+    roofMid.sort((a, b) => a - b);
+    r[n] = roofMid[1]!;
+  }
   roofs.set(kind, r);
   return r;
+}
+
+/** Raise each of roofOf's sample points to the height of any triangle of `geo` (moved by ox, oy, oz) above it. */
+function topsOf(geo: THREE.BufferGeometry, ox: number, oy: number, oz: number): void {
+  const pos = geo.getAttribute("position");
+  const index = geo.getIndex();
+  const n = index ? index.count : pos.count;
+  for (let t = 0; t + 2 < n; t += 3) {
+    const a = index ? index.getX(t) : t;
+    const b = index ? index.getX(t + 1) : t + 1;
+    const c = index ? index.getX(t + 2) : t + 2;
+    const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
+    const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
+    const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
+    // (seen from above, edge-on walls cover nothing)
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    const x0 = Math.min(ax, bx, cx), x1 = Math.max(ax, bx, cx);
+    const z0 = Math.min(az, bz, cz), z1 = Math.max(az, bz, cz);
+    for (let s = 0; s < 27; s++) {
+      const px = roofX[s]!;
+      const pz = roofZ[s]!;
+      if (px < x0 || px > x1 || pz < z0 || pz > z1) continue;
+      const u = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+      const v = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+      if (u < 0 || v < 0 || u + v > 1) continue;
+      const h = u * (pos.getY(a) + oy) + v * (pos.getY(b) + oy) + (1 - u - v) * (pos.getY(c) + oy);
+      if (h > roofH[s]!) roofH[s] = h;
+    }
+  }
 }
 
 /**
@@ -457,12 +485,15 @@ export class EntityRenderer {
     const ratio = v.hp;
     this.setVariant(v, v.seen && performance.now() < v.warmUntil ? "warm" : ratio < 0.5 ? "damaged" : "normal");
     if (v.m.turret) {
-      if (b.kind === "radar") v.face += dtMs / 900; // radar sweeps continuously
-      else v.face += angleDelta(v.face, b.facing) * turnK;
-      if (b.firedTick !== v.lastFired) {
-        v.lastFired = b.firedTick;
-        v.recoil = 1;
+      // out of sight it holds its last-seen pose: a radar that swept on (then froze as it died in
+      // the fog) or a turret that kept tracking would show what the fog hides. (A shot we're shown
+      // still swings it round and kicks it: fired().)
+      if (v.seen) {
+        if (b.kind === "radar") v.face += dtMs / 900; // radar sweeps continuously
+        else v.face += angleDelta(v.face, b.facing) * turnK;
+        if (b.firedTick !== v.lastFired) v.recoil = 1;
       }
+      v.lastFired = b.firedTick;
       v.recoil = Math.max(0, v.recoil - dtMs / 160);
       const kick = v.recoil * 0.05;
       const mount = v.m.def.mount;

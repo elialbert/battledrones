@@ -55,8 +55,9 @@ const DEFAULT_ZOOM = 42;
 const EDGE_PAD = 2;
 /** Radius of an order's waypoint ring (CSS px). */
 const WAYPOINT_PX = 7;
-/** Box-select dashes (CSS px), and none. */
+/** Box-select dashes (CSS px), their dark rims (each 1 px longer at both ends), and none. */
 const DASH = [6, 4];
+const DASH_RIM = [8, 2];
 const NO_DASH: number[] = [];
 
 /**
@@ -762,8 +763,11 @@ export class GameScene {
 
   /**
    * Does the blast of a building dying at (x, y) go off on screen? Its own
-   * sight dies with it, so ours always do, and so does the HQ that decides
-   * the match (the finale glides onto it); an enemy's only where we can see
+   * sight dies with it (the fog may already be recomputed without it: every
+   * third tick, at the end of the step), so ours always do. So does every
+   * blast in the tick that decides the match, the HQ's among them: the finale
+   * glides onto it and the match is over (render/entities.ts drops its
+   * ghosts then too). Otherwise an enemy's goes off only where we can see
    * part of its footprint — one that falls in the fog stays standing, as
    * remembered, until we look again (render/entities.ts).
    */
@@ -941,18 +945,23 @@ export class GameScene {
     }
     if (this.boxRect) {
       const b = this.boxRect;
-      const x = Math.min(b.x0, b.x1);
-      const y = Math.min(b.y0, b.y1);
-      const bw = Math.abs(b.x1 - b.x0);
-      const bh = Math.abs(b.y1 - b.y0);
+      // edges through device pixel centres: the strokes sit on the pixel grid instead of straddling it
+      const x = pxCentre(Math.min(b.x0, b.x1), dpr);
+      const y = pxCentre(Math.min(b.y0, b.y1), dpr);
+      const bw = pxCentre(Math.max(b.x0, b.x1), dpr) - x;
+      const bh = pxCentre(Math.max(b.y0, b.y1), dpr) - y;
       ctx.fillStyle = "rgba(126,242,155,0.08)";
       ctx.fillRect(x, y, bw, bh);
-      // marching green dashes over a 1 px dark rim: the edge reads on snow and sand alike
+      // marching green dashes, each with a 1 px dark rim (a dash 1 px longer at both ends): the edge
+      // reads on snow, and on sand the gaps stay sand instead of making a dark frame
+      const march = (performance.now() / 40) % 10;
+      ctx.setLineDash(DASH_RIM);
+      ctx.lineDashOffset = 1 - march;
       ctx.lineWidth = 3.5;
       ctx.strokeStyle = "rgba(4,7,12,0.55)";
       ctx.strokeRect(x, y, bw, bh);
       ctx.setLineDash(DASH);
-      ctx.lineDashOffset = -(performance.now() / 40) % 10;
+      ctx.lineDashOffset = -march;
       ctx.lineWidth = 1.5;
       ctx.strokeStyle = "rgba(126,242,155,0.95)";
       ctx.strokeRect(x, y, bw, bh);
@@ -1226,6 +1235,11 @@ export class GameScene {
     this.terrain.dispose();
     this.stage.destroy();
   }
+}
+
+/** The centre of the device pixel under CSS coordinate `v`. */
+function pxCentre(v: number, dpr: number): number {
+  return (Math.floor(v * dpr) + 0.5) / dpr;
 }
 
 /** Add a rank chevron centred on (x, y), scaled by k, to the current path (drawn gold by drawScreen). */
