@@ -261,6 +261,25 @@ describe("chronicle analysis", () => {
   });
 });
 
+describe("chronicle: squads riding in a Condor", () => {
+  it("still count toward the army, and a veteran aboard can still be the MVP", () => {
+    const w = createMapWorld("frostbite", { seed: 3 });
+    const c = new Chronicle(w);
+    const hq = buildingCenter(hqOf(w, "blue")!);
+    const condor = spawnUnit(w, "condor", "blue", hq.x + 4, hq.y + 4);
+    const ace = spawnUnit(w, "sniper", "blue", hq.x + 4, hq.y + 5);
+    ace.kills = 7;
+    ace.rank = 2;
+    c.sample();
+    const before = c.samples.at(-1)!.army.blue;
+    w.units.delete(ace.id);
+    condor.passengers!.push(ace);
+    c.sample();
+    expect(c.samples.at(-1)!.army.blue).toBeCloseTo(before);
+    expect(c.mvp().blue).toMatchObject({ id: ace.id, kind: "sniper", kills: 7, alive: true });
+  });
+});
+
 describe("after-action report stats", () => {
   it("reads stats added by other features defensively", () => {
     const core: FactionStats = { unitsBuilt: 1, unitsLost: 2, unitsKilled: 3, buildingsLost: 0, buildingsKilled: 1, scrapHarvested: 500, scrapSalvaged: 0 };

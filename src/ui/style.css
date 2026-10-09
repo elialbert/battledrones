@@ -4616,3 +4616,94 @@ button {
     vertical-align: top;
   }
 }
+
+/* ===================================================== robot infantry === */
+/* src/ui/hud.ts: a squad's robots standing, a Condor's seats, squads aboard
+   in a group selection, and the ⇣ Unload chip. */
+.selpanel .robots {
+  color: var(--dim);
+}
+.selpanel .cargo {
+  display: flex;
+  gap: 4px;
+  margin-left: 2px;
+  flex: none;
+}
+.selpanel .seat {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--line-hi);
+  background: #152033;
+}
+.selpanel .seat img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.7));
+}
+/* robots standing in that squad */
+.selpanel .seat b {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-size: 11px;
+  line-height: 1.1;
+  color: #fff;
+  text-shadow: 0 1px 2px #000, 0 0 3px #000;
+}
+.selpanel .seat.empty {
+  border-style: dashed;
+  background: rgba(9, 13, 21, 0.5);
+}
+.selpanel .gi.aboard {
+  padding: 0 4px 0 2px;
+  border: 1px dashed var(--line-hi);
+  border-radius: 8px;
+  opacity: 0.85;
+}
+.selpanel .gi.aboard img {
+  width: 24px;
+  height: 24px;
+}
+.chip.unload {
+  color: #0d1a12;
+  background: #ffd66e;
+  border-color: #ffe7a3;
+}
+.chip.unload:active {
+  background: #e8bd4f;
+}
+/* four tabs on a 360–420 px portrait phone: icon and label a little tighter */
+@media (orientation: portrait) and (max-width: 420px) {
+  .tabs {
+    gap: 4px;
+  }
+  .tab {
+    gap: 3px;
+    font-size: 12px;
+    letter-spacing: 0.1px;
+  }
+  /* the Base tab's eight buttons fit a 390 px row (narrower phones scroll it) */
+  .grid {
+    gap: 4px;
+  }
+  .bb {
+    flex-basis: 43px;
+  }
+  .bb .ic {
+    width: 40px;
+    height: 40px;
+  }
+}
+/* …and on 360–379 px phones too, just */
+@media (orientation: portrait) and (max-width: 379px) {
+  .bb {
+    flex-basis: 39px;
+  }
+  .bb .ic {
+    width: 36px;
+    height: 36px;
+  }
+}

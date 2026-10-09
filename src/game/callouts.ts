@@ -61,7 +61,11 @@ export const CALLOUTS = {
     "cant-build": 8,
     "enemy-barrage": 20,
     "enemy-emp": 20,
-    "enemy-droppod": 20
+    "enemy-droppod": 20,
+    /** Our Condor put its squads down / one of ours went down (bail-out or lost with them) / the enemy lands troops. */
+    "troops-deployed": 20,
+    "condor-down": 10,
+    "enemy-drop": 20
   } as Record<string, number>,
   /**
    * An enemy calldown aimed at our units or buildings (the siren's
@@ -159,6 +163,8 @@ export class BattleCallouts {
   private lastAirScan = -Infinity;
   /** An enemy strike we warned about lands about now: its hits are that news, not new news. */
   private strikeQuietUntil = -Infinity;
+  /** Squads aboard each Condor (from embark / disembark events), to tell what went down with one. */
+  private aboard = new Map<number, number>();
   private ended = false;
   /** Lines and banners raised, by key (debug/measurement). */
   readonly counts = new Map<string, number>();
@@ -170,6 +176,7 @@ export class BattleCallouts {
   /** Feed one tick's events at sim time `t` (seconds). */
   events(fx: readonly FxEvent[], t: number): void {
     if (this.ended) return;
+    this.transport(fx, t); // (first: a Condor lost with its squads says so instead of "Squad lost")
     for (const ev of fx) {
       const by = this.credit.see(ev);
       if (ev.type === "hit") this.hit(ev, t);
@@ -463,6 +470,57 @@ export class BattleCallouts {
       },
       t
     );
+  }
+
+  /**
+   * Condor drops: ours ("Troops deployed", a flavour line), the enemy's where
+   * we can see it land (a warning), and a Condor of ours shot down — its
+   * squads bailing out hurt, or lost with it over water or rock.
+   */
+  private transport(fx: readonly FxEvent[], t: number): void {
+    const h = this.h;
+    let bailed: Set<number> | null = null;
+    for (const ev of fx) if (ev.type === "disembark" && ev.bailout) (bailed ??= new Set()).add(ev.carrierId);
+    for (const ev of fx) {
+      if (ev.type === "embark") this.aboard.set(ev.carrierId, (this.aboard.get(ev.carrierId) ?? 0) + 1);
+      else if (ev.type === "death" && ev.unitKind && this.aboard.has(ev.id)) {
+        const n = this.aboard.get(ev.id)!;
+        this.aboard.delete(ev.id);
+        // (a bail-out is announced by its disembark below)
+        if (n === 0 || bailed?.has(ev.id) || h.spectator || ev.faction !== h.player || !this.ready("condor-down", t)) continue;
+        this.say(
+          { key: "condor-down", text: `Condor down with ${n === 1 ? "a squad" : `${n} squads`} aboard`, priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: true },
+          t
+        );
+        this.last.set("squad-lost", t); // (the squads' own deaths are this news)
+      } else if (ev.type === "disembark") {
+        const left = (this.aboard.get(ev.carrierId) ?? 0) - ev.unitIds.length;
+        if (left > 0) this.aboard.set(ev.carrierId, left);
+        else this.aboard.delete(ev.carrierId);
+        this.dropped(ev, t);
+      }
+    }
+  }
+
+  private dropped(ev: Extract<FxEvent, { type: "disembark" }>, t: number): void {
+    const h = this.h;
+    if (h.spectator) {
+      const key = `drop-${ev.faction}`;
+      if (!ev.bailout && this.ready(key, t, 30))
+        this.say({ key, text: `${SIDE[ev.faction]} troops landing`, priority: 3, tone: "info", x: ev.x, y: ev.y, caption: true }, t);
+      return;
+    }
+    if (ev.faction === h.player) {
+      if (ev.bailout) {
+        if (this.ready("condor-down", t))
+          this.say({ key: "condor-down", text: "Condor down! Troops bailing out", priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: true }, t);
+      } else if (this.ready("troops-deployed", t))
+        this.say({ key: "troops-deployed", text: "Troops deployed", priority: 3, tone: "good", x: ev.x, y: ev.y, caption: !h.onScreen(ev.x, ev.y) }, t);
+      return;
+    }
+    // the enemy lands troops where we can see it
+    if (ev.bailout || !isVisible(h.world, h.player, Math.floor(ev.x), Math.floor(ev.y)) || !this.ready("enemy-drop", t)) return;
+    this.say({ key: "enemy-drop", text: "Enemy troops landing!", priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: true, staleS: 3 }, t);
   }
 
   /** An enemy calldown aimed at our units or buildings: say what's coming while there's time to move. */

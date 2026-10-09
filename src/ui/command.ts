@@ -7,18 +7,20 @@
  *   a member is being hit.
  * - Build advisor badges: an amber ⚔ on build buttons that counter enemies
  *   you've seen (and on their tab), and an "idle" tag on the Vehicles /
- *   Aircraft tab when a factory sits idle while you can afford its units.
- * - One-time hints that teach the squad gesture.
+ *   Infantry / Aircraft tab when a factory sits idle while you can afford
+ *   its units.
+ * - One-time hints that teach the squad gesture, infantry and the Condor.
  *
  * Rules live in ../game/squads.ts and ../game/advisor.ts (tested).
  */
-import { UNITS } from "../sim/balance";
+import { BUILDINGS, UNITS } from "../sim/balance";
 import { buildingBlocker, unitBlocker } from "../sim/economy";
+import { isInfantry, isTransport } from "../sim/infantry";
 import type { BuildingKind, Faction, FxEvent, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { PLAYER, type Controller } from "../game/controller";
 import { SQUAD } from "../game/squads";
-import { ADVISOR, EnemyIntel, IdleWatch, adviceNote, counterAdvice, type FactoryTab } from "../game/advisor";
+import { ADVISOR, COUNTERS, EnemyIntel, FACTORY_TAB, IdleWatch, adviceNote, counterAdvice, type FactoryTab } from "../game/advisor";
 import { HINTS, type HintOffer } from "../game/hints";
 
 export interface CommandHooks {
@@ -40,11 +42,16 @@ const BADGE_MS = 250;
 
 const icon = (kind: string) => `assets/icons/${kind}.webp`;
 
-/** Build-bar tab of each build option (for the tab's ⚔ dot). */
+/** Build-bar tab of each build option (for the tab's ⚔ dot): a unit sits on its factory's tab. */
 const TAB_OF = (key: string): "build" | FactoryTab => {
   if (key.startsWith("b:")) return "build";
-  return UNITS[key.slice(2) as UnitKind].domain === "air" ? "air" : "ground";
+  return FACTORY_TAB[UNITS[key.slice(2) as UnitKind].builtAt] ?? "ground";
 };
+
+/** Build-bar tabs, as the HUD names them (src/ui/hud.ts). */
+const TABS: ("build" | FactoryTab)[] = ["build", "ground", "infantry", "air"];
+/** Defences with a counter entry: the Base tab's ⚔ while another tab is open. */
+const DEFENCES = (Object.keys(COUNTERS) as (UnitKind | BuildingKind)[]).filter((k): k is BuildingKind => k in BUILDINGS);
 
 interface SquadEl {
   btn: HTMLButtonElement;
@@ -57,7 +64,7 @@ interface SquadEl {
 export class CommandUi {
   readonly intel: EnemyIntel;
   readonly idleWatch: IdleWatch;
-  idle: Record<FactoryTab, boolean> = { ground: false, air: false };
+  idle: Record<FactoryTab, boolean> = { ground: false, infantry: false, air: false };
   private simT = 0;
   private row: HTMLElement | null = null;
   private squadsEl: HTMLElement | null = null;
@@ -99,7 +106,7 @@ export class CommandUi {
     this.squadsEl = squads;
     for (let i = 0; i < SQUAD.slots; i++) this.chips.push(this.makeSquad(i, squads));
 
-    for (const t of ["build", "ground", "air"]) {
+    for (const t of TABS) {
       const tab = this.h.root.querySelector<HTMLElement>(`.tab[data-tab="${t}"]`);
       if (!tab) continue;
       const notes = document.createElement("span");
@@ -242,9 +249,10 @@ export class CommandUi {
   }
 
   /**
-   * Offer a once-per-device hint ("squads", "place") to the HUD's hint queue;
-   * it counts as seen only once it is shown, and only while it still applies
-   * (a group selected / a building being placed). Safe to call every frame.
+   * Offer a once-per-device hint ("squads", "place", "infantry", "condor") to
+   * the HUD's hint queue; it counts as seen only once it is shown, and only
+   * while it still applies (a group selected / a building being placed /
+   * infantry or a Condor selected). Safe to call every frame.
    */
   hint(id: string, msg: string): void {
     if (this.h.spectator || this.hints.has(id)) return;
@@ -253,17 +261,40 @@ export class CommandUi {
     const applies =
       id === "place"
         ? () => ctrl.placing !== null
-        : () => [...ctrl.selectedUnits].filter((u) => w.units.get(u)?.kind !== "harvester").length >= 2;
+        : id === "infantry"
+          ? () => this.selecting(isInfantry)
+          : id === "condor"
+            ? () => this.condorMoment()
+            : () => [...ctrl.selectedUnits].filter((u) => w.units.get(u)?.kind !== "harvester").length >= 2;
     // (the player may find the gesture on their own while the hint waits)
     const valid = () => !this.hints.has(id) && applies();
     this.h.offerHint({
       id: `cmd-${id}`,
       msg,
-      priority: id === "place" ? HINTS.priority.placement : HINTS.priority.squads,
+      priority:
+        id === "place" ? HINTS.priority.placement : id === "infantry" || id === "condor" ? HINTS.priority.transport : HINTS.priority.squads,
       ttlS: 20,
       valid,
       onShow: () => this.seen(id)
     });
+  }
+
+  /** Is a unit of a kind matching `pred` selected? */
+  private selecting(pred: (k: UnitKind) => boolean): boolean {
+    const w = this.h.world;
+    for (const id of this.h.ctrl.selectedUnits) {
+      const u = w.units.get(id);
+      if (u && pred(u.kind)) return true;
+    }
+    return false;
+  }
+
+  /** The Condor tip's moment: a Condor selected, or squads selected while we own one. */
+  private condorMoment(): boolean {
+    if (this.selecting(isTransport)) return true;
+    if (!this.selecting(isInfantry)) return false;
+    for (const u of this.h.world.units.values()) if (u.faction === PLAYER && isTransport(u.kind)) return true;
+    return false;
   }
 
   // -------------------------------------------------------------- update --
@@ -274,6 +305,8 @@ export class CommandUi {
     if (this.h.spectator) return;
     this.h.ctrl.squads.events(fx, performance.now());
     this.intel.update(t);
+    // a squad dropped from a Condor: the player has found the whole load-and-drop loop
+    if (!this.hints.has("condor") && fx.some((e) => e.type === "disembark" && !e.bailout && e.faction === PLAYER)) this.seen("condor");
   }
 
   /** Every frame, after the HUD update. */
@@ -314,6 +347,13 @@ export class CommandUi {
         if (army >= 2)
           this.hint("squads", "Squads: hold 1, 2 or 3 to save the selected units. Tap it to select them, double-tap to fly there.");
       }
+      // robot infantry and the Condor: one tip each, the first time the player picks them up
+      if (ctrl.selectedUnits.size > 0) {
+        if (!this.hints.has("infantry") && this.selecting(isInfantry))
+          this.hint("infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Titans: they get crushed.");
+        if (!this.hints.has("condor") && this.condorMoment())
+          this.hint("condor", "Condor: select squads, then tap the Condor to load them. Long-press the map to fly there and drop them, or tap ⇣ Unload.");
+      }
     }
     if (now - this.badgeAt >= BADGE_MS) {
       this.badgeAt = now;
@@ -325,7 +365,7 @@ export class CommandUi {
   private badges(now: number): void {
     const w = this.h.world;
     this.idle = this.idleWatch.update(this.simT);
-    const tabCtr = { build: false, ground: false, air: false };
+    const tabCtr: Record<"build" | FactoryTab, boolean> = { build: false, ground: false, infantry: false, air: false };
     for (const btn of this.h.root.querySelectorAll<HTMLElement>(".bb[data-key]")) {
       const key = btn.dataset.key!;
       const kind = key.slice(2) as UnitKind | BuildingKind;
@@ -345,14 +385,13 @@ export class CommandUi {
     }
     if (
       !this.h.root.querySelector('.bb[data-key^="b:"]') &&
-      counterAdvice(w, PLAYER, this.intel, "sam-site", this.simT).active &&
-      !buildingBlocker(w, PLAYER, "sam-site")
+      DEFENCES.some((k) => counterAdvice(w, PLAYER, this.intel, k, this.simT).active && !buildingBlocker(w, PLAYER, k))
     )
       tabCtr.build = true;
     for (const [t, n] of this.tabNotes) {
       const tab = n.idle.closest<HTMLElement>(".tab");
       const current = !!tab?.classList.contains("on");
-      const idle = !current && (t === "ground" || t === "air") && this.idle[t];
+      const idle = !current && t !== "build" && this.idle[t as FactoryTab];
       const ctr = !current && tabCtr[t as "build" | FactoryTab];
       if (n.idle.hidden === idle) n.idle.hidden = !idle;
       if (n.ctr.hidden === ctr) n.ctr.hidden = !ctr;

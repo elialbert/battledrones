@@ -172,6 +172,27 @@ export class ModelBuilder {
     return this;
   }
 
+  /**
+   * Add a finished model part (another builder's output) as it is: moved,
+   * turned and scaled, its own colours and glow kept (no grade or occlusion
+   * applied again). `geo` is copied, not consumed.
+   */
+  addBuilt(geo: THREE.BufferGeometry, at: Vec3, o: PartOpts = {}): this {
+    const g = geo.clone();
+    for (const name of Object.keys(g.attributes))
+      if (name !== "position" && name !== "normal" && name !== "color" && name !== "glow") g.deleteAttribute(name);
+    g.applyMatrix4(
+      new THREE.Matrix4().compose(
+        new THREE.Vector3(...at),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...(o.rot ?? [0, 0, 0]))),
+        new THREE.Vector3(...(o.scale ?? [1, 1, 1]))
+      )
+    );
+    if (!g.attributes.normal) g.computeVertexNormals();
+    this.parts.push(g);
+    return this;
+  }
+
   box(w: number, h: number, d: number, at: Vec3, hex: number, o?: PartOpts): this {
     return this.add(new THREE.BoxGeometry(w, h, d), at, hex, o);
   }

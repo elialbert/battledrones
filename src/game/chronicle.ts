@@ -186,9 +186,11 @@ export class Chronicle {
     for (const u of w.units.values()) {
       if (u.kind === "harvester") harvesters[u.faction]++;
       else army[u.faction] += (UNITS[u.kind].cost * Math.max(0, u.hp)) / UNITS[u.kind].hp;
+      // squads riding in a Condor still count toward the army
+      for (const p of u.passengers ?? []) army[p.faction] += (UNITS[p.kind].cost * Math.max(0, p.hp)) / UNITS[p.kind].hp;
     }
     for (const b of w.buildings.values()) {
-      if (b.kind !== "fab-plant" && b.kind !== "airpad") continue;
+      if (b.kind !== "fab-plant" && b.kind !== "airpad" && b.kind !== "assembly-bay") continue;
       const fc = this.factories[b.faction];
       fc.total++;
       if (b.queue.length === 0 && w.factions[b.faction].scrap >= 150) fc.idleRich++;
@@ -214,11 +216,13 @@ export class Chronicle {
   /** The best unit per side by kills, fallen or alive. */
   mvp(): Record<Faction, HeroRec | null> {
     const best: Record<Faction, HeroRec | null> = { ...this.fallen };
-    for (const u of this.w.units.values()) {
-      if (u.kills <= 0) continue;
-      const rec: HeroRec = { id: u.id, faction: u.faction, kind: u.kind, kills: u.kills, rank: u.rank, alive: true, diedAt: null };
-      if (betterHero(rec, best[u.faction])) best[u.faction] = rec;
-    }
+    // (squads riding in a Condor are off the field, but very much alive)
+    for (const u of this.w.units.values())
+      for (const x of u.passengers?.length ? [u, ...u.passengers] : [u]) {
+        if (x.kills <= 0) continue;
+        const rec: HeroRec = { id: x.id, faction: x.faction, kind: x.kind, kills: x.kills, rank: x.rank, alive: true, diedAt: null };
+        if (betterHero(rec, best[x.faction])) best[x.faction] = rec;
+      }
     return best;
   }
 }

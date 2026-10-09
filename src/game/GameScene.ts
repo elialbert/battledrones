@@ -3,14 +3,15 @@ import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/comma
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
 import { canPlaceBuilding, nearestReachableResource } from "../sim/economy";
 import { isVisible, tickFog } from "../sim/fog";
+import { unitSeenBy } from "../sim/infantry";
 import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
-import type { Building, FxEvent, World } from "../sim/types";
+import type { Building, FxEvent, Unit, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
-import { GestureRecognizer, type GesturePointer } from "./gestures";
+import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions } from "./mode";
 import { music } from "./music";
@@ -195,7 +196,9 @@ export class GameScene {
       this.fx,
       (x, y) => this.tileVisible(x, y),
       (b) => this.buildingShown(b),
-      (f) => f === PLAYER || !this.ctrl.showFog
+      (f) => f === PLAYER || !this.ctrl.showFog,
+      // (a Sniper Team hidden in the woods isn't drawn, though its tile is in sight)
+      (u) => this.unitVisible(u)
     );
     this.juice = new CombatJuice(v, {
       world: this.world, entities: this.entities, player: PLAYER, spectator: gameMode.spectator,
@@ -316,6 +319,7 @@ export class GameScene {
       rig, canvas: this.stage.canvas, world: this.world, player: PLAYER, spectator: gameMode.spectator,
       hud: this.hud, radio: this.radio,
       sees: (x, y) => this.seesPoint(x, y),
+      seesUnit: (u) => this.unitVisible(u),
       cinematic: () => !!this.finale,
       pulse: (x, y, col) => this.fx.pulse(x, y, col, 1.4)
     });
@@ -546,6 +550,11 @@ export class GameScene {
       this.drawScreen();
     }
     this.hud.update(delta);
+    if (this.ctrl.tip) {
+      // a note on the order just given ("Condor full: unload it first")
+      this.hud.notify(this.ctrl.tip);
+      this.ctrl.tip = null;
+    }
     this.command.update();
     this.aware.update(delta, this.ctrl.paused);
     voices.watchSelection(this.ctrl.selectedUnits, this.world);
@@ -647,6 +656,7 @@ export class GameScene {
     for (const ev of this.world.fx) {
       this.handleFx(ev);
       this.wrecks.onFx(ev);
+      this.entities.onFx(ev);
       this.powerFx.onFx(ev);
       this.objFx.onFx(ev);
     }
@@ -661,7 +671,11 @@ export class GameScene {
     const fb = this.ctrl.lastFeedback;
     if (fb) {
       this.ctrl.lastFeedback = null;
-      const tint = fb.kind === "attack" ? 0xff5a4a : fb.kind === "rally" ? 0xffe066 : 0x7ef29b;
+      const tint =
+        fb.kind === "attack" ? 0xff5a4a
+        : fb.kind === "rally" || fb.kind === "drop" ? 0xffe066
+        : fb.kind === "board" ? 0x7ec1ff
+        : 0x7ef29b;
       this.fx.marker(fb.x, fb.y, tint);
       sfx.play("click", 0.6);
       voices.order(fb.kind, this.ctrl.selectedUnits, this.world);
@@ -754,6 +768,15 @@ export class GameScene {
     return isVisible(this.world, PLAYER, Math.floor(x), Math.floor(y));
   }
 
+  /**
+   * May the local player see this unit? Ours always; an enemy when its tile
+   * is in sight and it isn't a Sniper Team hidden in the woods (unitSeenBy).
+   */
+  private unitVisible(u: Unit): boolean {
+    if (u.faction === PLAYER || !this.ctrl.showFog) return true;
+    return unitSeenBy(this.world, PLAYER, u);
+  }
+
   private buildingShown(b: Building): boolean {
     if (!this.ctrl.showFog) return true;
     if (this.world.fog[PLAYER].known.has(b.id)) return true;
@@ -827,6 +850,20 @@ export class GameScene {
         ty = t.gy;
         key = -1 - o.targetId;
         col = 0xff5a4a;
+      } else if (o.type === "board") {
+        // a squad walking to its Condor: a blue line to the craft
+        const t = this.entities.pos(o.carrierId);
+        if (!t) continue;
+        tx = t.gx;
+        ty = t.gy;
+        key = -1e7 - o.carrierId;
+        col = 0x7ec1ff;
+      } else if (o.type === "unload") {
+        // a Condor flying a drop: a gold waypoint where the squads land
+        tx = o.x;
+        ty = o.y;
+        key = -2e7 - (Math.floor(o.x) * 4096 + Math.floor(o.y));
+        col = 0xffe066;
       } else continue;
       let m = 0;
       while (m < nMarks && marks[m]!.key !== key) m++;
@@ -990,7 +1027,8 @@ export class GameScene {
     let best: TapHit = { kind: "ground" };
     let bestD = Infinity;
     for (const u of w.units.values()) {
-      if (u.faction !== PLAYER && !this.canSee(u.id)) continue;
+      // (a concealed Sniper Team can't be tapped, even before the renderer hides it)
+      if (u.faction !== PLAYER && (!this.canSee(u.id) || !this.unitVisible(u))) continue;
       const p = this.entities.pos(u.id);
       if (!p) continue;
       const s = rig.project(p.x, p.y, (p.h + p.top) / 2);
@@ -1066,6 +1104,12 @@ export class GameScene {
         if (!this.boxRect) return;
         const b = this.boxRect;
         this.boxRect = null;
+        // a long-press released without dragging (the degenerate box): with loaded
+        // Condors selected, they fly there and drop their squads
+        if (isHoldRelease(b.x0, b.y0, sx, sy)) {
+          const p = this.worldAt(sx, sy);
+          if (this.ctrl.dropAt(p.x, p.y)) return;
+        }
         const x0 = Math.min(b.x0, sx);
         const y0 = Math.min(b.y0, sy);
         const x1 = Math.max(b.x0, sx);
@@ -1103,6 +1147,8 @@ export class GameScene {
         }
         const p = this.worldAt(sx, sy);
         let hit = this.pick(sx, sy);
+        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it
+        if (hit.kind === "ownUnit" && this.ctrl.boardTap(hit.id)) return;
         // right-click never re-selects; own entities count as ground
         if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
         this.ctrl.tapWorld(p.x, p.y, hit);
@@ -1189,6 +1235,7 @@ export class GameScene {
         if (e.key === " ") e.preventDefault();
         this.hud.togglePause();
       } else if (e.key === "q") this.ctrl.selectArmy();
+      else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "Delete") this.ctrl.sellSelected();
       else if (e.key === ".") this.aware.cycleSpeed();
       else if (e.key === "j") this.aware.jump();

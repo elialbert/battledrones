@@ -4,7 +4,7 @@
  * with a camera glide, the ⚡ jump button and the battle meter. The rules are
  * in ./awareness (engine-free, tested); the widgets in ../ui/awareness.
  */
-import type { Faction, FxEvent, World } from "../sim/types";
+import type { Faction, FxEvent, Unit, World } from "../sim/types";
 import { sfx } from "./audio";
 import type { CameraRig } from "./three/camera";
 import { announce } from "./announce";
@@ -40,6 +40,8 @@ export interface AwarenessHooks {
   radio: Announcer;
   /** Can the local player see this tile point (fog, or fog switched off)? */
   sees(x: number, y: number): boolean;
+  /** …and this enemy unit itself (a Sniper Team hidden in the woods is not seen)? Default: yes. */
+  seesUnit?(u: Unit): boolean;
   /** A marker flash where the camera lands (tiles). */
   pulse?(x: number, y: number, color: number): void;
   /** The HQ-kill cinematic owns the camera: no glides, jumps or edge arrows meanwhile. */
@@ -291,7 +293,10 @@ export class Awareness {
         const s = this.toScreen(x, y);
         return inside(L.play, s.x, s.y) && s.y > L.markers.y0 - MARKER.size / 2;
       };
-      this.tally = tallyView(this.h.world, this.h.spectator ? "blue" : this.h.player, inView, (x, y) => this.h.sees(x, y));
+      this.tally = tallyView(
+        this.h.world, this.h.spectator ? "blue" : this.h.player, inView, (x, y) => this.h.sees(x, y),
+        (u) => this.h.seesUnit?.(u) ?? true
+      );
     }
     if (!paused) {
       const m = this.meter.update(this.tally, this.lastShotInView, this.simT, deltaMs, this.viewJumped);

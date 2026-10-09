@@ -1,5 +1,6 @@
 // Visual QA: stage a close-up skirmish with every unit type and capture
-// frames mid-fight (tracers, rockets, lasers, shells, bombs, heal beams).
+// frames mid-fight (tracers, rockets, lasers, shells, bombs, heal beams,
+// robot squads' rifle crackle and rail shots, a Condor hovering to drop).
 // Usage: node tools/showcase.mjs [url] [outDir]   (Vite dev server by default)
 import { chromium } from "playwright-core";
 import { existsSync, mkdirSync } from "node:fs";
@@ -35,19 +36,30 @@ await page.evaluate(() => {
     const u = {
       id, kind, faction, x, y, hp: 999, facing: faction === "blue" ? Math.PI / 2 : -Math.PI / 2,
       aim: 0, order: { type: "idle" }, path: null, pathGoal: null, cargo: kind === "harvester" ? 100 : 0,
-      cooldown: 0, autoTargetId: null, damagedTick: -1000, lastAttackerId: null, firedTick: -1000, xp: 0, rank: 0
+      cooldown: 0, autoTargetId: null, damagedTick: -1000, lastAttackerId: null, firedTick: -1000, xp: 0, rank: 0, kills: 0
     };
+    if (kind === "condor") u.passengers = [];
     w.units.set(id, u);
     return u;
   };
   const blue = [["titan", 0, 0], ["lancer", 0, 1.4], ["stinger", 0, -1.4], ["mortar", -3, 0.6], ["flak-crawler", -1.5, 2.2],
-    ["wasp", 1, -2.4], ["hornet", 1.4, 2.6], ["mender", -1.2, -1.2], ["raptor", 0.6, 3.6]];
+    ["wasp", 1, -2.4], ["hornet", 1.4, 2.6], ["mender", -1.2, -1.2], ["raptor", 0.6, 3.6],
+    ["trooper", 1.2, 1.2], ["rocket-squad", -1.8, -2.6], ["sniper", -3.6, -1.6]];
   const red = [["titan", 5, 0], ["stinger", 5.2, 1.6], ["flak-crawler", 5.5, -1.5], ["wasp", 4, 3], ["raptor", 4.2, -3],
-    ["lancer", 6.4, 2.6], ["harvester", 7, -0.5]];
+    ["lancer", 6.4, 2.6], ["harvester", 7, -0.5], ["trooper", 3.6, 1.4], ["rocket-squad", 4.4, -0.2]];
   for (const [k, dx, dy] of blue) add(k, "blue", cx - 3 + dx, cy + dy);
   for (const [k, dx, dy] of red) add(k, "red", cx - 1 + dx, cy + dy);
+  // a loaded Condor coming down to drop its squads behind the line
+  const condor = add("condor", "blue", cx - 4.6, cy + 2.4);
+  for (const k of ["trooper", "sniper"]) {
+    const p = add(k, "blue", 0, 0);
+    w.units.delete(p.id);
+    condor.passengers.push(p);
+  }
+  condor.order = { type: "unload", x: cx - 4.6, y: cy + 2.4, hover: -1 };
   // real hp values so health bars read correctly
   for (const u of w.units.values()) u.hp = Math.min(u.hp, 400) * 0.8;
+  for (const p of condor.passengers) p.hp = Math.min(p.hp, 400) * 0.8;
   cam.zoom = 90;
   cam.centerOn(cx, cy);
 });

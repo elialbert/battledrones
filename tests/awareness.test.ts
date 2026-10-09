@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
-import { tickFog } from "../src/sim/fog";
-import type { Faction, FxEvent, World } from "../src/sim/types";
-import { createWorld, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { isVisible, tickFog } from "../src/sim/fog";
+import { Terrain, type Faction, type FxEvent, type World } from "../src/sim/types";
+import { createWorld, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 import {
   AWARE,
   BattleMeter,
@@ -266,8 +266,34 @@ describe("inbound warning", () => {
   it("advice matches the counter web", () => {
     expect(raidAdvice("air", "hornet").advice).toMatch(/Flak/);
     expect(raidAdvice("ground", "titan").advice).toMatch(/Lancers/);
+    expect(raidAdvice("ground", "titan").advice).toMatch(/Rocket Squads/);
     expect(raidAdvice("ground", "mortar").advice).toMatch(/Stingers/);
     expect(raidAdvice("mixed", "wasp").what).toBe("strike force");
+    expect(raidAdvice("ground", "trooper")).toEqual({ what: "troops", advice: "Mortars, Turrets or Snipers" });
+    expect(raidAdvice("air", "condor").what).toBe("dropships");
+  });
+
+  it("a Sniper Team hidden in the woods raises no warning; a loaded Condor does", () => {
+    const r = rig();
+    // in sight of the HQ, in woods, more than 3 tiles from anything of ours
+    setTerrain(r.w, 11, 6, Terrain.Forest);
+    const sn = spawnUnit(r.w, "sniper", "red", 11.5, 6.5);
+    r.w.tick = 100;
+    expect(r.tick(3)).toEqual([]);
+    expect(isVisible(r.w, "blue", 11, 6)).toBe(true);
+    // an empty Condor is no threat to a base…
+    const c = spawnUnit(r.w, "condor", "red", 21, 9);
+    expect(r.tick(3)).toEqual([]);
+    // …a loaded one is about to put squads on top of us
+    const t = spawnUnit(r.w, "trooper", "red", 21, 9);
+    r.w.units.delete(t.id);
+    c.passengers!.push(t);
+    const [wn] = r.tick();
+    expect(wn).toMatchObject({ domain: "air", text: "Enemy dropships inbound", ids: [c.id] });
+    // the sniper gives itself away by firing: now it counts
+    sn.firedTick = r.w.tick;
+    const [ws] = r.tick();
+    expect(ws).toMatchObject({ lead: "sniper", text: "Enemy snipers inbound" });
   });
 
   it("an air raid warning stands in for 'Enemy aircraft detected'", () => {
@@ -356,6 +382,9 @@ describe("battle meter", () => {
     expect(t.enemy).toEqual({ n: 3, value: 450 });
     const fogged = tallyView(w, "blue", inView, (x) => x < 11);
     expect(fogged.enemy.n).toBe(0);
+    // a unit the player can't see though its tile is in sight (a hidden Sniper Team) doesn't count
+    const hidden = tallyView(w, "blue", inView, () => true, (u) => u.y !== 10);
+    expect(hidden.enemy.n).toBe(2);
   });
 
   it("shows only for a real fight in view, eases toward the live share, and lingers briefly", () => {

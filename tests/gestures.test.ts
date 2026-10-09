@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GestureRecognizer } from "../src/game/gestures";
+import { GestureRecognizer, TAP_SLOP_PX, isHoldRelease } from "../src/game/gestures";
 
 function makeCallbacks() {
   return {
@@ -73,6 +73,30 @@ describe("touch gestures", () => {
     g.tick(300);
     g.up(touch(1, 100, 100), 500);
     expect(cb.onBoxEnd).toHaveBeenCalledWith(100, 100);
+    expect(cb.onTap).not.toHaveBeenCalled();
+  });
+
+  it("tells a hold released in place (a Condor drop) from a box drag", () => {
+    const box = () => {
+      const [x0, y0] = cb.onBoxStart.mock.calls.at(-1)!;
+      const [x1, y1] = cb.onBoxEnd.mock.calls.at(-1)!;
+      return isHoldRelease(x0, y0, x1, y1);
+    };
+    // held still (a finger's jitter included), with or without the tick firing first
+    g.down(touch(1, 100, 100), 0);
+    g.tick(300);
+    g.move(touch(1, 104, 103), 350);
+    g.up(touch(1, 104, 103), 400);
+    expect(box()).toBe(true);
+    g.down(touch(1, 200, 200), 1000);
+    g.up(touch(1, 202, 199), 1400);
+    expect(box()).toBe(true);
+    // a real box drag
+    g.down(touch(1, 100, 100), 2000);
+    g.tick(2300);
+    g.move(touch(1, 100 + TAP_SLOP_PX + 6, 140), 2350);
+    g.up(touch(1, 100 + TAP_SLOP_PX + 6, 140), 2400);
+    expect(box()).toBe(false);
     expect(cb.onTap).not.toHaveBeenCalled();
   });
 

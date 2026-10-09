@@ -38,6 +38,16 @@ export const DOUBLE_TAP_SLOP_PX = 24;
  * otherwise two-finger pans wobble the zoom from natural finger jitter. */
 export const PINCH_ACTIVATE_PX = 16;
 
+/**
+ * Was this box (start and end corners) really a long-press released without
+ * dragging? The recognizer reports such a hold as a degenerate box
+ * (onBoxStart + onBoxEnd at about the same point); callers give it its own
+ * meaning — loaded Condors drop their squads there (GameScene).
+ */
+export function isHoldRelease(x0: number, y0: number, x1: number, y1: number): boolean {
+  return Math.hypot(x1 - x0, y1 - y0) <= TAP_SLOP_PX;
+}
+
 type Mode = "idle" | "pending" | "pan" | "box" | "multi" | "mousepan";
 
 interface Tracked {
