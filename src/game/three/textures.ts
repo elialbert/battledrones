@@ -4,7 +4,7 @@ import * as THREE from "three";
  * Procedural textures drawn once with the 2D canvas API: the particle atlas
  * (glow, smoke, spark, rings, glint, scorch, debris, flame, lit smoke,
  * shock ring, muzzle flare, shards), the drifting cloud shadows and the
- * noise the water and lava shaders scroll.
+ * soft disc under light pools.
  */
 
 /** Cells of the 4×4 particle atlas. */
@@ -353,42 +353,6 @@ export function cloudTexture(): THREE.CanvasTexture {
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
-
-/** Tileable value noise (R, G, B = three octaves) for water ripples and lava flow. */
-export function noiseTexture(): THREE.DataTexture {
-  const S = 128;
-  const data = new Uint8Array(S * S * 4);
-  const rnd = prng(3);
-  const grids = [8, 16, 32].map((n) => {
-    const g = new Float32Array(n * n);
-    for (let i = 0; i < g.length; i++) g[i] = rnd();
-    return { n, g };
-  });
-  const smooth = (t: number) => t * t * (3 - 2 * t);
-  for (let y = 0; y < S; y++)
-    for (let x = 0; x < S; x++) {
-      grids.forEach(({ n, g }, k) => {
-        const fx = (x / S) * n;
-        const fy = (y / S) * n;
-        const x0 = Math.floor(fx);
-        const y0 = Math.floor(fy);
-        const tx = smooth(fx - x0);
-        const ty = smooth(fy - y0);
-        const at = (i: number, j: number) => g[((j + n) % n) * n + ((i + n) % n)]!;
-        const v =
-          at(x0, y0) * (1 - tx) * (1 - ty) + at(x0 + 1, y0) * tx * (1 - ty) + at(x0, y0 + 1) * (1 - tx) * ty + at(x0 + 1, y0 + 1) * tx * ty;
-        data[(y * S + x) * 4 + k] = Math.round(v * 255);
-      });
-      data[(y * S + x) * 4 + 3] = 255;
-    }
-  const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.generateMipmaps = true;
-  tex.needsUpdate = true;
   return tex;
 }
 

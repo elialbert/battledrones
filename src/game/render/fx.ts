@@ -536,20 +536,22 @@ export class Fx {
   }
 
   /**
-   * Damage smoke off a building's roof; `burning` (badly hurt) adds flames and
-   * blacker smoke. Not under the fog: a remembered enemy building is drawn
-   * from memory, and a plume would give away how hurt it is now.
+   * Damage smoke off `p`, a point on a building's roof; `burning` (badly
+   * hurt) adds flames, licking up from the roof itself, and blacker smoke.
+   * The smoke is born half a puff above the roof, so the roof doesn't clip
+   * it as it fades in. Not under the fog: a remembered enemy building is
+   * drawn from memory, and a plume would give away how hurt it is now.
    */
   buildingSmoke(p: P3, burning: boolean): void {
     if (fogged(p.x, p.y)) return;
     const pt = this.v.particles;
-    // (lifted clear of the roof, or the hull hides the puff's lower half until it climbs)
-    pt.emit(burning ? BURN_SMOKE : DAMAGE_SMOKE, p.x, p.y, p.h + 0.35, 1);
+    const cfg = burning ? BURN_SMOKE : DAMAGE_SMOKE;
+    pt.emit(cfg, p.x, p.y, p.h + cfg.size[1] / 2, 1);
     if (burning) {
-      pt.emit(FIRE, p.x, p.y, p.h + 0.18, 2);
+      pt.emit(FIRE, p.x, p.y, p.h + 0.05, 2);
       // the fire lights the smoke around it
       tmpC.setHex(0xff7a1e);
-      pt.spawn({ x: p.x, y: p.h + 0.35, z: p.y, life: 280, tex: TEX.glow, size0: 1.2, size1: 1.4, alpha0: 0.45, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
+      pt.spawn({ x: p.x, y: p.h + 0.3, z: p.y, life: 280, tex: TEX.glow, size0: 1.2, size1: 1.4, alpha0: 0.45, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b }, true);
       if (Math.random() < 0.35) this.emit(EMBERS, p, 1);
     }
   }

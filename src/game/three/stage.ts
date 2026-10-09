@@ -17,6 +17,7 @@ import { ScreenLayer } from "./screen";
  */
 
 interface Look {
+  /** The void the skirt past the map's edge fades into: a deep shade of the biome's ground, so the land recedes rather than ends in night. */
   bg: number;
   sky: number;
   ground: number;
@@ -29,19 +30,19 @@ interface Look {
 
 const LOOKS: Record<Biome, Look> = {
   temperate: {
-    bg: 0x070a10, sky: 0xc6d8ff, ground: 0x8a8a6a, hemi: 1.45, sun: 0xfff0d8, sunI: 3.7, exposure: 1.0,
+    bg: 0x0b100c, sky: 0xc6d8ff, ground: 0x8a8a6a, hemi: 1.45, sun: 0xfff0d8, sunI: 3.7, exposure: 1.0,
     fog: { shroud: 0x0b1219, wisp: 0x1c2a35, memory: [0.86, 0.96, 1.12], cloud: [1, 0.92, 0.8] }
   },
   desert: {
-    bg: 0x0d0a07, sky: 0xdde8ff, ground: 0xb09060, hemi: 1.4, sun: 0xffe6bf, sunI: 3.8, exposure: 0.98,
+    bg: 0x15110b, sky: 0xdde8ff, ground: 0xb09060, hemi: 1.4, sun: 0xffe6bf, sunI: 3.8, exposure: 0.98,
     fog: { shroud: 0x16130f, wisp: 0x342e27, memory: [1.06, 0.97, 0.84], cloud: [1, 0.9, 0.78] }
   },
   arctic: {
-    bg: 0x070a10, sky: 0xd8e8ff, ground: 0xa8b4c4, hemi: 1.35, sun: 0xeef4ff, sunI: 3.25, exposure: 0.95,
+    bg: 0x10161e, sky: 0xd8e8ff, ground: 0xa8b4c4, hemi: 1.35, sun: 0xeef4ff, sunI: 3.25, exposure: 0.95,
     fog: { shroud: 0x0c1420, wisp: 0x21334a, memory: [0.88, 0.97, 1.14], cloud: [1, 0.9, 0.72] }
   },
   volcanic: {
-    bg: 0x0b0606, sky: 0xb0a0a8, ground: 0x6a3a24, hemi: 1.5, sun: 0xffd2b0, sunI: 3.7, exposure: 1.05,
+    bg: 0x120b0a, sky: 0xb0a0a8, ground: 0x6a3a24, hemi: 1.5, sun: 0xffd2b0, sunI: 3.7, exposure: 1.05,
     fog: { shroud: 0x141012, wisp: 0x302727, memory: [1.1, 0.94, 0.86], cloud: [1, 1, 1] }
   }
 };

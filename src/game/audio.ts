@@ -246,7 +246,8 @@ export class Sfx {
    */
   play(name: SfxName, vol = 1, pitch = 1): void {
     const ctx = this.ctx;
-    if (!ctx || !this.buses || !this.enabled("sfx") || vol < 0.03) return;
+    // (`!(vol >= …)` also turns away NaN, which an AudioParam would throw on)
+    if (!ctx || !this.buses || !this.enabled("sfx") || !(vol >= 0.03)) return;
     const now = ctx.currentTime;
     const minGap = (GAP[name] ?? 0.05) * (BATTLE.has(name) ? this.tempo : 1);
     if (now - (this.last.get(name) ?? -1) < minGap) return;

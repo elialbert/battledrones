@@ -75,6 +75,9 @@ const STREAK_STEP = 0.3;
 /** …and Barrage shells, which leave no smoke, closer together, so the shrinking puffs still join up. */
 const SHELL_STEP = 0.18;
 
+/** The EMP crackle's scratch arc (5 points), refilled per arc: no per-frame garbage. */
+const ARC = Array.from({ length: 5 }, () => ({ x: 0, y: 0 }));
+
 const beamGeo = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true).translate(0, 0.5, 0);
 const streakGeo = new THREE.BoxGeometry(0.06, 0.06, 1);
 const tmpC = new THREE.Color();
@@ -513,17 +516,17 @@ export class PowerRenderer {
       // a flickering blue haze says "frozen" at a glance
       a.fillStyle(0x7fd4ff, 0.12 + 0.12 * Math.random()).fillCircle(p.x, p.y, r * 1.35, h);
       if (Math.random() < dtMs / 90) this.v.particles.emit(SPARKS, p.x + (Math.random() - 0.5) * r, p.y + (Math.random() - 0.5) * r, h, 1);
-      // a jagged arc or two, redrawn every frame
+      // a jagged arc or two, redrawn every frame: unhaloed, so they glow rather than read as outlined lines
       for (let n = 0; n < 2; n++) {
         if (Math.random() < 0.35) continue;
         let ang = Math.random() * Math.PI * 2;
-        const pts = [{ x: p.x + Math.cos(ang) * r, y: p.y + Math.sin(ang) * r }];
-        for (let i = 0; i < 4; i++) {
-          ang += 0.45 + Math.random() * 0.4;
-          const rr = r * (0.55 + Math.random() * 0.6);
-          pts.push({ x: p.x + Math.cos(ang) * rr, y: p.y + Math.sin(ang) * rr });
+        for (let i = 0; i < ARC.length; i++) {
+          if (i > 0) ang += 0.45 + Math.random() * 0.4;
+          const rr = i === 0 ? r : r * (0.55 + Math.random() * 0.6);
+          ARC[i]!.x = p.x + Math.cos(ang) * rr;
+          ARC[i]!.y = p.y + Math.sin(ang) * rr;
         }
-        a.lineStyle(1.6, Math.random() < 0.5 ? 0xbfeaff : 0x7fd4ff, 0.9).strokePoints(pts, false, h + (Math.random() - 0.5) * 0.1);
+        a.lineStyle(1.6, Math.random() < 0.5 ? 0xbfeaff : 0x7fd4ff, 0.9, 0).strokePoints(ARC, false, h + (Math.random() - 0.5) * 0.1);
       }
     }
   }
