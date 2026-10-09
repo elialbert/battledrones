@@ -16,6 +16,12 @@ export function prng(seed: number): () => number {
   return () => (s = (s * 16807) % 2147483647) / 2147483647;
 }
 
+/** Deterministic hash → [0, 1). */
+export const hash = (i: number, k: number) => {
+  const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+};
+
 // ------------------------------------------------------------- crags --
 
 export interface CragSpot {
@@ -94,7 +100,11 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
   const strata = biome === "desert" ? 0.13 : biome === "volcanic" ? 0.2 : 0;
   const base = new THREE.Color();
   const grey = new THREE.Color();
+  const snowCol = new THREE.Color(0.7, 0.77, 0.88);
   const c = new THREE.Color();
+  // (on the arctic ridges the painted rock is near black: the crags stay a lighter stone, so their
+  // shape reads under their snow caps rather than vanishing into the paint)
+  const minL = biome === "volcanic" ? 0.05 : snow ? 0.2 : 0.12;
   const hsl = { h: 0, s: 0, l: 0 };
   for (const sp of spots) {
     const rnd = prng(sp.seed * 7919 + 17);
@@ -115,7 +125,7 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
     // average sits between its sunlit stone and black crevices; the crag shades itself)
     base.copy(sp.tint);
     base.getHSL(hsl);
-    base.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.min(0.3, Math.max(biome === "volcanic" ? 0.05 : 0.12, hsl.l * 1.7)));
+    base.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.min(0.3, Math.max(minL, hsl.l * 1.7)));
     const l = base.r * 0.3 + base.g * 0.6 + base.b * 0.1;
     grey.setRGB(l * 1.3, l * 1.3, l * 1.3);
     for (const [sx, sy, sz, cut, ox, oz] of parts) {
@@ -137,7 +147,8 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
         let shade = (0.45 + 0.85 * Math.pow(k, 0.9)) * facet;
         if (strata > 0) shade *= 0.93 + 0.07 * Math.sign(Math.sin((sp.h + fy * sp.s) / strata * Math.PI));
         c.copy(base).multiplyScalar(shade);
-        if (snow && _n.y > 0.55 && k > 0.35) c.setRGB(0.78, 0.84, 0.92).multiplyScalar(0.92 + facet * 0.1);
+        // snow lies only on the flat of the cap, a dusting that thickens toward the top
+        if (snow && _n.y > 0.72 && k > 0.6) c.lerp(snowCol, Math.min(0.6, 0.3 + (k - 0.6) * 0.9) * facet);
         else if (_n.y > 0.75 && k > 0.6) c.lerp(grey, 0.12);
         for (const v of TRI) {
           v.add(_off).applyMatrix4(_m);

@@ -1,12 +1,11 @@
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ECONOMY } from "../../sim/balance";
 import { Vis } from "../../sim/fog";
 import { Terrain, type Biome, type Faction, type World } from "../../sim/types";
-import { ModelBuilder } from "./builder";
 import { fogged, fowUniforms, modelMat } from "./materials";
 import { patchGround, patchLiquid, type GroundUniforms, type LiquidUniforms } from "./terrain-glsl";
-import { cragGeometry, crystalGeos, scrapGeos, treeGeos, type CragSpot } from "./terrain-props";
+import { bridgeGeometry, type DeckSpan } from "./terrain-bridges";
+import { cragGeometry, crystalGeos, hash, scrapGeos, treeGeos, type CragSpot } from "./terrain-props";
 import { PaintedColors, terrainNoise } from "./terrain-tex";
 import { cloudTexture } from "./textures";
 
@@ -19,18 +18,24 @@ import { cloudTexture } from "./textures";
  * lava, or an icy sea), bridges, instanced trees per biome, rock crags
  * coloured from the painted rock beneath, scrap heaps and glowing crystal
  * clusters that shrink as they're mined, drifting cloud shadows and the fog
- * of war. Past the map's edge the land carries on as a mirrored skirt that
- * dims and fades into the sky colour, so the world never ends in a void.
+ * of war. Past the map's edge the land carries on as a skirt: the map
+ * mirrored for a tile or two, easing within a few tiles into the biome's
+ * open ground, dimmed so the bounds read, and fading into the sky colour, so
+ * the world never ends in a void.
  */
 
 /** Height of the water / lava surface. */
 export const WATER_LEVEL = -0.12;
 /** Lattice resolution: height samples per tile. */
 const RES = 3;
-/** How far the mirrored land runs past the map's edge (tiles); it has faded out by there. */
+/** How far the skirt runs past the map's edge (tiles); it has faded out by there. */
 const SKIRT = 20;
-/** Skirt grid lines past the lattice-fine first tile: coarser as it fades. */
-const SKIRT_LINES = [1.5, 2, 2.5, 3, 4, 5, 6.5, 8, 10, 13, 16, SKIRT];
+/** Past this (tiles out) the skirt is open ground: no mirrored paint, relief or water. */
+const NEAR = 6;
+/** The mirrored relief has eased flat this far out (tiles); mirrored water and lava stop here. */
+const FLAT = 4;
+/** Near-skirt grid lines past the lattice-fine first tile: coarser as it flattens. */
+const NEAR_LINES = [1.5, 2, 2.5, 3, FLAT, 5, NEAR];
 
 const TILE_H: Record<number, number> = {
   [Terrain.Ground]: 0,
@@ -79,12 +84,6 @@ const LOOK: Record<Biome, BiomeLook> = {
   desert: { shallow: 0x5fd8d0, deep: 0x147a8a, liquid: 0, rock: 0xa45a3a, bridge: 0x9a8058, steel: false, detail: [0.2, 3.4, 0.7] },
   arctic: { shallow: 0x9fd0ea, deep: 0x0f2a44, liquid: 2, rock: 0x8a929e, bridge: 0x7c8590, steel: false, detail: [0.08, 1.8, 0.45] },
   volcanic: { shallow: 0xffd060, deep: 0xff4a10, liquid: 1, rock: 0x2e2b2a, bridge: 0x6c6660, steel: true, detail: [0.22, 2.6, 0.55] }
-};
-
-/** Deterministic hash → [0, 1). */
-export const hash = (i: number, k: number) => {
-  const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
-  return x - Math.floor(x);
 };
 
 function valueNoise(x: number, y: number): number {
@@ -148,12 +147,15 @@ export class Terrain3D {
   private fogData: Uint8Array;
   private fogAcc = 0;
   private piles: Pile[] = [];
+  /** The bridges' main decks (they reach a little past their tiles onto the banks). */
+  private spans: DeckSpan[] = [];
   private waterTime = { value: 0 };
   /** Shared by the ground and liquid shaders: noise, and the sky colour the skirt fades into. */
   private edge = {
     uTNoise: { value: terrainNoise() as THREE.Texture | null },
     uFarColor: { value: new THREE.Color(0x070a10) },
-    uSkirt: { value: SKIRT }
+    uSkirt: { value: SKIRT },
+    uNear: { value: NEAR }
   };
   private cloud = new THREE.Vector2();
   private time = 0;
@@ -166,11 +168,12 @@ export class Terrain3D {
     this.latW = this.W * RES + 1;
     this.lat = new Float32Array(this.latW * (this.H * RES + 1));
     this.buildLattice();
-    this.buildGround(art);
+    const painted = art ? new PaintedColors(this.W, this.H, art.chunks, art.pxPerTile, art.chunk) : null;
+    this.buildGround(art, painted);
     this.buildWater();
     this.buildBridges();
     this.buildTrees();
-    this.buildRocks(art ? new PaintedColors(this.W, this.H, art.chunks, art.pxPerTile, art.chunk) : null);
+    this.buildRocks(painted);
     this.buildPiles();
 
     // fog: one texel per tile (plus a border), linearly filtered into soft edges
@@ -245,9 +248,28 @@ export class Terrain3D {
     return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
   }
 
-  /** The land's height anywhere, the skirt past the edge included (the map mirrored). */
+  /**
+   * The land's height anywhere, the skirt past the edge included: the map mirrored
+   * for about a tile, its relief then easing flat by FLAT tiles out (so mirrored
+   * outcrops and river channels don't carry on as copies of the map).
+   */
   private landAt(x: number, z: number): number {
-    return this.heightAt(mirror(x, this.W), mirror(z, this.H));
+    const h = this.heightAt(mirror(x, this.W), mirror(z, this.H));
+    const ox = Math.max(0, -x, x - this.W);
+    const oz = Math.max(0, -z, z - this.H);
+    if (ox === 0 && oz === 0) return h;
+    const t = Math.min(1, Math.max(0, (Math.hypot(ox, oz) - 1) / (FLAT - 1)));
+    return h * (1 - t * t * (3 - 2 * t));
+  }
+
+  /** Whether (x, y) is on a bridge's main deck where it reaches onto the bank. */
+  private onDeck(x: number, y: number): boolean {
+    for (const s of this.spans) {
+      const dx = x - s.cx;
+      const dz = y - s.cz;
+      if (Math.abs(dx * s.ux + dz * s.uz) <= s.hl && Math.abs(dz * s.ux - dx * s.uz) <= s.hw) return true;
+    }
+    return false;
   }
 
   /** Where a ground vehicle rides: the deck on bridges, else the terrain (fords sink a little). */
@@ -255,6 +277,7 @@ export class Terrain3D {
     const t = this.tile(Math.floor(x), Math.floor(y));
     if (t === Terrain.Bridge) return 0.02;
     const h = this.heightAt(x, y);
+    if (h < 0.02 && this.spans.length && this.onDeck(x, y)) return 0.02;
     return hover ? Math.max(h, WATER_LEVEL) : h;
   }
 
@@ -262,30 +285,36 @@ export class Terrain3D {
   surfaceAt(x: number, y: number): number {
     const t = this.tile(Math.floor(x), Math.floor(y));
     if (t === Terrain.Bridge) return 0.02;
-    return Math.max(this.heightAt(x, y), WATER_LEVEL);
+    const h = this.heightAt(x, y);
+    if (h < 0.02 && this.spans.length && this.onDeck(x, y)) return 0.02;
+    return Math.max(h, WATER_LEVEL);
   }
 
   // ----------------------------------------------------------- ground --
 
   /**
-   * Grid lines along one axis of length L: the lattice inside the map, the
-   * skirt outside (fine near the edge, coarse further out), plus the mirror
-   * images of chunk seams so no skirt cell straddles two painted chunks.
+   * Grid lines along one axis of length L: the lattice inside the map, the near
+   * skirt outside (fine at the edge, coarser as it flattens), plus the mirror
+   * images of chunk seams there so no skirt cell straddles two painted chunks.
    */
   private lines(L: number, chunkTiles: number): number[] {
     const out: number[] = [];
     for (let i = 0; i <= L * RES; i++) out.push(i / RES);
-    const far = [...Array.from({ length: RES }, (_, k) => (k + 1) / RES), ...SKIRT_LINES];
+    const far = [...Array.from({ length: RES }, (_, k) => (k + 1) / RES), ...NEAR_LINES];
     for (let s = chunkTiles; s < L; s += chunkTiles) far.push(s, L - s);
     for (const d of far)
-      if (d > 0 && d <= SKIRT) out.push(-d, L + d);
+      if (d > 0 && d <= NEAR) out.push(-d, L + d);
     out.sort((a, b) => a - b);
     return out.filter((v, i) => i === 0 || v - out[i - 1]! > 1e-4);
   }
 
-  private buildGround(art: TerrainArt | null): void {
+  private buildGround(art: TerrainArt | null, painted: PaintedColors | null): void {
     const L = this.look;
-    const uniforms: GroundUniforms = { ...this.edge, uDetail: { value: new THREE.Vector3(...L.detail) } };
+    const uniforms: GroundUniforms = {
+      ...this.edge,
+      uDetail: { value: new THREE.Vector3(...L.detail) },
+      uFarGround: { value: this.openGround(painted) }
+    };
     const groundMat = <T extends THREE.Material>(m: T) => fogged(m, { key: "ground", also: (s) => patchGround(s, uniforms) });
     const px = art?.pxPerTile ?? 48;
     const size = art ? art.chunk / px : Math.max(this.W, this.H); // tiles per chunk
@@ -295,27 +324,30 @@ export class Terrain3D {
     const zs = this.lines(this.H, size);
     const NX = xs.length;
 
-    // one mesh per painted chunk: its own cells inside the map, plus the skirt cells mirrored from it
-    interface Acc { idx: number[]; pos: number[]; nor: number[]; uv: number[]; col: number[]; map: Int32Array | null; tex: THREE.Texture | null; x0: number; z0: number; w: number; h: number }
+    // one mesh per painted chunk: its own cells, plus the near-skirt cells past the edges it lies on
+    // (so its bounds grow only by the skirt beside it, and it still culls)
+    interface Acc { idx: number[]; pos: number[]; nor: number[]; uv: number[]; col: number[]; tex: THREE.Texture | null; x0: number; z0: number; w: number; h: number }
     const accs: Acc[] = [];
     for (let r = 0; r < nR; r++)
       for (let c = 0; c < nC; c++) {
         const tex = art?.chunks[r]?.[c] ?? null;
         const img = tex?.image as { width: number; height: number } | undefined;
-        accs.push({ idx: [], pos: [], nor: [], uv: [], col: [], map: null, tex, x0: c * size, z0: r * size, w: img?.width ?? 1, h: img?.height ?? 1 });
+        accs.push({ idx: [], pos: [], nor: [], uv: [], col: [], tex, x0: c * size, z0: r * size, w: img?.width ?? 1, h: img?.height ?? 1 });
       }
-    // heights and normals per grid point, worked out once however many chunks share the point
+    // heights and normals per grid point, worked out once however many meshes share the point
     const NV = NX * zs.length;
     const hgt = new Float32Array(NV * 4).fill(NaN);
+    // each grid point's vertex in the mesh that last used it (a point on a mesh boundary is simply repeated)
+    const slot = new Int32Array(NV);
+    const owner = new Int32Array(NV).fill(-1);
     const fc = new THREE.Color();
     const e = 0.12;
-    const vert = (a: Acc, i: number, j: number): number => {
+    const vert = (a: Acc, ak: number, i: number, j: number): number => {
       const key = j * NX + i;
-      a.map ??= new Int32Array(NV).fill(-1);
-      const have = a.map[key]!;
-      if (have >= 0) return have;
+      if (owner[key] === ak) return slot[key]!;
       const k = a.pos.length / 3;
-      a.map[key] = k;
+      owner[key] = ak;
+      slot[key] = k;
       const x = xs[i]!;
       const z = zs[j]!;
       if (Number.isNaN(hgt[key * 4])) {
@@ -341,40 +373,86 @@ export class Terrain3D {
     };
     for (let j = 0; j < zs.length - 1; j++)
       for (let i = 0; i < NX - 1; i++) {
-        // which chunk the cell's (mirrored) source lies in
-        const sx = mirror((xs[i]! + xs[i + 1]!) / 2, this.W);
-        const sz = mirror((zs[j]! + zs[j + 1]!) / 2, this.H);
-        const c = Math.min(nC - 1, Math.floor(sx / size));
-        const r = Math.min(nR - 1, Math.floor(sz / size));
-        const a = accs[r * nC + c]!;
-        const v00 = vert(a, i, j);
-        const v10 = vert(a, i + 1, j);
-        const v01 = vert(a, i, j + 1);
-        const v11 = vert(a, i + 1, j + 1);
+        // which chunk the cell's (mirrored) source lies in — past an edge, always the chunk on that edge
+        // (where the last chunk is narrower than the near skirt its paint just clamps: by then the
+        // skirt is all open ground anyway)
+        const mx = (xs[i]! + xs[i + 1]!) / 2;
+        const mz = (zs[j]! + zs[j + 1]!) / 2;
+        const c = mx > this.W ? nC - 1 : Math.min(nC - 1, Math.floor(mirror(mx, this.W) / size));
+        const r = mz > this.H ? nR - 1 : Math.min(nR - 1, Math.floor(mirror(mz, this.H) / size));
+        const ak = r * nC + c;
+        const a = accs[ak]!;
+        const v00 = vert(a, ak, i, j);
+        const v10 = vert(a, ak, i + 1, j);
+        const v01 = vert(a, ak, i, j + 1);
+        const v11 = vert(a, ak, i + 1, j + 1);
         a.idx.push(v00, v01, v10, v10, v01, v11);
       }
-    for (const a of accs) {
-      if (a.idx.length === 0) continue;
-      const tex = a.tex;
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(a.pos, 3));
-      g.setAttribute("normal", new THREE.Float32BufferAttribute(a.nor, 3));
-      if (tex) g.setAttribute("uv", new THREE.Float32BufferAttribute(a.uv, 2));
-      else g.setAttribute("color", new THREE.Float32BufferAttribute(a.col, 3));
-      g.setIndex(a.idx);
+    const mats = accs.map(({ tex }) => {
+      if (!tex) return groundMat(new THREE.MeshLambertMaterial({ vertexColors: true }));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.anisotropy = 8;
+      tex.needsUpdate = true;
+      return groundMat(new THREE.MeshLambertMaterial({ map: tex }));
+    });
+    const mesh = (g: THREE.BufferGeometry, mat: THREE.Material) => {
       g.computeBoundingSphere();
-      let mat: THREE.Material;
-      if (tex) {
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-        tex.anisotropy = 8;
-        tex.needsUpdate = true;
-        mat = groundMat(new THREE.MeshLambertMaterial({ map: tex }));
-      } else mat = groundMat(new THREE.MeshLambertMaterial({ vertexColors: true }));
       const m = new THREE.Mesh(g, mat);
       m.receiveShadow = true;
       this.group.add(m);
+    };
+    accs.forEach((a, ak) => {
+      if (a.idx.length === 0) return;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(a.pos, 3));
+      g.setAttribute("normal", new THREE.Float32BufferAttribute(a.nor, 3));
+      if (a.tex) g.setAttribute("uv", new THREE.Float32BufferAttribute(a.uv, 2));
+      else g.setAttribute("color", new THREE.Float32BufferAttribute(a.col, 3));
+      g.setIndex(a.idx);
+      mesh(g, mats[ak]!);
+    });
+
+    // the far skirt: flat open ground out to SKIRT, a quad along each side, each culled on its own (the
+    // shader paints it — the biome's ground fading into the sky — so any chunk's material will do)
+    const fi = Math.max(0, accs.findIndex((a) => a.tex));
+    const farMat = mats[fi]!;
+    const fa = accs[fi]!;
+    const W = this.W;
+    const H = this.H;
+    for (const [x0, z0, x1, z1] of [
+      [-SKIRT, -SKIRT, W + SKIRT, -NEAR], [-SKIRT, H + NEAR, W + SKIRT, H + SKIRT],
+      [-SKIRT, -NEAR, -NEAR, H + NEAR], [W + NEAR, -NEAR, W + SKIRT, H + NEAR]
+    ] as const) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute([x0, 0, z0, x1, 0, z0, x0, 0, z1, x1, 0, z1], 3));
+      g.setAttribute("normal", new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
+      if (fa.tex) g.setAttribute("uv", new THREE.Float32BufferAttribute([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], 2));
+      else g.setAttribute("color", new THREE.Float32BufferAttribute(new Array(12).fill(1), 3));
+      g.setIndex([0, 2, 1, 1, 2, 3]);
+      mesh(g, farMat);
     }
+  }
+
+  /** The biome's open ground (linear): the painted ground tiles' average, else the flat fallback. */
+  private openGround(painted: PaintedColors | null): THREE.Color {
+    const out = new THREE.Color(FALLBACK[Terrain.Ground]!);
+    if (!painted) return out;
+    const c = new THREE.Color();
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    const w = this.world;
+    for (let i = 0; i < w.terrain.length; i++) {
+      if (w.terrain[i] !== Terrain.Ground) continue;
+      if (!painted.at((i % this.W) + 0.5, Math.floor(i / this.W) + 0.5, c)) return out;
+      r += c.r;
+      g += c.g;
+      b += c.b;
+      n++;
+    }
+    return n ? out.setRGB(r / n, g / n, b / n) : out;
   }
 
   // ------------------------------------------------------------ water --
@@ -386,7 +464,7 @@ export class Terrain3D {
     const idx: number[] = [];
     const keyOf = new Map<number, number>();
     const vert = (x: number, z: number) => {
-      const key = Math.round((x + SKIRT) * 2) * 10007 + Math.round((z + SKIRT) * 2);
+      const key = Math.round((x + FLAT) * 2) * 10007 + Math.round((z + FLAT) * 2);
       let k = keyOf.get(key);
       if (k === undefined) {
         k = pos.length / 3;
@@ -410,9 +488,10 @@ export class Terrain3D {
         );
         wet[j * cw + i] = lo < WATER_LEVEL - 0.005 ? 1 : 0;
       }
-    // ...and the skirt's mirrored rivers carry on past the edge (a skirt cell is wet if the cell it mirrors is)
+    // ...and the rivers carry on into the skirt (a skirt cell is wet if the cell it mirrors is) until
+    // its flattening land rises over them, FLAT tiles out; the shader thins them away before that
     const cell = (k: number, n: number) => (k < 0 ? -k - 1 : k >= n ? 2 * n - k - 1 : k);
-    const sk = Math.round(SKIRT / step);
+    const sk = Math.round(FLAT / step);
     for (let j = -sk; j < ch + sk; j++)
       for (let i = -sk; i < cw + sk; i++) {
         if (!wet[cell(j, ch) * cw + cell(i, cw)]) continue;
@@ -435,10 +514,8 @@ export class Terrain3D {
     const lava = L.liquid === 1;
     const mat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      roughness: lava ? 0.92 : L.liquid === 2 ? 0.34 : 0.3,
+      roughness: lava ? 0.92 : L.liquid === 2 ? 0.34 : 0.24,
       metalness: 0,
-      // (the rippled surface would mirror the studio environment's bright panels as white blotches)
-      envMapIntensity: 0.5,
       transparent: !lava,
       depthWrite: lava
     });
@@ -458,151 +535,11 @@ export class Terrain3D {
 
   // ---------------------------------------------------------- bridges --
 
-  /**
-   * Each run of bridge tiles becomes one deck laid along the crossing's own
-   * axis (the painted art's bridge): planks or steel plates, kerbs and rails
-   * down both sides, piers into the river and abutments on the banks. The
-   * deck spans every bridge tile, so vehicles always ride on it.
-   */
+  /** Every bridge, one merged model mesh (see terrain-bridges.ts). */
   private buildBridges(): void {
-    const w = this.world;
-    const seen = new Uint8Array(w.terrain.length);
-    const decks: THREE.BufferGeometry[] = [];
-    const L = this.look;
-    const deck = new THREE.Color(L.bridge);
-    const shade = (k: number) => deck.clone().multiplyScalar(k).getHex();
-    const isDeck = (tx: number, ty: number) =>
-      tx >= 0 && ty >= 0 && tx < this.W && ty < this.H && w.terrain[ty * this.W + tx] === Terrain.Bridge;
-    for (let start = 0; start < w.terrain.length; start++) {
-      if (seen[start] || w.terrain[start] !== Terrain.Bridge) continue;
-      // flood the connected run
-      const tiles: number[] = [];
-      const stack = [start];
-      seen[start] = 1;
-      while (stack.length) {
-        const i = stack.pop()!;
-        tiles.push(i);
-        const tx = i % this.W;
-        const ty = Math.floor(i / this.W);
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-          const nx = tx + dx;
-          const ny = ty + dy;
-          if (!isDeck(nx, ny) || seen[ny * this.W + nx]) continue;
-          seen[ny * this.W + nx] = 1;
-          stack.push(ny * this.W + nx);
-        }
-      }
-      let mx = 0;
-      let mz = 0;
-      for (const i of tiles) {
-        mx += (i % this.W) + 0.5;
-        mz += Math.floor(i / this.W) + 0.5;
-      }
-      mx /= tiles.length;
-      mz /= tiles.length;
-      // the bridge runs between its banks: the principal axis of the dry land touching the run
-      let cxx = 0;
-      let czz = 0;
-      let cxz = 0;
-      const bank = new Set<number>();
-      for (const i of tiles)
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = (i % this.W) + dx;
-            const ny = Math.floor(i / this.W) + dy;
-            if (nx < 0 || ny < 0 || nx >= this.W || ny >= this.H) continue;
-            const t = w.terrain[ny * this.W + nx];
-            if (t === Terrain.Bridge || t === Terrain.Water || t === Terrain.Rock || bank.has(ny * this.W + nx)) continue;
-            bank.add(ny * this.W + nx);
-            const ddx = nx + 0.5 - mx;
-            const ddz = ny + 0.5 - mz;
-            cxx += ddx * ddx;
-            czz += ddz * ddz;
-            cxz += ddx * ddz;
-          }
-      const ang = bank.size > 1 ? 0.5 * Math.atan2(2 * cxz, cxx - czz) : 0;
-      const ux = Math.cos(ang);
-      const uz = Math.sin(ang);
-      // extent along and across the axis, over every tile corner
-      let a0 = Infinity;
-      let a1 = -Infinity;
-      let half = 0;
-      for (const i of tiles) {
-        const tx = i % this.W;
-        const ty = Math.floor(i / this.W);
-        for (const [cx, cz] of [[tx, ty], [tx + 1, ty], [tx, ty + 1], [tx + 1, ty + 1]] as const) {
-          const along = (cx - mx) * ux + (cz - mz) * uz;
-          const across = -(cx - mx) * uz + (cz - mz) * ux;
-          a0 = Math.min(a0, along);
-          a1 = Math.max(a1, along);
-          half = Math.max(half, Math.abs(across));
-        }
-      }
-      // (a diagonal run's corners overshoot its ends: pull them back to the banks)
-      const diag = Math.abs(Math.sin(2 * ang));
-      a0 += diag * 0.45;
-      a1 -= diag * 0.45;
-      half = Math.min(half, 1.55);
-      const len = a1 - a0;
-      const mid = (a0 + a1) / 2;
-      const cx = mx + ux * mid;
-      const cz = mz + uz * mid;
-      const part = new ModelBuilder();
-      // local frame: x along the bridge, z across, the walking surface at y = 0.03 (vehicles ride at 0.02)
-      const wd = half * 2;
-      part.box(len + 0.5, 0.14, wd, [0, -0.06, 0], shade(0.62));
-      if (L.steel) {
-        // riveted steel plates with hazard-striped kerbs
-        const n = Math.max(2, Math.round(len / 0.9));
-        for (let k = 0; k < n; k++)
-          part.box(len / n - 0.05, 0.03, wd - 0.3, [-len / 2 + (k + 0.5) * (len / n), 0.015, 0], shade(k % 2 ? 0.9 : 1.02));
-        for (const s of [-1, 1]) {
-          part.box(len + 0.5, 0.07, 0.12, [0, 0.05, s * (half - 0.09)], 0x2b2d30);
-          for (let k = 0; k < Math.floor(len / 0.5); k++)
-            part.box(0.22, 0.072, 0.124, [-len / 2 + 0.25 + k * 0.5, 0.05, s * (half - 0.09)], 0xc89a2a);
-        }
-      } else {
-        // planks across the deck, each a slightly different board
-        const n = Math.max(4, Math.round(len / 0.21));
-        for (let k = 0; k < n; k++)
-          part.box((len + 0.4) / n - 0.035, 0.03, wd - 0.22, [-(len + 0.4) / 2 + (k + 0.5) * ((len + 0.4) / n), 0.015, 0], shade(0.86 + hash(k, 3) * 0.24));
-        for (const s of [-1, 1]) part.box(len + 0.5, 0.09, 0.11, [0, 0.06, s * (half - 0.07)], shade(0.55));
-      }
-      // down both sides: a riveted truss on steel bridges, a post-and-rail fence on timber ones
-      const railCol = L.steel ? 0x5a5550 : 0x5a4632;
-      const bays = Math.max(2, Math.round((len + 0.2) / (L.steel ? 0.55 : 0.6)));
-      const bay = (len + 0.2) / bays;
-      for (const s of [-1, 1]) {
-        const z = s * (half - 0.07);
-        if (L.steel) {
-          part.box(len + 0.3, 0.06, 0.07, [0, 0.36, z], railCol);
-          for (let k = 0; k <= bays; k++) part.box(0.06, 0.34, 0.07, [-len / 2 - 0.1 + k * bay, 0.2, z], shade(0.8));
-          const tilt = Math.atan2(0.3, bay) * (s > 0 ? 1 : -1);
-          for (let k = 0; k < bays; k++)
-            part.box(Math.hypot(bay, 0.3), 0.04, 0.05, [-len / 2 - 0.1 + (k + 0.5) * bay, 0.2, z], railCol, { rot: [0, 0, k % 2 ? tilt : -tilt] });
-        } else {
-          part.box(len + 0.3, 0.05, 0.06, [0, 0.25, z], railCol);
-          for (let k = 0; k <= bays; k++) part.box(0.07, 0.22, 0.07, [-len / 2 - 0.1 + k * bay, 0.14, z], shade(0.5));
-        }
-      }
-      // piers into the river, a cap beam across under each
-      const piers = Math.max(1, Math.round(len / 1.8));
-      for (let k = 0; k < piers; k++) {
-        const x = -len / 2 + (k + 0.5) * (len / piers);
-        part.box(0.24, 0.12, wd + 0.1, [x, -0.16, 0], 0x34322f);
-        for (const s of [-0.6, 0.6]) part.box(0.26, 0.9, 0.26, [x, -0.62, s * half], L.steel ? 0x2a2a2c : 0x5d5850);
-      }
-      // abutments where the deck meets each bank
-      for (const s of [-1, 1]) part.box(0.5, 0.5, wd + 0.2, [s * (len / 2 + 0.2), -0.24, 0], L.steel ? 0x3a3634 : 0x6a655c);
-      const geo = part.build();
-      geo.rotateY(-ang);
-      geo.translate(cx, 0, cz);
-      decks.push(geo);
-    }
-    if (decks.length === 0) return;
-    const geo = decks.length === 1 ? decks[0]! : mergeGeometries(decks, false)!;
-    if (decks.length > 1) for (const d of decks) d.dispose();
-    geo.computeBoundingSphere();
+    const { geo, spans } = bridgeGeometry(this.world, this.look.bridge, this.look.steel);
+    this.spans = spans;
+    if (!geo) return;
     const m = new THREE.Mesh(geo, modelMat("normal"));
     m.userData.model = true;
     m.castShadow = true;
@@ -663,8 +600,11 @@ export class Terrain3D {
     const rockCol = new THREE.Color(this.look.rock);
     const tmp = new THREE.Color();
     const isRock = (tx: number, ty: number) => tx >= 0 && ty >= 0 && tx < this.W && ty < this.H && w.terrain[ty * this.W + tx] === Terrain.Rock;
-    const seat = (x: number, y: number, r: number) =>
+    const low = (x: number, y: number, r: number) =>
       Math.min(this.heightAt(x, y), this.heightAt(x + r, y), this.heightAt(x - r, y), this.heightAt(x, y + r), this.heightAt(x, y - r));
+    // a crag stands between the lowest point under it and its middle: proud of the craggy paint (on a
+    // narrow ridge, seated on the lowest point, all but its cap would drown in the heightfield)
+    const seat = (x: number, y: number, r: number) => (low(x, y, r) + this.heightAt(x, y)) / 2;
     for (let i = 0; i < w.terrain.length; i++) {
       const t = w.terrain[i];
       const tx = i % this.W;
@@ -674,13 +614,23 @@ export class Terrain3D {
         for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && isRock(tx + dx, ty + dy)) n++;
         const heart = n >= 7;
         if (hash(i, 2) < (heart ? 0.45 : 0.6)) continue;
-        const x = tx + 0.5 + (hash(i, 3) - 0.5) * 0.6;
-        const y = ty + 0.5 + (hash(i, 4) - 0.5) * 0.6;
+        // each crag crowns the highest of a few spots in its tile, so it stands on the outcrop's peaks
+        // rather than drowning in a hollow of its craggy heightfield
+        let x = tx + 0.5;
+        let y = ty + 0.5;
+        for (let k = 0; k < 5; k++) {
+          const cx = tx + 0.5 + (hash(i, 3 + k * 7) - 0.5) * 0.6;
+          const cy = ty + 0.5 + (hash(i, 4 + k * 7) - 0.5) * 0.6;
+          if (k === 0 || this.heightAt(cx, cy) > this.heightAt(x, y)) {
+            x = cx;
+            y = cy;
+          }
+        }
         const s = heart ? 0.5 + hash(i, 5) * 0.35 : 0.34 + hash(i, 5) * 0.22;
         const k = hash(i, 7);
         spots.push({
           x, y, s, rot: hash(i, 6) * Math.PI * 2,
-          h: seat(x, y, s * 0.45) - 0.06,
+          h: seat(x, y, s * 0.45) - 0.05,
           tint: painted?.at(x, y, tmp, 0.75)?.clone() ?? rockCol.clone(),
           kind: k < 0.5 ? 0 : k < 0.82 ? 1 : 2,
           seed: i
@@ -693,7 +643,7 @@ export class Terrain3D {
         const tint = rockCol.clone();
         const under = painted?.at(x, y, tmp, 1);
         if (under) tint.lerp(under, 0.35);
-        spots.push({ x, y, s, rot: hash(i, 6) * 6, h: seat(x, y, s * 0.45) - 0.04, tint, kind: 3, seed: i });
+        spots.push({ x, y, s, rot: hash(i, 6) * 6, h: low(x, y, s * 0.45) - 0.04, tint, kind: 3, seed: i });
       }
     }
     const geo = cragGeometry(spots, w.biome);

@@ -6,10 +6,15 @@ import type * as THREE from "three";
  *
  * - **Ground**: a fine procedural grain, embossed from the north-west like
  *   the painted hillshade, so the painted art stays crisp close in; and the
- *   world past the map's edge (the mirrored skirt) dims, desaturates and
- *   fades into the sky colour, so the battlefield's bounds read at a glance.
+ *   world past the map's edge (the skirt) dims and greys, so the
+ *   battlefield's bounds read at a glance, its mirrored paint blurring into
+ *   the biome's open ground within a few tiles and fading into the sky.
  * - **Liquids**: water with lapping shore foam and sun glints; an icy sea
  *   of drifting floes; lava with a cooled crust cracking over glowing flows.
+ *   Past the edge the water and ice thin away within a few tiles.
+ *
+ * Under the fog of war the skirt shows exactly what's known of the map
+ * tile it mirrors (its fog lookup is mirrored too), so it reveals nothing.
  *
  * All variation comes from uniforms, so every map shares the programs.
  */
@@ -21,10 +26,16 @@ const EDGE_DECL = /* glsl */ `
 uniform sampler2D uTNoise;
 uniform vec3 uFarColor;
 uniform float uSkirt;
+uniform float uNear;
 /** How far outside the map (tiles) a world point is; 0 inside. */
 float bdOutside( vec2 p ) {
   vec2 o = max( -p, p - ( uFowSize - 2.0 ) );
   return length( max( o, 0.0 ) );
+}
+/** The map point a point past the edge mirrors (the skirt is the map reflected across its edges). */
+vec2 bdMirror( vec2 p ) {
+  vec2 L = uFowSize - 2.0;
+  return clamp( L - abs( abs( p ) - L ), vec2( 0.0 ), L );
 }
 /** Out of bounds: a little darker and greyer right from the edge. */
 vec3 bdDim( vec3 c, float od ) {
@@ -34,14 +45,14 @@ vec3 bdDim( vec3 c, float od ) {
 }
 `;
 
-/**
- * After everything, fog included: fade into the sky colour toward the skirt's end. (Under the
- * fog of war the skirt stays dark: off the map the fog texture clamps to its unexplored border.)
- */
+/** The fog of war past the edge: what's known of the map tile there mirrors. */
+const FOG_LOOKUP = "float fw = fowAt( fp );";
+const FOG_MIRRORED = "float fw = fowAt( bdMirror( fp ) );";
+
+/** After everything, fog included: fade into the sky colour toward the skirt's end. */
 const FAR_FADE = /* glsl */ `
   {
-    float k = clamp( bdOutside( vFowW.xz ) / uSkirt, 0.0, 1.0 );
-    k = 1.0 - ( 1.0 - k ) * ( 1.0 - k ) * ( 1.0 - k );
+    float k = smoothstep( 0.0, uSkirt, bdOutside( vFowW.xz ) );
     gl_FragColor.rgb = mix( gl_FragColor.rgb, uFarColor, k );
   }
   #include <premultiplied_alpha_fragment>
@@ -53,37 +64,57 @@ export interface EdgeUniforms {
   uFarColor: { value: THREE.Color };
   /** Skirt width (tiles): fully faded there. */
   uSkirt: { value: number };
+  /** How far out (tiles) the mirrored paint has given way to open ground. */
+  uNear: { value: number };
 }
 
 export interface GroundUniforms extends EdgeUniforms {
   /** Grain contrast, north-west emboss of the grain, sharpening of the paint. */
   uDetail: { value: THREE.Vector3 };
+  /** The biome's open ground (linear), which the skirt eases into. */
+  uFarGround: { value: THREE.Color };
 }
 
 /** Patch the painted ground material (call from `fogged`'s `also`). */
 export function patchGround(s: Shader, u: GroundUniforms): void {
   Object.assign(s.uniforms, u);
+  if (!s.fragmentShader.includes(FOG_LOOKUP)) throw new Error("terrain: fog lookup not found");
   s.fragmentShader = s.fragmentShader
-    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uDetail;`)
+    .replace(FOG_LOOKUP, FOG_MIRRORED)
+    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uDetail;\nuniform vec3 uFarGround;`)
     .replace(
       "#include <map_fragment>",
-      /* glsl */ `#include <map_fragment>
+      /* glsl */ `float od = bdOutside( vFowW.xz );
+      #ifdef USE_MAP
+      {
+        // past the edge the mirrored paint blurs (a coarser mip), so it never reads as a copy of the map
+        float blur = min( od * 1.3, 5.0 );
+        diffuseColor *= texture2D( map, vMapUv, blur );
+        // unsharp mask: the paint minus a softer mip of itself, so close in it reads crisp, not smeared
+        // (high rock is softened a little instead: its paint is busy enough under the crags)
+        vec3 soft = texture2D( map, vMapUv, blur + 1.5 ).rgb;
+        float sharp = mix( uDetail.z, -0.5, smoothstep( 0.35, 0.8, vFowW.y ) ) * ( 1.0 - smoothstep( 0.0, 1.0, od ) );
+        diffuseColor.rgb = max( diffuseColor.rgb + ( diffuseColor.rgb - soft ) * sharp, 0.0 );
+      }
+      #endif`
+    )
+    .replace(
+      "#include <color_fragment>",
+      /* glsl */ `#include <color_fragment>
       {
         vec2 wp = vFowW.xz;
-        #ifdef USE_MAP
-          // unsharp mask: the paint minus a softer mip of itself, so close in it reads crisp, not smeared
-          // (high rock is softened a little instead: its paint is busy enough under the crags)
-          vec3 soft = texture2D( map, vMapUv, 1.5 ).rgb;
-          float sharp = mix( uDetail.z, -0.5, smoothstep( 0.35, 0.8, vFowW.y ) );
-          diffuseColor.rgb = max( diffuseColor.rgb + ( diffuseColor.rgb - soft ) * sharp, 0.0 );
-        #endif
+        if ( od > 0.0 ) {
+          // past the edge the land gives way to the biome's open ground, rolling in tone
+          float roll = texture2D( uTNoise, wp * 0.045 ).r;
+          diffuseColor.rgb = mix( diffuseColor.rgb, uFarGround * ( 0.78 + 0.44 * roll ), smoothstep( 1.0, uNear, od ) );
+        }
         // fine grain (on a grid turned off the tile axes, so its repeat never lines up), and the same
         // grain a hair to the south-east: their difference lights it from the north-west like the paint
         vec2 gp = mat2( 0.66, 0.29, -0.29, 0.66 ) * wp;
         float g0 = texture2D( uTNoise, gp ).r;
         float g1 = texture2D( uTNoise, gp + vec2( 0.0045, 0.0035 ) ).r;
         diffuseColor.rgb *= 1.0 + ( g0 - 0.5 ) * uDetail.x + ( g1 - g0 ) * uDetail.y;
-        diffuseColor.rgb = bdDim( diffuseColor.rgb, bdOutside( wp ) );
+        diffuseColor.rgb = bdDim( diffuseColor.rgb, od );
       }`
     )
     .replace("#include <premultiplied_alpha_fragment>", FAR_FADE);
@@ -109,12 +140,15 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
       vXZ = position.xz;
       transformed.y += sin( position.x * 1.7 + uWT * 1.3 ) * 0.008 + cos( position.z * 1.3 + uWT * 1.1 ) * 0.008;`
     );
+  if (!s.fragmentShader.includes(FOG_LOOKUP)) throw new Error("terrain: fog lookup not found");
   s.fragmentShader = s.fragmentShader
+    .replace(FOG_LOOKUP, FOG_MIRRORED)
     .replace("#include <common>", "#include <common>\nvarying float vDepth;\nvarying vec2 vXZ;")
     .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uShallow; uniform vec3 uDeep; uniform float uMode; uniform float uWT;`)
     .replace(
       "#include <color_fragment>",
       /* glsl */ `#include <color_fragment>
+      float od = bdOutside( vXZ );
       float dk = smoothstep( 0.0, 0.32, vDepth );
       vec3 lavaGlow = vec3( 0.0 );
       vec3 wc;
@@ -140,12 +174,13 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
         float deep = smoothstep( 0.1, 0.34, vDepth );
         // further out the leads between floes widen and more of the floes are gone
         float gap = mix( 0.012, 0.1, deep ) + ( n - 0.5 ) * 0.05;
-        float has = 1.0 - smoothstep( 0.695, 0.705, c.a + deep * 0.24 );
+        // (over the shallows the shelf is whole: only out over the deep do floes go missing)
+        float has = 1.0 - smoothstep( 0.695, 0.705, ( c.a + 0.24 ) * deep );
         float plate = smoothstep( gap, gap + 0.025, c.b ) * has;
         float sunk = smoothstep( gap - 0.06, gap, c.b ) * has * ( 1.0 - plate );
         // the same a little toward the sun (north-west): a floe there shades this water
         vec4 c2 = texture2D( uTNoise, vXZ * 0.074 + wq * 0.12 + vec2( uWT * 0.0016, uWT * 0.0009 ) - vec2( 0.0055, 0.005 ) );
-        float plate2 = smoothstep( gap, gap + 0.025, c2.b ) * ( 1.0 - smoothstep( 0.695, 0.705, c2.a + deep * 0.24 ) );
+        float plate2 = smoothstep( gap, gap + 0.025, c2.b ) * ( 1.0 - smoothstep( 0.695, 0.705, ( c2.a + 0.24 ) * deep ) );
         float shade = plate2 * ( 1.0 - plate );
         // each floe: snow-dusted in its middle, glassy blue toward its broken edge, hairline cracks
         float inner = smoothstep( gap, gap + 0.32, c.b );
@@ -180,26 +215,47 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
         float split = 1.0 - smoothstep( 0.0, 0.05, texture2D( uTNoise, vXZ * 0.26 - flow * 0.5 + ( h2 - 0.5 ) * 0.1 ).b );
         vec3 seep = uDeep * ( 0.02 + 0.85 * edge * edge + 0.6 * split );
         lavaGlow = mix( open, seep, crust );
-        lavaGlow *= ( smoothstep( 0.0, 0.08, vDepth ) * 0.7 + 0.3 ) * ( 1.0 - smoothstep( 0.0, 0.9, bdOutside( vXZ ) ) * 0.35 );
+        lavaGlow *= smoothstep( 0.0, 0.08, vDepth ) * 0.7 + 0.3;
         wc = mix( vec3( 0.008, 0.005, 0.004 ), vec3( 0.022, 0.015, 0.012 ) * ( 0.7 + 0.6 * h2.x ), crust );
         alpha = 1.0;
       }
-      diffuseColor = vec4( bdDim( wc, bdOutside( vXZ ) ), alpha );`
+      // (past the edge the water and ice thin away within a few tiles, so lakes don't double)
+      if ( uMode < 0.5 || uMode > 1.5 ) alpha *= 1.0 - smoothstep( 0.5, 2.5, od );
+      diffuseColor = vec4( wc, alpha );`
     )
     .replace(
       "#include <normal_fragment_maps>",
       /* glsl */ `#include <normal_fragment_maps>
       if ( uMode < 0.5 ) {
-        // wind ripples tilt the surface so the sun glints off it in soft drifting patches
-        vec2 t1 = texture2D( uTNoise, vXZ * 0.19 + vec2( uWT * 0.02, uWT * 0.013 ) ).rg;
-        vec2 t2 = texture2D( uTNoise, vXZ * 0.13 - vec2( uWT * 0.016, -uWT * 0.022 ) ).gr;
-        vec2 tilt = ( t1 + t2 - 1.0 ) * 0.2;
+        // wind ripples tilt the surface so the sun glints off it in small drifting patches
+        vec2 t1 = texture2D( uTNoise, vXZ * 0.47 + vec2( uWT * 0.03, uWT * 0.02 ) ).rg;
+        vec2 t2 = texture2D( uTNoise, vXZ * 0.33 - vec2( uWT * 0.024, -uWT * 0.033 ) ).gr;
+        vec2 tilt = ( t1 + t2 - 1.0 ) * 0.12;
         normal = normalize( normal + ( viewMatrix * vec4( tilt.x, 0.0, tilt.y, 0.0 ) ).xyz );
       }`
     )
     .replace(
       "#include <emissivemap_fragment>",
       "#include <emissivemap_fragment>\n      if ( uMode > 0.5 && uMode < 1.5 ) totalEmissiveRadiance = lavaGlow;"
+    )
+    // reflections: kept to a sheen, or the sun's glint off the ripples and the scene's studio environment
+    // would wash whole stretches of water white; and past the edge, next to none (they'd outshine the dimmed water)
+    .replace(
+      "#include <lights_fragment_end>",
+      /* glsl */ `#include <lights_fragment_end>
+      {
+        float rk = 0.5 * ( 1.0 - smoothstep( 0.0, 1.5, od ) * 0.9 );
+        reflectedLight.directSpecular *= rk;
+        reflectedLight.indirectSpecular *= rk;
+      }`
+    )
+    // out of bounds dims everything it sends out, reflections and glow included, like the ground
+    // (lava only darkens: greyed, its glow would turn salmon-pink)
+    .replace(
+      "#include <opaque_fragment>",
+      /* glsl */ `#include <opaque_fragment>
+      if ( uMode > 0.5 && uMode < 1.5 ) gl_FragColor.rgb *= 1.0 - smoothstep( 0.0, 0.9, od ) * 0.3;
+      else gl_FragColor.rgb = bdDim( gl_FragColor.rgb, od );`
     )
     .replace("#include <premultiplied_alpha_fragment>", FAR_FADE);
 }

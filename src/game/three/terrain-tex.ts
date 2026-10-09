@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { prng } from "./terrain-props";
 
 /**
  * Textures the terrain shaders share, made once on the CPU:
@@ -9,18 +10,14 @@ import * as THREE from "three";
  *   liquids threshold into crisp ice floes and lava crust plates; A is a
  *   random value per cell (which floes exist, how hot a plate glows).
  * - **Painted colours**: a few texels per tile read back from the painted
- *   terrain chunks, so rocks, boulders and the world beyond the map's edge
- *   take their colour from the art they stand on.
+ *   terrain chunks, so crags and boulders take their colour from the art
+ *   they stand on, and the open ground past the map's edge the colour of
+ *   the map's own.
  */
 
 const S = 256;
 /** Cells per side of the cellular pattern (32 px each). */
 const CELLS = 8;
-
-function prng(seed: number): () => number {
-  let s = seed;
-  return () => (s = (s * 16807) % 2147483647) / 2147483647;
-}
 
 /** Tileable fractal value noise into one channel of `out` (0..1). */
 function fractal(out: Uint8Array, ch: number, seed: number): void {
@@ -194,10 +191,6 @@ export class PaintedColors {
     } catch {
       this.data = null;
     }
-  }
-
-  get ok(): boolean {
-    return this.data !== null;
   }
 
   /** The painted colour around tile point (x, y), averaged over about `r` tiles (linear), into `out`. */
