@@ -100,6 +100,12 @@ export class Finale {
     }
     if (!this.flashed && this.t >= FINALE.flashAt) {
       this.flashed = true;
+      // the core goes up: a blast front rolls out across the base and a pillar of smoke climbs
+      if (n > 0) {
+        const h = v.terrain.heightAt(this.o.x, this.o.y);
+        this.o.fx.shock(this.o.x, this.o.y, this.o.size * 1.5, 0xfff0d8, 0.85, 800);
+        this.o.fx.plume(this.o.x, this.o.y, h + 0.6, 1.4 + this.o.size * 0.3, 8);
+      }
       v.stage.flash(380, 255, 244, 228);
       v.rig.shake(520, 0.011);
       this.o.onFlash();
