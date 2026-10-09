@@ -336,6 +336,7 @@ export function createHud(api: HudApi): Hud {
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
       ${!isUnit && f().pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;
+    layout.refresh(true); // (portrait: kept under the band at its real height)
     cardEl.querySelector("#card-x")!.addEventListener("click", () => (cardEl.hidden = true));
     cardEl.querySelector("#card-cancel")?.addEventListener("click", () => {
       const b = unitProducers(kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind));
