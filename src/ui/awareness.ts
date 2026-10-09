@@ -177,7 +177,7 @@ export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): Awarenes
   const jump = document.createElement("button");
   jump.className = "zb jump";
   jump.title = "Jump to the action (J)";
-  jump.innerHTML = `⚡<span class="jdot" hidden></span>`;
+  jump.innerHTML = `<span class="ji">⚡</span><span class="jdot" hidden></span>`;
   root.querySelector(".zoombtns")?.appendChild(jump);
   jump.addEventListener("click", () => h.onJump());
   shield(jump);

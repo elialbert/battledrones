@@ -17,6 +17,10 @@
   --green: #7ef29b;
   --red: #ff7a6a;
   --r: 12px;
+  /* in-battle chrome: every widget floating over the 3D battlefield sits on the
+     same lift (a soft drop shadow plus a hairline top bevel), so the set reads
+     as one machined gunmetal family rather than stickers on the terrain */
+  --lift: 0 2px 8px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 html,
@@ -91,14 +95,19 @@ button {
   padding: 5px 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
 .res {
+  height: 30px;
+  padding-top: 0;
+  padding-bottom: 0;
   font-size: 19px;
+  line-height: 1;
   color: var(--gold);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
 }
 .res .gear {
@@ -127,11 +136,13 @@ button {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  border: 1px solid var(--line);
+  /* tappable chrome wears the brighter rim (chips, squads, speed, minimap) */
+  border: 1px solid var(--line-hi);
   background: var(--panel);
   color: var(--text);
   font-size: 15px;
   font-weight: 800;
+  box-shadow: var(--lift);
 }
 .round:active {
   background: #223048;
@@ -145,7 +156,7 @@ button {
   padding: 3px;
   background: var(--panel);
   border: 1px solid var(--line-hi);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 #minimap {
   display: block;
@@ -153,6 +164,15 @@ button {
   width: 124px;
   height: 124px;
   border-radius: 7px;
+}
+/* the map sits recessed in its bezel like a screen (a static overlay: taps go through) */
+.minimap-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 7px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 2px 7px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
 }
 
 /* -------------------------------------------------------------- toasts --- */
@@ -218,9 +238,13 @@ button {
   border-radius: 12px;
   text-align: center;
   pointer-events: auto;
-  background: linear-gradient(180deg, rgba(14, 20, 32, 0.92), rgba(8, 12, 20, 0.92));
+  /* the tone (rgb) washes down from the top edge and glows behind the title */
+  --tone: 140, 180, 255;
+  background:
+    linear-gradient(180deg, rgba(var(--tone), 0.15), rgba(var(--tone), 0) 75%),
+    linear-gradient(180deg, rgba(14, 20, 32, 0.93), rgba(8, 12, 20, 0.93));
   border: 1px solid var(--line-hi);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(var(--tone), 0.3);
   opacity: 0;
   z-index: 6;
 }
@@ -231,7 +255,7 @@ button {
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--text);
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 18px rgba(var(--tone), 0.35);
 }
 .banner span {
   display: block;
@@ -240,11 +264,15 @@ button {
   font-weight: 600;
   color: var(--dim);
 }
-.banner.good { border-color: rgba(126, 242, 155, 0.7); }
+.banner.good { --tone: 126, 242, 155; border-color: rgba(126, 242, 155, 0.7); }
 .banner.good b { color: var(--green); }
-.banner.bad { border-color: rgba(255, 110, 90, 0.8); }
+.banner.bad { --tone: 255, 110, 90; border-color: rgba(255, 110, 90, 0.8); }
 .banner.bad b { color: var(--red); }
-.banner.epic { border-color: rgba(255, 214, 110, 0.85); box-shadow: 0 0 34px rgba(255, 196, 80, 0.35), 0 8px 28px rgba(0, 0, 0, 0.55); }
+.banner.epic {
+  --tone: 255, 214, 110;
+  border-color: rgba(255, 214, 110, 0.85);
+  box-shadow: 0 0 34px rgba(255, 196, 80, 0.35), 0 8px 28px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(var(--tone), 0.3);
+}
 .banner.epic b { color: var(--gold); }
 .banner.in { animation: bannerIn 0.32s cubic-bezier(0.2, 1.4, 0.4, 1) forwards; }
 .banner.out { opacity: 1; animation: bannerOut 0.26s ease-in forwards; }
@@ -273,13 +301,16 @@ button {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 3px 10px 4px;
+  height: 30px;
+  padding: 0 10px;
+  align-content: center;
   font-size: 12px;
   font-weight: 700;
-  line-height: 1.25;
+  line-height: 1.15;
   color: var(--dim);
   pointer-events: none;
   white-space: nowrap;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -329,8 +360,9 @@ button {
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-hi);
   background: var(--panel);
+  box-shadow: var(--lift);
   color: var(--text);
   font-size: 22px;
   font-weight: 700;
@@ -365,12 +397,14 @@ button {
   min-height: 40px;
   min-width: 40px;
   padding: 6px 14px;
-  border-radius: 20px;
+  /* the squads' and selection panel's corners: the chip row reads as one toolbar */
+  border-radius: 12px;
   border: 1px solid var(--line-hi);
   background: var(--panel);
   color: var(--text);
   font-size: 14px;
   font-weight: 700;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -401,6 +435,7 @@ button {
   border-radius: var(--r);
   padding: 6px 10px 6px 6px;
   max-width: min(94vw, 360px);
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -776,14 +811,34 @@ button {
   .card {
     left: 50%;
     transform: translateX(-50%);
-    bottom: calc(150px + env(safe-area-inset-bottom));
+    /* clear of the dock (chip row, selection panel): measured by src/ui/layout.ts */
+    bottom: var(--card-bottom, calc(150px + env(safe-area-inset-bottom)));
+  }
+  /* the battlefield darkens softly into the dock, so the chip row reads on bright
+     snow and sand and the build bar grows out of the scene instead of sitting on it */
+  .dock::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -26px;
+    bottom: 0;
+    background: linear-gradient(180deg, rgba(4, 7, 12, 0), rgba(4, 7, 12, 0.45) 72px, rgba(4, 7, 12, 0.6));
+    pointer-events: none;
+    z-index: -1;
+  }
+  /* (spectators have no dock to blend into) */
+  #hud.spectator .dock::before {
+    display: none;
   }
   .topbar {
     left: calc(max(8px, env(safe-area-inset-left)) + 94px);
     transform: none;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 3px;
+    /* one instrument column: every pill (and the battle meter under them) shares
+       the widest one's edges instead of a ragged stack of stickers */
+    align-items: stretch;
+    gap: 4px;
   }
   /* never under the minimap: (round buttons 102 px) + (minimap + gap) */
   .res {
@@ -1240,7 +1295,7 @@ button {
   0% { transform: scale(1); }
   35% {
     transform: scale(1.13);
-    box-shadow: 0 0 14px rgba(255, 214, 110, 0.55);
+    box-shadow: 0 0 14px rgba(255, 214, 110, 0.55), var(--lift);
     border-color: rgba(255, 214, 110, 0.8);
   }
   100% { transform: scale(1); }
@@ -1249,7 +1304,7 @@ button {
   0% {
     color: #ff8a7a;
     border-color: rgba(255, 106, 90, 0.85);
-    box-shadow: 0 0 12px rgba(255, 90, 74, 0.45);
+    box-shadow: 0 0 12px rgba(255, 90, 74, 0.45), var(--lift);
     transform: scale(0.95);
   }
   100% { transform: scale(1); }
@@ -1402,9 +1457,16 @@ button {
   pointer-events: none;
 }
 .tempo .clock {
-  padding: 6px 10px;
+  height: 30px;
+  padding: 0 10px;
   font-size: 13px;
-  line-height: 16px;
+  line-height: 28px;
+  text-align: center;
+}
+@media (orientation: portrait) {
+  .tempo .clock {
+    flex: 1;
+  }
 }
 .clock.holdable {
   position: relative;
@@ -1446,6 +1508,7 @@ button {
   font-size: 14px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   touch-action: manipulation;
@@ -1456,7 +1519,7 @@ button {
 .speed.fast {
   color: var(--gold);
   border-color: rgba(255, 214, 110, 0.75);
-  box-shadow: 0 0 10px rgba(255, 196, 80, 0.3);
+  box-shadow: 0 0 10px rgba(255, 196, 80, 0.3), var(--lift);
 }
 .speed.held {
   color: #10141c;
@@ -1467,7 +1530,7 @@ button {
   animation: speedDrop 0.9s ease-out;
 }
 @keyframes speedDrop {
-  0%, 40% { border-color: var(--red); box-shadow: 0 0 12px rgba(255, 90, 74, 0.8); color: var(--red); }
+  0%, 40% { border-color: var(--red); box-shadow: 0 0 12px rgba(255, 90, 74, 0.8), var(--lift); color: var(--red); }
 }
 
 /* battle meter: hangs under the top bar (its positioning parent) while a fight is on screen */
@@ -1482,11 +1545,23 @@ button {
   border-radius: 9px;
   background: var(--panel);
   border: 1px solid var(--line);
+  box-shadow: var(--lift);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.6px;
   pointer-events: none;
   white-space: nowrap;
+}
+/* portrait: the meter closes the top-bar column, edge to edge with the pills above */
+@media (orientation: portrait) {
+  .bmeter {
+    right: 0;
+  }
+  .bmeter .bm-bar {
+    flex: 1;
+    width: auto;
+    min-width: 48px;
+  }
 }
 .bmeter.in {
   animation: bmIn 0.25s ease-out;
@@ -1645,13 +1720,18 @@ button {
   color: var(--gold);
   font-size: 20px;
 }
+/* idle: the button stays solid chrome and only its bolt dims (a see-through
+   button over the battlefield read as broken) */
 .zb.jump.idle {
   color: var(--dim);
-  opacity: 0.55;
+}
+.zb.jump.idle .ji {
+  opacity: 0.4;
+  filter: grayscale(1);
 }
 .zb.jump.threat {
   border-color: rgba(255, 110, 90, 0.8);
-  box-shadow: 0 0 10px rgba(255, 90, 74, 0.45);
+  box-shadow: 0 0 10px rgba(255, 90, 74, 0.45), var(--lift);
 }
 .zb.jump .jdot {
   position: absolute;
@@ -1777,13 +1857,14 @@ button {
   width: 42px;
   height: 42px;
   padding: 0;
-  border-radius: 11px;
+  border-radius: 12px;
   border: 1px solid var(--line-hi);
   background: var(--panel);
   color: var(--text);
   overflow: hidden;
   touch-action: manipulation;
   -webkit-touch-callout: none;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -1855,7 +1936,8 @@ button {
 /* empty slot: a dashed outline with the number big and a "+" */
 .sq.empty {
   border-style: dashed;
-  background: rgba(9, 13, 21, 0.55);
+  /* solid enough to read as an empty slot on bright sand and snow, not a muddy hole */
+  background: rgba(9, 13, 21, 0.72);
 }
 .sq.empty .sqn {
   left: 0;
@@ -1979,7 +2061,8 @@ button {
 /* tab notes: "idle" factory, ⚔ counters on another tab */
 .tab .tnotes {
   position: absolute;
-  top: -6px;
+  /* straddles the tab's top edge, clear of its label */
+  top: -10px;
   left: 3px;
   display: flex;
   gap: 2px;
@@ -2106,6 +2189,7 @@ button {
   cursor: pointer;
   min-height: 40px;
   align-content: center;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -2157,6 +2241,21 @@ button {
   /* the top bar is a narrow column between the round buttons and the minimap */
   .wavepill {
     max-width: calc(100vw - 236px);
+  }
+}
+/* landscape: the row's 30 px pill height, its two lines snug; the tap target stays 40 px */
+@media (orientation: landscape) {
+  .wavepill {
+    position: relative;
+    min-height: 30px;
+    height: 30px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .wavepill::after {
+    content: "";
+    position: absolute;
+    inset: -6px 0;
   }
 }
 .chip.callwave {
@@ -3409,6 +3508,7 @@ button {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -4187,6 +4287,7 @@ button {
   font-size: 14px;
   font-variant-numeric: tabular-nums;
   color: #bfe9ff;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -4402,16 +4503,18 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 30px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 2px 9px;
+  padding: 0 10px;
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--dim);
   white-space: nowrap;
   pointer-events: none;
+  box-shadow: var(--lift);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
@@ -4459,21 +4562,17 @@ button {
 }
 @media (orientation: portrait) {
   .objpill {
-    padding: 1px 8px;
+    height: 22px;
+    padding: 0 8px;
     font-size: 11px;
+    /* stretched to the column: Uplinks on the left, the drop timer on the right */
+    justify-content: space-between;
   }
 }
 /* spectating has no build sidebar: the minimap moves to the right edge, clear of the versus pill */
 @media (orientation: landscape) {
   #hud.spectator .minimap-wrap {
     right: max(8px, env(safe-area-inset-right));
-  }
-}
-/* portrait: while an announcement banner is up, toasts (Uplink alerts, crate news) drop below it
-   instead of hiding under it (landscape has no room to spare: there they keep their place) */
-@media (orientation: portrait) {
-  #hud:has(.banner:not([hidden])) .toasts {
-    top: calc(max(6px, env(safe-area-inset-top)) + 232px);
   }
 }
 /* the end screen's objectives row (a4) makes it one row taller: on short landscape screens

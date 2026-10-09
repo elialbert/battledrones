@@ -18,10 +18,12 @@
  * - the **calldown stack** and the **zoom stack** (portrait: right and left
  *   edges): where they like to be (centred / 38% down), but below a banner's
  *   slot and above the chip row.
+ * - the **info card** (portrait): just above the dock, however tall the chip
+ *   row and selection panel make it.
  *
  * Results are CSS custom properties on the HUD root (`--tick-top`, `--tick-w`,
- * `--banner-top`, `--banner-x`, `--banner-max`, `--pw-top`, `--zoom-top`) and a
- * `tick-under` class;
+ * `--banner-top`, `--banner-x`, `--banner-max`, `--pw-top`, `--zoom-top`,
+ * `--card-bottom`) and a `tick-under` class;
  * style.css uses them with sensible fallbacks.
  */
 
@@ -32,7 +34,7 @@ interface Box {
 }
 
 /** Gaps kept under the band, CSS px. */
-const GAP = { ticker: 6, banner: 8 } as const;
+const GAP = { ticker: 6, banner: 8, card: 8 } as const;
 /** Battle meter size until it has been seen once (it hangs under the top bar). */
 const METER_DEFAULT = { w: 156, h: 20, gap: 5 } as const;
 /** Height reserved for one ticker line (two text lines) above a portrait banner. */
@@ -149,6 +151,7 @@ export function mountHudLayout(root: HTMLElement): HudLayout {
     // portrait: centred on the right edge, but under the banner's slot and above the chip row
     let pwTop = -1;
     let zoomTop = -1;
+    let cardBottom = -1;
     if (!landscape) {
       const row = q(".chiprow") ?? q("#chips");
       const floor = row && shown(row) ? row.getBoundingClientRect().top - 8 : H - 8;
@@ -159,9 +162,12 @@ export function mountHudLayout(root: HTMLElement): HudLayout {
       if (shown(powers)) pwTop = place(H / 2 - powers.offsetHeight / 2, powers.offsetHeight);
       const zoom = q(".zoombtns");
       if (shown(zoom)) zoomTop = place(H * 0.38, zoom.offsetHeight);
+      // the info card opens above the dock, not over half of its chip row
+      const dock = q(".dock");
+      if (shown(dock)) cardBottom = Math.round(H - dock.getBoundingClientRect().top + GAP.card);
     }
 
-    const vars = `${tickNow}|${tickW}|${Math.round(bannerTop)}|${Math.round(cx)}|${under}|${pwTop}|${zoomTop}`;
+    const vars = `${tickNow}|${tickW}|${Math.round(bannerTop)}|${Math.round(cx)}|${under}|${pwTop}|${zoomTop}|${cardBottom}`;
     if (vars === lastVars) return;
     lastVars = vars;
     root.style.setProperty("--tick-top", `${tickNow}px`);
@@ -173,6 +179,8 @@ export function mountHudLayout(root: HTMLElement): HudLayout {
     else root.style.removeProperty("--pw-top");
     if (zoomTop >= 0) root.style.setProperty("--zoom-top", `${zoomTop}px`);
     else root.style.removeProperty("--zoom-top");
+    if (cardBottom >= 0) root.style.setProperty("--card-bottom", `${cardBottom}px`);
+    else root.style.removeProperty("--card-bottom");
   }
 
   return {
