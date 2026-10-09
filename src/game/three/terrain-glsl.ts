@@ -46,8 +46,8 @@ vec3 bdDim( vec3 c, float od ) {
 `;
 
 /** The fog of war past the edge: what's known of the map tile there mirrors. */
-const FOG_LOOKUP = "float fw = fowAt( fp );";
-const FOG_MIRRORED = "float fw = fowAt( bdMirror( fp ) );";
+const FOG_LOOKUP = "fowAt( fp )";
+const FOG_MIRRORED = "fowAt( bdMirror( fp ) )";
 
 /** After everything, fog included: fade into the sky colour toward the skirt's end. */
 const FAR_FADE = /* glsl */ `
