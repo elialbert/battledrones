@@ -10,6 +10,10 @@ sprite sheets in ``art/raw``, then writes the game-ready chunks:
     public/assets/maps/<id>/thumb.webp          256x256 overview (map picker, minimap)
     art/previews/terrain-<id>.jpg               ~1200 px QA preview
 
+and then refreshes the rock materials of those maps' biomes, which the 3D
+cliffs and crags are textured with (art/textures.py, whose seamless-texture
+helpers it shares: public/assets/textures/rock-<biome>.webp).
+
 Usage:  python3 art/terrain.py [map ids...] [--debug]
 
 Rendering is deterministic for a given map JSON (all randomness is seeded from
@@ -36,6 +40,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
 from scipy import ndimage as ndi
+
+from textures import flatten, make_seamless, write_rock_textures
 
 ROOT = Path(__file__).resolve().parent.parent
 MAPS_DIR = ROOT / "art" / "maps"
@@ -278,39 +284,9 @@ def hillshade(Hf: np.ndarray) -> np.ndarray:
 _TEX_CACHE: dict[tuple[str, str, float], np.ndarray] = {}
 
 
-def _periodic_noise(N: int, sigma: float, rng) -> np.ndarray:
-    g = ndi.gaussian_filter(rng.standard_normal((N, N)).astype(np.float32), sigma, mode="wrap")
-    return g / (g.std() + 1e-6)
-
-
-def _vp_blend(A, B, w, m):
-    """Variance-preserving blend (keeps contrast inside the transition)."""
-    w = w[..., None]
-    return m + ((A - m) * w + (B - m) * (1.0 - w)) / np.sqrt(w * w + (1.0 - w) ** 2)
-
-
-def make_seamless(a: np.ndarray, rng) -> np.ndarray:
-    N = a.shape[0]
-    m = a.mean((0, 1))
-    idx = np.arange(N, dtype=np.float32)
-    d = np.minimum(idx, N - idx) / (N / 2.0)
-    for axis in (1, 0):
-        nz = np.clip(_periodic_noise(N, N / 24, rng), -1.5, 1.5)
-        f = (d[None, :] if axis == 1 else d[:, None]) + 0.17 * nz
-        w = sstep(0.44, 0.56, f)
-        a = _vp_blend(a, np.roll(a, N // 2, axis=axis), w, m)
-    return np.clip(a, 0.0, 1.0)
-
-
-def flatten(a: np.ndarray, strength: float) -> np.ndarray:
-    """Remove low-frequency illumination so the tile repeats less obviously."""
-    if strength <= 0:
-        return a
-    N = a.shape[0]
-    L = lum(a)
-    low = ndi.gaussian_filter(L, N / 12, mode="wrap")
-    ratio = (L.mean() / np.maximum(low, 1e-3)) ** strength
-    return np.clip(a * ratio[..., None], 0.0, 1.0)
+def _wrap_blur(a: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian blur wrapping round the edges (for the seamless helpers shared with art/textures.py)."""
+    return ndi.gaussian_filter(a, sigma, mode="wrap")
 
 
 FLATTEN = dict(ground=0.7, ground2=0.6, rough=0.6, rock=0.5, liquid=0.35, road=0.6, forest=0.5)
@@ -322,8 +298,8 @@ def get_texture(biome: str, mat: str, scale: float) -> np.ndarray:
         return _TEX_CACHE[key]
     src = np.asarray(Image.open(RAW / f"tex-{biome}-{mat}.webp").convert("RGB"), np.float32) / 255.0
     rng = np.random.default_rng([ord(c) for c in biome + mat])
-    a = make_seamless(src, rng)
-    a = flatten(a, FLATTEN.get(mat, 0.5))
+    a = make_seamless(src, rng, _wrap_blur)
+    a = flatten(a, FLATTEN.get(mat, 0.5), _wrap_blur)
     N = a.shape[0]
     n = max(16, int(round(N * scale)))
     big = np.tile(a, (3, 3, 1))
@@ -1190,6 +1166,8 @@ def main(argv: list[str]) -> None:
         over = " (over budget)" if st["bytes"] > BUDGET else ""
         print(f"{mid}: {st['cols']}x{st['rows']} chunks, {st['bytes'] / 1024:.0f} KB at q{st['quality']}{over} "
               f"(+thumb {st['thumb'] / 1024:.0f} KB) in {st['seconds']}s")
+    # the same rock materials, shipped for the 3D cliff walls and crags (those of the biomes just painted)
+    write_rock_textures(sorted({load_map(mid)["biome"] for mid in ids}))
 
 
 if __name__ == "__main__":

@@ -92,12 +92,16 @@ function rockShape(rnd: () => number, sx: number, sy: number, sz: number, cut: n
   return out;
 }
 
-/** Merge every crag into one vertex-coloured mesh geometry (one draw call). */
-export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeometry | null {
+/**
+ * Merge every crag into one vertex-coloured mesh geometry (one draw call). `textured`: for the
+ * rock-textured crag material (the texture brings its own strata; no glow attribute), else for
+ * the model material.
+ */
+export function cragGeometry(spots: CragSpot[], biome: Biome, textured = false): THREE.BufferGeometry | null {
   const pos: number[] = [];
   const col: number[] = [];
   const snow = biome === "arctic";
-  const strata = biome === "desert" ? 0.13 : biome === "volcanic" ? 0.2 : 0;
+  const strata = textured ? 0 : biome === "desert" ? 0.13 : biome === "volcanic" ? 0.2 : 0;
   const base = new THREE.Color();
   const grey = new THREE.Color();
   const snowCol = new THREE.Color(0.7, 0.77, 0.88);
@@ -164,7 +168,7 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.setAttribute("glow", new THREE.Float32BufferAttribute(new Float32Array(pos.length / 3), 1));
+  if (!textured) g.setAttribute("glow", new THREE.Float32BufferAttribute(new Float32Array(pos.length / 3), 1));
   g.computeVertexNormals();
   g.computeBoundingSphere();
   return g;
