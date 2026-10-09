@@ -1,12 +1,12 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { Terrain, type Faction, type Unit, type World } from "./types";
-import { inBounds, moveClassOf, passable, terrainSpeed, type MoveClass } from "./world";
+import { inBounds, moveClassOf, passable, terrainMult, terrainSpeed, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
 /** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
-const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed)));
+const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed, t.footSpeed)));
 
 /**
  * Arrival radius at a final destination, growing with the crowd already
@@ -24,9 +24,7 @@ function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
 
 /** Per-step cost multiplier of entering a tile (slow terrain costs more). */
 function stepCost(w: World, idx: number, mc: MoveClass): number {
-  const info = TERRAIN[w.terrain[idx] as Terrain];
-  const s = mc === "hover" ? info.hoverSpeed : info.speed;
-  return 1 / (s || 1);
+  return 1 / (terrainMult(TERRAIN[w.terrain[idx] as Terrain], mc) || 1);
 }
 
 /**

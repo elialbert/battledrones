@@ -13,7 +13,13 @@ export type UnitKind =
   | "wasp"
   | "raptor"
   | "hornet"
-  | "mender";
+  | "mender"
+  // robot infantry (INFANTRY.md): each is ONE sim unit drawn as UNITS[kind].squad robots
+  | "trooper"
+  | "rocket-squad"
+  | "sniper"
+  /** Dropship: carries two infantry squads, unarmed. */
+  | "condor";
 
 export type BuildingKind =
   | "hq"
@@ -23,13 +29,15 @@ export type BuildingKind =
   | "depot"
   | "turret"
   | "sam-site"
-  | "radar";
+  | "radar"
+  /** Builds robot infantry. */
+  | "assembly-bay";
 
 /** Armor classes: weapons deal a damage-type-specific multiple vs each. */
-export type ArmorClass = "light" | "medium" | "heavy" | "structure";
+export type ArmorClass = "light" | "medium" | "heavy" | "structure" | "infantry";
 
 /** Damage types, each with a multiplier row in `DAMAGE_VS` (balance.ts). */
-export type DamageType = "kinetic" | "cannon" | "flak" | "missile" | "explosive" | "laser";
+export type DamageType = "kinetic" | "cannon" | "flak" | "missile" | "explosive" | "laser" | "precision";
 
 /** How a weapon looks when it fires (render-only hint carried on fx). */
 export type WeaponFx =
@@ -41,7 +49,11 @@ export type WeaponFx =
   | "laser"
   | "shell"
   | "bomb"
-  | "mg";
+  | "mg"
+  /** Trooper rifles: a crackle of light tracers from each robot standing. */
+  | "rifle"
+  /** Sniper rail-rifle: one bright, instant streak. */
+  | "snipe";
 
 export const enum Terrain {
   Ground = 0,
@@ -71,7 +83,19 @@ export type UnitOrder =
   | { type: "move"; x: number; y: number }
   | { type: "attackMove"; x: number; y: number }
   | { type: "attack"; targetId: number }
-  | { type: "harvest"; fieldX: number; fieldY: number; phase: HarvestPhase };
+  | { type: "harvest"; fieldX: number; fieldY: number; phase: HarvestPhase }
+  /**
+   * Infantry: walk to Condor `carrierId` and climb aboard (transport.ts).
+   * `ticks` counts up while the squad is within boarding range; at
+   * INFANTRY.boardTime it is taken off the map into the Condor.
+   */
+  | { type: "board"; carrierId: number; ticks: number }
+  /**
+   * Condor: fly to (x, y) — already snapped to the nearest tile infantry can
+   * stand on — hover for INFANTRY.unloadHover, then drop every passenger.
+   * `hover` is -1 while flying, then counts ticks spent hovering.
+   */
+  | { type: "unload"; x: number; y: number; hover: number };
 
 export interface Unit {
   id: number;
@@ -108,6 +132,13 @@ export interface Unit {
   rank: number;
   /** Enemy units and buildings this unit has destroyed. */
   kills: number;
+  /**
+   * Condor only: the infantry squads aboard (at most INFANTRY.capacity).
+   * Passengers are taken OUT of `World.units` while aboard — hidden, unable
+   * to fire, no vision, no presence — and put back (same id) when dropped.
+   * Absent on every other unit.
+   */
+  passengers?: Unit[];
 }
 
 export interface QueueItem {
@@ -380,7 +411,38 @@ export type FxEvent =
       /** Scrap credited (the scrap reward, or the fallback when a kit had nothing to work on). */
       scrap: number;
     }
-  | { type: "crateExpired"; id: number; x: number; y: number };
+  | { type: "crateExpired"; id: number; x: number; y: number }
+  | {
+      /** Infantry squad `unitId` climbed into Condor `carrierId` (it left World.units). */
+      type: "embark";
+      faction: Faction;
+      carrierId: number;
+      unitId: number;
+      x: number;
+      y: number;
+    }
+  | {
+      /**
+       * Condor `carrierId` put squads `unitIds` back on the ground at (x, y):
+       * a normal drop, or `bailout` when it was shot down (they land hurt).
+       */
+      type: "disembark";
+      faction: Faction;
+      carrierId: number;
+      unitIds: number[];
+      x: number;
+      y: number;
+      bailout: boolean;
+    }
+  | {
+      /** A Titan rolled over enemy squad `id` this tick (crushing, INFANTRY.crushDps). */
+      type: "crush";
+      faction: Faction;
+      id: number;
+      attackerId: number;
+      x: number;
+      y: number;
+    };
 
 /**
  * A capturable Uplink relay (objectives.ts). Not a building: nothing
@@ -546,4 +608,12 @@ export type Command =
   | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
   /** Last Stand: bring the next wave in now for a scrap bonus. */
   | { type: "callWave"; faction: Faction }
-  | { type: "calldown"; faction: Faction; power: PowerKind; x: number; y: number };
+  | { type: "calldown"; faction: Faction; power: PowerKind; x: number; y: number }
+  /** Infantry `unitIds` board Condor `carrierId` (the Condor comes to meet them if idle). */
+  | { type: "board"; faction: Faction; unitIds: number[]; carrierId: number }
+  /**
+   * Condors `unitIds` drop their passengers: at (x, y) if given (they fly there
+   * first; the drop snaps to the nearest tile infantry can stand on), else
+   * right where they are.
+   */
+  | { type: "unload"; faction: Faction; unitIds: number[]; x?: number; y?: number };

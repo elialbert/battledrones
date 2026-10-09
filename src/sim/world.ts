@@ -1,4 +1,4 @@
-import { BUILDINGS, ECONOMY, TERRAIN, UNITS } from "./balance";
+import { BUILDINGS, ECONOMY, TERRAIN, UNITS, type TerrainInfo } from "./balance";
 import { createFog } from "./fog";
 import { createObjectiveState } from "./objectives";
 import { createPowerState } from "./powers";
@@ -76,11 +76,15 @@ export function buildingAtTile(w: World, tx: number, ty: number): Building | nul
   return id ? w.buildings.get(id) ?? null : null;
 }
 
-/** Movement class of a unit: decides which terrain it may cross. */
-export type MoveClass = "ground" | "hover" | "air";
+/**
+ * Movement class of a unit: decides which terrain it may cross and how fast.
+ * "foot" is robot infantry: full speed through Woods and Rough, slowed in
+ * Shallows, never on Water or Rock (TERRAIN[t].footSpeed).
+ */
+export type MoveClass = "ground" | "hover" | "air" | "foot";
 
 export const moveClassOf = (kind: UnitKind): MoveClass =>
-  UNITS[kind].domain === "air" ? "air" : UNITS[kind].hover ? "hover" : "ground";
+  UNITS[kind].domain === "air" ? "air" : UNITS[kind].hover ? "hover" : UNITS[kind].squad ? "foot" : "ground";
 
 /** Can a unit of this movement class stand on the tile? */
 export function passable(w: World, tx: number, ty: number, mc: MoveClass): boolean {
@@ -88,8 +92,13 @@ export function passable(w: World, tx: number, ty: number, mc: MoveClass): boole
   if (mc === "air") return true;
   const i = tileIndex(w, tx, ty);
   const info = TERRAIN[w.terrain[i] as Terrain];
-  if (!(mc === "hover" ? info.hover : info.ground)) return false;
+  if (!(mc === "hover" ? info.hover : mc === "foot" ? info.footSpeed > 0 : info.ground)) return false;
   return w.occupancy[i] === 0;
+}
+
+/** A terrain's speed multiplier for a (non-air) movement class. */
+export function terrainMult(info: TerrainInfo, mc: MoveClass): number {
+  return mc === "hover" ? info.hoverSpeed : mc === "foot" ? info.footSpeed : info.speed;
 }
 
 /** Ground-passability of a tile for tracked/wheeled units (air ignores this). */
@@ -101,7 +110,7 @@ export function groundPassable(w: World, tx: number, ty: number): boolean {
 export function terrainSpeed(w: World, x: number, y: number, mc: MoveClass): number {
   if (mc === "air") return 1;
   const info = TERRAIN[terrainAt(w, Math.floor(x), Math.floor(y))];
-  return (mc === "hover" ? info.hoverSpeed : info.speed) || 1;
+  return terrainMult(info, mc) || 1;
 }
 
 export function spawnUnit(
@@ -133,6 +142,7 @@ export function spawnUnit(
     rank: 0,
     kills: 0
   };
+  if (UNITS[kind].capacity) unit.passengers = [];
   w.units.set(unit.id, unit);
   return unit;
 }

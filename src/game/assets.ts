@@ -8,10 +8,10 @@ export const TERRAIN_CHUNK = 1024;
 
 export const UNIT_KINDS: UnitKind[] = [
   "harvester", "scout", "stinger", "flak-crawler", "mortar", "titan", "lancer",
-  "wasp", "raptor", "hornet", "mender"
+  "wasp", "raptor", "hornet", "mender", "trooper", "rocket-squad", "sniper", "condor"
 ];
 export const BUILDING_KINDS: BuildingKind[] = [
-  "hq", "fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar"
+  "hq", "fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar", "assembly-bay"
 ];
 
 export function mapAssetBase(mapId: string): string {
