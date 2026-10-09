@@ -102,9 +102,11 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
   const grey = new THREE.Color();
   const snowCol = new THREE.Color(0.7, 0.77, 0.88);
   const c = new THREE.Color();
-  // (on the arctic ridges the painted rock is near black: the crags stay a lighter stone, so their
-  // shape reads under their snow caps rather than vanishing into the paint)
-  const minL = biome === "volcanic" ? 0.05 : snow ? 0.2 : 0.12;
+  // (on the arctic ridges the painted rock is near black under snow streaks: the crags are a grey stone,
+  // lighter than the paint so their shape reads, but dark enough under the bright arctic light that
+  // their frosted caps read too, rather than the whole crag going white)
+  const minL = biome === "volcanic" ? 0.05 : snow ? 0.07 : 0.12;
+  const maxL = snow ? 0.1 : 0.3;
   const hsl = { h: 0, s: 0, l: 0 };
   for (const sp of spots) {
     const rnd = prng(sp.seed * 7919 + 17);
@@ -125,7 +127,7 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
     // average sits between its sunlit stone and black crevices; the crag shades itself)
     base.copy(sp.tint);
     base.getHSL(hsl);
-    base.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.min(0.3, Math.max(minL, hsl.l * 1.7)));
+    base.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.min(maxL, Math.max(minL, hsl.l * 1.7)));
     const l = base.r * 0.3 + base.g * 0.6 + base.b * 0.1;
     grey.setRGB(l * 1.3, l * 1.3, l * 1.3);
     for (const [sx, sy, sz, cut, ox, oz] of parts) {
@@ -148,7 +150,7 @@ export function cragGeometry(spots: CragSpot[], biome: Biome): THREE.BufferGeome
         if (strata > 0) shade *= 0.93 + 0.07 * Math.sign(Math.sin((sp.h + fy * sp.s) / strata * Math.PI));
         c.copy(base).multiplyScalar(shade);
         // snow lies only on the flat of the cap, a dusting that thickens toward the top
-        if (snow && _n.y > 0.72 && k > 0.6) c.lerp(snowCol, Math.min(0.6, 0.3 + (k - 0.6) * 0.9) * facet);
+        if (snow && _n.y > 0.72 && k > 0.6) c.lerp(snowCol, Math.min(0.42, 0.18 + (k - 0.6) * 0.7) * facet);
         else if (_n.y > 0.75 && k > 0.6) c.lerp(grey, 0.12);
         for (const v of TRI) {
           v.add(_off).applyMatrix4(_m);
