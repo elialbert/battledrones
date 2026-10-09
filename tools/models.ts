@@ -3,7 +3,7 @@
 // /tools/models.html (?faction=red, ?zoom=80, ?only=units|buildings).
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
-import { buildingDef, crateDef, instance, podDef, uplinkDef, unitDef, chuteGeometry, modelMesh, rubbleGeometry } from "../src/game/three/models";
+import { buildingDef, crateDef, instance, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry } from "../src/game/three/models";
 import { setVariant } from "../src/game/three/materials";
 import { UNIT_KINDS, BUILDING_KINDS } from "../src/game/assets";
 
@@ -18,17 +18,24 @@ stage.scene.add(plate);
 
 const facs = (q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
 const only = q.get("only");
+// units at their in-game size (unitScale), each row spaced to fit its biggest hulls
+const box = new THREE.Box3();
 facs.forEach((f, fi) => {
-  if (only !== "buildings")
-    UNIT_KINDS.forEach((k, i) => {
+  if (only !== "buildings") {
+    let x = 0;
+    UNIT_KINDS.forEach((k) => {
       const inst = instance(unitDef(k, f));
       const air = ["scout", "wasp", "raptor", "hornet", "mender"].includes(k);
-      inst.root.position.set(i * 1.6, air ? 0.9 : 0, fi * 1.8 - 1);
+      inst.root.scale.setScalar(unitScale(k));
       inst.body.rotation.y = -0.5;
       if (inst.turret) inst.turret.rotation.y = 0.6;
       if (inst.cargo) inst.cargo.visible = true;
+      const w = box.setFromObject(inst.root).max.x - box.min.x;
+      inst.root.position.set(x + w / 2, air ? 0.9 : 0, fi * 2.2 - 1.4);
+      x += w + 0.35;
       stage.scene.add(inst.root);
     });
+  }
   if (only !== "units")
     BUILDING_KINDS.forEach((k, i) => {
       const inst = instance(buildingDef(k, f));

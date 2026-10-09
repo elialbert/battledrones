@@ -38,7 +38,13 @@ export interface JuiceHost {
   earshot(x: number, y: number): number;
 }
 
-const hex = (c: number) => `#${c.toString(16).padStart(6, "0")}`;
+/** CSS colour strings for the bar fills, made once each (the bars redraw every frame). */
+const hexes = new Map<number, string>();
+function hex(c: number): string {
+  let s = hexes.get(c);
+  if (!s) hexes.set(c, (s = `#${c.toString(16).padStart(6, "0")}`));
+  return s;
+}
 
 /**
  * Combat and economy feedback layered over the battle: hit flashes, team
@@ -74,7 +80,8 @@ export class CombatJuice {
   private death(ev: Extract<FxEvent, { type: "death" }>): void {
     const h = this.host;
     const ours = ev.faction === h.player;
-    const seen = ours || h.sees(ev.x, ev.y);
+    // (a building is seen where any tile of its footprint is: the sim's rule, and its blast's)
+    const seen = ours || (ev.buildingKind ? this.footprintSeen(ev.x, ev.y, BUILDINGS[ev.buildingKind].size) : h.sees(ev.x, ev.y));
     const visible = seen && this.v.rig.onScreen(ev.x, ev.y);
     const cue = deathCue(ev, h.player, h.spectator, seen);
     if (cue.sound === "kill") sfx.play("kill", h.earshot(ev.x, ev.y));
@@ -110,6 +117,15 @@ export class CombatJuice {
         size0: Math.max(r * 2.6, 0.7), size1: Math.max(r * 2.6, 0.7) * 2.1, alpha0: 0.95, alpha1: 0, r: c.r, g: c.g, b: c.b
       });
     }
+  }
+
+  /** May the local player see any tile of the footprint of a building centred on (x, y)? */
+  private footprintSeen(x: number, y: number, size: number): boolean {
+    const x0 = x - size / 2 + 0.5;
+    const y0 = y - size / 2 + 0.5;
+    for (let dy = 0; dy < size; dy++)
+      for (let dx = 0; dx < size; dx++) if (this.host.sees(x0 + dx, y0 + dy)) return true;
+    return false;
   }
 
   private deposit(ev: Extract<FxEvent, { type: "deposit" }>): void {
@@ -169,8 +185,11 @@ export class CombatJuice {
     // health trails for everything on show (cheap: one map entry per entity)
     for (const u of w.units.values())
       if (h.entities.isShown(u.id)) this.trail.update(u.id, u.hp / UNITS[u.kind].hp, 1, this.time);
-    for (const b of w.buildings.values())
-      if (h.entities.isShown(b.id)) this.trail.update(b.id, b.hp / BUILDINGS[b.kind].hp, 1, this.time);
+    // (a remembered building's trail waits at its last-seen health: seen again, the loss drains in view)
+    for (const b of w.buildings.values()) {
+      const r = h.entities.shownHp(b.id);
+      if (r !== null) this.trail.update(b.id, r, 1, this.time);
+    }
     this.sweepT += dtMs;
     if (this.sweepT > 2000) {
       this.sweepT = 0;
@@ -189,8 +208,9 @@ export class CombatJuice {
       const col = TEAM[u.faction];
       const r = Math.max(st.radius * 1.4, 11 * g.px(p.x, p.y));
       const at = flying ? p.h - 0.08 : undefined;
-      g.fillStyle(col, 0.2 * k).fillEllipse(p.x, p.y, r * 2, r * 2, at);
-      g.lineStyle(1.6, col, 0.75 * k).strokeEllipse(p.x, p.y, r * 2, r * 2, at);
+      // (a lighter halo and fill than a selection's: combat ranks below it)
+      g.fillStyle(col, 0.14 * k).fillEllipse(p.x, p.y, r * 2, r * 2, at);
+      g.lineStyle(1.6, col, 0.75 * k, 0.6).strokeEllipse(p.x, p.y, r * 2, r * 2, at);
     }
   }
 
@@ -199,37 +219,85 @@ export class CombatJuice {
   /**
    * A health bar with a damage trail (recently lost HP in pale gold that
    * drains away) and, for enemies near death, a 2 Hz blink — drawn in screen
-   * space, crisp at every zoom. (x, y) is the bar's top-left in CSS px.
+   * space, crisp at every zoom. (x, y) is the bar's top-left in CSS px;
+   * `hgt` its fill height (buildings take a taller one).
    */
-  healthBar(ctx: CanvasRenderingContext2D, id: number, x: number, y: number, width: number, ratio: number, friendly: boolean): void {
+  healthBar(ctx: CanvasRenderingContext2D, id: number, x: number, y: number, width: number, ratio: number, friendly: boolean, hgt = 4): void {
     const minW = 22;
     if (width < minW) {
       x -= (minW - width) / 2;
       width = minW;
     }
-    x = Math.round(x);
-    y = Math.round(y);
-    width = Math.round(width);
-    const hgt = 4;
     const r = Math.max(0, Math.min(1, ratio));
-    ctx.globalAlpha = 0.85;
-    ctx.fillStyle = "#0a0d14";
-    ctx.fillRect(x - 1, y - 1, width + 2, hgt + 2);
+    const dpr = this.v.dpr;
+    barFrame(ctx, dpr, x, y, width, hgt);
+    const { x0, y0, w, h, px } = box;
     const trail = Math.max(r, Math.min(1, this.trail.value(id) ?? r));
-    const filled = Math.round(width * r);
+    const filled = snap(w * r, dpr);
     if (trail > r) {
       ctx.globalAlpha = 0.95;
       ctx.fillStyle = TRAIL_COLOR;
-      ctx.fillRect(x + filled, y, Math.round(width * trail) - filled, hgt);
+      ctx.fillRect(x0 + filled, y0, snap(w * trail, dpr) - filled, h);
     }
     ctx.globalAlpha = barBlink(r, friendly, this.time);
     ctx.fillStyle = hex(friendly ? friendlyBarColor(r) : enemyBarColor(r));
-    ctx.fillRect(x, y, filled, hgt);
+    ctx.fillRect(x0, y0, filled, h);
+    ctx.fillStyle = HIGHLIGHT;
+    ctx.fillRect(x0, y0, filled, px);
     // segment ticks make big health pools readable at a glance
-    const segs = Math.min(10, Math.floor(width / 7));
+    const segs = Math.min(10, Math.floor(w / 7));
     ctx.globalAlpha = 0.55;
-    ctx.fillStyle = "#0a0d14";
-    if (segs >= 2) for (let i = 1; i < segs; i++) ctx.fillRect(x + Math.round((width * i) / segs), y, 1, hgt);
+    ctx.fillStyle = RIM;
+    if (segs >= 2) for (let i = 1; i < segs; i++) ctx.fillRect(x0 + snap((w * i) / segs, dpr), y0, px, h);
     ctx.globalAlpha = 1;
   }
+
+  /** A plain meter in the health bars' frame (production, harvester load): `k` of it filled in `color`. */
+  meter(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, hgt: number, k: number, color: string): void {
+    const dpr = this.v.dpr;
+    barFrame(ctx, dpr, x, y, width, hgt);
+    const { x0, y0, w, h, px } = box;
+    const filled = snap(w * Math.max(0, Math.min(1, k)), dpr);
+    ctx.fillStyle = color;
+    ctx.fillRect(x0, y0, filled, h);
+    ctx.fillStyle = HIGHLIGHT;
+    ctx.fillRect(x0, y0, filled, px);
+  }
+}
+
+// ------------------------------------------------------------ bar frame ---
+
+const RIM = "rgba(0,0,0,0.85)";
+const TROUGH = "rgba(20,25,34,0.88)";
+const HIGHLIGHT = "rgba(255,255,255,0.18)";
+
+/** Round a CSS-px length or coordinate to whole device pixels. */
+function snap(v: number, dpr: number): number {
+  return Math.round(v * dpr) / dpr;
+}
+
+/** The trough of the last frame drawn (CSS px on the device grid; `px` = one CSS px in whole device pixels): reused, no per-frame garbage. */
+const box = { x0: 0, y0: 0, w: 0, h: 0, px: 1 };
+
+/**
+ * The frame every overlay bar shares: a dark trough inside a 1 px black rim
+ * whose corners are cut, so it reads rounded, with every edge on the device
+ * pixel grid so it stays crisp at any pixel ratio. Leaves the trough in `box`.
+ */
+function barFrame(ctx: CanvasRenderingContext2D, dpr: number, x: number, y: number, width: number, hgt: number): void {
+  const px = Math.max(1, Math.round(dpr)) / dpr;
+  const x0 = snap(x, dpr);
+  const y0 = snap(y, dpr);
+  const w = snap(width, dpr);
+  const h = snap(hgt, dpr);
+  ctx.fillStyle = RIM;
+  ctx.fillRect(x0 - px, y0, w + 2 * px, h);
+  ctx.fillRect(x0, y0 - px, w, h + 2 * px);
+  ctx.fillStyle = TROUGH;
+  ctx.fillRect(x0, y0, w, h);
+  box.x0 = x0;
+  box.y0 = y0;
+  box.w = w;
+  box.h = h;
+  box.px = px;
 }

@@ -676,8 +676,15 @@ rules in `src/sim/objectives.ts`):
 
 ### Fog of war
 
-- Unexplored (black), explored-but-unseen (dimmed; remembers enemy
-  buildings), visible. Rendered as a smoothly fading soft-edged overlay.
+- Unexplored (an opaque, biome-tinted shroud), explored-but-unseen (a
+  greyed memory; remembers enemy buildings), visible. Rendered as a
+  smoothly fading soft-edged overlay.
+- A remembered enemy building is drawn as last seen: its damage look
+  follows the health it had then, and it shows no smoke, hit flash, health
+  bar, EMP crackle or turning turret while out of sight. One destroyed in
+  the fog stays standing (as on the minimap) until its footprint is seen
+  again. Enemy building blasts show only where seen; ours, and the HQ that
+  decides the match, always show.
 - The AI does *not* cheat: it keeps its own visibility map and reacts only
   to what it has seen.
 
@@ -1289,47 +1296,103 @@ y up.
   the point under the anchor, and every screen↔ground conversion (taps,
   edge arrows, the minimap's view trapezoid, earshot) goes through it.
   Shake is an offset in the camera plane.
-- **Terrain** (`three/terrain.ts`): the map grid becomes a heightfield
-  (3 samples per tile): each terrain type has a base height (rock +0.95,
-  water and lava −0.55, fords −0.2) blended over about a tile, plus
-  terrain-weighted fractal noise (craggy rock, lumpy rough ground). The
+- **Terrain** (`three/terrain.ts`, with `terrain-glsl.ts`, `terrain-props.ts`,
+  `terrain-tex.ts` and `terrain-bridges.ts`): the map grid becomes a
+  heightfield (3 samples per tile): each terrain type has a base height
+  (rock +0.95, water and lava −0.55, fords −0.2) blended over about a tile,
+  plus terrain-weighted fractal noise (craggy rock, lumpy rough ground). The
   painted terrain chunks are draped over it as the albedo, so the painted
-  hillshade and the real lighting agree. On top: a water/lava/ice surface
-  whose opacity and colour come from the depth under it (shore foam,
-  sparkles; lava flows and crusts), bridge decks with railings, instanced
-  trees and boulders per biome, scrap heaps and crystal clusters (instance
-  matrices shrink as they're mined), and an earthen slab edge round the
-  map. Units ride the surface: ground vehicles pitch and roll with the
-  slope, fords sink them a little, hover tanks ride over water.
+  hillshade and the real lighting agree; a cheap unsharp mask and a fine
+  grain embossed from the north-west keep the 48 px-per-tile paint crisp
+  close in. The outcrops' steep **cliff walls** don't show the drape (it
+  smears down a wall): the ground shader fades there to the biome's own
+  painted rock material — granite, red sandstone, basalt with snow, obsidian
+  (`public/assets/textures/rock-<biome>.webp`) — projected sideways in world
+  space so desert strata run level, tinted per tile from the paint above
+  and darkened toward the foot. Flat tops keep the paint. **Crags** on the
+  outcrops (one merged mesh) are textured with the same stone, triplanar per
+  facet, over their painted-rock tint, in a matte stone material; Frostbite's
+  get frosted caps. Without the texture everything falls back to the
+  untextured look. On top: a water/ice/lava surface whose opacity and colour
+  come from the depth under it — water with soft sun glints and lapping
+  foam; Frostbite's frozen sea an ice shelf over the fords breaking into
+  drifting, cracked floes; Ashlands' lava a molten flow with yellow-hot
+  veins under drifting crust plates that glow at their rims. Each bridge is
+  one deck laid along its crossing (timber planks, kerbs and rails;
+  riveted steel with a truss on Ashlands) on piers and abutments. Instanced
+  trees per biome, salvage heaps of hull plates, girders and drums, and
+  crystal clusters (instance matrices shrink as they're mined). **Past the
+  map's edge** the land carries on for 20 tiles as a skirt: the paint
+  mirrored, dimmed and greyed at the boundary so the playable area reads,
+  easing into the biome's open ground and then into the sky colour, so the
+  world never ends in a void. Its fog lookup mirrors back into the map, so
+  it never shows more than the map tile it reflects. Units ride the surface:
+  ground vehicles pitch and roll with the slope, fords sink them a little,
+  hover tanks ride over water.
 - **Models** (`three/models.ts`, `three/builder.ts`): every unit, building
   and objective is built from primitives in code, merged into one
   vertex-coloured geometry per moving part (hull, turret/head, rotor,
   cargo) so a vehicle is a couple of draw calls. Units face −Z and are
   scaled to the sizes the painted sprites had (×1.12 for 3D readability).
-  A per-vertex glow weight lights lamps, engines and crystals.
+  A per-vertex glow weight lights lamps, engines and crystals. The builder
+  can bake shading into the vertex colours (each part darker toward its
+  base, ground models darker near the ground) and has chamfered `block` /
+  `drum` primitives whose lightened top bevel is the painted art's edge
+  highlight. Every unit carries a solid team patch on top (turret roof,
+  fenders, rotor ducts, wing bands) so red vs blue reads at phone zoom; the
+  HQ's command cab, team bands and tower caps make it the base's
+  centrepiece; rubble is a cracked, scorched foundation with wall stubs and
+  bent girders.
 - **Materials** (`three/materials.ts`): one shared, flat-shaded model
-  material with uniform variants — hit flash (white), building hit (warm),
-  damaged, burnt wreck, elite shimmer (gold), and green/red placement
-  ghosts — that share one shader program, so swapping is free. Every lit
-  material is patched to sample the **fog of war** texture (a texel per
-  tile, blurred on the CPU, smoothed in the shader) by world position, and
-  the ground also takes the drifting **cloud shadows**.
-- **Effects** (`three/particles.ts`): two instanced quad pools (additive
-  light, alpha-blended matter) for fire, smoke, sparks, dust, debris,
-  trails, flashes, shock rings and scorch decals; quads face the camera or
-  lie on the ground. Tracers, missiles, shells, beams, pods and crates are
-  small meshes.
+  material with uniform variants — hit flash (warm light over the shaded
+  model, barely bleaching the paint), building hit (fire light), damaged
+  (greyed, sooty), burnt wreck (neutral charcoal, matte), elite (a gold edge
+  light and a glint sweeping over the hull), and green/red placement ghosts
+  — that share one shader program, so swapping is free. Walls darken near
+  the ground (contact shading), with or without shadows. Every lit material
+  is patched to sample the **fog of war** texture (a texel per tile, blurred
+  on the CPU, smoothed in the shader) by world position: unexplored ground
+  is an opaque, biome-tinted **shroud** with slow wisps (from the cloud
+  texture, looked up where the view ray meets the ground, so nothing under
+  the shroud shows a silhouette) and a faint mist band at its edge;
+  explored ground is a greyed **memory** of the terrain. At every fog level
+  the ground shows through no more than under a plain half-darkening. The
+  ground also takes the drifting **cloud shadows**, tinted per biome.
+- **Effects** (`three/particles.ts`, `render/fx.ts`): two instanced quad
+  pools (additive light, alpha-blended matter) plus a ground pool for flat
+  marks, drawing from a 4×4 procedural atlas (ragged flame, sun-lit smoke
+  puffs, shock ring, muzzle burst, shards, a soft scorch) built once per
+  session. Explosions are layered — a hot flash, a ragged fireball cooling
+  from yellow to red, sun-lit smoke that outlives the fire, embers, a shock
+  ring, kicked-up dust and a scorch (none on water or lava); buildings add a
+  blast front and a smoke pillar. Muzzle bursts, gun smoke and back-blast,
+  tracers held to a minimum screen size, trails laid by distance flown,
+  beams with a white core in a coloured sheath, wrecks that smoulder with
+  oily smoke leaning downwind, and damaged buildings that smoke (and below
+  25% burn) from their real roof. Particle records are recycled; per-frame
+  paths don't allocate.
 - **Ground marks** (`three/ground-gfx.ts`): an immediate-mode API in the
   shape of Phaser's Graphics (rings, arcs, lines, discs, rectangles) that
   drapes thick lines over the terrain with widths in CSS px — selection and
-  combat rings, order lines, reticles, capture rings, the build zone. Three
-  layers: under the fog, through the fog, and on top of everything.
+  combat rings, order lines, reticles, capture rings, the build zone. Lines
+  are indexed, mitred polylines with a feathered edge and a soft dark halo
+  (weaker for fainter strokes; `halo` 0 turns it off), so marks read on
+  snow, sand and lava alike. The hierarchy is selection (2.5 px, opaque,
+  a faint fill under our own units) > combat rings (1.6 px) > ambient. A
+  selection's orders share one waypoint ring per target. Three layers: under
+  the fog, through the fog, and on top of everything.
 - **Screen overlay** (`three/screen.ts`): a 2D canvas over the WebGL view
-  for health and production bars, chevrons, the box select and floating
-  labels ("+100", "VETERAN"), re-projected every frame.
-- **Quality** (`three/stage.ts`): shadows from a sun in the north-west (the
-  painted art's light), the shadow box following the view; 1024² shadow
-  maps on touch devices, 2048² on desktop. Shaders compile during loading.
+  for health, production and harvester-load bars (one framed style: a 1 px
+  rim with cut corners round a dark trough, on the device pixel grid),
+  chevrons with a soft dark copy beneath, a marching-dash box select, and
+  floating labels ("+100", "VETERAN", placement reasons on a plate that
+  slides clear of the HUD), re-projected every frame.
+- **Quality** (`three/stage.ts`): shadows from a sun about 48° up in the
+  north-west (the painted art's light) that gives about half the light on
+  flat ground, so models read with form; the shadow box follows the view;
+  1024² shadow maps on touch devices, 2048² on desktop. The clear colour
+  past the world's edge is a deep shade of each biome's ground. Shaders
+  compile during loading.
   An adaptive controller watches the frame time and, when a device can't
   keep up, steps down in cost order — resolution to 1×, a smaller shadow
   map, no shadows, then resolution below 1× — and creeps back up when

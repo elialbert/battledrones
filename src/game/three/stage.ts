@@ -2,15 +2,22 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import type { Biome } from "../../sim/types";
 import { CameraRig } from "./camera";
+import { setFogLook, type FogLook } from "./materials";
 import { ScreenLayer } from "./screen";
 
 /**
  * The WebGL stage: renderer, scene, sun and sky light per biome, the camera
  * rig, the 2D overlay and a full-screen flash. The sun's shadow frustum
  * follows the camera so shadows stay sharp wherever you look.
+ *
+ * Light is mostly the sun, so models read with lit tops and shaded flanks
+ * and their shadows ground them; a hemisphere light (sky above, the biome's
+ * sunlit ground bouncing back up at the flanks) and a little studio
+ * environment (reflections on metal and water) fill in.
  */
 
 interface Look {
+  /** The void the skirt past the map's edge fades into: a deep shade of the biome's ground, so the land recedes rather than ends in night. */
   bg: number;
   sky: number;
   ground: number;
@@ -18,13 +25,26 @@ interface Look {
   sun: number;
   sunI: number;
   exposure: number;
+  fog: FogLook;
 }
 
 const LOOKS: Record<Biome, Look> = {
-  temperate: { bg: 0x070a10, sky: 0xc6d8ff, ground: 0x51603a, hemi: 1.45, sun: 0xfff0d8, sunI: 2.3, exposure: 1.0 },
-  desert: { bg: 0x0d0a07, sky: 0xdde8ff, ground: 0x8c6c40, hemi: 1.4, sun: 0xffe6bf, sunI: 2.35, exposure: 0.98 },
-  arctic: { bg: 0x070a10, sky: 0xd8e8ff, ground: 0x8a98a8, hemi: 1.35, sun: 0xeef4ff, sunI: 2.0, exposure: 0.95 },
-  volcanic: { bg: 0x0b0606, sky: 0xb0a0a8, ground: 0x402418, hemi: 1.5, sun: 0xffd2b0, sunI: 2.0, exposure: 1.05 }
+  temperate: {
+    bg: 0x0b100c, sky: 0xc6d8ff, ground: 0x8a8a6a, hemi: 1.45, sun: 0xfff0d8, sunI: 3.7, exposure: 1.0,
+    fog: { shroud: 0x0b1219, wisp: 0x1c2a35, memory: [0.86, 0.96, 1.12], cloud: [1, 0.92, 0.8] }
+  },
+  desert: {
+    bg: 0x15110b, sky: 0xdde8ff, ground: 0xb09060, hemi: 1.4, sun: 0xffe6bf, sunI: 3.8, exposure: 0.98,
+    fog: { shroud: 0x16130f, wisp: 0x342e27, memory: [1.06, 0.97, 0.84], cloud: [1, 0.9, 0.78] }
+  },
+  arctic: {
+    bg: 0x10161e, sky: 0xd8e8ff, ground: 0xa8b4c4, hemi: 1.35, sun: 0xeef4ff, sunI: 3.25, exposure: 0.95,
+    fog: { shroud: 0x0c1420, wisp: 0x21334a, memory: [0.88, 0.97, 1.14], cloud: [1, 0.9, 0.72] }
+  },
+  volcanic: {
+    bg: 0x120b0a, sky: 0xb0a0a8, ground: 0x6a3a24, hemi: 1.5, sun: 0xffd2b0, sunI: 3.7, exposure: 1.05,
+    fog: { shroud: 0x141012, wisp: 0x302727, memory: [1.1, 0.94, 0.86], cloud: [1, 1, 1] }
+  }
 };
 
 /** Is this WebGL context rasterising on the CPU (SwiftShader, llvmpipe…)? */
@@ -39,8 +59,11 @@ function isSoftwareGl(r: THREE.WebGLRenderer): boolean {
   }
 }
 
-/** Direction the sunlight comes FROM: north-west and high (the painted art's upper-left light). */
-export const SUN_DIR = new THREE.Vector3(-0.62, 1.15, -0.55).normalize();
+/**
+ * Direction the sunlight comes FROM: north-west (the painted art's upper-left
+ * light), ~48° up — low enough that units cast a shadow you can see at phone size.
+ */
+export const SUN_DIR = new THREE.Vector3(-0.62, 0.92, -0.55).normalize();
 
 export class Stage {
   readonly renderer: THREE.WebGLRenderer;
@@ -82,6 +105,9 @@ export class Stage {
     const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
     const size = coarse ? 1024 : 2048;
     sun.shadow.mapSize.set(size, size);
+    // soft edges for free: the same 5 PCF taps, spread over ~2 texels of the 1024 map (2.5 of the
+    // 2048: spread wider, five taps show as a crawling dither at 1x DPR)
+    sun.shadow.radius = size > 1024 ? 2.5 : 2;
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
     sun.shadow.camera.near = 1;
@@ -91,7 +117,7 @@ export class Stage {
 
     const pmrem = new THREE.PMREMGenerator(r);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.45;
+    this.scene.environmentIntensity = 0.3;
     pmrem.dispose();
 
     this.software = isSoftwareGl(r);
@@ -124,6 +150,7 @@ export class Stage {
     this.sun.color.setHex(l.sun);
     this.sun.intensity = l.sunI;
     this.renderer.toneMappingExposure = l.exposure;
+    setFogLook(l.fog);
   }
 
   resize(): void {
@@ -175,6 +202,7 @@ export class Stage {
     if (this.ratio > 1.01) this.setRatio(Math.max(1, this.ratio * k));
     else if (this.renderer.shadowMap.enabled && shadow.mapSize.x > 1024) {
       shadow.mapSize.set(1024, 1024);
+      shadow.radius = 2;
       shadow.map?.dispose();
       shadow.map = null;
       this.shadowHalf = 0;

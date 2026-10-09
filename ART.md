@@ -13,7 +13,10 @@ engine loads.
 > contract — gunmetal, royal-blue/crimson team panels, amber lights — and
 > particle textures are drawn at runtime (`src/game/three/textures.ts`).
 > The painted **terrain** (section 3) is draped over the 3D heightfield as
-> its albedo; the generated **unit and building art** still provides the
+> its albedo, and the four painted **rock materials** become small tileable
+> textures (`art/textures.py` → `public/assets/textures/rock-<biome>.webp`,
+> 512², seamless) that texture the outcrops' cliff walls and crags, so they
+> are the same stone as the painted tops. The generated **unit and building art** still provides the
 > HUD portraits (`public/assets/icons/`), and the key art and icons are
 > unchanged. The sprite atlas (`public/assets/sprites/`) is still produced
 > by `process.py` but is no longer loaded by the game.
@@ -27,7 +30,8 @@ python3 art/generate.py 'tex-*' --force   # regenerate matching assets
 python3 art/generate.py --list     # what exists
 python3 art/process.py             # raws -> sprite atlas, icons, key art, PWA icons
 npx vite-node tools/export-maps.ts # map grids -> art/maps/*.json
-python3 art/terrain.py [map ids]   # paint each map's terrain
+python3 art/terrain.py [map ids]   # paint each map's terrain (and refresh the rock textures)
+python3 art/textures.py            # the biome rock textures alone (Pillow + numpy only)
 ```
 
 ## 1. Generation — `art/catalog.py`, `art/generate.py`, `art/imagegen.py`

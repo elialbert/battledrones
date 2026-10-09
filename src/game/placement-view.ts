@@ -16,11 +16,13 @@ import type { BuildingKind, World } from "../sim/types";
 import { sfx } from "./audio";
 import { setVariant } from "./three/materials";
 import { buildingDef, instance, type ModelInstance } from "./three/models";
-import type { Label } from "./three/screen";
+import type { Label, ScreenRect } from "./three/screen";
 import type { View } from "./three/view";
 import { radioCue } from "./announcer";
 import { PLAYER, type Controller } from "./controller";
 import type { GesturePointer } from "./gestures";
+
+type Pt = { x: number; y: number };
 
 export interface PlacementHooks {
   view: View;
@@ -40,10 +42,17 @@ export interface PlacementHooks {
 /** Ghost shake on a refused build (ms) and its amplitude (CSS px). */
 const SHAKE_MS = 220;
 const SHAKE_PX = 4;
+/** The build zone's tint, and the footprint where the ghost may / may not stand (its ghost tints). */
+const ZONE = 0x7ef29b;
+const GOOD = 0x37d67a;
+const BAD = 0xe25555;
 /** Finger slop around the ghost that still counts as touching it (CSS px). */
 const GHOST_SLOP_PX = 14;
 /** A press on the ghost that moves less than this is a tap (CSS px). */
 const TAP_SLOP_PX = 8;
+/** The HUD rails the reason plate slides off (the calldown stack, zoom buttons, minimap), re-measured this often (ms). */
+const RAILS = "[data-edge-avoid], .zoombtns, .minimap-wrap";
+const RAILS_MS = 300;
 
 export class PlacementView {
   /** The ghost: a translucent model of the building, green where it may stand, red where not. */
@@ -60,10 +69,17 @@ export class PlacementView {
   private swallow = new Set<number>();
   private shake = Infinity;
   private pulse = 0;
-  private zone: { key: string; runs: number[]; edges: number[] } | null = null;
+  private zone: { key: string; runs: number[]; loops: Pt[][] } | null = null;
+  /** Scratch points for a footprint corner bracket. */
+  private bracket: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }];
+  private rails: ScreenRect[] = [];
+  private railsAt = -Infinity;
 
   constructor(private h: PlacementHooks) {
-    this.label = h.view.screen.label({ x: 0, y: 0, text: "", size: 13, color: "#ffb3a6", bg: "rgba(10, 14, 22, 0.88)", visible: false });
+    this.label = h.view.screen.label({
+      x: 0, y: 0, text: "", size: 14, color: "#ffc2b6", bg: "rgba(12, 15, 22, 0.92)", border: "rgba(255, 106, 88, 0.7)",
+      tail: true, pin: 10, visible: false
+    });
   }
 
   /** Placing, the building is ready, and the ghost has a spot. */
@@ -215,13 +231,15 @@ export class PlacementView {
       return;
     }
     const w = this.h.world;
-    // where you may build: the build-range zone, tinted with a crisp outline
+    // where you may build: the build-range zone, tinted, with a soft glow under a crisp rounded outline
     const g = v.over;
     const z = this.buildZone(w);
-    g.fillStyle(0x7ef29b, 0.07);
+    g.fillStyle(ZONE, 0.08);
     for (let i = 0; i < z.runs.length; i += 3) g.fillRect(z.runs[i]!, z.runs[i + 1]!, z.runs[i + 2]!, 1);
-    g.lineStyle(1.5, 0x7ef29b, 0.45);
-    for (let i = 0; i < z.edges.length; i += 4) g.lineBetween(z.edges[i]!, z.edges[i + 1]!, z.edges[i + 2]!, z.edges[i + 3]!);
+    g.lineStyle(7, ZONE, 0.12, 0);
+    for (const loop of z.loops) g.strokePoints(loop, true);
+    g.lineStyle(2, ZONE, 0.8);
+    for (const loop of z.loops) g.strokePoints(loop, true);
     const size = BUILDINGS[kind].size;
     const why = this.h.ctrl.placementProblem();
     const ok = why === null;
@@ -250,9 +268,31 @@ export class PlacementView {
     // a valid ghost breathes, inviting the tap that builds it
     const breathe = ok ? 0.7 + 0.3 * Math.sin(this.pulse / 260) : 0.95;
     this.ghost.root.scale.set(1, ok ? 0.96 + 0.04 * breathe : 1, 1);
+    // the footprint: a tinted pad with its tile grid, a crisp rim and corner brackets that breathe
     const t = v.top;
-    t.fillStyle(ok ? 0x37d67a : 0xe25555, 0.25).fillRect(x, y, size, size);
-    t.lineStyle(2, ok ? 0x37d67a : 0xe25555, breathe).strokeRect(x, y, size, size);
+    const col = ok ? GOOD : BAD;
+    t.fillStyle(col, ok ? 0.2 : 0.26).fillRect(x, y, size, size);
+    t.lineStyle(1, col, 0.4, 0);
+    for (let i = 1; i < size; i++) t.lineBetween(x + i, y, x + i, y + size).lineBetween(x, y + i, x + size, y + i);
+    t.lineStyle(2, col, 0.55 + 0.4 * breathe).strokeRect(x, y, size, size);
+    const px = v.rig.worldPerPx(cx, cy);
+    const gap = px * (ok ? 3 + 3 * breathe : 3);
+    const arm = Math.min(size * 0.32, px * 16);
+    t.lineStyle(3, col, 0.95);
+    for (let i = 0; i < 4; i++) {
+      const sx = i & 1 ? 1 : -1;
+      const sy = i & 2 ? 1 : -1;
+      const ex = x + size / 2 + sx * (size / 2 + gap);
+      const ey = y + size / 2 + sy * (size / 2 + gap);
+      const b = this.bracket;
+      b[0]!.x = ex - sx * arm;
+      b[0]!.y = ey;
+      b[1]!.x = ex;
+      b[1]!.y = ey;
+      b[2]!.x = ex;
+      b[2]!.y = ey - sy * arm;
+      t.strokePoints(b);
+    }
     if (why) {
       this.label.text = why;
       this.label.visible = true;
@@ -260,27 +300,51 @@ export class PlacementView {
       this.label.y = y + size / 2;
       this.label.h = ground + (this.ghost.def.height ?? 1) + 0.2;
       this.label.dy = -6;
+      this.label.avoid = this.hudRails();
     } else this.label.visible = false;
+  }
+
+  /** Where the HUD's side rails cover the battlefield (CSS px), measured a few times a second while a reason shows. */
+  private hudRails(): ScreenRect[] {
+    const now = performance.now();
+    if (now - this.railsAt < RAILS_MS) return this.rails;
+    this.railsAt = now;
+    this.rails.length = 0;
+    document.querySelectorAll(RAILS).forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) this.rails.push({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom });
+    });
+    return this.rails;
   }
 
   /**
    * Tiles whose centre is in build range of the base, as horizontal runs
-   * [x, y, length, …] and outline segments [x0, y0, x1, y1, …] (tiles).
-   * Recomputed only when the set of buildings changes.
+   * [x, y, length, …] (tiles), and the zone's outline as closed loops with
+   * their tile-step corners rounded off. Recomputed only when the set of
+   * buildings changes.
    */
-  private buildZone(w: World): { runs: number[]; edges: number[] } {
+  private buildZone(w: World): { runs: number[]; loops: Pt[][] } {
     let key = "";
     for (const b of w.buildings.values()) if (b.faction === PLAYER) key += `${b.id},`;
     if (this.zone?.key === key) return this.zone;
-    const inZone = new Uint8Array(w.width * w.height);
+    const W = w.width;
+    const inZone = new Uint8Array(W * w.height);
     for (let ty = 0; ty < w.height; ty++)
-      for (let tx = 0; tx < w.width; tx++) if (inBuildRange(w, PLAYER, tx + 0.5, ty + 0.5)) inZone[ty * w.width + tx] = 1;
-    const at = (x: number, y: number) => x >= 0 && y >= 0 && x < w.width && y < w.height && inZone[y * w.width + x] === 1;
+      for (let tx = 0; tx < W; tx++) if (inBuildRange(w, PLAYER, tx + 0.5, ty + 0.5)) inZone[ty * W + tx] = 1;
+    const at = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < w.height && inZone[y * W + x] === 1;
     const runs: number[] = [];
-    const edges: number[] = [];
+    // boundary edges between grid corners, directed with the zone on their right
+    const corner = (x: number, y: number) => y * (W + 1) + x;
+    const out = new Map<number, number[]>();
+    const edge = (x0: number, y0: number, x1: number, y1: number) => {
+      const k = corner(x0, y0);
+      const list = out.get(k);
+      if (list) list.push(corner(x1, y1));
+      else out.set(k, [corner(x1, y1)]);
+    };
     for (let ty = 0; ty < w.height; ty++) {
       let start = -1;
-      for (let tx = 0; tx <= w.width; tx++) {
+      for (let tx = 0; tx <= W; tx++) {
         const on = at(tx, ty);
         if (on && start < 0) start = tx;
         if (!on && start >= 0) {
@@ -288,13 +352,47 @@ export class PlacementView {
           start = -1;
         }
         if (!on) continue;
-        if (!at(tx, ty - 1)) edges.push(tx, ty, tx + 1, ty);
-        if (!at(tx, ty + 1)) edges.push(tx, ty + 1, tx + 1, ty + 1);
-        if (!at(tx - 1, ty)) edges.push(tx, ty, tx, ty + 1);
-        if (!at(tx + 1, ty)) edges.push(tx + 1, ty, tx + 1, ty + 1);
+        if (!at(tx, ty - 1)) edge(tx, ty, tx + 1, ty);
+        if (!at(tx + 1, ty)) edge(tx + 1, ty, tx + 1, ty + 1);
+        if (!at(tx, ty + 1)) edge(tx + 1, ty + 1, tx, ty + 1);
+        if (!at(tx - 1, ty)) edge(tx, ty + 1, tx, ty);
       }
     }
-    this.zone = { key, runs, edges };
+    // walk the edges into loops (where two zone tiles touch only at a corner, turn right: separate loops)
+    const loops: Pt[][] = [];
+    for (const [s, ends] of out) {
+      while (ends.length > 0) {
+        const pts: Pt[] = [];
+        let cur = s;
+        let dx = 0;
+        let dy = 0;
+        for (let guard = 0; guard < 100000; guard++) {
+          const cx = cur % (W + 1);
+          const cy = (cur - cx) / (W + 1);
+          const list = out.get(cur);
+          if (!list || list.length === 0) break;
+          let pick = 0;
+          if (list.length > 1)
+            for (let i = 0; i < list.length; i++) {
+              const nx = (list[i]! % (W + 1)) - cx;
+              const ny = (list[i]! - (list[i]! % (W + 1))) / (W + 1) - cy;
+              if (nx === -dy && ny === dx) pick = i; // the right turn
+            }
+          const next = list.splice(pick, 1)[0]!;
+          const nx = next % (W + 1);
+          const ny = (next - nx) / (W + 1);
+          const ndx = nx - cx;
+          const ndy = ny - cy;
+          if (ndx !== dx || ndy !== dy) pts.push({ x: cx, y: cy }); // keep the corners only
+          dx = ndx;
+          dy = ndy;
+          cur = next;
+          if (cur === s) break;
+        }
+        if (pts.length >= 3) loops.push(smoothLoop(smoothLoop(pts, 0.42), 0.2));
+      }
+    }
+    this.zone = { key, runs, loops };
     return this.zone;
   }
 
@@ -302,4 +400,19 @@ export class PlacementView {
     if (this.ghost) this.h.view.scene.remove(this.ghost.root);
     this.h.view.screen.remove(this.label);
   }
+}
+
+/** One round of corner cutting on a closed loop: each corner is cut back by at most `cap` tiles (and a quarter edge) along both sides. */
+function smoothLoop(pts: Pt[], cap: number): Pt[] {
+  const out: Pt[] = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % n]!;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1e-6) continue;
+    const k = Math.min(0.25, cap / len);
+    out.push({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }, { x: b.x - (b.x - a.x) * k, y: b.y - (b.y - a.y) * k });
+  }
+  return out;
 }
