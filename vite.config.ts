@@ -30,8 +30,9 @@ export default defineConfig({
             options: { cacheName: "battledrones-maps", expiration: { maxEntries: 120 } }
           },
           {
+            // (served from the cache, refreshed behind it: a re-tuned texture reaches players next game)
             urlPattern: /\/assets\/textures\/.*\.webp$/,
-            handler: "CacheFirst",
+            handler: "StaleWhileRevalidate",
             options: { cacheName: "battledrones-textures", expiration: { maxEntries: 16 } }
           }
         ]

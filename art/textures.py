@@ -10,22 +10,27 @@ the painted tops.
 
     public/assets/textures/rock-<biome>.webp   512 x 512, seamless
 
-Usage:  python3 art/textures.py      (also run at the end of art/terrain.py)
+Usage:  python3 art/textures.py      (art/terrain.py also refreshes those of the biomes it paints)
 
 Needs Pillow and numpy only. Deterministic: same raws -> same output.
 
-Per biome: the raw is made seamless the way art/terrain.py does it (blended
-with itself rolled half-way round, along a noisy seam), its low-frequency
-light is flattened out so the repeat doesn't show as a pattern of bright
-and dark patches, and it's resampled to SIZE from a 3 x 3 tiling (so the
-filter wraps and the result still tiles). WebP quality: the highest of
-WEBP_QUALITY that fits BUDGET.
+Per biome: the raw is made seamless (blended with itself rolled half-way
+round, along a noisy seam), its low-frequency light is flattened out so the
+repeat doesn't show as a pattern of bright and dark patches, and it's
+resampled to SIZE from a 3 x 3 tiling (so the filter wraps and the result
+still tiles). WebP quality: the highest of WEBP_QUALITY that fits BUDGET
+(it warns if even the lowest doesn't).
+
+make_seamless and flatten are shared with art/terrain.py, which paints the
+maps with the same materials: it passes its own wrap-round blur (scipy's),
+this script an exact one via the FFT, so it needs no scipy.
 """
 
 from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Callable, Iterable
 
 import numpy as np
 from PIL import Image
@@ -58,8 +63,11 @@ def blur_wrap(a: np.ndarray, sigma: float) -> np.ndarray:
     return np.fft.irfft2(np.fft.rfft2(a) * g, s=a.shape).astype(np.float32)
 
 
-def periodic_noise(N: int, sigma: float, rng) -> np.ndarray:
-    g = blur_wrap(rng.standard_normal((N, N)).astype(np.float32), sigma)
+Blur = Callable[[np.ndarray, float], np.ndarray]
+
+
+def periodic_noise(N: int, sigma: float, rng, blur: Blur = blur_wrap) -> np.ndarray:
+    g = blur(rng.standard_normal((N, N)).astype(np.float32), sigma)
     return g / (g.std() + 1e-6)
 
 
@@ -69,24 +77,28 @@ def vp_blend(A, B, w, m):
     return m + ((A - m) * w + (B - m) * (1.0 - w)) / np.sqrt(w * w + (1.0 - w) ** 2)
 
 
-def make_seamless(a: np.ndarray, rng) -> np.ndarray:
-    """Blend with itself rolled half-way round: its old edges meet in the middle along a noisy seam."""
+def make_seamless(a: np.ndarray, rng, blur: Blur = blur_wrap) -> np.ndarray:
+    """Blend with itself rolled half-way round: its old edges meet in the middle along a noisy seam.
+    `blur`: a Gaussian blur that wraps round the edges (sigma in px)."""
     N = a.shape[0]
     m = a.mean((0, 1))
     idx = np.arange(N, dtype=np.float32)
     d = np.minimum(idx, N - idx) / (N / 2.0)
     for axis in (1, 0):
-        nz = np.clip(periodic_noise(N, N / 24, rng), -1.5, 1.5)
+        nz = np.clip(periodic_noise(N, N / 24, rng, blur), -1.5, 1.5)
         f = (d[None, :] if axis == 1 else d[:, None]) + 0.17 * nz
         w = sstep(0.44, 0.56, f)
         a = vp_blend(a, np.roll(a, N // 2, axis=axis), w, m)
     return np.clip(a, 0.0, 1.0)
 
 
-def flatten(a: np.ndarray, strength: float) -> np.ndarray:
+def flatten(a: np.ndarray, strength: float, blur: Blur = blur_wrap) -> np.ndarray:
     """Remove low-frequency light so the repeat is less obvious."""
+    if strength <= 0:
+        return a
+    N = a.shape[0]
     L = lum(a)
-    low = blur_wrap(L, a.shape[0] / 12)
+    low = blur(L, N / 12)
     ratio = (L.mean() / np.maximum(low, 1e-3)) ** strength
     return np.clip(a * ratio[..., None], 0.0, 1.0)
 
@@ -100,9 +112,9 @@ def rock_texture(biome: str) -> Image.Image:
     return big.crop((SIZE, SIZE, 2 * SIZE, 2 * SIZE))
 
 
-def write_rock_textures() -> None:
+def write_rock_textures(biomes: Iterable[str] = BIOMES) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    for biome in BIOMES:
+    for biome in biomes:
         im = rock_texture(biome)
         for q in WEBP_QUALITY:
             b = io.BytesIO()
@@ -110,7 +122,8 @@ def write_rock_textures() -> None:
             if b.tell() <= BUDGET:
                 break
         (OUT / f"rock-{biome}.webp").write_bytes(b.getvalue())
-        print(f"rock-{biome}: {SIZE}x{SIZE}, {b.tell() / 1024:.0f} KB at q{q}")
+        over = f" (over the {BUDGET // 1024} KB budget)" if b.tell() > BUDGET else ""
+        print(f"rock-{biome}: {SIZE}x{SIZE}, {b.tell() / 1024:.0f} KB at q{q}{over}")
 
 
 if __name__ == "__main__":

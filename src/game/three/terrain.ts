@@ -20,10 +20,10 @@ import { cloudTexture } from "./textures";
  * animated water (or lava, or an icy sea), bridges, instanced trees per
  * biome, rock crags in that stone, coloured from the painted rock beneath,
  * scrap heaps and glowing crystal clusters that shrink as they're mined,
- * drifting cloud shadows and the fog of war. Past the map's edge the land carries on as a skirt: the map
- * mirrored for a tile or two, easing within a few tiles into the biome's
- * open ground, dimmed so the bounds read, and fading into the sky colour, so
- * the world never ends in a void.
+ * drifting cloud shadows and the fog of war. Past the map's edge the land
+ * carries on as a skirt: the map mirrored for a tile or two, easing within
+ * a few tiles into the biome's open ground, dimmed so the bounds read, and
+ * fading into the sky colour, so the world never ends in a void.
  */
 
 /** Height of the water / lava surface. */
@@ -89,29 +89,37 @@ interface StoneLook {
   crag: number;
   /** Detail contrast (1 = the texture's own). */
   contrast: number;
-  /** The walls' colour against the painted rock's average, and how much darker their foot is. */
+  /** The walls' colour against the painted rock around them, and how much darker their foot is. */
   lift: number;
   foot: number;
   /** The crags' roughness (obsidian glints). */
   rough: number;
 }
 
+/**
+ * Mip bias of the rock material on the walls and on the crags: one isotropic level for the footprint's long
+ * axis (no anisotropic filtering), so the walls, foreshortened up their height, go a little under it.
+ */
+const ROCK_LOD_BIAS = { wall: -0.35, crag: 0 };
+/** How far the walls' local colour keeps the painted rock's own brightness (else the map's average). */
+const ROCK_TINT_LUM = 0.5;
+
 const LOOK: Record<Biome, BiomeLook> = {
   temperate: {
     shallow: 0x4fa8b8, deep: 0x123f5c, liquid: 0, rock: 0x7c7b77, bridge: 0x8a7a64, steel: false, detail: [0.22, 2.6, 0.55],
-    stone: { wall: 7, crag: 4, contrast: 1.3, lift: 1.15, foot: 0.35, rough: 0.75 }
+    stone: { wall: 5, crag: 4, contrast: 1.5, lift: 1.15, foot: 0.35, rough: 0.75 }
   },
   desert: {
     shallow: 0x5fd8d0, deep: 0x147a8a, liquid: 0, rock: 0xa45a3a, bridge: 0x9a8058, steel: false, detail: [0.2, 3.4, 0.7],
-    stone: { wall: 7, crag: 4, contrast: 1.45, lift: 1.15, foot: 0.35, rough: 0.75 }
+    stone: { wall: 4.5, crag: 4, contrast: 2.0, lift: 1.15, foot: 0.35, rough: 0.75 }
   },
   arctic: {
     shallow: 0x9fd0ea, deep: 0x0f2a44, liquid: 2, rock: 0x8a929e, bridge: 0x7c8590, steel: false, detail: [0.08, 1.8, 0.45],
-    stone: { wall: 7, crag: 4, contrast: 1.0, lift: 0.8, foot: 0.35, rough: 0.7 }
+    stone: { wall: 5, crag: 4, contrast: 1.15, lift: 0.8, foot: 0.35, rough: 0.7 }
   },
   volcanic: {
     shallow: 0xffd060, deep: 0xff4a10, liquid: 1, rock: 0x2e2b2a, bridge: 0x6c6660, steel: true, detail: [0.22, 2.6, 0.55],
-    stone: { wall: 7, crag: 4, contrast: 1.35, lift: 0.85, foot: 0.35, rough: 0.45 }
+    stone: { wall: 5, crag: 4, contrast: 1.8, lift: 0.85, foot: 0.35, rough: 0.45 }
   }
 };
 
@@ -191,8 +199,11 @@ export class Terrain3D {
   private cloud = new THREE.Vector2();
   private time = 0;
   readonly look: BiomeLook;
-  /** The rock material on the cliff walls and on the crags (null: no texture, so neither is textured). */
-  private stone: { walls: RockUniforms; crags: RockUniforms } | null;
+  /**
+   * The rock material on the cliff walls and on the crags (null: no texture, so neither is textured), and
+   * the walls' colour per rock tile (linear rgb, W×H): the painted rock there.
+   */
+  private stone: { walls: RockUniforms; crags: RockUniforms; tints: Float32Array } | null;
 
   constructor(private world: World, private player: Faction, art: TerrainArt | null) {
     this.W = world.width;
@@ -362,14 +373,21 @@ export class Terrain3D {
 
     // one mesh per painted chunk: its own cells, plus the near-skirt cells past the edges it lies on
     // (so its bounds grow only by the skirt beside it, and it still culls)
-    interface Acc { idx: number[]; pos: number[]; nor: number[]; uv: number[]; col: number[]; tex: THREE.Texture | null; x0: number; z0: number; w: number; h: number }
+    interface Acc {
+      idx: number[]; pos: number[]; nor: number[]; uv: number[]; col: number[]; stone: number[]; steep: number[];
+      tex: THREE.Texture | null; x0: number; z0: number; w: number; h: number;
+    }
     const accs: Acc[] = [];
     for (let r = 0; r < nR; r++)
       for (let c = 0; c < nC; c++) {
         const tex = art?.chunks[r]?.[c] ?? null;
         const img = tex?.image as { width: number; height: number } | undefined;
-        accs.push({ idx: [], pos: [], nor: [], uv: [], col: [], tex, x0: c * size, z0: r * size, w: img?.width ?? 1, h: img?.height ?? 1 });
+        accs.push({
+          idx: [], pos: [], nor: [], uv: [], col: [], stone: [], steep: [], tex, x0: c * size, z0: r * size,
+          w: img?.width ?? 1, h: img?.height ?? 1
+        });
       }
+    const st = new Float32Array(5);
     // heights and normals per grid point, worked out once however many meshes share the point
     const NV = NX * zs.length;
     const hgt = new Float32Array(NV * 4).fill(NaN);
@@ -399,6 +417,11 @@ export class Terrain3D {
       a.nor.push(hgt[key * 4 + 1]!, hgt[key * 4 + 2]!, hgt[key * 4 + 3]!);
       const sx = mirror(x, this.W);
       const sz = mirror(z, this.H);
+      if (walls) {
+        this.stoneAt(sx, sz, hgt[key * 4 + 1]!, hgt[key * 4 + 3]!, st);
+        a.stone.push(st[0]!, st[1]!, st[2]!, st[3]!);
+        a.steep.push(st[4]!);
+      }
       if (a.tex) a.uv.push(((sx - a.x0) * px) / a.w, 1 - ((sz - a.z0) * px) / a.h);
       else {
         const t = this.tile(Math.floor(sx), Math.floor(sz));
@@ -445,6 +468,10 @@ export class Terrain3D {
       g.setAttribute("normal", new THREE.Float32BufferAttribute(a.nor, 3));
       if (a.tex) g.setAttribute("uv", new THREE.Float32BufferAttribute(a.uv, 2));
       else g.setAttribute("color", new THREE.Float32BufferAttribute(a.col, 3));
+      if (walls) {
+        g.setAttribute("aStone", new THREE.Float32BufferAttribute(a.stone, 4));
+        g.setAttribute("aSteep", new THREE.Float32BufferAttribute(a.steep, 1));
+      }
       g.setIndex(a.idx);
       mesh(g, mats[ak]!);
     });
@@ -465,49 +492,131 @@ export class Terrain3D {
       g.setAttribute("normal", new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
       if (fa.tex) g.setAttribute("uv", new THREE.Float32BufferAttribute([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], 2));
       else g.setAttribute("color", new THREE.Float32BufferAttribute(new Array(12).fill(1), 3));
+      if (walls) {
+        g.setAttribute("aStone", new THREE.Float32BufferAttribute(new Float32Array(16), 4));
+        g.setAttribute("aSteep", new THREE.Float32BufferAttribute(new Float32Array(4), 1));
+      }
       g.setIndex([0, 2, 1, 1, 2, 3]);
       mesh(g, farMat);
     }
   }
 
   /**
-   * The rock material's uniforms: laid on as detail around its own average (read back once), the
-   * walls' colour the painted rock's, so the walls and crags are the same stone as the painted tops.
-   * Null if the texture can't be read back.
+   * The rock material's uniforms: laid on as detail around its own average (read back once), and the
+   * walls' colour per rock tile, the painted rock's, so the walls and crags are the same stone as the
+   * painted tops. Null if the texture can't be read back.
    */
-  private stoneUniforms(tex: THREE.Texture, painted: PaintedColors | null): { walls: RockUniforms; crags: RockUniforms } | null {
+  private stoneUniforms(
+    tex: THREE.Texture,
+    painted: PaintedColors | null
+  ): { walls: RockUniforms; crags: RockUniforms; tints: Float32Array } | null {
     const mean = textureMean(tex);
     if (!mean) return null;
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = 4;
+    // (sampled at an explicit mip level, which anisotropic filtering wouldn't touch anyway)
+    tex.anisotropy = 1;
     tex.needsUpdate = true;
     const S = this.look.stone;
     const norm = new THREE.Color(1 / Math.max(1e-4, mean.r), 1 / Math.max(1e-4, mean.g), 1 / Math.max(1e-4, mean.b));
-    const tint = (this.paintedRock(painted) ?? mean).multiplyScalar(S.lift);
-    const u = (tiles: number): RockUniforms => ({
+    const size = Math.log2((tex.image as { width: number }).width);
+    const u = (tiles: number, bias: number): RockUniforms => ({
       uRock: { value: tex },
       uRockNorm: { value: norm },
-      uRockTint: { value: tint },
-      uRockK: { value: new THREE.Vector3(1 / tiles, S.contrast, S.foot) }
+      uRockK: { value: new THREE.Vector4(1 / tiles, S.contrast, S.foot, size + bias) }
     });
-    return { walls: u(S.wall), crags: u(S.crag) };
+    return { walls: u(S.wall, ROCK_LOD_BIAS.wall), crags: u(S.crag, ROCK_LOD_BIAS.crag), tints: this.rockTints(painted, mean) };
   }
 
-  /** The painted rock's average colour (linear) over every rock tile; null without paint (or rock). */
-  private paintedRock(painted: PaintedColors | null): THREE.Color | null {
-    if (!painted) return null;
-    const out = new THREE.Color(0, 0, 0);
+  /**
+   * The cliff walls' colour on each rock tile (linear rgb, W×H, lifted): the painted rock there (its
+   * lichen, its snow), its brightness pulled part way to the map's average, since the paint's own
+   * hillshade darkens or lights a tile on an outcrop's flank; without paint, the texture's average.
+   */
+  private rockTints(painted: PaintedColors | null, mean: THREE.Color): Float32Array {
+    const out = new Float32Array(this.W * this.H * 3);
     const c = new THREE.Color();
-    let n = 0;
+    const sum = new THREE.Color(0, 0, 0);
+    const rock: number[] = [];
     const w = this.world;
     for (let i = 0; i < w.terrain.length; i++) {
       if (w.terrain[i] !== Terrain.Rock) continue;
-      if (!painted.at((i % this.W) + 0.5, Math.floor(i / this.W) + 0.5, c)) return null;
-      out.add(c);
-      n++;
+      const tx = i % this.W;
+      const ty = Math.floor(i / this.W);
+      // (the tile's four texels of the coarse read-back)
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let ok = !!painted;
+      for (let k = 0; k < 4 && ok; k++) {
+        ok = !!painted?.at(tx + 0.25 + (k & 1) * 0.5, ty + 0.25 + (k >> 1) * 0.5, c, 0);
+        r += c.r / 4;
+        g += c.g / 4;
+        b += c.b / 4;
+      }
+      if (!ok) [r, g, b] = [mean.r, mean.g, mean.b];
+      out[i * 3] = r;
+      out[i * 3 + 1] = g;
+      out[i * 3 + 2] = b;
+      sum.r += r;
+      sum.g += g;
+      sum.b += b;
+      rock.push(i);
     }
-    return n ? out.multiplyScalar(1 / n) : null;
+    if (!rock.length) return out;
+    const lum = (r: number, g: number, b: number) => r * 0.3 + g * 0.59 + b * 0.11;
+    const avg = lum(sum.r, sum.g, sum.b) / rock.length;
+    const lift = this.look.stone.lift;
+    for (const i of rock) {
+      const k = i * 3;
+      const l = Math.max(1e-4, lum(out[k]!, out[k + 1]!, out[k + 2]!));
+      const f = lift * Math.pow(avg / l, 1 - ROCK_TINT_LUM);
+      for (let j = k; j < k + 3; j++) out[j] = out[j]! * f;
+    }
+    return out;
+  }
+
+  /**
+   * The cliff walls' per-vertex inputs at map point (x, z) with normal (nx, ·, nz), into `out`:
+   * - 0–2: the painted rock's colour there (else the nearest rock's, so it holds up to the rock's edge);
+   * - 3: the rock share of the tiles the point lies on: 1 inside a rock tile, 1/2 on its straight edge, 0
+   *   inside any other (on the 1/3-tile lattice the walls stop at the rock's edge, so the slope's foot and
+   *   the pockets and notches in an outcrop keep their paint);
+   * - 4: 1 if the land here is steep enough that a wall could start (its normal more than 0.3 from
+   *   upright), else 0: a triangle with none of them, like a flat rock top, skips the walls for nothing.
+   */
+  private stoneAt(x: number, z: number, nx: number, nz: number, out: Float32Array): void {
+    const tints = this.stone!.tints;
+    const e = 1e-3;
+    let n = 0;
+    let m = 0;
+    let c = 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    const add = (tx: number, tz: number, share: boolean) => {
+      const i = Math.min(this.H - 1, Math.max(0, tz)) * this.W + Math.min(this.W - 1, Math.max(0, tx));
+      if (share) n++;
+      if (this.world.terrain[i] !== Terrain.Rock) return;
+      if (share) m++;
+      c++;
+      r += tints[i * 3]!;
+      g += tints[i * 3 + 1]!;
+      b += tints[i * 3 + 2]!;
+    };
+    const x0 = Math.floor(x - e);
+    const x1 = Math.floor(x + e);
+    const z0 = Math.floor(z - e);
+    const z1 = Math.floor(z + e);
+    for (let tz = z0; tz <= z1; tz++) for (let tx = x0; tx <= x1; tx++) add(tx, tz, true);
+    if (m === 0) for (let tz = z0 - 1; tz <= z1 + 1; tz++) for (let tx = x0 - 1; tx <= x1 + 1; tx++) add(tx, tz, false);
+    out.fill(0);
+    if (!c) return;
+    out[0] = r / c;
+    out[1] = g / c;
+    out[2] = b / c;
+    out[3] = m / n;
+    out[4] = Math.hypot(nx, nz) > 0.3 ? 1 : 0;
   }
 
   /** The biome's open ground (linear): the painted ground tiles' average, else the flat fallback. */
