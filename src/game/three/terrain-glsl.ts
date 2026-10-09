@@ -9,6 +9,12 @@ import type * as THREE from "three";
  *   world past the map's edge (the skirt) dims and greys, so the
  *   battlefield's bounds read at a glance, its mirrored paint blurring into
  *   the biome's open ground within a few tiles and fading into the sky.
+ *   Where the outcrops' heightfield turns steep the draped paint would smear
+ *   into streaks, so the cliff walls fade to the biome's rock material
+ *   itself (the texture the painter used for the outcrops), projected
+ *   sideways in world space: real stone, strata running level.
+ * - **Crags**: the same rock material projected in world space onto every
+ *   facet along the axis it faces (triplanar), over the crag's own colour.
  * - **Liquids**: water with lapping shore foam and sun glints; an icy sea
  *   of drifting floes; lava with a cooled crust cracking over glowing flows.
  *   Past the edge the water and ice thin away within a few tiles.
@@ -58,6 +64,43 @@ const FAR_FADE = /* glsl */ `
   #include <premultiplied_alpha_fragment>
 `;
 
+/** The rock material (declared after the fog-of-war ones). */
+const ROCK_DECL = /* glsl */ `
+uniform sampler2D uRock;
+uniform vec3 uRockNorm;
+uniform vec3 uRockTint;
+uniform vec3 uRockK;
+/**
+ * The rock material at world point p on a surface facing n (world space), as detail around 1 (the
+ * texture's own average divided out, its contrast set): projected along each axis and blended by the
+ * normal, sharpened, and slivers dropped so a surface facing mostly one way fetches once or twice.
+ * East- and west-facing sides take the z/y plane, north and south ones the x/y plane, tops the ground
+ * plane, each offset so a corner doesn't show the same stone twice; v runs up a wall, so strata lie
+ * level. dx, dy: p's screen derivatives, taken where control flow is still uniform.
+ */
+vec3 bdRock( vec3 p, vec3 n, vec3 dx, vec3 dy, float sharp ) {
+  vec3 w = pow( abs( n ), vec3( sharp ) );
+  w = max( w / ( w.x + w.y + w.z ) - 0.03, 0.0 );
+  w /= w.x + w.y + w.z;
+  vec3 t = vec3( 0.0 );
+  if ( w.x > 0.0 ) t += textureGrad( uRock, p.zy, dx.zy, dy.zy ).rgb * w.x;
+  if ( w.y > 0.0 ) t += textureGrad( uRock, p.xz + vec2( 0.19, 0.53 ), dx.xz, dy.xz ).rgb * w.y;
+  if ( w.z > 0.0 ) t += textureGrad( uRock, p.xy + vec2( 0.37, 0.61 ), dx.xy, dy.xy ).rgb * w.z;
+  return pow( t * uRockNorm, vec3( uRockK.y ) );
+}
+`;
+
+export interface RockUniforms {
+  /** The biome's tileable rock material (sRGB). */
+  uRock: { value: THREE.Texture | null };
+  /** 1 / the texture's average colour (linear), per channel. */
+  uRockNorm: { value: THREE.Color };
+  /** The colour (linear) the texture's average stands for on the cliff walls. */
+  uRockTint: { value: THREE.Color };
+  /** x: texture repeats per tile, y: detail contrast (1 = the texture's own), z: how much darker the cliff walls' foot is. */
+  uRockK: { value: THREE.Vector3 };
+}
+
 export interface EdgeUniforms {
   uTNoise: { value: THREE.Texture | null };
   /** The sky (clear) colour, sRGB-encoded like the final fragment. */
@@ -75,13 +118,38 @@ export interface GroundUniforms extends EdgeUniforms {
   uFarGround: { value: THREE.Color };
 }
 
-/** Patch the painted ground material (call from `fogged`'s `also`). */
-export function patchGround(s: Shader, u: GroundUniforms): void {
-  Object.assign(s.uniforms, u);
+/**
+ * The cliff walls (ground shader, after the paint): where the land is high and steep, fade to the rock
+ * material projected onto the wall (so it never shows stretched down the slope like the paint does), in
+ * the painted rock's colour. Only high, steep pixels fetch it.
+ */
+const CLIFF_WALLS = /* glsl */ `
+      {
+        vec3 rdx = dFdx( vFowW ) * uRockK.x;
+        vec3 rdy = dFdy( vFowW ) * uRockK.x;
+        if ( vFowW.y > 0.03 ) {
+          vec3 wn = normalize( ( vec4( vNormal, 0.0 ) * viewMatrix ).xyz );
+          // (the wall's lowest stretch keeps the paint: the painted ground and its shade at the outcrop's foot)
+          float wall = ( 1.0 - smoothstep( 0.66, 0.93, wn.y ) ) * smoothstep( 0.03, 0.2, vFowW.y );
+          if ( wall > 0.004 ) {
+            // (darker toward the foot, where the wall is in its own and the ground's shade)
+            float foot = 1.0 - uRockK.z * ( 1.0 - smoothstep( 0.1, 0.7, vFowW.y ) );
+            vec3 stone = bdRock( vFowW * uRockK.x, wn, rdx, rdy, 4.0 );
+            diffuseColor.rgb = mix( diffuseColor.rgb, stone * uRockTint * foot, wall );
+          }
+        }
+      }`;
+
+/** Patch the painted ground material (call from `fogged`'s `also`); with `rock`, its cliff walls show the rock material. */
+export function patchGround(s: Shader, u: GroundUniforms, rock: RockUniforms | null = null): void {
+  Object.assign(s.uniforms, u, rock ?? {});
   if (!s.fragmentShader.includes(FOG_LOOKUP)) throw new Error("terrain: fog lookup not found");
   s.fragmentShader = s.fragmentShader
     .replace(FOG_LOOKUP, FOG_MIRRORED)
-    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uDetail;\nuniform vec3 uFarGround;`)
+    .replace(
+      "#include <fog_pars_fragment>",
+      `#include <fog_pars_fragment>\n${EDGE_DECL}\n${rock ? ROCK_DECL : ""}\nuniform vec3 uDetail;\nuniform vec3 uFarGround;`
+    )
     .replace(
       "#include <map_fragment>",
       /* glsl */ `float od = bdOutside( vFowW.xz );
@@ -100,7 +168,7 @@ export function patchGround(s: Shader, u: GroundUniforms): void {
     )
     .replace(
       "#include <color_fragment>",
-      /* glsl */ `#include <color_fragment>
+      /* glsl */ `#include <color_fragment>${rock ? CLIFF_WALLS : ""}
       {
         vec2 wp = vFowW.xz;
         if ( od > 0.0 ) {
@@ -118,6 +186,28 @@ export function patchGround(s: Shader, u: GroundUniforms): void {
       }`
     )
     .replace("#include <premultiplied_alpha_fragment>", FAR_FADE);
+}
+
+/**
+ * Patch the crags' material (call from `fogged`'s `also`): the rock material projected in world space
+ * onto each facet (sharpened harder than the walls, so a facet shows one clean projection), as detail
+ * over the crag's own vertex colour.
+ */
+export function patchCrag(s: Shader, rock: RockUniforms): void {
+  Object.assign(s.uniforms, rock);
+  s.fragmentShader = s.fragmentShader
+    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${ROCK_DECL}`)
+    .replace(
+      "#include <color_fragment>",
+      /* glsl */ `#include <color_fragment>
+      {
+        // (flat facets: the face normal straight from the world position's screen derivatives)
+        vec3 rdx = dFdx( vFowW );
+        vec3 rdy = dFdy( vFowW );
+        vec3 fn = normalize( cross( rdx, rdy ) );
+        diffuseColor.rgb *= bdRock( vFowW * uRockK.x, fn, rdx * uRockK.x, rdy * uRockK.x, 6.0 );
+      }`
+    );
 }
 
 export interface LiquidUniforms extends EdgeUniforms {

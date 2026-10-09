@@ -85,7 +85,7 @@ async function startGame(): Promise<void> {
   const bar = loading.querySelector<HTMLElement>("#loadbar");
   const def = mapById(gameMode.mapId);
   // the painted terrain is draped over the 3D landscape; a failed chunk falls back to flat colours
-  const art = await loadTerrainArt(def.id, def.size, (k) => {
+  const art = await loadTerrainArt(def.id, def.size, def.biome, (k) => {
     if (bar) bar.style.width = `${Math.round(k * 90)}%`;
   });
   if (bar) bar.style.width = "100%";

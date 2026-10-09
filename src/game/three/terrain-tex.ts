@@ -13,6 +13,8 @@ import { prng } from "./terrain-props";
  *   terrain chunks, so crags and boulders take their colour from the art
  *   they stand on, and the open ground past the map's edge the colour of
  *   the map's own.
+ * - **Texture mean**: a loaded texture's average colour, read back once, so
+ *   the rock material can be laid on as detail around its own average.
  */
 
 const S = 256;
@@ -135,6 +137,37 @@ export function terrainNoise(): THREE.DataTexture {
   tex.needsUpdate = true;
   noise = tex;
   return tex;
+}
+
+/** A loaded texture's average colour (linear), from its image drawn onto a 2D canvas; null if it can't be read. */
+export function textureMean(tex: THREE.Texture): THREE.Color | null {
+  try {
+    const img = tex.image as (CanvasImageSource & { width: number; height: number }) | undefined;
+    if (!img || !img.width) return null;
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, c.width, c.height).data;
+    // (averaged in linear light, like the shader sees it: a table for the sRGB decode)
+    const lin = new Float32Array(256);
+    const col = new THREE.Color();
+    for (let i = 0; i < 256; i++) lin[i] = col.setRGB(i / 255, 0, 0, THREE.SRGBColorSpace).r;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      r += lin[px[i]!]!;
+      g += lin[px[i + 1]!]!;
+      b += lin[px[i + 2]!]!;
+    }
+    const n = px.length / 4;
+    return n ? col.setRGB(r / n, g / n, b / n) : null;
+  } catch {
+    return null;
+  }
 }
 
 // --------------------------------------------------------- painted colours --

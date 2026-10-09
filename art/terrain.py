@@ -10,6 +10,9 @@ sprite sheets in ``art/raw``, then writes the game-ready chunks:
     public/assets/maps/<id>/thumb.webp          256x256 overview (map picker, minimap)
     art/previews/terrain-<id>.jpg               ~1200 px QA preview
 
+and then refreshes the biome rock materials the 3D cliffs and crags are
+textured with (art/textures.py: public/assets/textures/rock-<biome>.webp).
+
 Usage:  python3 art/terrain.py [map ids...] [--debug]
 
 Rendering is deterministic for a given map JSON (all randomness is seeded from
@@ -1190,6 +1193,9 @@ def main(argv: list[str]) -> None:
         over = " (over budget)" if st["bytes"] > BUDGET else ""
         print(f"{mid}: {st['cols']}x{st['rows']} chunks, {st['bytes'] / 1024:.0f} KB at q{st['quality']}{over} "
               f"(+thumb {st['thumb'] / 1024:.0f} KB) in {st['seconds']}s")
+    # the same rock materials, shipped for the 3D cliff walls and crags
+    from textures import write_rock_textures
+    write_rock_textures()
 
 
 if __name__ == "__main__":

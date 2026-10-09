@@ -17,7 +17,8 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       // precache the shell, icons and menu art; painted map terrain
-      // (a few MB per map) is cached on first play instead
+      // (a few MB per map) and each biome's rock material are cached on
+      // first play instead
       includeAssets: ["assets/icons/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
       workbox: {
         globPatterns: ["**/*.{js,css,html}"],
@@ -27,6 +28,11 @@ export default defineConfig({
             urlPattern: /\/assets\/maps\/.*\.webp$/,
             handler: "CacheFirst",
             options: { cacheName: "battledrones-maps", expiration: { maxEntries: 120 } }
+          },
+          {
+            urlPattern: /\/assets\/textures\/.*\.webp$/,
+            handler: "CacheFirst",
+            options: { cacheName: "battledrones-textures", expiration: { maxEntries: 16 } }
           }
         ]
       },
