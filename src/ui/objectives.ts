@@ -1,4 +1,5 @@
 import { TICK_RATE } from "../sim/balance";
+import { isVisible } from "../sim/fog";
 import { dropLandTick } from "../sim/objectives";
 import type { Faction, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
@@ -44,8 +45,11 @@ export function createObjectivePill(world: World, player: Faction, spectator: bo
   let lastDrop = "";
 
   function update(): void {
-    // (an island relay held with no troops on it pays nothing: a hollow pip)
-    const idle = (l: (typeof order)[number]) => !!(l.infantryOnly && l.owner && !l.crewed);
+    // (an island relay held with no troops on it pays nothing: a hollow pip — for the enemy's,
+    // only while we can see it: whether they've left one empty is theirs to hide)
+    const idle = (l: (typeof order)[number]) =>
+      !!(l.infantryOnly && l.owner && !l.crewed) &&
+      (spectator || l.owner === player || isVisible(world, player, Math.floor(l.x), Math.floor(l.y)));
     const pips = order
       .map((l) => `${l.owner ?? "none"}${l.pushing || l.contested ? "*" : ""}${idle(l) ? "o" : ""}`)
       .join(",");

@@ -3,7 +3,8 @@ import { isInfantry, isTransport } from "../sim/infantry";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
 import type { BuildingKind, Command, Faction, Unit, World } from "../sim/types";
-import { buildingAtTile, isResource, onHomeLand, regionAt, tileIndex } from "../sim/world";
+import { buildingAtTile, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
+import { engageable } from "../sim/combat";
 import { Squads } from "./squads";
 
 export const PLAYER: Faction = "blue";
@@ -85,6 +86,7 @@ export class Controller {
     }
     if (this.selectedBuilding !== null && !this.world.buildings.has(this.selectedBuilding))
       this.selectedBuilding = null;
+    this.firePendingDrop();
     if (this.placing && this.world.factions[PLAYER].pending?.kind !== this.placing)
       this.placing = null;
     if (!this.placing) this.placeAt = null;
@@ -172,6 +174,7 @@ export class Controller {
   tapWorld(wx: number, wy: number, hit: TapHit, toggle = false): void {
     const w = this.world;
     this.lastFeedback = null;
+    this.pendingDrop = null; // (a new order replaces a drop still waiting on boarders)
     if (this.spectator) {
       // inspection only: selecting shows rings/health, orders are forbidden
       if (hit.kind === "ownUnit" || hit.kind === "enemy") this.selectUnits(w.units.has(hit.id) ? [hit.id] : []);
@@ -200,15 +203,23 @@ export class Controller {
       }
     }
     if (hit.kind === "enemy" && this.selectedUnits.size > 0) {
-      const attackers = this.selectedAttackers(hit.targetsAir);
+      // only those that can get in range of it (not a tank at an enemy on an island)
+      const attackers = this.selectedAttackers(hit.targetsAir).filter((id) => {
+        const u = w.units.get(id);
+        return !!u && engageable(w, u, hit.id);
+      });
       if (attackers.length > 0) {
         this.enqueue({ type: "attack", faction: PLAYER, unitIds: attackers, targetId: hit.id });
-        const others = [...this.selectedUnits].filter((id) => !attackers.includes(id));
+        // loaded Condors in the group drop their troops onto an island enemy's island
+        const drop = this.onIsland(Math.floor(wx), Math.floor(wy)) ? this.loadedSelected().map((u) => u.id) : [];
+        if (drop.length > 0) this.enqueue({ type: "unload", faction: PLAYER, unitIds: drop, x: wx, y: wy });
+        const others = [...this.selectedUnits].filter((id) => !attackers.includes(id) && !drop.includes(id));
         if (others.length > 0)
           this.enqueue({ type: "move", faction: PLAYER, unitIds: others, x: wx, y: wy });
-        this.lastFeedback = { kind: "attack", x: wx, y: wy };
+        this.lastFeedback = { kind: drop.length > 0 ? "drop" : "attack", x: wx, y: wy };
         return;
       }
+      // none can: treat it as a tap on the ground there (an island drop, or a tip)
     }
     if (hit.kind === "enemy" && this.selectedUnits.size === 0) return;
 
@@ -219,7 +230,17 @@ export class Controller {
     // there (no hidden long-press for the island map's main move); anything else gets told why not
     if (this.selectedUnits.size > 0 && this.onIsland(tx, ty)) {
       if (this.dropAt(wx, wy)) return;
-      this.islandTip();
+      // squads still walking to a Condor: keep them boarding, and drop them there once aboard
+      const boarding = this.selectedOwn().filter((u) => u.order.type === "board");
+      if (boarding.length > 0) {
+        const carriers = new Set<number>();
+        for (const u of boarding) if (u.order.type === "board") carriers.add(u.order.carrierId);
+        this.pendingDrop = { carriers: [...carriers], x: wx, y: wy };
+        this.tip = "Boarding: they'll drop there once they're aboard";
+        this.lastFeedback = { kind: "drop", x: wx, y: wy };
+        return;
+      }
+      if (!this.someoneReaches(tx, ty)) this.islandTip();
     }
     if (this.selectedUnits.size > 0) {
       const ids = [...this.selectedUnits].filter((id) => w.units.has(id));
@@ -263,6 +284,41 @@ export class Controller {
   onIsland(tx: number, ty: number): boolean {
     const w = this.world;
     return !!w.rules?.islands && regionAt(w, tx, ty, "foot") > 0 && !onHomeLand(w, PLAYER, tx, ty);
+  }
+
+  /** A tap on an island while squads were boarding: those Condors drop there once loaded (see prune). */
+  private pendingDrop: { carriers: number[]; x: number; y: number } | null = null;
+
+  /** Can any selected unit get to tile (tx, ty) itself (aircraft, or ground in its own region)? */
+  private someoneReaches(tx: number, ty: number): boolean {
+    const w = this.world;
+    return this.selectedOwn().some((u) => {
+      const mc = moveClassOf(u.kind);
+      if (mc === "air") return !isTransport(u.kind); // (an empty Condor gets there, but takes nothing)
+      const r = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+      return r > 0 && r === regionAt(w, tx, ty, mc);
+    });
+  }
+
+  /** Squads promised to a drop are aboard now: fly those Condors to it. */
+  private firePendingDrop(): void {
+    const p = this.pendingDrop;
+    if (!p) return;
+    const w = this.world;
+    const ready: number[] = [];
+    p.carriers = p.carriers.filter((id) => {
+      const c = w.units.get(id);
+      if (!c) return false;
+      const walking = [...w.units.values()].some((u) => u.order.type === "board" && u.order.carrierId === id);
+      if (walking) return true;
+      if (isLoaded(c)) ready.push(id);
+      return false;
+    });
+    if (ready.length > 0) {
+      this.enqueue({ type: "unload", faction: PLAYER, unitIds: ready, x: p.x, y: p.y });
+      this.lastFeedback = { kind: "drop", x: p.x, y: p.y };
+    }
+    if (p.carriers.length === 0) this.pendingDrop = null;
   }
 
   /** Sent at an island without a loaded Condor: say how islands are reached (now and then). */
@@ -338,6 +394,9 @@ export class Controller {
     if (!tapped || tapped.faction !== PLAYER) return false;
     const sel = this.selectedOwn();
     const squads = sel.filter((u) => isInfantry(u.kind));
+    // a loaded Condor over our own island garrison: the tap reinforces it, it doesn't pick the garrison up
+    if (isInfantry(tapped.kind) && squads.length === 0 && this.onIsland(Math.floor(tapped.x), Math.floor(tapped.y)) && this.dropAt(tapped.x, tapped.y))
+      return true;
     let carrier: Unit | null = null;
     let riders: Unit[] = [];
     if (isTransport(tapped.kind) && squads.length > 0) {

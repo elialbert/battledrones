@@ -417,7 +417,9 @@ export class ObjectiveRenderer {
     const owner = l.owner;
     const col = owner ? TEAM[owner] : NEUTRAL;
     // an island relay with no troops on it is held but silent: dimmed, its dish barely turning
-    const idle = !!(l.infantryOnly && owner && !l.crewed);
+    // (the enemy's only while we can see it)
+    const seen = this.opts.visibleAt(l.x, l.y);
+    const idle = !!(l.infantryOnly && owner && !l.crewed) && (this.opts.spectator || owner === this.opts.player || seen);
     this.watchCrew(v);
     // the dish: idles on a slow scan, turns for its owner, spins up while being captured
     const rate = l.pushing ? 2.6 : owner ? (idle ? 0.15 : 0.7) : 0;
@@ -429,7 +431,6 @@ export class ObjectiveRenderer {
     v.glowMat.opacity = owner && !idle ? 0.28 + 0.14 * breathe + 0.5 * v.flash : 0.08 + 0.4 * v.flash;
     v.glow.scale.setScalar(3.2 + v.flash * 2);
 
-    const seen = this.opts.visibleAt(l.x, l.y);
     const g = this.v.over;
     const k = seen ? 1 : 0.7;
     const R = OBJECTIVES.uplink.radius;
@@ -641,7 +642,9 @@ export class ObjectiveRenderer {
       ctx.lineTo(x - d, y);
       ctx.closePath();
       ctx.fillStyle = l.owner === "blue" ? "#4fa3ff" : l.owner === "red" ? "#ff5a4a" : "#6b6450";
-      if (l.infantryOnly && l.owner && !l.crewed) ctx.globalAlpha = 0.4; // held, but no troops on it
+      // held, but no troops on it (the enemy's only while we can see it)
+      if (l.infantryOnly && l.owner && !l.crewed && (this.opts.spectator || l.owner === this.opts.player || this.opts.visibleAt(l.x, l.y)))
+        ctx.globalAlpha = 0.4;
       ctx.fill();
       ctx.globalAlpha = 1;
       const busy = l.pushing || l.contested;

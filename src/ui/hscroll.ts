@@ -28,8 +28,8 @@ export function scrollCue(row: HTMLElement): ScrollCue {
   btn("l", "Scroll left");
   btn("r", "Scroll right");
 
+  // (the wrapper hides with its row through CSS, in the same layout pass: see .hscroll:has)
   const update = () => {
-    wrap.hidden = row.hidden;
     const max = row.scrollWidth - row.clientWidth;
     wrap.classList.toggle("more-l", !row.hidden && row.scrollLeft > 4);
     wrap.classList.toggle("more-r", !row.hidden && row.scrollLeft < max - 4);

@@ -128,7 +128,8 @@ function mutButtonHtml(): string {
   const names = on
     .map((id) => (mapBansMutator(def, id) ? `<s>${MUTATORS[id].icon} ${MUTATORS[id].name}</s>` : `${MUTATORS[id].icon} ${MUTATORS[id].name}`))
     .join(" · ");
-  return `<span class="mb-k">🧪</span><span class="mb-v on">${names}</span><span class="mb-n">no stars</span>`;
+  const live = on.some((id) => !mapBansMutator(def, id));
+  return `<span class="mb-k">🧪</span><span class="mb-v on">${names}</span>${live ? `<span class="mb-n">no stars</span>` : ""}`;
 }
 
 export interface MenuCareer {
@@ -222,7 +223,8 @@ export function showMutatorSheet(host: HTMLElement, onDone: () => void): void {
     });
   wrap.querySelectorAll<HTMLElement>(".mutchip").forEach((el) =>
     el.addEventListener("click", () => {
-      if (el.classList.contains("blocked")) return; // (can't be played on the picked map)
+      // (can't be played on the picked map: it may be switched off, never on)
+      if (el.classList.contains("blocked") && !gameMode.mutators.includes(el.dataset.id as MutatorId)) return;
       gameMode.mutators = toggleMutator(gameMode.mutators, el.dataset.id as MutatorId);
       sfx.play("click", 0.5);
       refresh();
@@ -247,6 +249,10 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
     return `<div class="medalcell${n ? " got" : ""}"><em>${m.icon}</em><b>${m.name}</b><small>${m.desc}</small>${n ? `<span class="cnt">×${n}</span>` : ""}</div>`;
   }).join("");
   const totalStars = Object.values(c.stars).reduce((s, m) => s + starCount(m), 0);
+  // maps with their own ★★ time (the Archipelago: 12:00)
+  const ownTimes = MAPS.filter((m) => m.starSecs !== undefined)
+    .map((m) => ` (${starLabelsFor(m.id)[1]!.replace("Win in under ", "")} on ${m.name})`)
+    .join("");
   const starRows = MAPS.map(
     (m) => `<tr><td>${m.name}</td>${diffs
       .map((d) => {
@@ -285,7 +291,7 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
        return `<tr><td>${o.icon} ${o.title}</td><td class="st${r?.stars ? " got" : ""}">${starsText(r?.stars ?? 0)}</td><td>${r?.bestSecs != null ? fmtClock(r.bestSecs) : "—"}</td></tr>`;
      }).join("")}</table>
      <h3>Medals</h3><div class="medalgrid">${medalCells}</div>
-     <h3>Map stars <small>${STAR_LABELS.map((l, i) => `${"★".repeat(i + 1)} ${l.toLowerCase()}`).join(" · ")}</small></h3>
+     <h3>Map stars <small>${STAR_LABELS.map((l, i) => `${"★".repeat(i + 1)} ${l.toLowerCase()}${i === 1 ? ownTimes : ""}`).join(" · ")}</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${starRows}</table>
      <h3>Last Stand bests <small>${c.laststand.runs} run${c.laststand.runs === 1 ? "" : "s"} · ${fmt(c.laststand.waves)} waves in all</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${lsRows}</table>

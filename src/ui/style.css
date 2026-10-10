@@ -1175,7 +1175,7 @@ button {
 .hscroll {
   position: relative;
 }
-.hscroll[hidden] {
+.hscroll:has(> .maps[hidden]) {
   display: none;
 }
 .hscroll > .maps {

@@ -167,7 +167,6 @@ function showMenu(): void {
 
   // menu music: a gentle take on the selected map's theme, from the first touch
   const biomeOf = (id: string) => MAPS.find((m) => m.id === id)?.biome ?? "temperate";
-  music.play("menu", biomeOf(gameMode.mapId));
   sfx.unlockOnGesture();
   const muteBtn = menu.querySelector<HTMLButtonElement>("#menu-mute")!;
   const syncMute = () => (muteBtn.textContent = sfx.muted ? "🔇" : "🔊");
@@ -191,6 +190,11 @@ function showMenu(): void {
       sync(); // the Play button names the picked op
     }
   });
+  /** Is this map offered in the mode picked (Last Stand isn't played on the island map)? */
+  const offered = (id: string) => gameMode.mode !== "survival" || mapById(id).lastStand !== false;
+  /** The map the menu shows and Play starts: the pick, or the first one offered in this mode. */
+  const shownMap = () => (offered(gameMode.mapId) ? gameMode.mapId : MAPS.find((x) => offered(x.id))!.id);
+  let menuBiome: string | null = null;
   // the map and Ops rows scroll sideways on phones: fade + chevrons say so
   const mapRow = scrollCue(menu.querySelector<HTMLElement>("#maps")!);
   scrollCue(menu.querySelector<HTMLElement>("#opcards")!);
@@ -204,12 +208,12 @@ function showMenu(): void {
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
     menu.classList.toggle("ops-mode", opsMode);
-    // Last Stand isn't offered on every map (the island map): move off one that isn't
-    const offered = (id: string) => !survival || mapById(id).lastStand !== false;
-    if (!offered(gameMode.mapId)) gameMode.mapId = MAPS.find((m) => offered(m.id))!.id;
+    // Last Stand isn't offered on every map (the island map): show the first that is, without
+    // losing the skirmish pick (Play points the match at the shown map: see begin)
+    const shown = shownMap();
     menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) => {
       el.hidden = !offered(el.dataset.id!);
-      el.classList.toggle("on", el.dataset.id === gameMode.mapId);
+      el.classList.toggle("on", el.dataset.id === shown);
       // Last Stand: each map card shows its best for the chosen difficulty
       const badge = el.querySelector<HTMLElement>(".mbest")!;
       const rec = survival ? loadBest(el.dataset.id!, gameMode.difficulty) : null;
@@ -222,15 +226,22 @@ function showMenu(): void {
       stars.classList.toggle("got", mask > 0);
     });
     // bring the picked map into view when the row first shows (or shows again)
-    const pick = menu.querySelector<HTMLElement>(`#maps .mapcard[data-id="${gameMode.mapId}"]`);
-    const key = opsMode ? "" : `${gameMode.mode}:${gameMode.mapId}`;
+    const pick = menu.querySelector<HTMLElement>(`#maps .mapcard[data-id="${shown}"]`);
+    const key = opsMode ? "" : `${gameMode.mode}:${shown}`;
     if (key && key !== revealed && pick) {
-      requestAnimationFrame(() => mapRow.reveal(pick, revealed !== ""));
+      const smooth = revealed !== ""; // (opening the menu: already centred, no slide)
+      requestAnimationFrame(() => mapRow.reveal(pick, smooth));
       revealed = key;
+    }
+    // the menu theme follows the map on show
+    const biome = biomeOf(shown);
+    if (biome !== menuBiome) {
+      menuBiome = biome;
+      music.play("menu", biome);
     }
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
     menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
-    const m = MAPS.find((x) => x.id === gameMode.mapId);
+    const m = MAPS.find((x) => x.id === shown);
     menu.querySelector("#blurb")!.textContent = m?.blurb ?? "";
     menu.querySelector("#sub")!.textContent = opsMode
       ? "Short missions with a twist. Three stars each — can you take them all?"
@@ -240,7 +251,7 @@ function showMenu(): void {
     const best = menu.querySelector<HTMLElement>("#lsbest")!;
     best.hidden = !survival;
     if (survival) {
-      const rec = loadBest(gameMode.mapId, gameMode.difficulty);
+      const rec = loadBest(shown, gameMode.difficulty);
       const where = `${m?.name ?? "this map"} · ${DIFFICULTY[gameMode.difficulty].label}`;
       best.innerHTML = rec
         ? `🏆 Best on ${where}: <b>${rec.best} wave${rec.best === 1 ? "" : "s"}</b>`
@@ -259,7 +270,6 @@ function showMenu(): void {
       gameMode.mapId = el.dataset.id!;
       saveSettings();
       sync();
-      music.play("menu", biomeOf(gameMode.mapId));
     })
   );
   menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) =>
@@ -288,6 +298,8 @@ function showMenu(): void {
   const begin = async (spectator: boolean, setup?: () => void) => {
     if (starting) return;
     starting = true;
+    // a Last Stand on a map it isn't offered on plays the shown one (not saved: the pick stays)
+    if (!setup && !offered(gameMode.mapId)) gameMode.mapId = shownMap();
     setup?.(); // (the Daily Op / an op points the match at its map and rules)
     gameMode.spectator = spectator;
     sfx.unlock();

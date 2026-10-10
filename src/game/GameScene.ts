@@ -256,7 +256,7 @@ export class GameScene {
       notify: (msg, tone) => this.hud.notify(msg, tone),
       ping: (x, y) => this.hud.ping(x, y),
       hint: (msg, x, y) => this.hud.hint(msg, undefined, x, y),
-      dropReady: () => this.ctrl.loadedSelected().length > 0
+      dropReady: () => !gameMode.spectator && this.ctrl.loadedSelected().length > 0
     });
     this.place = new PlacementView({
       view: v, world: this.world, ctrl: this.ctrl,

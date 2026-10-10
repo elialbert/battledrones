@@ -1,5 +1,5 @@
 import type { Difficulty } from "../sim/ai/commander";
-import type { MatchOptions } from "../sim/maps";
+import { mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import { opById, type OpDef } from "../sim/ops";
 import type { DailyOp } from "./daily";
@@ -24,11 +24,17 @@ export const gameMode = {
   opId: ""
 };
 
-/** The mutators the next match runs with (Last Stand runs classic rules). */
+/**
+ * The mutators the next match runs with (Last Stand runs classic rules),
+ * leaving out any the map can't be played with (Air War on the
+ * Archipelago): the saved pick stays, for the next map that allows it.
+ */
 export function activeMutators(): MutatorId[] {
   if (gameMode.op) return []; // an op brings its own rules
   if (gameMode.daily) return gameMode.daily.mutators;
-  return gameMode.mode === "skirmish" ? gameMode.mutators : [];
+  if (gameMode.mode !== "skirmish") return [];
+  const def = mapById(gameMode.mapId);
+  return gameMode.mutators.filter((id) => !mapBansMutator(def, id));
 }
 
 /**

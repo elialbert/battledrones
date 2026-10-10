@@ -342,3 +342,83 @@ describe("fighting across the sea (review fixes)", () => {
     expect(regionAt(w, Math.floor(b.x), Math.floor(b.y), "hover")).toBe(rb);
   });
 });
+
+describe("island taps (review fixes)", () => {
+  const setup = async () => {
+    const { Controller } = await import("../src/game/controller");
+    const w = createMapWorld("archipelago", { objectives: true });
+    return { w, c: new Controller(w) };
+  };
+
+  it("tapping an enemy on an island with only tanks selected doesn't fake an attack: it explains", async () => {
+    const { w, c } = await setup();
+    const b = besideHq(w, "blue");
+    const tank = spawnUnit(w, "stinger", "blue", b.x, b.y);
+    const foe = spawnUnit(w, "trooper", "red", 48.5, 48.5);
+    c.selectUnits([tank.id]);
+    c.tapWorld(48.5, 48.5, { kind: "enemy", id: foe.id, targetsAir: false });
+    expect(c.drainCommands().some((k) => k.type === "attack")).toBe(false);
+    expect(c.lastFeedback?.kind).not.toBe("attack");
+    expect(c.tip).toMatch(/Condor/);
+  });
+
+  it("a loaded Condor with an escort, tapped onto an island enemy: the escort attacks, the Condor drops", async () => {
+    const { w, c } = await setup();
+    const [condor] = own(w, "blue", "condor");
+    const wasp = spawnUnit(w, "wasp", "blue", condor!.x + 1, condor!.y);
+    const foe = spawnUnit(w, "trooper", "red", 48.5, 48.5);
+    c.selectUnits([condor!.id, wasp.id]);
+    c.tapWorld(48.5, 48.5, { kind: "enemy", id: foe.id, targetsAir: false });
+    const cmds = c.drainCommands();
+    expect(cmds).toContainEqual({ type: "attack", faction: "blue", unitIds: [wasp.id], targetId: foe.id });
+    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 48.5, y: 48.5 });
+  });
+
+  it("tapping our own island garrison with a loaded Condor reinforces it instead of picking it up", async () => {
+    const { w, c } = await setup();
+    const [condor] = own(w, "blue", "condor");
+    const garrison = spawnUnit(w, "rocket-squad", "blue", 48.5, 48.5);
+    c.selectUnits([condor!.id]);
+    c.tapWorld(48.6, 48.4, { kind: "ownUnit", id: garrison.id });
+    const cmds = c.drainCommands();
+    expect(cmds.some((k) => k.type === "board")).toBe(false);
+    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 48.5, y: 48.5 });
+  });
+
+  it("'tap the Condor, then the island' straight away keeps the squad boarding and drops it once aboard", async () => {
+    const { w, c } = await setup();
+    const [condor] = own(w, "blue", "condor");
+    // land the starting squad beside the HQ first
+    const squad = condor!.passengers!.pop()!;
+    const b = besideHq(w, "blue");
+    squad.x = b.x;
+    squad.y = b.y;
+    w.units.set(squad.id, squad);
+    c.selectUnits([squad.id]);
+    c.tapWorld(condor!.x, condor!.y, { kind: "ownUnit", id: condor!.id }); // board
+    step(w, c.drainCommands());
+    c.tapWorld(48.5, 48.5, { kind: "ground" }); // the island, before it's aboard
+    const now = c.drainCommands();
+    expect(now.some((k) => k.type === "attackMove" || k.type === "move")).toBe(false);
+    let sent = false;
+    for (let i = 0; i < 20 * TICK_RATE && !sent; i++) {
+      step(w, []);
+      c.prune();
+      sent = c.drainCommands().some((k) => k.type === "unload" && k.x === 48.5);
+    }
+    expect(sent).toBe(true);
+  });
+
+  it("no island tip for units that can get there: squads already on it, aircraft", async () => {
+    const { w, c } = await setup();
+    const sq = spawnUnit(w, "trooper", "blue", 47.5, 47.5);
+    c.selectUnits([sq.id]);
+    c.tapWorld(49.5, 49.5, { kind: "ground" });
+    expect(c.tip).toBeNull();
+    const b = besideHq(w, "blue");
+    const wasp = spawnUnit(w, "wasp", "blue", b.x, b.y);
+    c.selectUnits([wasp.id]);
+    c.tapWorld(10.5, 24.5, { kind: "ground" });
+    expect(c.tip).toBeNull();
+  });
+});
