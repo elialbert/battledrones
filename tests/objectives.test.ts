@@ -487,6 +487,34 @@ describe("AI and objectives", () => {
     expect((normal[0] as { unitIds: number[] }).unitIds).toHaveLength(3);
   });
 
+  it("sends robot infantry (double capture weight) to take an Uplink, and parks a Trooper Squad on one it holds", () => {
+    const w = createMapWorld("proving-grounds", { seed: 4, objectives: true });
+    const s = createAiState("balanced", "normal", 5);
+    // (the relay red goes for first: nearer its own HQ)
+    const l = w.objectives.uplinks.find((x) => Math.hypot(x.x - 35.5, x.y - 35.5) < 0.1)!;
+    w.tick = 60 * TICK_RATE;
+    // a Stinger a little nearer than four Trooper Squads
+    const tank = spawnUnit(w, "stinger", "red", l.x + 8, l.y);
+    const squads = [0, 1, 2, 3].map((i) => spawnUnit(w, "trooper", "red", l.x + 11, l.y - 1.5 + i));
+    const ctx = {
+      mode: "buildup" as const, hqC: { x: 42.5, y: 6.5 }, enemyHqPos: { x: 5.5, y: 41.5 }, guardPoint: { x: 35, y: 11 },
+      guardNeed: 0, army: [tank, ...squads], used: new Set<number>(), threatened: false
+    };
+    const run = planObjectives(w, "red", s, ctx).find((c) => c.type === "attackMove" && c.x === l.x && c.y === l.y);
+    expect(run).toBeDefined();
+    expect([...(run as { unitIds: number[] }).unitIds].sort()).toEqual(squads.map((u) => u.id).sort());
+    // held: the cheapest unit near it stands guard (a squad, though the Stinger is nearer)
+    const s2 = createAiState("balanced", "normal", 5);
+    l.owner = "red";
+    l.progress = -100;
+    for (const u of [tank, ...squads]) u.order = { type: "idle" };
+    tank.x = l.x + 3;
+    squads[0]!.x = l.x + 4;
+    squads[0]!.y = l.y;
+    const garrison = planObjectives(w, "red", s2, { ...ctx, used: new Set<number>() })[0];
+    expect(garrison).toMatchObject({ type: "attackMove", unitIds: [squads[0]!.id], x: l.x, y: l.y });
+  });
+
   it("is deterministic: the same match replays to the same objective results", () => {
     const a = match("dune-sea", "rush", "airswarm", 4, 8);
     const b = match("dune-sea", "rush", "airswarm", 4, 8);

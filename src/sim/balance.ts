@@ -160,16 +160,20 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     buildTime: 7, builtAt: "airpad", radius: 0.32
   },
   // ---- robot infantry (INFANTRY.md): one sim unit each, drawn as `squad` robots ----
+  // (tuned down from the spec's 225 HP / 18 DPS: cost for cost those beat Stingers by
+  // 0.48 in tools/balance.ts duels; Stingers are meant to handle infantry)
   trooper: {
     name: "Trooper Squad", role: "Cheap rifle bots. Hit ground and air. Take cover in woods.",
-    cost: 100, hp: 225, speed: 1.8, sight: 5, domain: "ground", armor: "infantry",
-    targets: "both", dps: 18, range: 3, shotInterval: 0.4, dmgType: "kinetic", fx: "rifle", airMult: 0.5,
+    cost: 100, hp: 190, speed: 1.8, sight: 5, domain: "ground", armor: "infantry",
+    targets: "both", dps: 15, range: 3, shotInterval: 0.4, dmgType: "kinetic", fx: "rifle", airMult: 0.5,
     buildTime: 6, builtAt: "assembly-bay", radius: 0.4, squad: 5
   },
+  // (the spec's 180 HP and 0.8× vs air lost to Hornets by 0.59 cost for cost — their bombs
+  // splash whole clumps of squads; 210 HP and 1.5× vs air kill them, as the role says)
   "rocket-squad": {
     name: "Rocket Squad", role: "Anti-armour rockets. Kill Titans and Hornets. Weak vs infantry.",
-    cost: 175, hp: 180, speed: 1.6, sight: 6, domain: "ground", armor: "infantry",
-    targets: "both", dps: 26, range: 4, shotInterval: 1.5, dmgType: "cannon", fx: "rockets", airMult: 0.8,
+    cost: 175, hp: 210, speed: 1.6, sight: 6, domain: "ground", armor: "infantry",
+    targets: "both", dps: 26, range: 4, shotInterval: 1.5, dmgType: "cannon", fx: "rockets", airMult: 1.5,
     buildTime: 9, builtAt: "assembly-bay", radius: 0.4, squad: 3
   },
   sniper: {

@@ -3,21 +3,28 @@
 // "ai"    = blue is a Normal Balanced AI commander (src/sim/ai/commander.ts)
 // "human" = blue is a scripted, reasonable phone player: reacts once a
 //           second, keeps factory queues one deep, builds a few turrets,
-//           counters the announced wave theme and pulls its army onto
-//           attackers near the base — but never calls waves early.
+//           counters the announced wave theme (Flak and Raptors for air,
+//           Mortars and Hornets for a Bot Swarm once it has a Tech Lab) and
+//           pulls its army onto attackers near the base — but never calls
+//           waves early.
 //           With --calldowns it also fires the Command meter like a player
 //           would: the Sky Hammer and Barrages on the biggest wave clump near
 //           the base, a Drop Pod when the base is outgunned. --no-calldowns
 //           takes them away from the AI defender too (an A/B check).
-// --tune '{"waveWreckShare":0.3}' overrides SURVIVAL numbers (A/B runs).
-// Prints waves survived per map and difficulty (plus run length, kills and salvage).
+// --tune '{"waveWreckShare":0.3}' overrides SURVIVAL numbers (A/B runs);
+//   '{"themes":["swarm","swarm","swarm","swarm","swarm"]}' makes every regular
+//   wave one theme (compare themes by waves survived).
+// Prints waves survived per map and difficulty (plus run length, kills and
+// salvage), then per theme and stage of the run: the scrap value the defender
+// lost while each wave was the current one, and how many runs it ended.
 import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { BUILDINGS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { canPlaceBuilding, nearestScrapTile, unitBlocker } from "../src/sim/economy";
 import { calldownBlocker, powerStatus } from "../src/sim/powers";
 import { isVisible } from "../src/sim/fog";
+import { isInfantry } from "../src/sim/infantry";
 import { MAPS, createMapWorld } from "../src/sim/maps";
-import { SURVIVAL, survivalStatus, wavesSurvived, type SurvivalDifficulty } from "../src/sim/modes/survival";
+import { SURVIVAL, survivalStatus, wavesSurvived, type SurvivalDifficulty, type WaveTheme } from "../src/sim/modes/survival";
 import { step } from "../src/sim/sim";
 import type { BuildingKind, Command, Unit, UnitKind, World } from "../src/sim/types";
 import { buildingCenter, dist, hqOf } from "../src/sim/world";
@@ -73,6 +80,7 @@ function humanDefender(w0: World): Brain {
     const army = mine.filter((u) => u.kind !== "harvester");
     const foes = [...w.units.values()].filter((u) => u.faction === "red" && isVisible(w, "blue", Math.floor(u.x), Math.floor(u.y)));
     const airThreat = st.nextTheme === "air" || foes.filter((u) => UNITS[u.kind].domain === "air").length >= 2;
+    const swarmThreat = st.nextTheme === "swarm" || foes.filter((u) => isInfantry(u.kind)).length >= 4;
     let scrap = f.scrap;
     if (f.pending?.ready) {
       const k = f.pending.kind;
@@ -98,9 +106,17 @@ function humanDefender(w0: World): Brain {
       let kind: UnitKind | null = null;
       if (b.kind === "fab-plant") {
         if (airThreat && count("flak-crawler") < 2 + Math.floor(st.wave / 3)) kind = "flak-crawler";
+        else if (swarmThreat && !unitBlocker(w, "blue", "mortar") && count("mortar") < 2 + Math.floor(st.wave / 4)) kind = "mortar";
         else if (!unitBlocker(w, "blue", "titan")) kind = army.length % 3 === 0 ? "titan" : army.length % 3 === 1 ? "lancer" : "stinger";
         else kind = "stinger";
-      } else if (b.kind === "airpad") kind = airThreat ? "raptor" : count("mender") < 2 && army.length > 8 ? "mender" : "wasp";
+      } else if (b.kind === "airpad")
+        kind = airThreat
+          ? "raptor"
+          : swarmThreat && !unitBlocker(w, "blue", "hornet")
+            ? "hornet"
+            : count("mender") < 2 && army.length > 8
+              ? "mender"
+              : "wasp";
       if (!kind || scrap < UNITS[kind].cost) continue;
       cmds.push({ type: "produce", faction: "blue", buildingId: b.id, unit: kind });
       scrap -= UNITS[kind].cost;
@@ -163,6 +179,16 @@ function playerCalldowns(w: World, foes: Unit[], army: Unit[], hqC: { x: number;
   return [];
 }
 
+/** One wave of a run, for the per-theme table. */
+export interface WaveRecord {
+  wave: number;
+  theme: WaveTheme;
+  /** Scrap value of the defender's units and buildings lost while this was the current wave. */
+  lost: number;
+  /** The run ended (HQ fell) during this wave. */
+  fatal: boolean;
+}
+
 export interface SurvivalRun {
   waves: number;
   min: number;
@@ -171,6 +197,7 @@ export interface SurvivalRun {
   spawnTimes: number[];
   /** Scrap the defender salvaged from wrecks. */
   salvaged: number;
+  perWave: WaveRecord[];
 }
 
 export function survivalRun(map: string, difficulty: SurvivalDifficulty, seed: number, defender: Defender = "ai", maxMin = 45): SurvivalRun {
@@ -182,10 +209,14 @@ export function survivalRun(map: string, difficulty: SurvivalDifficulty, seed: n
   const value = (f: string) =>
     [...w.units.values()].filter((u) => u.faction === f && u.kind !== "harvester").reduce((v, u) => v + UNITS[u.kind].cost, 0);
   let lostAt = 0;
+  const perWave: WaveRecord[] = [];
   for (let i = 0; i < maxMin * 60 * TICK_RATE && !w.winner; i++) {
     step(w, brain(w));
     for (const e of w.fx) {
+      const cur = perWave[perWave.length - 1];
+      if (cur && e.type === "death" && e.faction === "blue") cur.lost += e.value;
       if (e.type === "waveSpawned") {
+        perWave.push({ wave: e.wave, theme: e.theme, lost: 0, fatal: false });
         spawnTimes.push(w.tick / TICK_RATE);
         lostAt = w.factions.blue.stats.unitsLost;
         if (log) {
@@ -199,8 +230,34 @@ export function survivalRun(map: string, difficulty: SurvivalDifficulty, seed: n
     }
     if (log && w.tick % 600 === 0) console.log(`  ${t()}   red live ${[...w.units.values()].filter((u) => u.faction === "red").length} (${value("red")}) pending ${w.survival!.pending.length}`);
   }
+  const last = perWave[perWave.length - 1];
+  if (w.winner && last) last.fatal = true;
   const st = w.factions.blue.stats;
-  return { waves: wavesSurvived(w), min: w.tick / TICK_RATE / 60, kills: st.unitsKilled, lost: st.unitsLost, spawnTimes, salvaged: st.scrapSalvaged };
+  return { waves: wavesSurvived(w), min: w.tick / TICK_RATE / 60, kills: st.unitsKilled, lost: st.unitsLost, spawnTimes, salvaged: st.scrapSalvaged, perWave };
+}
+
+/** Stages of a run for the per-theme table: the first three blocks of five, then wider spans. */
+const STAGES = [
+  { label: "w1-5", from: 1, to: 5 },
+  { label: "w6-10", from: 6, to: 10 },
+  { label: "w11-15", from: 11, to: 15 },
+  { label: "w16-25", from: 16, to: 25 },
+  { label: "w26+", from: 26, to: Infinity }
+];
+
+/** Mean scrap lost per wave (and runs ended) by theme and stage: is one theme much harder than the others? */
+function themeTable(records: WaveRecord[]): string {
+  const themes = [...new Set(records.map((r) => r.theme))].sort();
+  const cell = (rs: WaveRecord[]) =>
+    rs.length === 0
+      ? "-".padStart(16)
+      : `${(rs.reduce((a, r) => a + r.lost, 0) / rs.length / 1000).toFixed(2)}k n${rs.length} †${rs.filter((r) => r.fatal).length}`.padStart(16);
+  const lines = [`  ${"theme".padEnd(9)}${STAGES.map((g) => g.label.padStart(16)).join("")}`];
+  for (const t of themes) {
+    const mine = records.filter((r) => r.theme === t);
+    lines.push(`  ${t.padEnd(9)}${STAGES.map((g) => cell(mine.filter((r) => r.wave >= g.from && r.wave <= g.to))).join("")}`);
+  }
+  return lines.join("\n");
 }
 
 function main(): void {
@@ -226,9 +283,11 @@ function main(): void {
   for (const def of defenders)
     for (const d of diffs) {
       const all: number[] = [];
+      const records: WaveRecord[] = [];
       for (const m of maps) {
         const runs: SurvivalRun[] = [];
         for (let k = 0; k < seeds; k++) runs.push(survivalRun(m.id, d, 1000 + k * 7919, def));
+        for (const r of runs) records.push(...r.perWave);
         const waves = runs.map((r) => r.waves);
         all.push(...waves);
         console.log(
@@ -243,8 +302,9 @@ function main(): void {
       const mean = all.reduce((a, b) => a + b, 0) / Math.max(1, all.length);
       console.log(
         `${def} ${d}: median ${all[Math.floor(all.length / 2)]} waves, mean ${mean.toFixed(1)} (min ${all[0]}, max ${all[all.length - 1]}, n=${all.length}; ` +
-          `fell within the first 3 waves in ${all.filter((x) => x < 3).length})\n`
+          `fell within the first 3 waves in ${all.filter((x) => x < 3).length})`
       );
+      console.log(`  scrap lost per wave by theme (n = waves, † = runs it ended):\n${themeTable(records)}\n`);
     }
 }
 

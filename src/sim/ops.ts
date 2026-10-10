@@ -161,7 +161,8 @@ export const OPS: OpDef[] = [
     tip: "Stingers and Turrets shred Rush's light tanks. Build a Fab Plant early and send reinforcements up the road to the bridge.",
     map: "riverlands",
     // bigger waves than a stock Rush: it masses ~1,200 scrap of tanks before each push
-    ai: { strategy: "rush", difficulty: "hard", tweak: { assaultValue: 2200 } },
+    // (and the four harvesters this op was tuned against: skirmish Rush now keeps five)
+    ai: { strategy: "rush", difficulty: "hard", tweak: { assaultValue: 2200, harvesters: 4 } },
     focus: { x: 21, y: 34 },
     setup(w, o) {
       o.building("blue", "depot", 20, 31);
@@ -309,7 +310,8 @@ export const OPS: OpDef[] = [
       "Glass Cannons and Rapid Fab for both sides: every weapon hits twice as hard and everything builds in half the time. Red's Rush commander loves it. Destroy their HQ within 6:00.",
     tip: "Fights end in seconds: never trade one at a time. Turrets hit twice as hard too — a couple buy you time to mass an army.",
     map: "dune-sea",
-    ai: { strategy: "rush", difficulty: "normal" },
+    // (the four harvesters this op was tuned against: skirmish Rush now keeps five)
+    ai: { strategy: "rush", difficulty: "normal", tweak: { harvesters: 4 } },
     rules: { mutators: ["glass", "rapidfab"] },
     goals: [{ type: "destroyHq" }, { type: "within", secs: 360 }],
     stars: [

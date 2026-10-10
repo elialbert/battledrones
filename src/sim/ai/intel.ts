@@ -1,0 +1,88 @@
+import { BUILDINGS, DAMAGE_VS, UNITS, type ArmedStats } from "../balance";
+import { knownBuildings } from "../fog";
+import { unitSeenBy } from "../infantry";
+import type { ArmorClass, Domain, Faction, Unit, UnitKind, World } from "../types";
+
+/**
+ * What the commander makes of the enemy it can see: who it sees (through
+ * fog AND Sniper concealment, infantry.ts unitSeenBy), how much anti-air
+ * covers a spot, and how well a weapon does against a target. Shared by
+ * commander.ts and its helpers so every tactic reads the field the same way.
+ */
+
+/** Enemy units `faction` can see right now (fog and Woods concealment applied). */
+export function seenEnemies(w: World, faction: Faction): Unit[] {
+  const out: Unit[] = [];
+  for (const u of w.units.values()) if (u.faction !== faction && unitSeenBy(w, faction, u)) out.push(u);
+  return out;
+}
+
+/**
+ * Anti-air worth of a weapon, in Flak Crawlers: its DPS against aircraft
+ * (airMult applied) over the Flak's, capped at 1, to a tenth. Flak, Raptors
+ * and SAMs 1, Lancers 0.6, Turrets 0.8, a Trooper Squad's rifles (half
+ * damage vs air) only 0.2 — a lone rifle squad is not flak.
+ */
+export function aaWeight(st: ArmedStats): number {
+  if (st.targets !== "air" && st.targets !== "both") return 0;
+  return Math.min(1, Math.round((10 * st.dps * (st.airMult ?? 1)) / UNITS["flak-crawler"].dps) / 10);
+}
+
+/** Anti-air (in Flak) covering a spot at least this much keeps drones and dropships away. */
+export const AA_COVER = 0.5;
+
+/** One anti-air threat to aircraft: where, how far it reaches, and its worth in Flak. */
+export interface AaSource {
+  x: number;
+  y: number;
+  reach: number;
+  weight: number;
+}
+
+/**
+ * Anti-air we can see (units) or remember (buildings) that could shoot at
+ * an aircraft, weighed in Flak (aaWeight). Units reach range + 3, buildings
+ * range + 2; the HQ's point-defence gun doesn't count (it swats lone drones,
+ * it doesn't close the sky).
+ */
+export function aaSources(w: World, faction: Faction, seen?: Unit[]): AaSource[] {
+  const out: AaSource[] = [];
+  for (const u of seen ?? seenEnemies(w, faction)) {
+    const st = UNITS[u.kind];
+    const weight = aaWeight(st);
+    if (weight > 0) out.push({ x: u.x, y: u.y, reach: st.range + 3, weight });
+  }
+  for (const kb of knownBuildings(w, faction)) {
+    if (kb.kind === "hq") continue;
+    const st = BUILDINGS[kb.kind];
+    const weight = aaWeight(st);
+    if (weight > 0) out.push({ x: kb.tx + st.size / 2, y: kb.ty + st.size / 2, reach: st.range + 2, weight });
+  }
+  return out;
+}
+
+/** Anti-air (in Flak) covering (x, y): the sum over the sources in reach of it. */
+export function aaStrengthAt(sources: AaSource[], x: number, y: number): number {
+  let v = 0;
+  for (const a of sources) if (Math.hypot(a.x - x, a.y - y) < a.reach) v += a.weight;
+  return v;
+}
+
+/**
+ * How hard `attacker`'s weapon hits a target of this armour and domain
+ * (1 = a full armour match): DAMAGE_VS for its damage type, times airMult
+ * against aircraft; 0 when it can't shoot that domain at all. A Sniper Team
+ * vs a tank is 0.4, vs a building 0.15, vs infantry 3.
+ */
+export function effectivenessVs(attacker: UnitKind, armor: ArmorClass, domain: Domain): number {
+  const st = UNITS[attacker];
+  if (st.targets === "none" || (st.targets !== "both" && st.targets !== domain)) return 0;
+  return DAMAGE_VS[st.dmgType ?? "kinetic"][armor] * (domain === "air" ? st.airMult ?? 1 : 1);
+}
+
+/** effectivenessVs against a unit kind. */
+export const effectiveness = (attacker: UnitKind, target: UnitKind): number =>
+  effectivenessVs(attacker, UNITS[target].armor, UNITS[target].domain);
+
+/** Below this effectiveness a unit is no answer to a target (a Sniper vs any vehicle). */
+export const USELESS = 0.45;

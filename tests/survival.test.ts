@@ -1,24 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { isInfantry, squadSize } from "../src/sim/infantry";
 import { MAPS, createMapWorld } from "../src/sim/maps";
 import {
   SURVIVAL,
+  THEME_COUNTERS,
+  THEME_NAMES,
   earlyCallBonus,
   planWave,
   survivalStatus,
   waveBudget,
+  waveName,
   waveRank,
   waveTheme,
   waveUnitsLeft,
   wavesSurvived,
-  type SurvivalDifficulty
+  type SurvivalDifficulty,
+  type WavePlan,
+  type WaveTheme
 } from "../src/sim/modes/survival";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
-import type { FxEvent, World } from "../src/sim/types";
+import type { FxEvent, UnitKind, World } from "../src/sim/types";
 import { wreckValue } from "../src/sim/salvage";
 import { buildingCenter, hqOf, passable, spawnUnit } from "../src/sim/world";
+import { THEME_ICONS } from "../src/game/survival";
 
 const lastStand = (map = "riverlands", seed = 42, difficulty: SurvivalDifficulty = "normal") =>
   createMapWorld(map, { seed, survival: { difficulty } });
@@ -67,25 +74,63 @@ describe("wave schedule", () => {
     const a = lastStand("dune-sea", 7);
     const b = lastStand("dune-sea", 7);
     const c = lastStand("dune-sea", 8);
-    const plans = (w: World) => Array.from({ length: 15 }, (_, i) => planWave(w, i + 1));
+    const plans = (w: World) => Array.from({ length: 25 }, (_, i) => planWave(w, i + 1));
     expect(plans(a)).toEqual(plans(b));
     expect(plans(a)).not.toEqual(plans(c));
+    // asking again, or out of order, changes nothing (no hidden state)
+    expect(planWave(a, 12)).toEqual(plans(b)[11]);
+    expect(planWave(a, 3, "hard")).toEqual(planWave(b, 3, "hard"));
+  });
+
+  it("rotates five regular themes through the four slots of each block, then a boss", () => {
+    const regular = [...SURVIVAL.themes].sort();
+    expect(regular).toEqual(["air", "armour", "artillery", "mixed", "swarm"]);
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const w = lastStand("riverlands", seed);
+      const benched: WaveTheme[] = [];
+      for (let block = 0; block < 40; block++) {
+        const themes = [1, 2, 3, 4].map((i) => waveTheme(w, block * 5 + i));
+        expect(waveTheme(w, block * 5 + 5)).toBe("boss");
+        // four different regular themes; the fifth sits this block out
+        expect(new Set(themes).size).toBe(4);
+        const out = regular.filter((t) => !themes.includes(t as WaveTheme));
+        expect(out).toHaveLength(1);
+        benched.push(out[0] as WaveTheme);
+      }
+      // every five blocks bench each theme once, and never one theme twice running
+      for (let cycle = 0; cycle < 8; cycle++) expect([...benched.slice(cycle * 5, cycle * 5 + 5)].sort()).toEqual(regular);
+      for (let i = 1; i < benched.length; i++) expect(benched[i]).not.toBe(benched[i - 1]);
+      // the first block always shows the threats with their own answers (anti-air, anti-infantry)
+      expect([1, 2, 3, 4].map((i) => waveTheme(w, i))).toEqual(expect.arrayContaining(["air", "swarm"]));
+      // each boss is previewed in its block: an Air Raid before a Bomber Wing, and so on
+      const preview: Record<string, WaveTheme> = { "Titan Spearhead": "armour", "Bomber Wing": "air", "Elite Strike Force": "mixed" };
+      for (let block = 0; block < 40; block++) {
+        const boss = waveName(w, block * 5 + 5);
+        expect([1, 2, 3, 4].map((i) => waveTheme(w, block * 5 + i)), `${boss} at ${block * 5 + 5}`).toContain(preview[boss]);
+      }
+      // so no theme is ever missing for more than 13 waves in a row
+      for (const t of regular) {
+        let last = 0;
+        for (let n = 1; n <= 200; n++)
+          if (waveTheme(w, n) === t) {
+            expect(n - last, `${t} at ${n}`).toBeLessThanOrEqual(14);
+            last = n;
+          }
+      }
+    }
   });
 
   it("opens with a small ground wave and escalates", () => {
-    for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const openers = new Set<WaveTheme>();
+    for (let seed = 1; seed <= 30; seed++) {
       const w = lastStand("riverlands", seed);
       const first = planWave(w, 1);
-      expect(["armour", "mixed"]).toContain(first.theme);
+      openers.add(first.theme);
+      expect(["armour", "mixed", "swarm"]).toContain(first.theme);
       expect(first.units.every((k) => UNITS[k].domain === "ground" && UNITS[k].cost <= 200)).toBe(true);
       expect(first.units.length).toBeLessThanOrEqual(4);
-      // each block of five: the four themes once, then a boss
-      for (let block = 0; block < 3; block++) {
-        const themes = [1, 2, 3, 4].map((i) => waveTheme(w, block * 5 + i)).sort();
-        expect(themes).toEqual(["air", "armour", "artillery", "mixed"]);
-        expect(waveTheme(w, block * 5 + 5)).toBe("boss");
-      }
     }
+    expect(openers.has("swarm")).toBe(true); // a Bot Swarm may open, as small as the others
     for (let n = 1; n < 25; n++) expect(waveBudget("normal", n + 1)).toBeGreaterThan(waveBudget("normal", n) * (n % 5 === 0 ? 0.85 : 1));
     expect(waveBudget("easy", 8)).toBeLessThan(waveBudget("normal", 8));
     expect(waveBudget("hard", 8)).toBeGreaterThan(waveBudget("normal", 8));
@@ -98,8 +143,9 @@ describe("wave schedule", () => {
       const p = planWave(w, n);
       const spent = p.units.reduce((s, k) => s + UNITS[k].cost, 0);
       expect(spent).toBeLessThanOrEqual(p.budget + 1);
-      expect(p.units.length).toBeLessThanOrEqual(SURVIVAL.maxWaveUnits);
-      if (p.units.length < SURVIVAL.maxWaveUnits) expect(p.budget - spent).toBeLessThan(300);
+      const cap = p.theme === "swarm" ? SURVIVAL.swarmMaxUnits : SURVIVAL.maxWaveUnits;
+      expect(p.units.length).toBeLessThanOrEqual(cap);
+      if (p.units.length < cap) expect(p.budget - spent).toBeLessThan(300);
       if (p.theme === "artillery") expect(p.units).toContain("mortar");
     }
   });
@@ -121,6 +167,154 @@ describe("wave schedule", () => {
   });
 });
 
+describe("Bot Swarm", () => {
+  /** Every Bot Swarm wave among waves 1–40 of seeds 1–15 (normal and hard). */
+  const swarms = (() => {
+    const out: WavePlan[] = [];
+    for (let seed = 1; seed <= 15; seed++) {
+      const w = lastStand("riverlands", seed);
+      for (let n = 1; n <= 40; n++)
+        if (waveTheme(w, n) === "swarm") out.push(planWave(w, n), planWave(w, n, "hard"));
+    }
+    return out;
+  })();
+  const cost = (units: UnitKind[], k?: UnitKind) => units.filter((u) => !k || u === k).reduce((s, u) => s + UNITS[u].cost, 0);
+
+  it("is a named, announced theme with its counter and icon", () => {
+    expect(THEME_NAMES.swarm).toBe("Bot Swarm");
+    expect(THEME_COUNTERS.swarm).toMatch(/Mortars/);
+    expect(THEME_ICONS.swarm).toBeTruthy();
+    expect(swarms.length).toBeGreaterThan(50);
+    for (let seed = 1; seed <= 20; seed++) {
+      const w = lastStand("riverlands", seed);
+      // it always shows up in the first block, while it is small
+      const n = [1, 2, 3, 4].find((i) => waveTheme(w, i) === "swarm");
+      expect(n).toBeDefined();
+      expect(waveName(w, n!)).toBe("Bot Swarm");
+    }
+  });
+
+  it("is Troopers and Rocket Squads, with a capped share of Sniper Teams from wave 6", () => {
+    for (const p of swarms) {
+      expect(p.units.every((k) => ["trooper", "rocket-squad", "sniper"].includes(k)), p.units.join()).toBe(true);
+      expect(p.units.filter((k) => k === "trooper").length).toBeGreaterThanOrEqual(1);
+      if (p.wave < 6) expect(p.units).not.toContain("sniper");
+      else expect(cost(p.units, "sniper")).toBeLessThanOrEqual(0.15 * p.budget + 1);
+      expect(p.units.filter((k) => k === "sniper").length).toBeLessThanOrEqual(0.15 * SURVIVAL.swarmMaxUnits);
+      // never more squads than the live cap: a full swarm marches off at once
+      expect(p.units.length).toBeLessThanOrEqual(SURVIVAL.swarmMaxUnits);
+      expect(SURVIVAL.swarmMaxUnits).toBeLessThanOrEqual(SURVIVAL.maxLive);
+      // Sniper Teams enter last, behind the squads
+      const firstSniper = p.units.indexOf("sniper");
+      if (firstSniper >= 0) expect(p.units.slice(firstSniper).every((k) => k === "sniper")).toBe(true);
+    }
+    const big = swarms.filter((p) => p.wave >= 3);
+    expect(big.every((p) => p.units.includes("rocket-squad"))).toBe(true);
+    expect(swarms.filter((p) => p.wave >= 6).some((p) => p.units.includes("sniper"))).toBe(true);
+    // the marksmen stay a minority, however big the wave
+    for (const p of swarms) expect(p.units.filter((k) => k === "sniper").length).toBeLessThanOrEqual(p.units.length / 5);
+    expect(swarms.some((p) => p.units.length === SURVIVAL.swarmMaxUnits)).toBe(true);
+  });
+
+  it("some bosses bring infantry escorts", () => {
+    const kinds = new Set<UnitKind>();
+    for (let seed = 1; seed <= 6; seed++) {
+      const w = lastStand("riverlands", seed);
+      for (const n of [10, 15, 20, 25, 30]) for (const k of planWave(w, n).units) kinds.add(k);
+    }
+    expect(kinds.has("rocket-squad")).toBe(true);
+    expect(kinds.has("trooper")).toBe(true);
+  });
+
+  /** A world whose next wave is the first Bot Swarm (seeds from `seed` on) whose plan passes `ok`. */
+  const swarmNext = (map: string, seed: number, ok: (p: WavePlan) => boolean, difficulty: SurvivalDifficulty = "normal") => {
+    for (const end = seed + 50; seed < end; seed++) {
+      const w = lastStand(map, seed, difficulty);
+      for (let n = 1; n <= 30; n++) {
+        if (waveTheme(w, n) !== "swarm" || !ok(planWave(w, n))) continue;
+        w.survival!.wave = n - 1;
+        w.survival!.nextWaveTick = w.tick + 1;
+        return { w, n };
+      }
+    }
+    throw new Error("no such Bot Swarm");
+  };
+
+  it("enters on walkable ground, marches as a column, then comes for the base", () => {
+    const cases = [
+      // a mid-sized wave with Sniper Teams, and a full 30-squad swarm
+      { map: "riverlands", difficulty: "easy", ok: (p: WavePlan) => p.units.includes("sniper") && p.units.length < SURVIVAL.swarmMaxUnits },
+      { map: "ashlands", difficulty: "easy", ok: (p: WavePlan) => p.units.includes("sniper") && p.units.length < SURVIVAL.swarmMaxUnits },
+      { map: "dune-sea", difficulty: "normal", ok: (p: WavePlan) => p.units.length === SURVIVAL.swarmMaxUnits }
+    ] as const;
+    for (const { map, difficulty, ok } of cases) {
+      const { w, n } = swarmNext(map, 4, ok, difficulty);
+      const s = w.survival!;
+      const c = buildingCenter(hqOf(w, "blue")!);
+      const seen = new Set<number>();
+      let released = -1;
+      let spreadMax = 0;
+      for (let i = 0; i < (SURVIVAL.marchTimeout + 5) * TICK_RATE; i++) {
+        shieldHq(w);
+        step(w, []);
+        if (s.wave === n) s.nextWaveTick = 1e9; // just this wave
+        for (const u of red(w))
+          if (!seen.has(u.id)) {
+            seen.add(u.id);
+            expect(isInfantry(u.kind)).toBe(true);
+            expect(passable(w, Math.floor(u.x), Math.floor(u.y), "foot")).toBe(true);
+          }
+        if (s.pending.length === 0 && s.marches.length > 0) {
+          const d = red(w).map((u) => Math.hypot(u.x - c.x, u.y - c.y));
+          spreadMax = Math.max(spreadMax, Math.max(...d) - Math.min(...d));
+        }
+        if (released < 0 && s.marches.length === 0 && seen.size > 0) released = w.tick;
+      }
+      expect(seen.size).toBe(planWave(w, n).units.length);
+      // slow walkers still move together, and the march lets go before its timeout
+      expect(spreadMax).toBeLessThan(12);
+      expect(released).toBeGreaterThan(0);
+      expect(released - s.lastSpawnTick).toBeLessThanOrEqual(SURVIVAL.marchTimeout * TICK_RATE);
+      // released toward the base: they have closed in on it
+      const d = red(w).map((u) => Math.hypot(u.x - c.x, u.y - c.y));
+      expect(Math.min(...d)).toBeLessThan(15);
+    }
+  });
+
+  it("Sniper Teams pick off units rather than buildings, and hang back with their squads", () => {
+    const w = lastStand("riverlands", 4);
+    w.survival!.nextWaveTick = 1e9; // no wave: just the snipers placed here
+    for (const u of [...w.units.values()]) w.units.delete(u.id);
+    const c = buildingCenter(hqOf(w, "blue")!);
+    // a released wave sniper with the HQ in reach and a defender squad a little farther off
+    const sniper = spawnUnit(w, "sniper", "red", c.x + 7, c.y);
+    const victim = spawnUnit(w, "trooper", "blue", c.x + 7, c.y - 7.5);
+    sniper.order = { type: "attackMove", x: c.x, y: c.y };
+    let shotHq = false;
+    for (let i = 0; i < SURVIVAL.retaskTicks + 2; i++) {
+      shieldHq(w);
+      step(w, []);
+      if (sniper.autoTargetId === hqOf(w, "blue")!.id) shotHq = true;
+      victim.x = c.x + 7; // the squad stands its ground
+      victim.y = c.y - 7.5;
+    }
+    expect(shotHq).toBe(true); // left alone it would plink at the HQ…
+    expect(sniper.order).toMatchObject({ type: "attack", targetId: victim.id }); // …but the director points it at the squad
+    // nothing to shoot: it rejoins the nearest walking squad instead of wandering off alone
+    w.units.delete(victim.id);
+    const lone = spawnUnit(w, "sniper", "red", c.x + 16, c.y);
+    const squad = spawnUnit(w, "trooper", "red", c.x + 16, c.y - 8);
+    spawnUnit(w, "wasp", "red", c.x + 16, c.y + 3); // aircraft are no cover for a walker
+    for (let i = 0; i < SURVIVAL.retaskTicks + 2; i++) {
+      shieldHq(w);
+      step(w, []);
+      squad.x = c.x + 16;
+      squad.y = c.y - 8;
+    }
+    expect(lone.order).toMatchObject({ type: "attackMove", x: squad.x, y: squad.y });
+  });
+});
+
 describe("spawn sites", () => {
   for (const def of MAPS)
     it(`are valid on ${def.name}`, () => {
@@ -135,8 +329,10 @@ describe("spawn sites", () => {
         expect(s.ay).toBeGreaterThan(0);
         expect(s.ax).toBeLessThan(w.width);
         expect(s.ay).toBeLessThan(w.height);
-        // tanks can drive from every site to the base
+        // tanks can drive, and squads walk, from every site to the base
         expect(findPath(w, s.x, s.y, c.x, c.y + 2.5)).not.toBeNull();
+        expect(passable(w, Math.floor(s.x), Math.floor(s.y), "foot")).toBe(true);
+        expect(findPath(w, s.x, s.y, c.x, c.y + 2.5, "foot")).not.toBeNull();
       }
     });
 });
@@ -167,6 +363,75 @@ describe("live cap", () => {
     }
     expect(s.pending).toHaveLength(0);
     expect(waveUnitsLeft(w)).toBe(0);
+  });
+
+  it("counts an infantry squad once, however many robots it is drawn as", () => {
+    const w = lastStand("riverlands", 9);
+    const s = w.survival!;
+    let n = 20;
+    while (waveTheme(w, n) !== "swarm") n++;
+    const plan = planWave(w, n);
+    expect(plan.units).toHaveLength(SURVIVAL.swarmMaxUnits); // a full Bot Swarm: exactly the live cap
+    // a few stragglers of an older wave still hold slots, far off
+    const c = buildingCenter(hqOf(w, "blue")!);
+    for (let i = 0; i < 4; i++) s.members.set(spawnUnit(w, "stinger", "red", w.width - c.x + i * 0.8, w.height - c.y).id, n - 1);
+    s.wave = n - 1;
+    s.nextWaveTick = w.tick + 1;
+    let maxLive = 0;
+    let maxRobots = 0;
+    let sawQueue = false;
+    for (let i = 0; i < 300; i++) {
+      shieldHq(w);
+      step(w, []);
+      if (s.wave === n) s.nextWaveTick = 1e9;
+      const live = red(w);
+      maxLive = Math.max(maxLive, live.length);
+      maxRobots = Math.max(maxRobots, live.reduce((a, u) => a + squadSize(u.kind), 0));
+      if (s.pending.length > 0 && live.length >= SURVIVAL.maxLive) sawQueue = true;
+    }
+    // the cap is 30 squads (one sim unit each), not 30 robots: 26 squads get in, 4 wait
+    expect(maxLive).toBe(SURVIVAL.maxLive);
+    expect(sawQueue).toBe(true);
+    expect(s.pending).toHaveLength(4);
+    expect(maxRobots).toBeGreaterThan(SURVIVAL.maxLive * 2);
+    expect(waveUnitsLeft(w)).toBe(plan.units.length + 4);
+  });
+
+  it("holds a wave at the edge while older waves fill the cap, and marches once they thin out", () => {
+    // a ground wave of 15–30 units (it fits under the cap on its own)
+    let w = lastStand("riverlands", 9);
+    let n = 0;
+    for (let seed = 9; n === 0 && seed < 30; seed++) {
+      w = lastStand("riverlands", seed);
+      for (let k = 6; k <= 15 && n === 0; k++) {
+        const size = planWave(w, k).units.length;
+        if (["armour", "mixed", "swarm"].includes(waveTheme(w, k)) && size >= 15 && size <= SURVIVAL.maxLive) n = k;
+      }
+    }
+    expect(n).toBeGreaterThan(0);
+    const s = w.survival!;
+    // 20 stragglers of an older wave, parked far from the next wave's edge
+    const site = s.sites[planWave(w, n).site]!;
+    const far = s.sites.reduce((a, b) => (Math.hypot(b.x - site.x, b.y - site.y) > Math.hypot(a.x - site.x, a.y - site.y) ? b : a));
+    const old = Array.from({ length: 20 }, (_, i) => spawnUnit(w, "stinger", "red", far.x + (i % 4) * 0.8 - 1.2, far.y + Math.floor(i / 4) * 0.8 - 1.6));
+    for (const u of old) s.members.set(u.id, n - 1);
+    s.wave = n - 1;
+    s.nextWaveTick = w.tick + 1;
+    const fresh = () => red(w).filter((u) => s.members.get(u.id) === n && UNITS[u.kind].domain === "ground");
+    const fromEdge = () => Math.max(...fresh().map((u) => Math.hypot(u.x - site.x, u.y - site.y)));
+    for (let i = 0; i < 25 * TICK_RATE; i++) {
+      step(w, []);
+      if (s.wave === n) s.nextWaveTick = 1e9;
+    }
+    expect(red(w)).toHaveLength(SURVIVAL.maxLive);
+    expect(s.pending.length).toBeGreaterThan(0);
+    const held = fromEdge();
+    expect(held).toBeLessThan(9); // formed up within a few tiles: waiting for the rest of its wave
+    // the stragglers fall: the queue comes in and the wave sets off
+    for (const u of old) u.hp = 0;
+    for (let i = 0; i < 20 * TICK_RATE; i++) step(w, []);
+    expect(s.pending).toHaveLength(0);
+    expect(fromEdge()).toBeGreaterThan(held + 5);
   });
 
   it("marches a wave together instead of strung out by speed", () => {

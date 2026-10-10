@@ -11,13 +11,14 @@
 // Every map × every personality the difficulty draws × each of the three openers.
 import * as balance from "../src/sim/balance";
 import { DIFFICULTY, STRATEGIES, type Difficulty } from "../src/sim/ai/commander";
+import { CONDOR_AI } from "../src/sim/ai/condor";
 import { MAPS } from "../src/sim/maps";
 import { OPENER_IDS } from "../src/sim/openers";
 import { PROFILES, playerMatch, type PlayerMatch } from "./scripted-player";
 
 function applyTune(json: string | undefined): void {
   if (!json) return;
-  const roots: Record<string, unknown> = { ...balance, STRATEGIES, DIFFICULTY };
+  const roots: Record<string, unknown> = { ...balance, STRATEGIES, DIFFICULTY, CONDOR_AI };
   for (const [path, v] of Object.entries(JSON.parse(json) as Record<string, unknown>)) {
     const parts = path.split(".");
     let o = roots as Record<string, unknown>;

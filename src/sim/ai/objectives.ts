@@ -1,16 +1,18 @@
-import { BUILDINGS, OBJECTIVES, TICK_RATE, UNITS } from "../balance";
-import { isVisible, knownBuildings } from "../fog";
+import { INFANTRY, OBJECTIVES, TICK_RATE, UNITS } from "../balance";
+import { isInfantry, unitSeenBy } from "../infantry";
 import type { Command, Crate, Faction, Unit, Uplink, World } from "../types";
 import { dist } from "../world";
 import type { AiMode, AiState } from "./commander";
+import { AA_COVER, aaSources, aaStrengthAt } from "./intel";
 
 /**
  * The commander's play for the map objectives (objectives.ts): it races for
- * Uplinks with a squad that can actually hold one, parks a cheap unit on
- * each Uplink it owns, and diverts its nearest idle units to announced
- * supply crates. Everything it reads is public (Uplink bars, crate
- * announcements) or seen through its own fog; it never peeks at what a
- * crate holds.
+ * Uplinks with a squad that can actually hold one (robot infantry first: a
+ * squad captures twice as fast), parks a cheap unit on each Uplink it owns
+ * (a Trooper Squad does nicely), and diverts its nearest idle units —
+ * infantry included — to announced supply crates. Everything it reads is
+ * public (Uplink bars, crate announcements) or seen through its own fog
+ * (Sniper concealment included); it never peeks at what a crate holds.
  */
 
 /** Squad value that goes to take an Uplink (more if the enemy is there). */
@@ -115,28 +117,19 @@ function enemyValueNear(w: World, faction: Faction, x: number, y: number, r: num
   let v = 0;
   for (const u of w.units.values()) {
     if (u.faction === faction || UNITS[u.kind].dps <= 0) continue;
-    if (!isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))) continue;
+    if (!unitSeenBy(w, faction, u)) continue;
     if (Math.hypot(u.x - x, u.y - y) <= r) v += UNITS[u.kind].cost;
   }
   return v;
 }
 
-/** Can we see (or remember) enemy anti-air covering this spot? */
-function aaCover(w: World, faction: Faction, x: number, y: number): boolean {
-  for (const u of w.units.values()) {
-    if (u.faction === faction) continue;
-    const t = UNITS[u.kind].targets;
-    if (t !== "air" && t !== "both") continue;
-    if (!isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))) continue;
-    if (Math.hypot(u.x - x, u.y - y) < UNITS[u.kind].range + 3) return true;
-  }
-  for (const kb of knownBuildings(w, faction)) {
-    const st = BUILDINGS[kb.kind];
-    if ((st.targets !== "air" && st.targets !== "both") || kb.kind === "hq") continue;
-    if (Math.hypot(kb.tx + st.size / 2 - x, kb.ty + st.size / 2 - y) < st.range + 2) return true;
-  }
-  return false;
-}
+/** Can we see (or remember) enemy anti-air covering this spot (half a Flak Crawler's worth or more)? */
+const aaCover = (w: World, faction: Faction, x: number, y: number): boolean =>
+  aaStrengthAt(aaSources(w, faction), x, y) >= AA_COVER;
+
+/** Uplink capture weight of a unit (objectives.ts presence: infantry double, aircraft half). */
+const captureWeight = (u: Unit): number =>
+  UNITS[u.kind].domain === "air" ? OBJECTIVES.uplink.airWeight : isInfantry(u.kind) ? INFANTRY.captureWeight : 1;
 
 /** Orders for Uplinks (garrisons, capture squads) and supply crates. */
 export function planObjectives(w: World, faction: Faction, s: AiState, ctx: ObjectiveContext): Command[] {
@@ -213,9 +206,11 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
     // recruits: nearest first; the economy guard keeps what it needs
     let guardSpare =
       value(ctx.army.filter((u) => dist(u.x, u.y, ctx.guardPoint.x, ctx.guardPoint.y) <= 5)) - ctx.guardNeed;
+    // nearest first, robot infantry (twice the capture weight) as if half as far
+    const turn = (u: Unit) => dist(u.x, u.y, l.x, l.y) / Math.max(1, captureWeight(u));
     const pool = free()
-      .filter((u) => u.kind !== "mender" && u.kind !== "mortar" && u.kind !== "scout")
-      .sort((a, b) => dist(a.x, a.y, l.x, l.y) - dist(b.x, b.y, l.x, l.y));
+      .filter((u) => u.kind !== "mender" && u.kind !== "mortar" && u.kind !== "scout" && u.kind !== "sniper")
+      .sort((a, b) => turn(a) - turn(b));
     const squad: Unit[] = [];
     let v = value(mine);
     for (const u of pool) {

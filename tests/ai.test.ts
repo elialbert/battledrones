@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGIES, createAiState, tickAi } from "../src/sim/ai/commander";
-import { TICK_RATE } from "../src/sim/balance";
+import { CONDOR_AI } from "../src/sim/ai/condor";
+import { AA_COVER, aaWeight } from "../src/sim/ai/intel";
+import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { unitSeenBy } from "../src/sim/infantry";
 import { createSkirmishWorld } from "../src/sim/map";
+import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
-import { spawnUnit } from "../src/sim/world";
-import type { World } from "../src/sim/types";
+import { buildingCenter, hqOf, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { Terrain, type FxEvent, type World } from "../src/sim/types";
 
 function runWithAi(w: World, seconds: number, state = createAiState()) {
   for (let i = 0; i < seconds * TICK_RATE; i++) {
@@ -154,4 +158,173 @@ describe("AI commander", () => {
       step(w, [...tickAi(w, "red", red), ...tickAi(w, "blue", blue)]);
     expect(w.winner).not.toBeNull();
   }, 120000);
+});
+
+describe("AI and robot infantry", () => {
+  const units = (w: World, f: "blue" | "red", kind?: string) =>
+    [...w.units.values()].filter((u) => u.faction === f && (!kind || u.kind === kind));
+
+  it("weighs anti-air by what it does to aircraft: a lone rifle squad is not flak", () => {
+    expect(aaWeight(UNITS["flak-crawler"])).toBe(1);
+    expect(aaWeight(UNITS.raptor)).toBe(1);
+    expect(aaWeight(UNITS.lancer)).toBeCloseTo(0.6, 9);
+    expect(aaWeight(UNITS.stinger)).toBe(0);
+    expect(aaWeight(UNITS.trooper)).toBeLessThan(AA_COVER);
+    expect(aaWeight(UNITS["rocket-squad"])).toBeGreaterThanOrEqual(AA_COVER);
+  });
+
+  it("tallies the robot infantry it sees, but not a Sniper Team hidden in the woods", () => {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState("balanced", "normal", 1);
+    const hq = buildingCenter(hqOf(w, "red")!);
+    const squads = [0, 1, 2].map((i) => spawnUnit(w, "trooper", "blue", hq.x - 5 + i * 0.8, hq.y + 4));
+    // in sight of the HQ, more than INFANTRY.concealRadius from anything of red's
+    const tx = Math.floor(hq.x) + 1;
+    const ty = Math.floor(hq.y) + 6;
+    setTerrain(w, tx, ty, Terrain.Forest);
+    const sniper = spawnUnit(w, "sniper", "blue", tx + 0.5, ty + 0.5);
+    for (const u of [...squads, sniper]) w.powers.stunned.set(u.id, 1e9);
+    for (let i = 0; i < 30; i++) step(w, []); // fog settles; the sniper hasn't fired
+    expect(unitSeenBy(w, "red", squads[0]!)).toBe(true);
+    expect(unitSeenBy(w, "red", sniper)).toBe(false);
+    tickAi(w, "red", ai);
+    expect(ai.seenInfantry).toBe(3);
+    // out of the woods it shows
+    setTerrain(w, tx, ty, Terrain.Ground);
+    ai.lastDecisionTick = -1000;
+    tickAi(w, "red", ai);
+    expect(ai.seenInfantry).toBe(4);
+  });
+
+  for (const [diff, snipers] of [["normal", true], ["easy", false]] as const)
+    it(`answers Titans with Rocket Squads and enemy squads with ${snipers ? "Sniper Teams" : "no Snipers (Easy)"}`, () => {
+      const w = createMapWorld("proving-grounds");
+      const ai = createAiState("ironclad", diff, 1);
+      const hq = hqOf(w, "red")!;
+      const c = buildingCenter(hq);
+      spawnBuilding(w, "assembly-bay", "red", hq.tx - 3, hq.ty + 4);
+      spawnBuilding(w, "tech-lab", "red", hq.tx + 1, hq.ty + 4);
+      w.factions.red.scrap = 6000;
+      const foes = [
+        ...[0, 1].map((i) => spawnUnit(w, "titan", "blue", c.x - 6 + i, c.y + 5)),
+        ...[0, 1, 2, 3, 4, 5].map((i) => spawnUnit(w, "trooper", "blue", c.x - 6 + (i % 3) * 0.8, c.y + 6.5 + Math.floor(i / 3) * 0.8))
+      ];
+      for (const u of foes) w.powers.stunned.set(u.id, 1e9);
+      const built = new Set<string>();
+      for (let i = 0; i < 40 * TICK_RATE; i++) {
+        const cmds = tickAi(w, "red", ai);
+        for (const cmd of cmds) if (cmd.type === "produce") built.add(cmd.unit);
+        step(w, cmds);
+      }
+      expect(ai.seenHeavy).toBeGreaterThanOrEqual(1);
+      expect(ai.seenInfantry).toBeGreaterThanOrEqual(3);
+      expect(built.has("rocket-squad")).toBe(true);
+      expect(built.has("sniper")).toBe(snipers);
+    });
+
+  it("Rush opens with an Assembly Bay and fields Troopers alongside its Stingers", () => {
+    const w = createSkirmishWorld();
+    const ai = createAiState("rush", "normal", 1);
+    runWithAi(w, 180, ai);
+    const red = [...w.buildings.values()].filter((b) => b.faction === "red").map((b) => b.kind);
+    expect(red).toContain("assembly-bay");
+    expect(units(w, "red", "trooper").length).toBeGreaterThanOrEqual(3); // the starting squad and more
+    expect(units(w, "red", "stinger").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("Ironclad escorts its Titans with Rocket Squads, one per Titan", () => {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState("ironclad", "normal", 1);
+    const hq = hqOf(w, "red")!;
+    const c = buildingCenter(hq);
+    spawnBuilding(w, "assembly-bay", "red", hq.tx - 3, hq.ty + 4);
+    for (let i = 0; i < 3; i++) spawnUnit(w, "titan", "red", c.x - 3 + i * 1.2, c.y + 8);
+    w.factions.red.scrap = 3000;
+    const rockets: number[] = [];
+    for (let i = 0; i < 60 * TICK_RATE; i++) {
+      const cmds = tickAi(w, "red", ai);
+      for (const cmd of cmds) if (cmd.type === "produce" && cmd.unit === "rocket-squad") rockets.push(w.tick);
+      step(w, cmds);
+    }
+    // nothing of the enemy's seen: the Rockets are for its own Titans
+    expect(ai.seenHeavy).toBe(0);
+    expect(rockets).toHaveLength(3);
+  });
+
+  /** Red, mid-game: an Airpad, an Assembly Bay, a Condor and a few squads at home. */
+  function dropSetup(diff: "normal" | "easy", strategy: "balanced" | "rush" | "boom" = "balanced") {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState(strategy, diff, 1);
+    const hq = hqOf(w, "red")!;
+    const c = buildingCenter(hq);
+    spawnBuilding(w, "airpad", "red", hq.tx - 3, hq.ty + 4);
+    spawnBuilding(w, "assembly-bay", "red", hq.tx + 1, hq.ty + 4);
+    spawnUnit(w, "condor", "red", c.x + 0.5, c.y + 3);
+    for (let i = 0; i < 2; i++) spawnUnit(w, "trooper", "red", c.x - 2 + i, c.y + 7);
+    for (let i = 0; i < 3; i++) spawnUnit(w, "stinger", "red", c.x - 2 + i, c.y + 8.5);
+    w.tick = CONDOR_AI.from * TICK_RATE;
+    return { w, ai };
+  }
+
+  it("Balanced loads two squads into its Condor and drops them on the enemy harvesters", () => {
+    const { w, ai } = dropSetup("normal");
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    const redHq = buildingCenter(hqOf(w, "red")!);
+    const fx: FxEvent[] = [];
+    let homeAfterDrop = Infinity;
+    let dropTick = -1;
+    for (let i = 0; i < 90 * TICK_RATE && !w.winner; i++) {
+      step(w, tickAi(w, "red", ai));
+      fx.push(...w.fx.filter((e) => "faction" in e && e.faction === "red"));
+      if (dropTick < 0 && fx.some((e) => e.type === "disembark")) dropTick = w.tick;
+      // …and the empty Condor flies home (~40 tiles at 3.6 tiles/s)
+      if (dropTick >= 0 && w.tick === dropTick + 20 * TICK_RATE) {
+        const condor = units(w, "red", "condor")[0]!;
+        homeAfterDrop = Math.hypot(condor.x - redHq.x, condor.y - redHq.y);
+      }
+    }
+    const drop = fx.find((e) => e.type === "disembark");
+    expect(drop).toBeDefined();
+    if (drop?.type !== "disembark") return;
+    expect(fx.slice(0, fx.indexOf(drop)).filter((e) => e.type === "embark")).toHaveLength(2);
+    expect(drop.bailout).toBe(false);
+    expect(drop.unitIds).toHaveLength(2);
+    // in the enemy's half, by its mining line
+    expect(Math.hypot(drop.x - blueHq.x, drop.y - blueHq.y)).toBeLessThan(14);
+    expect(homeAfterDrop).toBeLessThan(6);
+  }, 30000);
+
+  it("never flies a drop on Easy, or as a personality that doesn't", () => {
+    for (const [diff, strategy] of [["easy", "balanced"], ["normal", "boom"]] as const) {
+      const { w, ai } = dropSetup(diff, strategy);
+      for (let i = 0; i < 60 * TICK_RATE && !w.winner; i++) {
+        const cmds = tickAi(w, "red", ai);
+        expect(cmds.some((c) => c.type === "board" || c.type === "unload")).toBe(false);
+        step(w, cmds);
+      }
+    }
+  }, 30000);
+
+  it("doesn't fly a drop into anti-air it can see", () => {
+    const { w, ai } = dropSetup("normal");
+    // flak on every blue harvester line and over the blue base
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const f = spawnUnit(w, "flak-crawler", "blue", blueHq.x + Math.cos(a) * 5, blueHq.y + Math.sin(a) * 5);
+      w.powers.stunned.set(f.id, 1e9);
+    }
+    // a scout parked over the blue base (frozen, and sturdier than any scout): red sees it all
+    const scout = spawnUnit(w, "scout", "red", blueHq.x, blueHq.y);
+    scout.hp = 1e9;
+    w.powers.stunned.set(scout.id, 1e9);
+    const reached: number[] = [];
+    for (let i = 0; i < 60 * TICK_RATE && !w.winner; i++) {
+      step(w, tickAi(w, "red", ai));
+      for (const c of units(w, "red", "condor")) reached.push(Math.hypot(c.x - blueHq.x, c.y - blueHq.y));
+      if (w.fx.some((e) => e.type === "disembark" && e.faction === "red" && Math.hypot(e.x - blueHq.x, e.y - blueHq.y) < 14))
+        throw new Error("dropped into the flak");
+    }
+    expect(Math.min(...reached)).toBeGreaterThan(10);
+  }, 30000);
 });

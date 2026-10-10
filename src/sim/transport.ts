@@ -183,6 +183,8 @@ export function tickTransport(w: World): void {
   const hoverTicks = Math.round(INFANTRY.unloadHover * TICK_RATE);
   /** Condor id → the squads walking to board it (for idle Condors to meet). */
   const boarders = new Map<number, Unit[]>();
+  /** Condors a squad is climbing into right now: they hold still until it is aboard. */
+  const climbing = new Set<number>();
 
   // collected first: embarking takes squads out of w.units, dropping puts them back
   const boarding: Unit[] = [];
@@ -211,6 +213,7 @@ export function tickTransport(w: World): void {
       continue;
     }
     u.path = null;
+    climbing.add(c.id);
     if (++o.ticks < boardTicks) continue;
     // climb aboard (from where it stands): off the field, into the hold
     w.fx.push({ type: "embark", faction: u.faction, carrierId: c.id, unitId: u.id, x: u.x, y: u.y });
@@ -238,8 +241,8 @@ export function tickTransport(w: World): void {
         if (at) disembarkAll(w, c, at.x, at.y, false);
         c.order = { type: "idle" };
       }
-    } else if (c.order.type === "idle" && !stunned && freeSeats(c) > 0) {
-      // an idle Condor comes to meet the nearest squad boarding it
+    } else if (c.order.type === "idle" && !stunned && freeSeats(c) > 0 && !climbing.has(c.id)) {
+      // an idle Condor comes to meet the nearest squad boarding it (not drifting off one that is climbing in)
       let near: Unit | null = null;
       let nearD = Infinity;
       for (const s of boarders.get(c.id) ?? []) {

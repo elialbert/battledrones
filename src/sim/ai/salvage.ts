@@ -1,5 +1,6 @@
 import { BUILDINGS, ECONOMY, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
+import { unitSeenBy } from "../infantry";
 import type { Building, Command, Faction, Unit, World, Wreck } from "../types";
 import { distToBuilding } from "../world";
 
@@ -52,7 +53,7 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
       u.faction !== faction &&
       UNITS[u.kind].dps > 0 &&
       UNITS[u.kind].targets !== "air" &&
-      isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))
+      unitSeenBy(w, faction, u)
     )
       enemies.push(u);
   const defences = knownBuildings(w, faction).filter((kb) => {

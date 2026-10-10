@@ -22,6 +22,7 @@ export const THEME_ICONS: Record<WaveTheme, string> = {
   armour: "⛓",
   artillery: "💥",
   mixed: "⚔",
+  swarm: "🤖",
   boss: "☠"
 };
 
