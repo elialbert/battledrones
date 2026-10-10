@@ -338,12 +338,13 @@ describe("infantry mutators", () => {
   });
 
   it("under Airborne every personality keeps its Condor busy: an Assembly Bay for squads, and drop after drop", () => {
-    // two seeds: how often one AI's Condor finds a way in swings with the run
-    const drops = { blue: 0, red: 0 };
+    // (how many drops one side gets in swings with the run: a base under attack keeps its
+    // squads busy at home. So: both fly, every match, and drop after drop between them)
     for (const seed of [3, 4]) {
       const w = createMapWorld("frostbite", { seed, mutators: ["airborne"] });
       const ai = { blue: createAiState("skyforce", "normal", 1), red: createAiState("airswarm", "normal", 2) };
       const bays = { blue: 0, red: 0 };
+      const drops = { blue: 0, red: 0 };
       const home = { blue: hqOf(w, "blue")!, red: hqOf(w, "red")! };
       for (let i = 0; i < 8 * 60 * TICK_RATE && !w.winner; i++) {
         step(w, [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)]);
@@ -354,9 +355,10 @@ describe("infantry mutators", () => {
       }
       // (neither plans a Bay in a classic match, nor flies drops)
       expect(bays).toEqual({ blue: 1, red: 1 });
+      expect(drops.blue, `seed ${seed}`).toBeGreaterThanOrEqual(1);
+      expect(drops.red, `seed ${seed}`).toBeGreaterThanOrEqual(1);
+      expect(drops.blue + drops.red, `seed ${seed}`).toBeGreaterThanOrEqual(4);
     }
-    expect(drops.blue).toBeGreaterThanOrEqual(3);
-    expect(drops.red).toBeGreaterThanOrEqual(3);
   }, 90_000);
 
   it("plays an Infantry War to a finish from Assembly Bays, never building a banned kind", () => {
