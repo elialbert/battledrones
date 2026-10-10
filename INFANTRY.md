@@ -1,5 +1,65 @@
 # Robot Infantry — spec
 
+## Status
+
+Implemented (commits dcb151a…b3493e5). The rest of this file is the draft
+as written; **DESIGN.md** describes the shipped game (Units, Combat, AI
+opponent, Balance & pacing → *Infantry pass*, Last Stand, 3D view). Where
+the code differs from the draft, and why:
+
+- **Trooper Squad: 190 HP / 15 DPS** (draft 225 / 18). At the draft
+  numbers Troopers beat Stingers by 0.48 cost for cost
+  (`tools/balance.ts duels`), but Stingers are meant to handle infantry.
+  Now Stingers win by 0.15 and Snipers by 0.37.
+- **Rocket Squad: 210 HP, ×1.5 vs air** (draft 180, ×0.8). At the draft
+  numbers they lost to Hornets by 0.59, because each bomb splashes several
+  squads. Now they beat Hornets by 0.31 and Titans by 0.52; two Sniper
+  shots still wipe one.
+- **Titans still beat Troopers** cost for cost (+0.41), though they lose
+  hard to Rocket Squads (−0.52). "Poor against infantry" holds only next to
+  how they crush vehicle armies (+0.61–0.88). Any Trooper buff that closes
+  the gap makes Troopers beat Stingers again.
+- **Every side starts with a Trooper Squad** beside its HQ (a later
+  requirement): skirmish, Ops and the Last Stand defender. Air War (and the
+  Sky Pirates op) keeps it but bans more infantry and the Assembly Bay.
+- **The Tech Lab** also accepts an Assembly Bay as its prerequisite.
+- **AI personalities** were retuned around infantry and the starting
+  squads. With infantry in, Rush fell to 16–26% and Boom and Ironclad rose
+  to 72–76%. The fixes:
+  - Rush keeps 5 harvesters (was 4) and builds its Bay second.
+  - Balanced and Rush keep 25% and 40% of their army value in infantry.
+  - Boom's Depot moves from 2nd to 4th in its build.
+  - Ironclad attacks at 1400 (was 1500), with one Rocket Squad per Titan.
+  - Air Swarm and Skyforce build a Bay for Rocket Squads once they see
+    heavy armour.
+
+  Every personality now wins 38–63% (4-seed `tools/pacing.ts` panel).
+- **AI anti-air is weighed in Flak Crawlers**, so a Trooper Squad counts
+  0.2. Counted as full anti-air, the starting squad kept calling off Air
+  Swarm's opening raids.
+- **Condor drops** repeat. Rush and Balanced fly them from 2:30, every 45 s,
+  with up to 3 Condors a match, not just one. Over 150 AI games they about
+  break even: about 40k scrap destroyed for about 41k lost.
+- **Last Stand:** each block of five waves plays four of the five themes
+  before its boss, benched by seeded rules. A Bot Swarm stops at 30
+  squads. Snipers are held to 15% of the budget and of the unit cap. The
+  ground bosses bring Rocket Squads, and the Elite Strike Force Troopers too.
+- **Rule details the draft left open:**
+  - A Condor shot down over a building loses its passengers.
+  - A drop with no standable tile within 6 tiles is ignored, and a move or
+    stop order calls a drop off.
+  - EMP pauses boarding and drops.
+  - Concealment works apart from fog, so it holds under Clear Skies too.
+  - Enemy vehicles drive straight through squads.
+- **Done when:** met.
+  - 35 tests in `tests/infantry.test.ts`, plus AI and Last Stand tests.
+  - Win rates 38–63% on the 4-seed panel, 36–66% on the single-seed
+    `tools/balance.ts matches`.
+  - The scripted beginner wins 100% on Easy.
+  - Every robot has a run cycle, and the Condor has an open bay and ramp.
+
+## The draft spec
+
 Draft. Adds three infantry squads and a flying transport. Numbers are
 starting points for `tools/balance.ts`, written in `src/sim/balance.ts` units
 (tiles, tiles/s, HP/s).
