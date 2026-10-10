@@ -13,12 +13,13 @@ the code differs from the draft, and why:
   Now Stingers win by 0.15 and Snipers by 0.37.
 - **Rocket Squad: 210 HP, ×1.5 vs air** (draft 180, ×0.8). At the draft
   numbers they lost to Hornets by 0.59, because each bomb splashes several
-  squads. Now they beat Hornets by 0.31 and Titans by 0.52; two Sniper
+  squads. Now they beat Hornets by 0.31 and Titans by 0.69; two Sniper
   shots still wipe one.
-- **Titans still beat Troopers** cost for cost (+0.41), though they lose
-  hard to Rocket Squads (−0.52). "Poor against infantry" holds only next to
-  how they crush vehicle armies (+0.61–0.88). Any Trooper buff that closes
-  the gap makes Troopers beat Stingers again.
+- **Cannon vs infantry ×0.4** (draft ×0.6). At ×0.6 Titans beat Troopers
+  by 0.41 cost for cost, and any Trooper buff that closed the gap made
+  Troopers beat Stingers again. At ×0.4 Titans only edge them out (+0.13,
+  against +0.61–0.88 over vehicle armies) and lose hard to Rocket Squads
+  (−0.69).
 - **Every side starts with a Trooper Squad** beside its HQ (a later
   requirement): skirmish, Ops and the Last Stand defender. Air War (and the
   Sky Pirates op) keeps it but bans more infantry and the Assembly Bay.

@@ -268,16 +268,16 @@ Flak/Raptors/SAMs. Stinger › Lancer › Titan › Stinger is the ground
 triangle; air vs anti-air sits across it.
 
 Robot infantry adds a web on foot (duel margins from the *Infantry pass*):
-**Rocket Squads** kill Titans (+0.52) and Hornets (+0.31) and beat Flak,
+**Rocket Squads** kill Titans (+0.69) and Hornets (+0.31) and beat Flak,
 Lancers, Wasps and Raptors too, but lose to Stingers, Mortars, Troopers and
-Snipers · **Troopers** beat Rocket Squads (+0.68) and Lancers (+0.43) ·
-**Sniper Teams** delete Troopers (+0.37) and Rocket Squads (+0.81) and lose
+Snipers · **Troopers** beat Rocket Squads (+0.79) and Lancers (+0.43) ·
+**Sniper Teams** delete Troopers (+0.37) and Rocket Squads (+0.87) and lose
 by 0.75–0.94 to every vehicle or aircraft that can hit ground units ·
 **Mortars**, **Hornets** and **Stingers** handle infantry (+0.55, +0.68
-and +0.15 vs Troopers), and a Turret beats two Trooper Squads. The one
-miss: **Titans still beat Troopers** cost for cost (+0.41). They are poor
-against infantry only next to how they crush vehicle armies (+0.61–0.88),
-and they lose hard to Rocket Squads.
+and +0.15 vs Troopers), and a Turret beats two Trooper Squads. **Titans**
+are poor against infantry: cannon fire does ×0.4 to it, so a Titan army
+only edges out Troopers (+0.13, against +0.61–0.88 over vehicle armies)
+and loses hard to Rocket Squads.
 
 ### Combat
 
@@ -290,7 +290,7 @@ and they lose hard to Rocket Squads.
   | Damage type (used by) | light | medium | heavy | structure | infantry |
   |---|---|---|---|---|---|
   | kinetic (Stinger, Trooper, Turret, HQ gun) | 1.0 | 1.0 | 0.6 | 0.65 | 1.0 |
-  | cannon (Titan, Rocket Squad) | 0.8 | 1.0 | 1.3 | 1.0 | 0.6 |
+  | cannon (Titan, Rocket Squad) | 0.8 | 1.0 | 1.3 | 1.0 | 0.4 |
   | flak (Flak Crawler) | 1.25 | 1.0 | 1.15 | 0.5 | 1.25 |
   | missile (Wasp, Raptor, SAM) | 1.15 | 1.0 | 0.9 | 0.6 | 0.7 |
   | explosive (Mortar, Hornet) | 1.2 | 0.9 | 0.85 | 1.35 | 1.3 |
@@ -1056,14 +1056,14 @@ row army wins):
 | **Stinger** | – | 0.66 | 0.39 | −0.63 | 0.40 | −0.29 | 0.03 | −0.41 | 0.15 | 0.48 | 0.87 |
 | **Flak** | −0.66 | – | −1.07 | −0.88 | −0.68 | 0.66 | 0.65 | 0.21 | −0.38 | −0.52 | −0.40 |
 | **Mortar** | −0.39 | 1.07 | – | −0.61 | −0.52 | −0.92 | 0.10 | −0.86 | 0.55 | 0.62 | 0.89 |
-| **Titan** | 0.63 | 0.88 | 0.61 | – | −0.30 | −0.28 | 0.08 | −0.20 | 0.41 | −0.52 | 0.94 |
+| **Titan** | 0.63 | 0.88 | 0.61 | – | −0.30 | −0.28 | 0.08 | −0.20 | 0.13 | −0.69 | 0.91 |
 | **Lancer** | −0.40 | 0.68 | 0.52 | 0.30 | – | −0.41 | 0.26 | −0.10 | −0.43 | −0.33 | 0.89 |
 | **Wasp** | 0.29 | −0.66 | 0.92 | 0.28 | 0.41 | – | −0.42 | −0.04 | −0.26 | −0.61 | 0.75 |
 | **Raptor** | −0.03 | −0.65 | −0.10 | −0.08 | −0.26 | 0.42 | – | 0.41 | −0.13 | −0.63 | −0.03 |
 | **Hornet** | 0.41 | −0.21 | 0.86 | 0.20 | 0.10 | 0.04 | −0.41 | – | 0.68 | −0.31 | 0.94 |
-| **Trooper** | −0.15 | 0.38 | −0.55 | −0.41 | 0.43 | 0.26 | 0.13 | −0.68 | – | 0.68 | −0.37 |
-| **Rocket** | −0.48 | 0.52 | −0.62 | 0.52 | 0.33 | 0.61 | 0.63 | 0.31 | −0.68 | – | −0.81 |
-| **Sniper** | −0.87 | 0.40 | −0.89 | −0.94 | −0.89 | −0.75 | 0.03 | −0.94 | 0.37 | 0.81 | – |
+| **Trooper** | −0.15 | 0.38 | −0.55 | −0.13 | 0.43 | 0.26 | 0.13 | −0.68 | – | 0.79 | −0.37 |
+| **Rocket** | −0.48 | 0.52 | −0.62 | 0.69 | 0.33 | 0.61 | 0.63 | 0.31 | −0.79 | – | −0.87 |
+| **Sniper** | −0.87 | 0.40 | −0.89 | −0.91 | −0.89 | −0.75 | 0.03 | −0.94 | 0.37 | 0.87 | – |
 
 The vehicle block is unchanged. Outside the matrix, a Turret (225 scrap)
 against two Trooper Squads (200) wins with 511 of its 650 HP left.
@@ -1077,8 +1077,16 @@ two seeds, `--with <personality>` for single-lever tests):
   and Mortars by 0.55; Lancers still lose to Troopers (−0.43).
 - **Rocket Squad 180 HP / ×0.8 vs air → 210 / ×1.5.** At the draft's
   numbers they lost to Hornets by 0.59, because each bomb splashes several
-  squads. Now they beat Hornets by 0.31 and Titans by 0.52 (was 0.33). HP
+  squads. Now they beat Hornets by 0.31 and Titans by 0.69 (was 0.33). HP
   stays at or below 225, so two Sniper shots still wipe a squad.
+- **Cannon vs infantry ×0.6 → ×0.4.** With the draft's ×0.6, Titans beat
+  Troopers by 0.41 cost for cost, and no Trooper buff could close that
+  without Troopers beating Stingers again. At ×0.4 Titans only edge them
+  out (+0.13), Rocket Squads beat Titans by 0.69 (was 0.52) and lose to
+  Troopers by 0.79 (was 0.68); the rest of the matrix is unchanged.
+  Re-measured with `tools/balance.ts matches` (one seed): Balanced 56,
+  Rush 38, Air Swarm 48, Boom 52, Skyforce 42, Ironclad 64%, no draws;
+  the beginner still wins 45/45 on Easy.
 - **Rush keeps 5 harvesters** (was 4), builds its Assembly Bay second and
   keeps 40% of its army value in infantry. With infantry in, Rush won only
   16–26% (38% on its old build with no Bay); every side's starting squad
@@ -1137,9 +1145,7 @@ on Easy (45/45) and the novice 89% (40/45, all five losses to Air Swarm);
 the beginner on Normal fell from 84% to 80% (72/90), about one standard
 error.
 
-Known gaps: Titans still beat Troopers cost for cost (+0.41), since any
-Trooper buff that closes that gap also makes Troopers beat Stingers again,
-and more crush damage would only help Titans; and a Rocket Squad (range 4)
+Known gaps: a Rocket Squad (range 4)
 can kill a Turret without being shot back, because units measure range to
 a building's edge but a Turret measures from its centre (the same old
 quirk lets Lancers at range 4.5 do it). Turrets still beat Trooper Squads,

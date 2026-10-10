@@ -243,7 +243,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
 /** Damage multiplier by damage type (row) vs armor class (column). */
 export const DAMAGE_VS: Record<DamageType, Record<ArmorClass, number>> = {
   kinetic: { light: 1.0, medium: 1.0, heavy: 0.6, structure: 0.65, infantry: 1.0 },
-  cannon: { light: 0.8, medium: 1.0, heavy: 1.3, structure: 1.0, infantry: 0.6 },
+  cannon: { light: 0.8, medium: 1.0, heavy: 1.3, structure: 1.0, infantry: 0.4 },
   flak: { light: 1.25, medium: 1.0, heavy: 1.15, structure: 0.5, infantry: 1.25 },
   missile: { light: 1.15, medium: 1.0, heavy: 0.9, structure: 0.6, infantry: 0.7 },
   explosive: { light: 1.2, medium: 0.9, heavy: 0.85, structure: 1.35, infantry: 1.3 },
