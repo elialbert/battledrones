@@ -55,8 +55,8 @@ installable as a PWA.
   rules and fog of war as you — it gathers real waves, fights for the
   Uplinks, answers your infantry, flies Condor drops at your harvesters and
   calls down strikes — or watch two AIs fight. Matches are tuned for
-  comebacks: the side ahead at 4:00 now wins 71% of AI-vs-AI games, not
-  90%.
+  comebacks: the side ahead at 4:00 now wins 70% of AI-vs-AI games, not
+  90%, and a decided AI-vs-AI game runs a median of about 10½ minutes.
 - **Veteran heroes**: units that rank up earn callsigns ("★★ Viper ·
   Lancer · 9 kills"), promotions pop over the unit, elites shimmer gold, and
   you hear about it when a named unit falls; the AI pulls its wounded

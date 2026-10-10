@@ -18,7 +18,7 @@ Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings.
    identifiable on a 6" screen. Big touch targets, high-contrast sprites,
    minimal chrome.
 2. **A full match in a coffee break.** Target match length ~10 minutes
-   against a human (AI-vs-AI games settle in a median of ~9¾ since robot
+   against a human (AI-vs-AI games settle in a median of ~10½ since robot
    infantry, ~8¼ before; see Balance & pacing).
 3. **Air vs ground is the core tension.** The rock-paper-scissors between
    flying and ground drones is what makes this game *Battle Drones* and not
@@ -177,10 +177,11 @@ ground a squad can stand on). `createMapWorld` places it, so every skirmish,
 Daily Op, opener and objectives match has it, and so do Ops (the player, and
 an AI side that starts with an HQ) and the Last Stand defender (the wave
 side's units are cleared as before). Air War keeps it but bans raising
-more infantry. It is an early guard against the first raids — it
-hits air at half damage — and a cheap Uplink holder. Every match now has two
-more units than before, so the balance tools were re-run with it in (see
-*Infantry pass* under Balance & pacing).
+more infantry, and the Condor that could fly it into the fight; Veterans
+ranks it like every other combat unit. It is an early guard against the
+first raids — it hits air at half damage — and a cheap Uplink holder.
+Every match now has two more units than before, so the balance tools were
+re-run with it in (see *Infantry pass* under Balance & pacing).
 
 ### Buildings (9)
 
@@ -250,12 +251,18 @@ to it: after 1 s within 1.2 tiles a squad climbs in and leaves the map. A
 squad aboard is off the field (out of `World.units`), so it can't fire, see,
 capture or be shot; an idle Condor drifts over to meet a squad coming to
 board it and holds still while one climbs in. To **unload**, the Condor
-flies to the drop point, hovers 1.5 s and sets every squad down around it.
-The point snaps to the nearest tile a squad can stand on (not Water, Rock
-or a building) within 6 tiles, scanned in the side's own frame so drops are
-mirror-fair. An unload with nowhere to land is ignored, and a move or stop
-order calls a drop off. **Shot down** over ground a squad could stand on,
-its passengers bail out with at most 50% HP; over water, rock or a building
+flies to the drop point, hovers 1.5 s and sets every squad down around it,
+then backs off 1.5 tiles the way it came and idles there, off their heads.
+Squads are set down at least 0.4 tiles from anything they can't stand on
+(Water, Rock, a building) and from the map's edge, so no robot stands in
+the river, and a squad's width apart, so separation never shoves one
+toward the water. The point snaps to the nearest such spot within 6 tiles;
+out over a big lake (Frostbite's frozen sea), to the nearest shore at any
+distance. Every scan runs in the side's own frame, so drops are
+mirror-fair. Only a map with no ground at all refuses an unload, and a
+move or stop order calls a drop off. **Shot down** over ground a squad
+could stand on, its passengers bail out with at most 50% HP, set down
+clear of the water's edge the same way; over water, rock or a building
 they go down with it, each a unit lost and a kill for whoever downed the
 Condor. EMP freezes Condors and boarding squads like anything else.
 
@@ -304,16 +311,22 @@ and loses hard to Rocket Squads.
 - **Crushing.** A Titan that actually drove this tick deals 30 HP/s to
   every enemy squad whose centre is within its radius + 0.15 tiles,
   credited to the Titan (kills, XP, retaliation); a Titan standing still
-  crushes nothing. Squads step aside for their own vehicles (sideways off
-  the vehicle's line when in front of it, else straight back); enemy
-  vehicles drive straight through them.
+  crushes nothing. Squads step aside for their own vehicles on the move
+  (sideways off the vehicle's line when in front of it, else straight
+  back); a squad and a parked vehicle share the push, as two vehicles do,
+  so a squad walking up to a parked tank or harvester shoulders past it
+  instead of being pinned there for good. Enemy vehicles drive straight
+  through squads. Ground units keep 0.4 tiles inside the map's edge (their
+  models stand around the centre), and a factory boxed in at the edge
+  still rolls its units out onto the map.
 - **Sniper concealment.** A Sniper Team standing in Woods is hidden from a
   side more than 2 s after its last shot, unless one of that side's units
   or buildings is within 3 tiles. It works apart from fog (a hidden Sniper
   stays hidden under Clear Skies) and everything uses the same check
   (`unitSeenBy`): auto-targeting skips it, attack orders on it drop, and the
   AI, the renderer, taps, the minimap, the advisor and the inbound warnings
-  don't see it. Splash still hurts it.
+  don't see it, and neither do a Mender's heal beam, a rank-up pulse or a
+  promotion title. Splash still hurts it.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
   each +15% damage, rank 3 self-repairs. Shown as gold chevrons. Ranked
   units become heroes (see *Veteran heroes* below).
@@ -533,8 +546,8 @@ enemies you can currently see.
   alerts, so it's still one line per event. The chosen speed stays stored
   for the next match. Spectators never slow down.
 - **Inbound warning:** when visible armed enemies (anything that can hit a
-  ground target, and loaded Condors) come within 12 tiles of a building or
-  harvester, the group
+  ground target, and Condors, loaded or not: the warning doesn't give away
+  their cargo) come within 12 tiles of a building or harvester, the group
   (single-link, 5 tiles) is warned once, with counter advice by domain and
   lead kind: "Enemy drones inbound — Flak, Raptors or a Turret", "Enemy
   Titans inbound — Rocket Squads, Lancers or Wasps", "Enemy troops inbound
@@ -616,7 +629,8 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   all three squads; SAM Site → Hornets, Wasps, Condors) have been seen at
   least twice gets an amber ⚔ corner (pulsing for
   its first 6 s), and its tab a ⚔ dot, until your own force of that kind
-  (built + queued) is worth 75% of what it counters. The long-press card
+  (built + queued, squads riding in Condors included) is worth 75% of what
+  it counters. The long-press card
   says "Counters Wasps (seen ×4)". It is advisory: the same fog-limited
   knowledge the AI adapts its production to.
 - **Idle factories:** a Fab Plant, Assembly Bay or Airpad with an empty
@@ -632,10 +646,12 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   selection that loaded it can fly it next. With loaded Condors selected, a
   **long-press released without dragging** on the map flies them there to
   drop (the rest of the selection attack-moves along, or moves under *Move
-  only*), and the **⇣ Unload N** chip (key U) drops the squads where the
-  Condor is. A boarding squad draws a blue line to its craft, a drop a gold
-  waypoint where the squads will land. One-time hints teach infantry and
-  the Condor the first time you select them.
+  only*) — unless a calldown is armed: the hold fires it there first, as a
+  tap would; a hold cut short by a second finger (a pinch) or a cancelled
+  touch orders nothing — and the **⇣ Unload N** chip (key U) drops the
+  squads where the Condor is. A boarding squad draws a blue line to its
+  craft, a drop a gold waypoint where the squads will land. One-time hints
+  teach infantry and the Condor the first time you select them.
 - **Placement on touch:** tapping a ready structure drops the ghost on the
   best valid spot near the middle of the view (closest to it, avoiding
   spots that would wall a lane shut), gliding there if it's off screen; the
@@ -834,7 +850,7 @@ emits ordinary commands. Six personalities, picked at random each match:
 | Balanced | Factory, airpad, tech, then an Assembly Bay (a quarter of its army's value in infantry); steady macro; Condor drops |
 | Rush | Two factories and an Assembly Bay second; Troopers (40% of army value) alongside Stinger raids in packs of five, five harvesters, the earliest and smallest waves; Condor drops |
 | Air Swarm | Airpad first, wasp raids, bombers later; an Assembly Bay for Rocket Squads once it has seen heavy armour |
-| Boom | Greedy economy, a turret and the Tech Lab before its forward depot, huge late push |
+| Boom | Greedy economy, a turret and the Tech Lab before its forward depot, huge late push; an Assembly Bay for Rocket Squads once it has seen heavy armour |
 | Skyforce | Air force first; the Fab Plant only guards home; Rocket Squads once it has seen heavy armour, like Air Swarm |
 | Ironclad | Tech Lab right after its first turret, then an Assembly Bay: Titans, each with a Rocket Squad escort, Lancers and Mortars |
 
@@ -880,16 +896,25 @@ Robot infantry (`ai/intel.ts`, `ai/condor.ts`):
   whose damage multiplier against the target is below 0.45: no Sniper Team
   at a tank or a building. Infantry still marching up to the staging point
   goes with a launching wave.
-- **Condor drops** (Rush and Balanced; never on Easy or in Last Stand):
-  from 2:30 it loads two healthy squads (≥ 70% HP, within 16 tiles) at
-  home, picks a landing zone 2.5 tiles short of the enemy harvesters with
-  no anti-air it can see or remember and no visible ground defenders worth
-  more than 0.8× the squads within 6 tiles, flies round known anti-air by a
-  flank waypoint, and turns back if it loses 30% of its HP on the way. The
-  squads raid the harvester line for 50 s; the empty Condor flies home and
-  goes again 45 s later. At most 3 Condors a match, a lost one rebuilt no
-  sooner than 90 s after. Over 150 AI games the drops about broke even (see
-  *Infantry pass*): a harassment option, not a match winner.
+- **Condor drops** (Rush and Balanced; never on Easy, in Last Stand, or
+  under rules that ban the Condor): from 2:30 it picks a landing zone 2.5
+  tiles short of the enemy harvesters with no anti-air it can see or
+  remember and no ground defenders it knows of worth more than 0.8× the
+  squads within 6 tiles, and a route in that flies round known anti-air by
+  a flank waypoint. Only when it has one does it load two healthy squads
+  (≥ 70% HP, within 16 tiles) at home; while every way in is covered they
+  stay on the ground. It calls the trip off if it loses 30% of its HP on
+  the way in (on a straight run to the drop too, until the hover starts),
+  or if the landing zone turns out held or under anti-air (it tries another
+  way in first). A called-off trip flies home and sets its squads down
+  there, the next boarding waits 45 s, and the guards and anti-air it ran
+  into (within 8 tiles of the Condor or the landing zone) are remembered
+  for 90 s where they were seen, so the next trip doesn't fly straight back
+  into them. A landed drop's squads raid the harvester line for 50 s; the
+  empty Condor flies home and goes again 45 s later. At most 3 Condors a
+  match, a lost one rebuilt no sooner than 90 s after. Over 150 AI games
+  the landed drops destroy about two thirds of what they and the Condors
+  cost (see *Infantry pass*): a harassment option, not a match winner.
 
 Difficulty: **Easy** (slow reactions, 75% income, no raids, no Sniper
 Teams or Condor drops), **Normal**,
@@ -900,7 +925,8 @@ Ironclad, Boom and Balanced are the strongest, so Easy draws from Balanced,
 Rush and Air Swarm (Skyforce's all-air wave at ~3:00 was the one Easy
 opponent a first-week player usually lost to; see *Difficulty on-ramp*), and
 Hard from Balanced, Air Swarm, Boom and Ironclad. AI-vs-AI games settle in a
-median of ~9¾ minutes since robot infantry (~8¼ before).
+median of ~10½ minutes since robot infantry and the fixes after its review
+(~9¾ when it first shipped, ~8¼ before it).
 
 ### Balance & pacing
 
@@ -965,8 +991,10 @@ objectives); "First pass" is this pass as it first shipped, before lane C.
 
 Targets: draws ≤ 3%, decided median 7–10 min, the 4:00 leader winning
 ≤ 82%, ≥ 25% of deaths in the middle 40%, 3+ big fights in ≥ 45% of
-decided matches, every personality within ~25–75%. All hold, and still
-hold with robot infantry in (*Infantry pass* below).
+decided matches, every personality within ~25–75%. All hold, and held
+with robot infantry in; since the fixes from the infantry review the
+decided median (10:25) sits just over its band, and the rest still hold
+(*Infantry pass* below).
 
 How to read it:
 
@@ -1065,8 +1093,10 @@ row army wins):
 | **Rocket** | −0.48 | 0.52 | −0.62 | 0.69 | 0.33 | 0.61 | 0.63 | 0.31 | −0.79 | – | −0.87 |
 | **Sniper** | −0.87 | 0.40 | −0.89 | −0.91 | −0.89 | −0.75 | 0.03 | −0.94 | 0.37 | 0.87 | – |
 
-The vehicle block is unchanged. Outside the matrix, a Turret (225 scrap)
-against two Trooper Squads (200) wins with 511 of its 650 HP left.
+The vehicle block is unchanged, and the whole matrix came out the same to
+the hundredth when re-run after the review fixes. Outside the matrix, a
+Turret (225 scrap) against two Trooper Squads (200) wins with 511 of its
+650 HP left.
 
 What changed, and why (win rates from `tools/pacing.ts` panels of one or
 two seeds, `--with <personality>` for single-lever tests):
@@ -1104,52 +1134,113 @@ two seeds, `--with <personality>` for single-lever tests):
 - **Balanced** adds an Assembly Bay after its Tech Lab and keeps a quarter
   of its army value in infantry; **Air Swarm** and **Skyforce** build a Bay
   early once they have seen two heavy units, for Rocket Squads and Sniper
-  Teams only.
+  Teams only, and since the review fixes so does **Boom** (before, it never
+  answered Titans with Rocket Squads; it fields 1–3 now on 4 of 5 maps
+  against Ironclad).
 - **AI anti-air counted in Flak** (*AI opponent*). Before, any unit that
   could hit air counted as one anti-air unit, so blue's starting squad by
   its HQ kept calling off Air Swarm's opening Wasp raid.
 
 Result on the pacing panel (`tools/pacing.ts`, as above but 4 match seeds:
-600 matches, 200 a personality), against the *Final* column above:
+600 matches, 200 a personality), against the *Final* column above. The
+"Infantry pass" column was measured with cannon at ×0.6 vs infantry, before
+the change to ×0.4; "Review fixes" is the same panel re-run on the shipped
+code, with ×0.4 and the fixes from the infantry review in (squads shoulder
+past parked vehicles, drops set down clear of the water's edge, the Condor
+drop plan's caution and memory, Boom's reactive Assembly Bay; see *AI
+opponent* and *Units*):
 
-| | Final (8 seeds) | Infantry pass (4 seeds) |
-|---|---|---|
-| 25-minute draws | 0.9% | 0.3% (2) |
-| Decided match length, median (p10–p90) | 8:17 (5:23–17:17) | **9:42** (5:52–17:14) |
-| First combat-unit death, median | 1:17 | 1:09 (squads now count as combat units) |
-| Big fights per decided match: median / mean / share with ≥ 3 | 2 / 3.4 / 47% | 3 / 3.7 / **57%** |
-| Side ahead at 2:00 / 3:00 / 4:00 (/ 5:00) went on to win | 67 / 74 / 78% | 54 / 69 / **71%** (74%) |
-| Lead changes per match, mean; winner had been 800+ behind | 2.2; 46% | 3.0; **65%** |
-| Unit deaths in the middle 40% of the HQ–HQ line | 28% | 29% (combat units 31%) |
-| Calldowns per AI per match, median (mean) | 6 (7.3) | 7 (7.9) |
-| Matches where an Uplink changed hands; landed crates claimed | 83%; 99% | 91%; 99% |
-| Personality win rates (Balanced / Rush / Air Swarm / Boom / Skyforce / Ironclad) | 51 / 27 / 41 / 68 / 38 / 73% | 53 / 38 / 47 / 59 / 41 / 63% |
-| Red's share of decided games: Riverlands / Dune Sea / Frostbite / Ashlands / Proving Grounds | 47 / 49 / 48 / 51 / 48% | 55 / 47 / 44 / 57 / 53% (all 51%) |
+| | Final (8 seeds) | Infantry pass (4 seeds) | Review fixes (4 seeds) |
+|---|---|---|---|
+| 25-minute draws | 0.9% | 0.3% (2) | 1.5% (9) |
+| Decided match length, median (p10–p90) | 8:17 (5:23–17:17) | **9:42** (5:52–17:14) | **10:25** (5:56–18:33) |
+| First combat-unit death, median | 1:17 | 1:09 (squads now count as combat units) | 1:05 |
+| Big fights per decided match: median / mean / share with ≥ 3 | 2 / 3.4 / 47% | 3 / 3.7 / **57%** | 3 / 4.1 / **62%** |
+| Side ahead at 2:00 / 3:00 / 4:00 (/ 5:00) went on to win | 67 / 74 / 78% | 54 / 69 / **71%** (74%) | 54 / 64 / **70%** (72%) |
+| Lead changes per match, mean; winner had been 800+ behind | 2.2; 46% | 3.0; **65%** | 3.2; **64%** |
+| Unit deaths in the middle 40% of the HQ–HQ line | 28% | 29% (combat units 31%) | 29% (combat units 31%) |
+| Calldowns per AI per match, median (mean) | 6 (7.3) | 7 (7.9) | 8 (8.5) |
+| Matches where an Uplink changed hands; landed crates claimed | 83%; 99% | 91%; 99% | 90%; 99% |
+| Personality win rates (Balanced / Rush / Air Swarm / Boom / Skyforce / Ironclad) | 51 / 27 / 41 / 68 / 38 / 73% | 53 / 38 / 47 / 59 / 41 / 63% | 53 / 41 / 40 / 63 / 39 / 62% |
+| Red's share of decided games: Riverlands / Dune Sea / Frostbite / Ashlands / Proving Grounds | 47 / 49 / 48 / 51 / 48% | 55 / 47 / 44 / 57 / 53% (all 51%) | 56 / 45 / 48 / 45 / 57% (all 50%) |
 
-Every target holds, though the decided median now sits near the top of
-its 7–10 minute band. The single-seed round robin (`tools/balance.ts
-matches`, 150 games) gives 56 / 42 / 36 / 50 / 48 / 66% with 1 draw, a
-mean length of 10.8 min, 9,697 scrap salvaged per match (19.9% of income),
-7.7 calldowns per AI, 4.5 Uplink captures and 15.7 crates claimed per match.
+At the Infantry pass every target held, with the decided median near the
+top of its 7–10 minute band. After the review fixes every target still
+holds but that one: personalities win 39–63%, draws are 1.5%, the side
+ahead at 4:00 wins 70%, 62% of decided matches have three or more big
+fights and 29% of deaths fall in the middle 40%, but the decided median is
+**10:25**, just over the band. On the panel's first two seeds (the same
+300 matches) the median went 9:42 at the Infantry pass → 10:09 with the
+review fixes but cannon still ×0.6 (`--tune
+'{"DAMAGE_VS.cannon.infantry":0.6}'`) → 10:33 shipped: about half from the
+fixes and half from cannon ×0.4, each step near the noise. The games that
+grew are those of the two infantry-heavy, Condor-flying personalities
+(pairings with Balanced or Rush went from 9:38–9:53 to 11:03–11:13);
+Ironclad's stay short (7:35), and 8 of the 9 draws involve Skyforce (7 are
+on Ashlands). Nothing was retuned for it: cannon ×0.4 was a deliberate
+call, and INFANTRY.md's "Done when" targets (every personality 25–75%, the
+beginner ≥ 85% on Easy) hold.
 
-Infantry in AI hands (one seed of the panel, 150 matches): Rush and
-Balanced flew 216 Condor drops carrying 430 squads, which destroyed 39,735
-scrap of units and buildings (35 harvesters among them) for 315 squads and
-28 Condors lost: about break-even. Value destroyed per value lost: Sniper
-Teams 1.63–2.9, Rocket Squads 1.13–1.62, Troopers 0.81–0.82, against
-Stingers' 0.95–1.54; Mortars trade at 0.63–0.73 for every personality, a
-weakness that predates infantry.
+The single-seed round robin (`tools/balance.ts matches`, 150 games) gave
+56 / 42 / 36 / 50 / 48 / 66% at the Infantry pass with 1 draw, a mean
+length of 10.8 min, 9,697 scrap salvaged per match (19.9% of income), 7.7
+calldowns per AI, 4.5 Uplink captures and 15.7 crates claimed per match.
+After the review fixes it gives **56 / 38 / 38 / 70 / 36 / 58%** with 2
+draws, a mean length of 11.0 min, 9,836 scrap salvaged per match (20.2%),
+7.8 calldowns per AI, 4.4 Uplink captures and 16.1 crates claimed. Boom's
+70% is the highest any personality reaches in these runs, still inside
+25–75% (63% on the panel; one seed is good to about ±7%). It isn't Boom's
+new Bay: with `--tune '{"STRATEGIES.boom.bayVsArmour":false}'` the round
+robin gives it 70% too, against 52% before the fixes at ×0.4; the gain is
+spread over its opponents.
+
+Infantry in AI hands (seed set 0 of the panel, 150 matches). At the
+Infantry pass, Rush and Balanced made 216 Condor unloads carrying 430
+squads, which destroyed 39,735 scrap of units and buildings (35 harvesters
+among them) for 315 squads and 28 Condors lost: about break-even. That
+count took in the unloads at home after a 40 s wait in the hold, and the
+old plan kept flying back into the same anti-air. After the review fixes
+the same count gives 140 unloads carrying 280 squads, which destroyed
+18,665 scrap (37 harvesters) for 185 squads and 29 Condors. Of those, 87
+were drops that landed away from home (174 squads; the other 53 set
+their squads down at home: a trip called off, the base under attack, or no
+way in within 40 s): the dropped squads destroyed 11,080 scrap (33
+harvesters) for 100 squads (11,425 scrap), and 29 Condors were lost, only
+one of them with squads aboard. The drops now cost about 1.5× what they
+take, but they no longer feed loaded Condors to the same anti-air. Value
+destroyed per value lost, after the fixes: Sniper Teams 1.41–3.04, Rocket
+Squads 1.06–1.58, Troopers 0.82–0.90 (Balanced, Rush: the personalities
+that train them), against Stingers' 0.93–1.66 (at the Infantry pass
+1.63–2.9, 1.13–1.62, 0.81–0.82 and 0.95–1.54); Mortars trade at 0.57–0.68
+for every personality, a weakness that predates infantry.
 
 The on-ramp (`tools/beginner.ts`, 1 seed): the beginner still wins 100%
-on Easy (45/45) and the novice 89% (40/45, all five losses to Air Swarm);
-the beginner on Normal fell from 84% to 80% (72/90), about one standard
-error.
+on Easy (45/45) and the novice 89% (40/45, all five losses to Air Swarm),
+at the Infantry pass and again after the review fixes. The beginner on
+Normal went from 84% before infantry to 80% (72/90) at the Infantry pass
+and 83% (75/90) after the fixes (Balanced, Air Swarm and Skyforce won 4
+games each, Boom 2, Ironclad 1, Rush none), each step within about one
+standard error.
 
-Known gaps: a Rocket Squad (range 4)
-can kill a Turret without being shot back, because units measure range to
-a building's edge but a Turret measures from its centre (the same old
-quirk lets Lancers at range 4.5 do it). Turrets still beat Trooper Squads,
-and Sniper Teams out-range them by design.
+Known gaps (re-checked after the review fixes):
+
+- A Rocket Squad (range 4) can kill a Turret without being shot back,
+  because units measure range to a building's edge but a Turret measures
+  from its centre (the same old quirk lets Lancers at range 4.5 do it).
+  A Turret still beats two Trooper Squads, with 511 of its 650 HP left,
+  and Sniper Teams out-range it by design.
+- The decided median, 10:25, is just over its 7–10 minute band (above).
+- The Condor sees 6 tiles, so Flak waiting in the fog by a landing zone is
+  often first seen 2.5–4 tiles out, once the hover has begun: that drop
+  lands hurt. Once the 90 s memory runs out, the AI may try the same field
+  again.
+- A drop pressed into a one-tile pocket walled in by rock (six such tiles
+  on Proving Grounds) or a one-tile strip in a map corner still lands
+  there, where the squads can't walk out; avoiding it needs a reachability
+  check on the drop point.
+- A squad whose straight path runs exactly through a parked friendly
+  vehicle's centre pushes it all the way to the squad's goal, as one
+  vehicle does another; the slightest offset slides past instead.
 
 ### Match flow
 
@@ -1158,9 +1249,10 @@ and Sniper Teams out-range them by design.
    Ops, pick an op card → briefing → Start op.
 2. Skirmish (and the Daily Op): opener cards over the frozen battlefield
    (Blitz / Industry / Air Wing; tap, or keys 1–3; cards a mutator bans are
-   greyed out). The camera already frames the HQ, its home field and the
-   factory site, clear of the HUD. Spectated AIs pick instantly. Last Stand
-   and Ops have their own set-ups and no cards.
+   greyed out). The camera already frames the HQ, its home field, the
+   factory site and the starting squad, clear of the HUD (the zoom buttons
+   included). Spectated AIs pick instantly. Last Stand and Ops have their
+   own set-ups and no cards.
 3. The pick rolls out (factory, units, harvesters already mining) and the
    clock starts. Real-time play until one HQ is destroyed (or an op's goal
    is met). Pause any time. Calldowns charge from the first losses; in a
@@ -1171,9 +1263,10 @@ and Sniper Teams out-range them by design.
    → Rematch (back to the cards) or Menu.
 
 First-time players get contextual hints (command your opener units — or
-build a Fab on a classic start — then counters, tech), plus one-time hints
-for squads, touch placement, robot infantry, the Condor, calldowns and
-salvage. They all go through one
+build a Fab on a classic start — then counters, tech; the tech hint is
+skipped, and the tutorial finished, when a Tech Lab already stands), plus
+one-time hints for squads, touch placement, robot infantry, the Condor,
+calldowns and salvage. They all go through one
 queue (`game/hints.ts`, tested) so a new player is never handed several at
 once: at most one every 12 s of play (paused time and the opener cards
 don't count), what you're doing right now first (placing a building, a
@@ -1298,8 +1391,9 @@ best per map and difficulty is saved on the device and shown on the menu
   columns are.
 - **Announcements**: the next wave's theme is in the top-bar pill from the
   start of its countdown ("Wave 8 · 0:42 / ✈ Air Raid"); 15 s ahead a banner
-  names it and its edge, the pill pulses red, a minimap arrow and an
-  above-the-fog map marker point at the entry. Clearing the field pays
+  names it, its edge and what beats it (so wave 1 says it too), the pill
+  pulses red, a minimap arrow and an above-the-fog map marker point at the
+  entry. Clearing the field pays
   60 × wave scrap ("Wave 7 cleared · +420") with a counter tip for the next
   theme, and brings the next wave within 30 s. With the field clear, the
   **Call wave** chip brings it now for (5 + n) scrap per second skipped.
@@ -1331,7 +1425,14 @@ best per map and difficulty is saved on the device and shown on the menu
   | *Before robot infantry:* scripted | 15 (14–27) | 10 (8–15) | 8 (7–10) |
   | *Before robot infantry:* AI | 19 (14–30) | 15 (9–22) | 14 (9–29) |
   | *Before the wave-salvage fix (30% wrecks, n^1.3):* scripted / AI | | 50 (16–50) / 30 (14–51) | |
+  | *After the review fixes (Normal only, `both all normal 4`):* scripted / AI | | **9 (9–25) / 17 (12–30)** | |
 
+  The first two rows were measured with cannon at ×0.6 vs infantry.
+  Re-run on the shipped code (cannon ×0.4, the review fixes in), the
+  scripted player's median slips from 10 to 9 with its mean unchanged
+  (10.7 → 10.8): the wave-10 boss ends 11 of its 20 runs, so the median
+  sits right on that wall. The AI defender's rises from 15 to 17 (mean
+  18.2 → 19.0).
   Nobody fell within the first three waves. Most Normal runs end at a
   boss (wave 10 or 15): the first boss is the wall a decent player learns
   to beat. Waves stop growing at 36 units (around wave 14 on Normal; a Bot
@@ -1407,10 +1508,11 @@ Reasons to come back between matches. Spectated games never count.
   scrap), 💰 Gold Rush (income ×1.5, multiplied on top of the AI's own
   `incomeMult`), 💥 Glass Cannons (damage ×2), 🔧 Rapid Fab (build progress ×2
   per tick), ✈️ Air War (no ground combat units — robot infantry included,
-  though each side keeps its starting Trooper Squad — Fab Plants, Assembly
-  Bays or SAM sites; measured: with SAMs every AI-vs-AI air war drew at 25:00),
-  🎖️ Veterans (combat units roll out at rank 1), ☀️ Clear Skies (no fog for
-  either side; a Sniper Team in woods still hides).
+  though each side keeps its starting Trooper Squad — Condors to fly that
+  squad into the fight, Fab Plants, Assembly Bays or SAM sites; measured:
+  with SAMs every AI-vs-AI air war drew at 25:00), 🎖️ Veterans (combat
+  units roll out at rank 1, the starting squads too), ☀️ Clear Skies (no fog
+  for either side; a Sniper Team in woods still hides).
   Skirmish only; both sides obey them (`unitBlocker`/`buildingBlocker` say
   "Disabled: Air War", the HUD shows ⛔). The AI picks a personality whose
   plan survives the rules (`strategyFits`: no Rush/Ironclad in Air War) and,
@@ -1460,7 +1562,7 @@ completion goal.
 | 2 | 🌙 Harvest Moon | Dune Sea | Air Swarm, Hard, early Wasps | Deliver 10,000 scrap by 5:00 | ≤ 1 harvester lost · by 4:00 |
 | 3 | 🎯 Decapitation | Proving Grounds | Balanced, Easy, never attacks | Strike group, no production, no calldowns: HQ by 3:00 | lose ≤ 4 · under 2:00 |
 | 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income (not even salvage) or harvesters, no calldowns: HQ by 6:00 | 4 harvesters killed · under 4:00 |
-| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants, Assembly Bays or ground units (air only; the Drop Pod lands Wasps; the starting squad is kept), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
+| 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants, Assembly Bays, ground units or Condors (air only; the Drop Pod lands Wasps; the starting squad is kept, with no Condor to fly it), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
 | 6 | 💥 Glass Jaw | Dune Sea | Rush, Normal, 4 harvesters | Glass Cannons + Rapid Fab: HQ by 6:00 | lose no building · under 4:00 |
 | 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
 | 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
@@ -1530,7 +1632,7 @@ accidental browser gestures:
 | Double-tap | Own unit | Select all on-screen units of that type |
 | Drag (one finger) | Anywhere | Pan (with momentum) |
 | Long-press then drag | Anywhere | Box-select (prefers combat units over harvesters) |
-| Long-press, released without dragging | Map, loaded Condors selected | Fly there and drop the squads (the rest of the selection heads there too) |
+| Long-press, released without dragging | Map, loaded Condors selected | Fly there and drop the squads (the rest of the selection heads there too); with a calldown armed, fire it there instead |
 | Two-finger drag / pinch | Anywhere | Pan / zoom |
 | Tap / drag | Minimap | Jump / scrub the camera |
 | Long-press | Build button | Info card: stats, counters, cancel queued |
@@ -1543,7 +1645,8 @@ movement beyond the slop radius before the long-press timer fires commits
 to *pan*; after the timer fires it commits to *box-select*. A box
 released within the tap slop of where it began is a plain long-press: with
 loaded Condors selected it orders the drop there, otherwise it box-selects
-as usual. Hit-testing
+as usual; a box cut short by a second finger or a pointercancel is not a
+release and does neither. Hit-testing
 uses an enlarged (≥ 24 CSS px) radius, and aircraft are tested where they
 are drawn (lifted above their shadows).
 
@@ -1552,7 +1655,9 @@ Move only / deselect for units, plus **⇣ Unload N** while loaded Condors
 are selected (Stop shrinks to ■ on narrow screens to make room); Sell
 (+refund) for buildings (producers
 show "Tap the map to set a rally point" in the selection panel instead of a
-chip); "Select army" and "💤 Idle N" when nothing is selected;
+chip); "Select army" and "💤 Idle N" when nothing is selected (both
+leave out harvesters and the unarmed Condor, which would outrun the army
+and park alone in the enemy base);
 "✓ Place X" (or why not) + cancel while placing. Under 400 px wide the
 labels shorten ("Move", "Army") so everything stays on one row down to
 360 px.
@@ -1684,7 +1789,12 @@ y up.
   one deck laid along its crossing (timber planks, kerbs and rails;
   riveted steel with a truss on Ashlands) on piers and abutments. Instanced
   trees per biome, salvage heaps of hull plates, girders and drums, and
-  crystal clusters (instance matrices shrink as they're mined). **Past the
+  crystal clusters (instance matrices shrink as they're mined). Woods thin
+  around squads on show (`three/canopy.ts`): a tree whose canopy covers a
+  shown squad, around it or between it and the camera, dissolves down to a
+  trunk stump (cleared in 90 ms, regrown in 260 ms), so robots and their
+  selection rings stay readable in cover; a hidden Sniper Team or a fogged
+  squad never thins a tree, so the trees give nothing away. **Past the
   map's edge** the land carries on for 20 tiles as a skirt: the paint
   mirrored, dimmed and greyed at the boundary so the playable area reads,
   easing into the biome's open ground and then into the sky colour, so the
@@ -1732,7 +1842,10 @@ y up.
   dropship about a Titan's length but much slimmer (the Hornet's size, 1.5):
   an armoured nose tapering to a point under an amber canopy, an
   open-roofed troop bay amidships with benches and team rims (you can see
-  who's riding: riders sit at 40% scale so two whole squads fit), short
+  who's riding in your own: riders sit at 40% scale so two whole squads fit;
+  an enemy Condor's bay looks empty, under Clear Skies too, so its cargo
+  stays secret until the squads step off the ramp; a spectator sees every
+  rider), short
   wings out to two lift fans, and a tail boom to a V-tail over a rear ramp.
   To drop, it descends to a hover high enough for its belly to clear the
   robots, opens the ramp, lights a warm floodlight pool on the ground under
@@ -1790,7 +1903,10 @@ y up.
   flat ground, so models read with form; the shadow box follows the view;
   1024² shadow maps on touch devices, 2048² on desktop. The clear colour
   past the world's edge is a deep shade of each biome's ground. Shaders
-  compile during loading.
+  compile during loading, including stand-ins for looks that first appear
+  mid-battle (a skinned squad, tracer and beam glows, light pools, each kind
+  of ground mark), and every program is linked before the match starts, so
+  the first enemy squad in sight doesn't stall a frame.
   An adaptive controller watches the frame time and, when a device can't
   keep up, steps down in cost order — resolution to 1×, a smaller shadow
   map, no shadows, then resolution below 1× — and creeps back up when
