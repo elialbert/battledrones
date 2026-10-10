@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { STRATEGIES, type StrategyName } from "../src/sim/ai/commander";
 import { AWARDS, MEDALS, MEDAL_IDS, computeMedals, wasBehind, type MatchRecap, type RecapDeath } from "../src/sim/awards";
-import { MAPS, createMapWorld } from "../src/sim/maps";
+import { createMapWorld } from "../src/sim/maps";
 import { makeRules, strategyFits, type MutatorId } from "../src/sim/rules";
 import { step } from "../src/sim/sim";
 import type { FactionStats } from "../src/sim/types";
@@ -22,7 +22,7 @@ import {
   type MatchResult
 } from "../src/game/career";
 import { chronicleOf } from "../src/game/chronicle";
-import { dailyCompatible, dailyOp, dayIndexOf, dayLabel } from "../src/game/daily";
+import { DAILY_MAPS, dailyCompatible, dailyOp, dayIndexOf, dayLabel } from "../src/game/daily";
 
 const stats = (o: Partial<FactionStats> = {}): FactionStats => ({
   unitsBuilt: 10, unitsLost: 10, unitsKilled: 10, buildingsLost: 1, buildingsKilled: 2, scrapHarvested: 4000, scrapSalvaged: 0, ...o
@@ -280,9 +280,15 @@ describe("the Daily Op", () => {
     expect(dayIndexOf(new Date(2026, 9, 8, 0, 1))).toBe(20734);
   });
 
+  it("keeps each day's map when maps are reordered or added", () => {
+    // pinned before the picker put Proving Grounds first: a fixed list, not MAPS
+    const maps = Array.from({ length: 8 }, (_, i) => dailyOp(20733 + i).mapId);
+    expect(maps).toEqual(["frostbite", "dune-sea", "ashlands", "proving-grounds", "proving-grounds", "frostbite", "proving-grounds", "dune-sea"]);
+  });
+
   it("varies from day to day", () => {
     const ops = Array.from({ length: 90 }, (_, i) => dailyOp(20700 + i));
-    expect(new Set(ops.map((o) => o.mapId)).size).toBe(MAPS.length);
+    expect(new Set(ops.map((o) => o.mapId)).size).toBe(DAILY_MAPS.length);
     expect(new Set(ops.map((o) => o.strategy)).size).toBe(Object.keys(STRATEGIES).length);
     expect(new Set(ops.map((o) => o.difficulty))).toEqual(new Set(["normal", "hard"]));
     expect(new Set(ops.map((o) => o.mutators.join("+"))).size).toBeGreaterThan(10);

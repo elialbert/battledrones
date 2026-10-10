@@ -1,5 +1,5 @@
 import { STRATEGIES, type StrategyName } from "../sim/ai/commander";
-import { MAPS } from "../sim/maps";
+import { mapById } from "../sim/maps";
 import { hash32, saltOf } from "../sim/rand";
 import { MUTATOR_IDS, makeRules, mutatorsCompatible, strategyFits, type MutatorId } from "../sim/rules";
 
@@ -41,6 +41,14 @@ export function dayLabel(day: number): string {
   return `${DAYS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
 }
 
+/**
+ * The maps a Daily Op can land on, in a frozen order: the op is a hash of the
+ * date into this list, so reordering the map picker or adding a map must not
+ * change which map any past or future day gets. Maps added later stay out
+ * unless they suit any random mutator pair (Air War bans the Condor).
+ */
+export const DAILY_MAPS = ["riverlands", "dune-sea", "frostbite", "ashlands", "proving-grounds"] as const;
+
 const STRATEGY_NAMES = Object.keys(STRATEGIES) as StrategyName[];
 const FALLBACK: MutatorId[] = ["blitz", "glass"];
 
@@ -52,7 +60,7 @@ export function dailyCompatible(strategy: StrategyName, mutators: readonly Mutat
 
 export function dailyOp(day: number): DailyOp {
   const h = (salt: string, ...k: number[]) => hash32(day, saltOf(salt), ...k);
-  const map = MAPS[h("map") % MAPS.length]!;
+  const map = mapById(DAILY_MAPS[h("map") % DAILY_MAPS.length]!);
   const strategy = STRATEGY_NAMES[h("ai") % STRATEGY_NAMES.length]!;
   const difficulty = h("diff") % 3 === 0 ? "hard" : "normal";
   let mutators = FALLBACK;

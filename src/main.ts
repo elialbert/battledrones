@@ -13,6 +13,7 @@ import { opById, type OpDef } from "./sim/ops";
 import { mountMenuOps } from "./ui/ops";
 import { fullscreen } from "./ui/fullscreen";
 import { appUpdate, mountUpdatePill } from "./ui/update";
+import { scrollCue } from "./ui/hscroll";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -190,6 +191,10 @@ function showMenu(): void {
       sync(); // the Play button names the picked op
     }
   });
+  // the map and Ops rows scroll sideways on phones: fade + chevrons say so
+  const mapRow = scrollCue(menu.querySelector<HTMLElement>("#maps")!);
+  scrollCue(menu.querySelector<HTMLElement>("#opcards")!);
+  let revealed = "";
   const sync = () => {
     const survival = gameMode.mode === "survival";
     const opsMode = gameMode.mode === "ops";
@@ -212,6 +217,13 @@ function showMenu(): void {
       stars.textContent = starsText(mask);
       stars.classList.toggle("got", mask > 0);
     });
+    // bring the picked map into view when the row first shows (or shows again)
+    const pick = menu.querySelector<HTMLElement>(`#maps .mapcard[data-id="${gameMode.mapId}"]`);
+    const key = opsMode ? "" : `${gameMode.mode}:${gameMode.mapId}`;
+    if (key && key !== revealed && pick) {
+      requestAnimationFrame(() => mapRow.reveal(pick, revealed !== ""));
+      revealed = key;
+    }
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
     menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
     const m = MAPS.find((x) => x.id === gameMode.mapId);

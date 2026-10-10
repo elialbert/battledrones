@@ -1171,6 +1171,67 @@ button {
   scrollbar-width: none;
   scroll-snap-type: x mandatory;
 }
+/* sideways rows (ui/hscroll.ts): the side with more cards fades out and shows a chevron */
+.hscroll {
+  position: relative;
+}
+.hscroll[hidden] {
+  display: none;
+}
+.hscroll > .maps {
+  --fade-l: 0px;
+  --fade-r: 0px;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent);
+}
+.hscroll.more-l > .maps {
+  --fade-l: 34px;
+}
+.hscroll.more-r > .maps {
+  --fade-r: 34px;
+}
+.hs-btn {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  margin-top: -16px;
+  padding: 0 0 3px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(8, 12, 20, 0.88);
+  color: var(--gold);
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.hs-l {
+  left: -2px;
+}
+.hs-r {
+  right: -2px;
+}
+.hscroll.more-l .hs-l,
+.hscroll.more-r .hs-r {
+  opacity: 1;
+  pointer-events: auto;
+}
+.hscroll.more-r .hs-r {
+  animation: hs-nudge 1.4s ease-in-out 3;
+}
+@keyframes hs-nudge {
+  50% {
+    transform: translateX(4px);
+  }
+}
 .mapcard {
   flex: 0 0 104px;
   scroll-snap-align: center;

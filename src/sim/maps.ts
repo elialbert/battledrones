@@ -9,7 +9,8 @@ import { setupOp } from "./ops";
 import { dropPoint } from "./transport";
 
 /**
- * Skirmish maps. Every map is 2-player and point-symmetric (rotated 180°
+ * Skirmish maps, in map-picker order (the classic Proving Grounds first, to
+ * learn on). Every map is 2-player and point-symmetric (rotated 180°
  * about the centre), so both sides get identical terrain. Maps are painted
  * procedurally from a fixed seed with simple shape primitives — the same
  * definition feeds the simulation and (via tools/export-maps.ts) the
@@ -136,6 +137,20 @@ const LAND = [Terrain.Ground, Terrain.Rough, Terrain.Forest, Terrain.Rock];
 // ------------------------------------------------------------------ maps ---
 
 export const MAPS: MapDef[] = [
+  {
+    id: "proving-grounds",
+    name: "Proving Grounds",
+    biome: "temperate",
+    size: 48,
+    blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
+    hq: [4, 40],
+    seed: 5,
+    uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
+    dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
+    paint() {
+      /* painted by createClassicTerrain (kept tile-exact for the test suite) */
+    }
+  },
   {
     id: "riverlands",
     name: "Riverlands",
@@ -277,20 +292,6 @@ export const MAPS: MapDef[] = [
       p.blob(4, 32, 1.8, Terrain.Scrap, 0.25);
       p.blob(24, 24, 1.6, Terrain.Crystal, 0.2, LAND);
       p.blob(17, 12, 1.8, Terrain.Scrap, 0.25, LAND);
-    }
-  },
-  {
-    id: "proving-grounds",
-    name: "Proving Grounds",
-    biome: "temperate",
-    size: 48,
-    blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
-    hq: [4, 40],
-    seed: 5,
-    uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
-    dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
-    paint() {
-      /* painted by createClassicTerrain (kept tile-exact for the test suite) */
     }
   }
 ];
