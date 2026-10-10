@@ -7,7 +7,6 @@ import { placementBlocker, snapPlacement, suggestPlacement } from "../src/sim/pl
 import { Terrain, type BuildingKind, type FxEvent, type Unit, type World } from "../src/sim/types";
 import { buildingCenter, createWorld, hqOf, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 import { Controller } from "../src/game/controller";
-import { TAP_SLOP_PX, isHoldRelease } from "../src/game/gestures";
 import { SQUAD, Squads } from "../src/game/squads";
 import { ADVISOR, COUNTERS, EnemyIntel, IdleWatch, adviceNote, counterAdvice } from "../src/game/advisor";
 import { applyMutators, rulesOf } from "../src/sim/rules";
@@ -510,14 +509,17 @@ describe("Condor: boarding and drops from taps", () => {
   };
 
   it("squads selected + tap an own Condor: they board it, nearest first, as many as it seats", () => {
-    const { c, condor, t1, t2, rk, tank } = bay();
+    const { w, c, condor, t1, t2, rk, tank } = bay();
     c.selectUnits([t1.id, t2.id, rk.id, tank.id]);
     c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
     expect(c.drainCommands()).toEqual([{ type: "board", faction: "blue", unitIds: [t2.id, t1.id], carrierId: condor.id }]);
     expect(c.lastFeedback?.kind).toBe("board");
     expect(c.tip).toMatch(/Room for 2/);
-    // the selection stays as it was (the boarders leave it when they climb in)
+    // the selection stays as it was until they climb in; then the Condor takes their place
     expect(c.selectedUnits.size).toBe(4);
+    embark(w, condor, t1, t2);
+    c.prune();
+    expect([...c.selectedUnits]).toEqual([rk.id, tank.id, condor.id]);
   });
 
   it("a flying Condor stops to come and meet them; seats already promised count", () => {
@@ -597,12 +599,6 @@ describe("Condor: boarding and drops from taps", () => {
     expect(c.drainCommands()).toEqual([{ type: "attackMove", faction: "blue", unitIds: [condor.id, empty.id, tank.id], x: 30.5, y: 30.5 }]);
   });
 
-  it("a long-press without dragging is a hold-release; a drag is a box", () => {
-    expect(isHoldRelease(100, 100, 100, 100)).toBe(true);
-    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX * 0.7, 100 + TAP_SLOP_PX * 0.7)).toBe(true);
-    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX + 1, 100)).toBe(false);
-  });
-
   it("an Assembly Bay takes a rally point like any factory", () => {
     const { w, c } = bay();
     const ab = spawnBuilding(w, "assembly-bay", "blue", 9, 4);
@@ -629,8 +625,8 @@ describe("Condor: boarding and drops from taps", () => {
     c.selectUnits([t1.id, t2.id, tank.id]);
     c.assignSquad(0);
     embark(w, condor, t1, t2);
-    c.prune(); // the selection drops the passengers…
-    expect([...c.selectedUnits]).toEqual([tank.id]);
+    c.prune(); // the selection swaps the passengers for their Condor…
+    expect([...c.selectedUnits]).toEqual([tank.id, condor.id]);
     expect(c.squads.slots[0]).toEqual([t1.id, t2.id, tank.id]); // …the squad keeps them
     const sum = c.squads.summary(0, w)!;
     expect(sum.count).toBe(3);

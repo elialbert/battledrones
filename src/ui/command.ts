@@ -53,6 +53,13 @@ const TABS: ("build" | FactoryTab)[] = ["build", "ground", "infantry", "air"];
 /** Defences with a counter entry: the Base tab's ⚔ while another tab is open. */
 const DEFENCES = (Object.keys(COUNTERS) as (UnitKind | BuildingKind)[]).filter((k): k is BuildingKind => k in BUILDINGS);
 
+/** One-time tips offered when the selection calls for them (CommandUi.update). */
+const SELECTION_HINTS: [string, string][] = [
+  ["squads", "Squads: hold 1, 2 or 3 to save the selected units. Tap it to select them, double-tap to fly there."],
+  ["infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Titans: they get crushed."],
+  ["condor", "Condor: select squads, then tap the Condor to load them. Long-press the map to fly there and drop them, or tap ⇣ Unload."]
+];
+
 interface SquadEl {
   btn: HTMLButtonElement;
   img: HTMLImageElement;
@@ -256,18 +263,8 @@ export class CommandUi {
    */
   hint(id: string, msg: string): void {
     if (this.h.spectator || this.hints.has(id)) return;
-    const ctrl = this.h.ctrl;
-    const w = this.h.world;
-    const applies =
-      id === "place"
-        ? () => ctrl.placing !== null
-        : id === "infantry"
-          ? () => this.selecting(isInfantry)
-          : id === "condor"
-            ? () => this.condorMoment()
-            : () => [...ctrl.selectedUnits].filter((u) => w.units.get(u)?.kind !== "harvester").length >= 2;
     // (the player may find the gesture on their own while the hint waits)
-    const valid = () => !this.hints.has(id) && applies();
+    const valid = () => !this.hints.has(id) && this.hintApplies(id);
     this.h.offerHint({
       id: `cmd-${id}`,
       msg,
@@ -277,6 +274,26 @@ export class CommandUi {
       valid,
       onShow: () => this.seen(id)
     });
+  }
+
+  /** Is hint `id`'s moment still here? (Offered when it arrives; checked again before it shows.) */
+  private hintApplies(id: string): boolean {
+    const ctrl = this.h.ctrl;
+    const w = this.h.world;
+    switch (id) {
+      case "place":
+        return ctrl.placing !== null;
+      case "infantry":
+        return this.selecting(isInfantry);
+      case "condor":
+        return this.condorMoment();
+      default: {
+        // squads: a real group (two or more, harvesters aside)
+        let army = 0;
+        for (const uid of ctrl.selectedUnits) if (w.units.get(uid)?.kind !== "harvester") army++;
+        return army >= 2;
+      }
+    }
   }
 
   /** Is a unit of a kind matching `pred` selected? */
@@ -340,20 +357,11 @@ export class CommandUi {
           c.hp.className = s.hp > 0.6 ? "" : s.hp > 0.3 ? "mid" : "low";
         } else c.count.textContent = "";
       }
-      // teach the gesture the first time a real group is selected
-      if (!this.hints.has("squads") && ctrl.squads.isEmpty()) {
-        let army = 0;
-        for (const id of ctrl.selectedUnits) if (w.units.get(id)?.kind !== "harvester") army++;
-        if (army >= 2)
-          this.hint("squads", "Squads: hold 1, 2 or 3 to save the selected units. Tap it to select them, double-tap to fly there.");
-      }
-      // robot infantry and the Condor: one tip each, the first time the player picks them up
-      if (ctrl.selectedUnits.size > 0) {
-        if (!this.hints.has("infantry") && this.selecting(isInfantry))
-          this.hint("infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Titans: they get crushed.");
-        if (!this.hints.has("condor") && this.condorMoment())
-          this.hint("condor", "Condor: select squads, then tap the Condor to load them. Long-press the map to fly there and drop them, or tap ⇣ Unload.");
-      }
+      // one tip each, the first time it applies: the squad gesture (a real group selected),
+      // robot infantry and the Condor (the first time the player picks them up)
+      if (ctrl.selectedUnits.size > 0)
+        for (const [id, msg] of SELECTION_HINTS)
+          if (!this.hints.has(id) && (id !== "squads" || ctrl.squads.isEmpty()) && this.hintApplies(id)) this.hint(id, msg);
     }
     if (now - this.badgeAt >= BADGE_MS) {
       this.badgeAt = now;

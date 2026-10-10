@@ -101,7 +101,7 @@ const MATCHUPS: Partial<Record<UnitKind | BuildingKind, { strong: string; weak: 
   stinger: { strong: "Flak, Mortars, Lancers, Harvesters", weak: "Wasps, Titans, Hornets" },
   "flak-crawler": { strong: "All aircraft", weak: "Any ground unit" },
   mortar: { strong: "Buildings, clumped armies", weak: "Stingers up close, aircraft" },
-  titan: { strong: "Stingers, Flak, Mortars", weak: "Lancers, Wasps, Hornets" },
+  titan: { strong: "Stingers, Flak, Mortars", weak: "Rocket Squads, Lancers, Wasps" },
   lancer: { strong: "Titans, Flak, Raptors; crosses water", weak: "Stinger swarms, Hornets" },
   wasp: { strong: "Stingers, Titans, Mortars", weak: "Flak, Raptors, Lancers" },
   raptor: { strong: "Wasps, Hornets, Scouts", weak: "Flak, Lancers, SAMs" },
@@ -468,7 +468,7 @@ export function createHud(api: HudApi): Hud {
           const hint = transport
             ? (u.passengers?.length ?? 0) > 0 || ctrl.spectator
               ? ""
-              : `<span class="hint">Empty: select squads, then tap the Condor</span>`
+              : `<span class="hint">Empty: tap a squad to load it</span>`
             : `<span class="hint">${st.role}</span>`;
           html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
             <span class="hp">${Math.ceil(u.hp)} / ${st.hp}${robots}</span>${hint}</div>${transport ? cargoHtml(u) : ""}`;

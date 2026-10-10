@@ -522,8 +522,13 @@ export function pickTip(i: TipInput): string {
     });
 
   const titans = n(them, "titan");
-  if (titans >= 4 && n(me, "lancer", "wasp", "hornet") <= 2)
-    tips.push({ score: 75, text: `They built ${titans} Titans. Lancers and Wasps burn through heavy armour.` });
+  if (titans >= 4 && n(me, "lancer", "wasp", "hornet", "rocket-squad") <= 2)
+    tips.push({ score: 75, text: `They built ${titans} Titans. Rocket Squads, Lancers and Wasps burn through heavy armour.` });
+
+  // robot infantry: splash and Snipers are the answer (Titans only scratch them, unless they roll over them)
+  const squads = n(them, "trooper", "rocket-squad", "sniper");
+  if (squads >= 8 && n(me, "mortar", "hornet", "sniper", "turret") <= 1)
+    tips.push({ score: 72, text: `They fielded ${squads} infantry squads. Mortars, Hornets and Sniper Teams tear through robot infantry.` });
 
   const harvLost = i.deaths.filter((d) => d.faction === me && d.unitKind === "harvester").length;
   if (harvLost >= 5)
@@ -564,7 +569,7 @@ export function pickTip(i: TipInput): string {
 
   const tech = i.firstBuilt[me]["tech-lab"];
   if (i.duration > 420 && (tech === undefined || tech > 360))
-    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Titans, Lancers, Mortars and Hornets." });
+    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Titans, Lancers, Mortars, Hornets and Sniper Teams." });
 
   if (i.won)
     tips.push({

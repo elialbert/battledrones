@@ -14,10 +14,12 @@ import { AMBER, BARREL, CONDOR_BAY, GM, GM_D, GM_L, TEAMS, WHITE } from "./model
  * turns with the unit. All of a squad's robots are one skinned mesh — one
  * draw call — rigidly skinned: every part (thigh, shin, arm, gun…) is built
  * in its own joint's space and rides one bone, so the skeleton is just a
- * scene graph of joints the rig poses each frame: a run cycle whose cadence
- * follows ground speed, an idle sway and head scan, a raise-and-aim firing
- * pose with recoil, a topple when the squad's HP drops a robot, hops into
- * and drops out of a Condor, and a seated pose for riding in its bay.
+ * scene graph of joints the rig poses each frame: a run cycle whose feet
+ * stay planted while the ground passes under them (two-bone leg IK), an idle
+ * sway and head scan, a raise-and-aim firing pose with recoil, a topple
+ * (outward, clear of the others) when the squad's HP drops a robot, a step
+ * aside out of a vehicle's path, hops into and drops out of a Condor, and a
+ * seated pose for riding in its bay (standing to face the ramp for a drop).
  *
  * World units are tiles; robots are modelled at map scale (no unitScale).
  * Robots face north (-Z) with their origin on the ground between the feet.
@@ -70,13 +72,17 @@ interface Spec {
   muzzle: Vec3;
   carry: Upper;
   aim: Upper;
-  /** Walk: arm swing (left, right), leg swing, knee lift in the swing, forward lean, a constant crouch. */
+  /**
+   * Run: arm swing (left, right), forward lean, extra crouch (a stalk), the
+   * fraction of a stride each foot spends planted, and how high a foot lifts
+   * in its swing.
+   */
   swing: [number, number];
-  legA: number;
-  knee: number;
   lean: number;
   crouch: number;
-  /** Ground covered per stride (two steps), tiles: the cadence follows the ground speed. */
+  stance: number;
+  lift: number;
+  /** Ground covered per stride (two steps), in the robot's own units: the cadence follows the ground speed. */
   cycle: number;
   /** Legs while firing at a standstill: thigh L, shin L, thigh R, shin R, and the hip drop. */
   brace: [number, number, number, number, number];
@@ -95,7 +101,7 @@ const SPECS: Record<BotKind, Spec> = {
     gunOnHand: true, muzzle: [0, 0.016, -0.14],
     carry: { armL: [0.05, 0.08], armR: [0.25, -0.12], gun: [-0.85, 0, 0], gunAt: [0, -0.1, 0], torso: 0 },
     aim: { armL: [1.32, 0.62], armR: [1.42, -0.32], gun: [-1.42, 0, 0], gunAt: [0, -0.1, 0], torso: -0.04 },
-    swing: [0.62, 0.3], legA: 0.8, knee: 1.25, lean: -0.16, crouch: 0.06, cycle: 0.46,
+    swing: [0.62, 0.3], lean: -0.16, crouch: 0, stance: 0.34, lift: 0.032, cycle: 0.4,
     brace: [0.32, -0.4, -0.24, -0.2, 0.012],
     seatArms: 0.8, seatGun: [0.5, 0, 0]
   },
@@ -108,7 +114,7 @@ const SPECS: Record<BotKind, Spec> = {
     gunOnHand: false, muzzle: [0, 0, -0.17],
     carry: { armL: [0.05, 0.1], armR: [1.45, -0.06], gun: [0.16, 0, 0], gunAt: [0.078, 0.112, 0.012], torso: 0 },
     aim: { armL: [1.25, 0.55], armR: [1.5, -0.06], gun: [0.06, 0, 0], gunAt: [0.078, 0.112, 0.012], torso: 0.03 },
-    swing: [0.55, 0.06], legA: 0.7, knee: 1.05, lean: -0.1, crouch: 0.08, cycle: 0.4,
+    swing: [0.55, 0.06], lean: -0.1, crouch: 0.004, stance: 0.38, lift: 0.026, cycle: 0.36,
     brace: [0.4, -0.45, -0.32, -0.22, 0.016],
     seatArms: 0.7, seatGun: [0.3, 0, 0]
   },
@@ -121,7 +127,8 @@ const SPECS: Record<BotKind, Spec> = {
     gunOnHand: false, muzzle: [0, 0.006, -0.27],
     carry: { armL: [0.95, 0.55], armR: [0.45, -0.12], gun: [-0.38, 0.22, 0], gunAt: [0.034, 0.028, -0.045], torso: 0 },
     aim: { armL: [1.45, 0.5], armR: [1.3, -0.25], gun: [0, 0, 0], gunAt: [0.03, 0.068, -0.042], torso: -0.05 },
-    swing: [0.12, 0.12], legA: 0.72, knee: 1.1, lean: -0.22, crouch: 0.25, cycle: 0.44,
+    // (a low, stalking lope)
+    swing: [0.12, 0.12], lean: -0.22, crouch: 0.018, stance: 0.36, lift: 0.028, cycle: 0.42,
     // the marksman drops to one knee to take a shot
     brace: [1.15, -1.2, 0.2, -1.75, 0.055],
     seatArms: 0.85, seatGun: [1.35, 0, 0]
@@ -324,13 +331,14 @@ const PARTS: Record<BotKind, (t: Team) => Parts> = {
     b.box(0.08, 0.12, 0.008, [0, -0.005, 0.07], camo[2]!, { rot: [0.22, 0, 0] });
     b.box(0.03, 0.1, 0.009, [-0.03, -0.03, 0.078], camo[3]!, { rot: [0.2, 0.2, 0.08] });
     b.box(0.03, 0.11, 0.009, [0.028, -0.035, 0.076], camo[1]!, { rot: [0.24, -0.2, -0.08] });
-    b.drum(0.05, 0.036, 0.024, 8, [0, 0.086, 0.004], t.main, { bevel: 0.008, edge: 1.45 });
-    b.box(0.03, 0.044, 0.006, [0, 0.062, 0.05], t.main, { rot: [0.32, 0, 0] });
+    b.drum(0.06, 0.042, 0.026, 8, [0, 0.086, 0.004], t.main, { bevel: 0.009, edge: 1.45 });
+    b.box(0.042, 0.054, 0.006, [0, 0.06, 0.054], t.main, { rot: [0.32, 0, 0] });
     P[J.torso] = b.build();
     // the hood: a dark face and one amber scope-eye
     b = pb();
     b.sphere(0.032, [0, 0.028, 0.006], camo[2]!, { w: 7, h: 5, scale: [1, 1.12, 1.15] });
     b.cone(0.022, 0.03, 5, [0, 0.052, 0.024], camo[0]!, { rot: [0.9, 0, 0] });
+    b.box(0.014, 0.008, 0.052, [0, 0.064, 0.008], t.main);
     b.box(0.036, 0.03, 0.012, [0, 0.024, -0.024], GM_D);
     b.sphere(0.0105, [0.007, 0.027, -0.031], AMBER, { glow: 1, w: 6, h: 4 });
     P[J.head] = b.build();
@@ -403,6 +411,8 @@ interface Trip {
   arc: number;
   /** Boarding: shrinks into the bay and is gone at the end. */
   away: boolean;
+  /** Dropping: its size at the start (a rider, seated small, grows to its size on the map as it jumps). */
+  s0: number;
 }
 
 interface Bot {
@@ -430,6 +440,9 @@ interface Bot {
   trip: Trip | null;
   /** Gone (boarded, or sunk away after falling). */
   gone: boolean;
+  /** Stepped off its slot, out of a vehicle's way (squad space). */
+  px: number;
+  pz: number;
 }
 
 export interface RigState {
@@ -445,6 +458,20 @@ export interface RigState {
   alive: number;
   /** Absolute ground height at world (x, z), so each robot stands on the terrain under it. */
   ground?: (x: number, z: number) => number;
+  /** Riders only: stood up off the benches facing the ramp, ready to drop (0–1). */
+  ready?: number;
+  /** Vehicles close by: robots step aside out of their hulls (see Footprint). */
+  avoid?: Footprint[];
+}
+
+/** A vehicle's hull on the ground: centre and heading (world, unit vector), half-length and half-width (tiles). */
+export interface Footprint {
+  x: number;
+  z: number;
+  fx: number;
+  fz: number;
+  hl: number;
+  hw: number;
 }
 
 /** Topple, lie, sink (ms). */
@@ -476,6 +503,7 @@ export class SquadRig {
   /** A robot hit the ground (falling over, or dropping out of a Condor): world point. */
   onImpact: ((p: THREE.Vector3, kind: "fall" | "land") => void) | null = null;
   private move = 0;
+  private ready = 0;
   private time = 0;
   private last: RigState = { dt: 0, speed: 0, aim: 0, pitch: 0, alive: 0 };
 
@@ -499,7 +527,7 @@ export class SquadRig {
       this.bots.push({
         b, slot, seat: null, phase: r * Math.PI * 2, rate: 0.94 + hash(seed + i * 7.3) * 0.12, seed: r,
         up: true, fallT: -1, fallX: 0, fallZ: 0, landed: false, recoil: 0, aim: 0, look: 0,
-        yaw: (hash(seed * 3.3 + i) - 0.5) * 0.7, scale: s.size * (0.96 + hash(seed * 5.1 + i * 1.7) * 0.08), pop: 1, trip: null, gone: false
+        yaw: (hash(seed * 3.3 + i) - 0.5) * 0.7, scale: s.size * (0.96 + hash(seed * 5.1 + i * 1.7) * 0.08), pop: 1, trip: null, gone: false, px: 0, pz: 0
       });
     }
     const mesh = new THREE.SkinnedMesh(squadGeo(kind, faction), modelMat("normal"));
@@ -543,16 +571,22 @@ export class SquadRig {
   seat(seats: { x: number; y: number; z: number; yaw: number }[]): void {
     this.bots.forEach((b, i) => (b.seat = seats[i] ?? null));
     this.root.scale.setScalar(RIDER_SCALE);
+    // (a bench is longer than a formation is wide)
+    this.mesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.1, 0), 1.6);
   }
 
-  /** Robots drop from `from` (this rig's space) to their slots, a beat apart: out of a Condor. */
-  dropFrom(from: THREE.Vector3, spread: number): void {
+  /**
+   * Robots drop from `from` (this rig's space) to their slots, a beat apart:
+   * out of a Condor, starting at `s0` of their size (a rider's) and growing
+   * to full size as they jump.
+   */
+  dropFrom(from: THREE.Vector3, spread: number, s0 = 1): void {
     this.bots.forEach((b, i) => {
       if (!b.up) return;
       const f = from.clone();
       f.x += (hash(b.seed * 9 + i) - 0.5) * spread;
       f.z += (hash(b.seed * 5 + i) - 0.5) * spread;
-      b.trip = { from: f, to: null, t: -i * 70, dur: 420, arc: 0, away: false };
+      b.trip = { from: f, to: null, t: -i * 70, dur: 420, arc: 0, away: false, s0 };
     });
   }
 
@@ -564,7 +598,7 @@ export class SquadRig {
         return;
       }
       const p = b.b[J.root]!.position;
-      b.trip = { from: p.clone(), to: to.clone(), t: -i * 55, dur: 360, arc: 0.25, away: true };
+      b.trip = { from: p.clone(), to: to.clone(), t: -i * 55, dur: 360, arc: 0.25, away: true, s0: 1 };
     });
   }
 
@@ -626,10 +660,11 @@ export class SquadRig {
     }
     const moveTarget = Math.min(1, st.speed / 0.5);
     this.move += (moveTarget - this.move) * (1 - Math.exp(-k * 9));
-    const cadence = (st.speed / (s.cycle * s.size)) * Math.PI * 2;
+    this.ready += ((st.ready ?? 0) - this.ready) * (1 - Math.exp(-k * 6));
     for (let i = 0; i < this.bots.length; i++) {
       const bot = this.bots[i]!;
-      bot.phase += k * cadence * bot.rate;
+      // (strides scale with the robot: its feet keep pace with the ground)
+      bot.phase += k * (st.speed / (s.cycle * bot.scale)) * Math.PI * 2 * bot.rate;
       const want = bot.seat ? 0 : st.aim;
       bot.aim += (want - bot.aim) * (1 - Math.exp(-k * (want > bot.aim ? 12 : 2.5)));
       bot.recoil = Math.max(0, bot.recoil - k * 7);
@@ -645,9 +680,11 @@ export class SquadRig {
     bot.fallT = 0;
     bot.landed = false;
     bot.trip = null;
-    const d = Math.floor(bot.seed * 4);
-    bot.fallX = d === 0 ? 1 : d === 1 ? -1 : 0;
-    bot.fallZ = d === 2 ? 1 : d === 3 ? -1 : 0;
+    // outward, away from the squad's centre: never across a robot still standing
+    const [sx, sz] = bot.slot;
+    const side = Math.abs(sx) > Math.abs(sz);
+    bot.fallX = side ? 0 : sz > 0 ? 1 : -1;
+    bot.fallZ = side ? (sx > 0 ? -1 : 1) : 0;
   }
 
   /** Pose robot `i`'s bones (advancing its fall or trip by `dt` ms). */
@@ -663,18 +700,35 @@ export class SquadRig {
     const m = bot.seat ? 0 : this.move;
     const a = bot.aim;
     const p = bot.phase;
-    const sp = Math.sin(p);
-    const cp = Math.cos(p);
+    // (1 with the left foot out in front, -1 the right: the arms and shoulders swing against the legs)
+    const sa = Math.cos(p);
     const t = this.time;
 
-    // ---- legs: a run cycle (knees lift through the swing), braced when firing still ----
-    const legA = s.legA * m;
-    const c = s.crouch * m;
-    let thL = legA * sp + c * 0.5;
-    let thR = -legA * sp + c * 0.5;
-    let shL = -(s.knee * Math.pow(Math.max(0, cp), 1.5) * m + c + 0.05 * m);
-    let shR = -(s.knee * Math.pow(Math.max(0, -cp), 1.5) * m + c + 0.05 * m);
-    let drop = (s.thigh + s.shin) * ((1 - Math.cos(legA * sp)) * 0.55 + (1 - Math.cos(c * 0.5)));
+    // ---- legs: a run cycle, braced when firing still ----
+    // Each foot is planted for `stance` of the stride, sliding back under the hips at just the
+    // body's speed (so it stays put on the ground), then lifts and swings forward to land again;
+    // the hips ride low enough for the legs to reach (lowest at each footfall), and two-bone IK
+    // turns the feet's paths into thigh and knee angles.
+    const stride = (s.cycle * s.stance) / bot.rate;
+    const ankle = s.hipY - s.thigh - s.shin;
+    const reach = (s.thigh + s.shin) * 0.97;
+    const runHip = ankle + Math.sqrt(Math.max(0, reach * reach - stride * stride * 0.25)) - s.crouch;
+    const u0 = (((p / (Math.PI * 2)) % 1) + 1) % 1;
+    const q = (u0 - s.stance / 2) * Math.PI * 2;
+    let hipsY = lerp(s.hipY, runHip - 0.005 * Math.cos(2 * q), m);
+    const leg = (u: number): [number, number] => {
+      let f: number;
+      let lift = 0;
+      if (u < s.stance) f = stride * (0.5 - u / s.stance);
+      else {
+        const k = (u - s.stance) / (1 - s.stance);
+        f = stride * (k * k * (3 - 2 * k) - 0.5);
+        lift = s.lift * Math.sin(Math.PI * k);
+      }
+      return ik(f * m, hipsY - ankle - lift * m, s.thigh, s.shin);
+    };
+    let [thL, shL] = leg(u0);
+    let [thR, shR] = leg((u0 + 0.5) % 1);
     const brace = a * (1 - m);
     if (brace > 0) {
       const br = s.brace;
@@ -682,23 +736,23 @@ export class SquadRig {
       shL = lerp(shL, br[1], brace);
       thR = lerp(thR, br[2], brace);
       shR = lerp(shR, br[3], brace);
-      drop = lerp(drop, br[4], brace);
+      hipsY = lerp(hipsY, s.hipY - br[4], brace);
     }
     const idle = (1 - m) * (1 - a);
-    let hipsY = s.hipY - drop + idle * 0.0025 * Math.sin(t / 700 + bot.seed * 7);
+    hipsY += idle * 0.0025 * Math.sin(t / 700 + bot.seed * 7);
 
     // ---- upper body: carry (swinging with the stride) blending to aim ----
     const C = s.carry;
     const A = s.aim;
-    let aLx = lerp(C.armL[0], A.armL[0], a) - s.swing[0] * sp * m * (1 - a);
+    let aLx = lerp(C.armL[0], A.armL[0], a) - s.swing[0] * sa * m * (1 - a);
     let aLz = lerp(C.armL[1], A.armL[1], a);
-    let aRx = lerp(C.armR[0], A.armR[0], a) + s.swing[1] * sp * m * (1 - a);
+    let aRx = lerp(C.armR[0], A.armR[0], a) + s.swing[1] * sa * m * (1 - a);
     let aRz = lerp(C.armR[1], A.armR[1], a);
     let gx = lerp(C.gun[0], A.gun[0] + st.pitch, a);
     let gy = lerp(C.gun[1], A.gun[1], a);
     let gz = lerp(C.gun[2], A.gun[2], a);
     let torsoX = lerp(C.torso, A.torso, a) + s.lean * m * (1 - a * 0.5) + bot.recoil * 0.1;
-    let torsoY = 0.14 * sp * m;
+    let torsoY = 0.14 * sa * m;
     let torsoZ = idle * 0.035 * Math.sin(t / 1100 + bot.seed * 5);
     let headX = -torsoX * 0.6;
     let headY = bot.look - torsoY;
@@ -707,18 +761,22 @@ export class SquadRig {
     let sink = 0;
     let sc = bot.scale;
 
+    // riding: sat on the bench, hands on knees, weapon upright, looking about — or stood up
+    // facing the ramp, weapon ready, as it opens for the drop
+    const up = bot.seat ? this.ready * (0.75 + bot.seed * 0.25) : 0;
     if (bot.seat) {
-      // riding: sat on the bench, hands on knees, weapon upright, looking about
-      thL = thR = 1.5;
-      shL = shR = -1.5;
-      hipsY = s.hipY - s.thigh + 0.004;
-      aLx = aRx = s.seatArms;
-      aLz = 0.15;
-      aRz = -0.15;
-      gx = s.seatGun[0];
-      gy = s.seatGun[1];
-      gz = s.seatGun[2];
-      torsoX = 0.04 + 0.02 * Math.sin(t / 900 + bot.seed * 4);
+      const sit = 1 - up;
+      thL = thR = 1.5 * sit;
+      shL = shR = -1.5 * sit;
+      hipsY = lerp(s.hipY - s.thigh + 0.004, s.hipY, up);
+      aLx = lerp(s.seatArms, C.armL[0], up);
+      aRx = lerp(s.seatArms, C.armR[0], up);
+      aLz = lerp(0.15, C.armL[1], up);
+      aRz = lerp(-0.15, C.armR[1], up);
+      gx = lerp(s.seatGun[0], C.gun[0], up);
+      gy = lerp(s.seatGun[1], C.gun[1], up);
+      gz = lerp(s.seatGun[2], C.gun[2], up);
+      torsoX = (0.04 + 0.02 * Math.sin(t / 900 + bot.seed * 4)) * sit;
       torsoY = 0;
       torsoZ = 0;
     }
@@ -758,16 +816,41 @@ export class SquadRig {
 
     // ---- place the robot: formation slot (or seat), on the ground under it ----
     if (bot.seat) {
-      root.position.set(bot.seat.x, bot.seat.y, bot.seat.z);
-      root.rotation.set(0, bot.seat.yaw, 0);
+      // (stood up, a half step in off the bench and turned aft)
+      root.position.set(bot.seat.x * (1 - up * 0.18), bot.seat.y, bot.seat.z);
+      root.rotation.set(0, bot.seat.yaw * (1 + up), 0);
     } else {
-      root.position.set(bot.slot[0], sink, bot.slot[1]);
-      if (st.ground) {
-        const r = this.root;
-        const cy = Math.cos(r.rotation.y);
-        const sy = Math.sin(r.rotation.y);
+      const r = this.root;
+      const cy = Math.cos(r.rotation.y);
+      const sy = Math.sin(r.rotation.y);
+      if (st.avoid && bot.up) {
+        // shoulder out of any vehicle's footprint (eased: they shuffle aside); a fallen robot stays put
+        let tx = 0;
+        let tz = 0;
         const wx = r.position.x + bot.slot[0] * cy + bot.slot[1] * sy;
         const wz = r.position.z - bot.slot[0] * sy + bot.slot[1] * cy;
+        for (const o of st.avoid) {
+          const dx = wx - o.x;
+          const dz = wz - o.z;
+          const along = dx * o.fx + dz * o.fz;
+          const across = dx * -o.fz + dz * o.fx;
+          if (Math.abs(along) >= o.hl || Math.abs(across) >= o.hw) continue;
+          // sideways, out of the vehicle's path (dead centre: to the side of its slot)
+          const side = Math.sign(across) || Math.sign(bot.slot[0]) || 1;
+          const out = side * o.hw - across;
+          tx += -o.fz * out;
+          tz += o.fx * out;
+        }
+        const kk = 1 - Math.exp(-(dt / 1000) * 10);
+        bot.px += (tx * cy - tz * sy - bot.px) * kk;
+        bot.pz += (tx * sy + tz * cy - bot.pz) * kk;
+      }
+      const lx = bot.slot[0] + bot.px;
+      const lz = bot.slot[1] + bot.pz;
+      root.position.set(lx, sink, lz);
+      if (st.ground) {
+        const wx = r.position.x + lx * cy + lz * sy;
+        const wz = r.position.z - lx * sy + lz * cy;
         const gy0 = Math.max(-0.2, Math.min(0.2, st.ground(wx, wz) - r.position.y));
         root.position.y += gy0;
       }
@@ -785,6 +868,7 @@ export class SquadRig {
       aLx = aRx = 0.5;
     }
     const pop = bot.pop >= 1 ? 1 : bot.pop <= 0 ? 0 : backOut(bot.pop);
+    if (bot.trip && !bot.trip.away) sc *= lerp(bot.trip.s0, 1, Math.max(0, Math.min(1, bot.trip.t / bot.trip.dur)));
     if (!bot.trip?.away) root.scale.setScalar(Math.max(1e-4, sc * pop));
 
     B[J.hips]!.position.y = hipsY;
@@ -813,7 +897,7 @@ export class SquadRig {
     tr.t += dt;
     const root = bot.b[J.root]!;
     const k = Math.max(0, Math.min(1, tr.t / tr.dur));
-    const to = tr.to ?? tmpV.set(bot.slot[0], root.position.y, bot.slot[1]);
+    const to = tr.to ?? tmpV.set(bot.slot[0] + bot.px, root.position.y, bot.slot[1] + bot.pz);
     const toX = to.x;
     const toY = to.y;
     const toZ = to.z;
@@ -863,6 +947,18 @@ export class SquadRig {
   }
 }
 
+/**
+ * Two-bone leg IK in the leg's plane: thigh and shin angles (about x; the
+ * thigh + swings the foot forward, the shin − folds back at the knee) that
+ * put the ankle `f` ahead of the hip and `d` below it.
+ */
+function ik(f: number, d: number, a: number, b: number): [number, number] {
+  const r = Math.max(Math.abs(a - b) + 1e-4, Math.min(a + b - 1e-4, Math.hypot(f, d)));
+  const hip = Math.acos(Math.max(-1, Math.min(1, (a * a + r * r - b * b) / (2 * a * r))));
+  const knee = Math.acos(Math.max(-1, Math.min(1, (a * a + b * b - r * r) / (2 * a * b))));
+  return [Math.atan2(f, d) + hip, knee - Math.PI];
+}
+
 function backOut(k: number): number {
   const c1 = 1.70158;
   const c3 = c1 + 1;
@@ -889,8 +985,12 @@ export function botHeight(kind: BotKind): number {
   return (s.hipY + s.waist + s.neck + 0.06) * s.size;
 }
 
-/** Riders sit a little smaller than on the map, so a full squad fits shoulder to shoulder down a bench. */
-export const RIDER_SCALE = 0.75;
+/**
+ * Riders sit well under their size on the map: a dropship no bigger than a
+ * Titan seats two whole squads down its benches (the map's robots are drawn
+ * big for readability, see Spec.size).
+ */
+export const RIDER_SCALE = 0.4;
 
 /**
  * Seats for a squad riding in the Condor's bay — `side` 0 the port bench, 1
@@ -901,13 +1001,11 @@ export const RIDER_SCALE = 0.75;
 export function baySeats(kind: BotKind, side: number, s: number): { x: number; y: number; z: number; yaw: number }[] {
   const B = CONDOR_BAY;
   const n = SPECS[kind].n;
-  const k = 1 / RIDER_SCALE;
-  const len = (B.z1 - B.z0 - 0.05) * s * k;
-  const step = Math.min(0.34, len / n);
-  const z0 = ((B.z0 + B.z1) / 2) * s * k - (step * (n - 1)) / 2;
+  const k = s / RIDER_SCALE;
+  const step = Math.min(0.14, (B.z1 - B.z0 - 0.03) / n);
+  const z0 = (B.z0 + B.z1) / 2 - (step * (n - 1)) / 2;
   const sx = side ? 1 : -1;
   const out: { x: number; y: number; z: number; yaw: number }[] = [];
-  for (let i = 0; i < n; i++)
-    out.push({ x: sx * (B.benchX * s * k - 0.01), y: B.floor * s * k, z: z0 + i * step, yaw: (sx * Math.PI) / 2 });
+  for (let i = 0; i < n; i++) out.push({ x: sx * B.benchX * k, y: B.floor * k, z: (z0 + i * step) * k, yaw: (sx * Math.PI) / 2 });
   return out;
 }

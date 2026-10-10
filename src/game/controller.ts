@@ -1,7 +1,7 @@
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { placementBlocker, snapPlacement } from "../sim/placement";
-import { freeSeats, isLoaded } from "../sim/transport";
+import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
 import type { BuildingKind, Command, Faction, Unit, World } from "../sim/types";
 import { buildingAtTile, isResource, tileIndex } from "../sim/world";
 import { Squads } from "./squads";
@@ -63,10 +63,19 @@ export class Controller {
     this.queue.push(cmd);
   }
 
-  /** Drop selection entries for units that no longer exist. */
+  /**
+   * Drop selection entries for units that no longer exist. A squad that just
+   * climbed into a Condor hands its place to the craft, so the selection
+   * that loaded it can fly it and drop it next.
+   */
   prune(): void {
-    for (const id of this.selectedUnits)
-      if (!this.world.units.has(id)) this.selectedUnits.delete(id);
+    let gone: number[] | null = null;
+    for (const id of this.selectedUnits) if (!this.world.units.has(id)) (gone ??= []).push(id);
+    for (const id of gone ?? []) {
+      this.selectedUnits.delete(id);
+      const c = carrierOf(this.world, id);
+      if (c) this.selectedUnits.add(c.id);
+    }
     if (this.selectedBuilding !== null && !this.world.buildings.has(this.selectedBuilding))
       this.selectedBuilding = null;
     if (this.placing && this.world.factions[PLAYER].pending?.kind !== this.placing)

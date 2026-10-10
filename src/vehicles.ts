@@ -69,8 +69,8 @@ const FEATURES: Record<UnitKind, string[]> = {
     `Captures Uplinks ${INFANTRY.captureWeight}× as fast as a vehicle and picks up supply crates. Leaves no wreck.`
   ],
   "rocket-squad": [
-    "Three bots with shoulder-fired rockets: cannon damage that hits heavy armour 1.3× — the cheap answer to Titans.",
-    "Also fires at aircraft (0.8×), so Hornets and Wasps pay for low passes.",
+    `Three bots with shoulder-fired rockets: cannon damage that hits heavy armour ${DAMAGE_VS.cannon.heavy}× — the cheap answer to Titans.`,
+    `Also fires at aircraft (${UNITS["rocket-squad"].airMult}×), so Hornets and Wasps pay for low passes.`,
     "Weak against other infantry: Troopers and Snipers cut it down."
   ],
   sniper: [
@@ -79,7 +79,7 @@ const FEATURES: Record<UnitKind, string[]> = {
     "Next to useless against armour and buildings, and slow to fire: keep vehicles away from it."
   ],
   condor: [
-    `Dropship: carries ${UNITS.condor.capacity} infantry squads over water, rock and walls. Unarmed.`,
+    `Dropship: carries ${UNITS.condor.capacity} infantry squads over water, rock and anything else in the way. Unarmed.`,
     `Select squads and tap the Condor to load them (1 s each, once they reach it); long-press the map to fly there and drop them (it hovers ${INFANTRY.unloadHover} s), or tap Unload.`,
     `Shot down over land, its squads bail out with at most ${Math.round(INFANTRY.bailoutHp * 100)}% HP; over water or rock they are lost with it.`
   ]

@@ -98,6 +98,9 @@ describe("touch gestures", () => {
     g.up(touch(1, 100 + TAP_SLOP_PX + 6, 140), 2400);
     expect(box()).toBe(false);
     expect(cb.onTap).not.toHaveBeenCalled();
+    // the line is the tap slop
+    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX * 0.7, 100 + TAP_SLOP_PX * 0.7)).toBe(true);
+    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX + 1, 100)).toBe(false);
   });
 
   it("a second finger switches to pinch/two-finger pan and cancels other gestures", () => {

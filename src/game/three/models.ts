@@ -31,6 +31,8 @@ export const WHITE = 0xd6dbe1;
 export const HAZ = 0xe0b23a;
 export const HAZ_D = 0x2b2a28;
 const GREEN = 0x5dff8a;
+/** Amber-tinted cockpit glass (lit a little from inside). */
+const GLASS = 0xcf7f2a;
 const EXHAUST = 0xffa040;
 
 interface Team {
@@ -62,8 +64,12 @@ export interface ModelDef {
   rotors: Rotor[];
   /** Harvester's scrap load (shown when full). */
   cargo?: THREE.BufferGeometry;
-  /** Condor's rear ramp: hinged at `hinge`, closed pointing up; it opens by turning +x (down and back). */
-  ramp?: { geo: THREE.BufferGeometry; hinge: Vec3 };
+  /**
+   * Condor's rear ramp: hinged at `hinge`, closed pointing up; it opens by
+   * turning +x (down and back) to `open` rad. `tip` is its lip in ramp space
+   * (where squads step off and climb aboard).
+   */
+  ramp?: { geo: THREE.BufferGeometry; hinge: Vec3; open: number; tip: Vec3 };
   /** Model height, for labels and bars. */
   height: number;
 }
@@ -416,88 +422,106 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
   sniper: (t) => squadModel("sniper", t),
 
   condor: (t) => {
-    // a twin-boom dropship: a glazed cab forward, an open-topped troop bay amidships (you can see
-    // who's riding), ducted lift fans on stub wings, a rear ramp that drops between the booms
+    // a ducted-fan dropship: an armoured nose under an amber canopy, an open-roofed troop bay
+    // amidships (you can see who's riding), lift fans on short wing pylons, and a tail boom out to
+    // a V-tail over the rear ramp
     const b = partB();
     const B = CONDOR_BAY;
+    // half-widths of the hull down its length: widest at the wing roots, tapering to nose and tail
+    const W0 = 0.212;
+    const W1 = 0.216;
+    const W2 = 0.2;
+    const W3 = 0.17;
+    // the nose: armour tapering to a blunt point, a team chevron on top, a sensor ball under the chin
+    b.fuselage([[-0.75, 0.024, -0.088, -0.116], [-0.712, 0.07, -0.052, -0.152], [-0.64, 0.124, -0.024, -0.182], [-0.54, 0.166, -0.006, -0.196], [-0.43, 0.196, 0.006, -0.2], [B.z0 + 0.01, W0, 0.012, -0.2]], [0, 0, 0], GM, { chamfer: 0.035, belly: 0.06 });
+    for (const sx of [-1, 1])
+      b.prism([[0, -0.072], [sx * 0.062, 0.0], [sx * 0.062, 0.03], [0, -0.04]], 0.008, [0, -0.03, -0.645], t.main, { rot: [-0.3, 0, 0] });
+    b.sphere(0.03, [0, -0.19, -0.56], GM_D, { w: 6, h: 4 });
+    light(b, [0, -0.1, -0.75], 0.022);
+    // the canopy: amber-tinted glass on a dark sill, a reflection along its brow, faired in behind
+    b.fuselage([[-0.6, 0.06, -0.012, -0.03], [-0.55, 0.112, 0.012, -0.02], [-0.45, 0.13, 0.026, -0.01], [-0.36, 0.13, 0.03, -0.005]], [0, 0, 0], GM_D, { chamfer: 0.03 });
+    b.fuselage([[-0.585, 0.035, -0.006, -0.03], [-0.54, 0.092, 0.036, -0.015], [-0.46, 0.114, 0.064, 0.0], [-0.37, 0.116, 0.072, 0.005]], [0, 0, 0], GLASS, { chamfer: 0.05, glow: 0.3, edge: 1.15 });
+    b.fuselage([[-0.52, 0.013, 0.048, 0.034], [-0.46, 0.013, 0.067, 0.052], [-0.385, 0.013, 0.075, 0.06]], [-0.034, 0, 0], 0xffd9a0, { chamfer: 0.005, glow: 0.5 });
+    b.fuselage([[-0.375, 0.12, 0.074, 0.0], [B.z0 + 0.01, 0.11, 0.04, 0.0]], [0, 0, 0], GM, { chamfer: 0.04, edge: 1.35 });
+    // the bay: a tub under an open roof — dark deck with aisle lamps, benches down both walls, team gunwales
+    b.fuselage([[B.z0 - 0.01, W0, B.floor, -0.2], [-0.12, W1, B.floor, -0.2], [B.z1, W2, B.floor, -0.194], [B.ramp - 0.05, W3, B.floor, -0.175], [B.ramp, B.rampW / 2 + 0.012, B.floor, -0.15]], [0, 0, 0], GM, { chamfer: 0.035, belly: 0.05 });
+    const zr = (B.z0 + B.ramp) / 2;
     const zc = (B.z0 + B.z1) / 2;
-    const len = B.z1 - B.z0;
-    // keel and belly
-    b.block(0.4, 0.08, 0.82, [0, -0.1, 0.03], GM, { bevel: 0.02 });
-    b.block(0.32, 0.05, 0.68, [0, -0.15, 0.05], GM_D, { bevel: 0.015 });
-    // the nose: a chin under a tapered cab, amber-glazed windscreen in a dark frame, team roof
-    b.block(0.36, 0.11, 0.22, [0, -0.075, -0.46], GM, { taper: 0.3, bevel: 0.025 });
-    b.block(0.2, 0.07, 0.1, [0, -0.09, -0.6], GM_D, { taper: 0.45, bevel: 0.02 });
-    b.block(0.32, 0.12, 0.22, [0, 0.0, -0.37], GM_L, { taper: 0.3, bevel: 0.03, edge: 1.35 });
-    b.box(0.27, 0.095, 0.016, [0, 0.022, -0.47], GM_D, { rot: [-0.6, 0, 0] });
-    for (const x of [-0.064, 0.064]) b.box(0.112, 0.074, 0.012, [x, 0.025, -0.478], AMBER, { rot: [-0.6, 0, 0], glow: 0.6 });
-    b.pair(0.012, 0.05, 0.13, [0.14, 0.022, -0.38], AMBER, { glow: 0.5 });
-    b.block(0.18, 0.024, 0.13, [0, 0.07, -0.345], t.main, { bevel: 0.01, edge: 1.4 });
-    b.sphere(0.035, [0, -0.135, -0.5], GM_D, { w: 6, h: 4 });
-    light(b, [0, -0.08, -0.655], 0.03);
-    // the bay: dark deck with a lit centre strip, benches down both sides, team gunwales, slim roll bars
-    b.box(B.w, 0.02, len, [0, B.floor - 0.01, zc], 0x25282c);
-    b.box(0.03, 0.006, len - 0.06, [0, B.floor + 0.003, zc], AMBER, { glow: 0.9 });
+    b.box(B.w, 0.012, B.ramp - B.z0, [0, B.floor + 0.004, zr], 0x25282c);
+    for (let z = B.z0 + 0.05; z < B.ramp - 0.03; z += 0.075) b.box(0.012, 0.004, 0.035, [0, B.floor + 0.012, z], AMBER, { glow: 0.8 });
+    const iw = B.w / 2;
     for (const sx of [-1, 1]) {
-      b.box(0.05, B.bench - B.floor, len - 0.04, [sx * B.benchX, (B.bench + B.floor) / 2, zc], GM_L);
-      b.block(0.036, B.wall - B.floor + 0.03, len, [sx * (B.w / 2 + 0.018), (B.wall + B.floor) / 2 - 0.015, zc], GM, { bevel: 0.01 });
-      b.block(0.048, 0.016, len + 0.01, [sx * (B.w / 2 + 0.018), B.wall + 0.008, zc], t.main, { bevel: 0.006, edge: 1.45 });
-      for (const z of [B.z0 + 0.08, zc, B.z1 - 0.08]) light(b, [sx * (B.w / 2 + 0.042), B.wall - 0.03, z], 0.02);
+      // walls straight inside (narrowing under the hump to the ramp), following the hull outside
+      const wall: [number, number][] = [[iw, B.z0], [W0, B.z0], [W1, -0.12], [W2, B.z1], [W3, B.ramp - 0.05], [B.rampW / 2 + 0.012, B.ramp], [B.rampW / 2, B.ramp], [iw, B.z1 - 0.02]];
+      b.prism(wall.map(([x, z]) => [sx * x, z]), B.wall - B.floor, [0, B.floor, 0], GM);
+      const rim: [number, number][] = [[iw - 0.002, B.z0], [W0 + 0.003, B.z0], [W1 + 0.003, -0.12], [W2 + 0.002, B.z1 + 0.012], [iw - 0.002, B.z1 + 0.012]];
+      b.prism(rim.map(([x, z]) => [sx * x, z]), 0.014, [0, B.wall - 0.002, 0], t.main);
+      b.box(0.034, B.bench - B.floor, B.z1 - B.z0 - 0.02, [sx * (iw - 0.017), (B.bench + B.floor) / 2, zc], GM_L);
+      for (const z of [B.z0 + 0.05, zc, B.z1 - 0.04]) light(b, [sx * (iw - 0.004), B.wall - 0.02, z], 0.014);
     }
-    b.block(B.w + 0.07, B.wall - B.floor + 0.05, 0.035, [0, (B.wall + B.floor) / 2 - 0.005, B.z0 - 0.017], GM, { bevel: 0.01 });
-    for (const z of [B.z0 + 0.04, B.z1 - 0.05]) {
-      b.pair(0.012, 0.085, 0.014, [B.w / 2 + 0.018, B.wall + 0.045, z], GM_D);
-      b.box(B.w + 0.05, 0.014, 0.016, [0, B.wall + 0.088, z], GM_D);
-    }
-    // stub wings with team panels, out to the ducted fans
+    // the hump over the ramp sweeping up into the tail boom, a team spine stripe along both, a beacon
+    b.fuselage([[B.z1, W2 + 0.002, 0.034, B.wall - 0.004], [B.z1 + 0.08, 0.172, 0.06, -0.002], [B.ramp + 0.012, B.rampW / 2 + 0.006, 0.07, 0.014]], [0, 0, 0], GM, { chamfer: 0.03, edge: 1.35 });
+    b.fuselage([[B.ramp, 0.1, 0.07, 0.022], [0.5, 0.058, 0.074, 0.036], [0.64, 0.034, 0.077, 0.05]], [0, 0, 0], GM, { chamfer: 0.02 });
+    b.fuselage([[B.z1 + 0.03, 0.038, 0.048, 0.03], [B.z1 + 0.08, 0.038, 0.064, 0.05], [B.ramp + 0.012, 0.03, 0.074, 0.06], [0.5, 0.021, 0.078, 0.064], [0.6, 0.014, 0.08, 0.066]], [0, 0, 0], t.main, { chamfer: 0.008, edge: 1.4 });
+    light(b, [0, 0.08, B.ramp - 0.03], 0.018);
+    // exhausts either side of the boom's root
     for (const sx of [-1, 1]) {
-      b.block(0.32, 0.03, 0.16, [sx * 0.35, -0.03, -0.03], GM, { bevel: 0.01 });
-      b.box(0.22, 0.008, 0.11, [sx * 0.34, -0.012, -0.03], t.main);
+      b.tube(0.022, 0.05, 8, [sx * 0.085, 0.04, B.ramp + 0.01], GM_D);
+      b.cyl(0.016, 0.016, 0.004, 8, [sx * 0.085, 0.04, B.ramp + 0.036], EXHAUST, { rot: [Math.PI / 2, 0, 0], glow: 0.9 });
     }
+    // the V-tail: swept team fins, lamps at their tips
+    for (const sx of [-1, 1]) {
+      b.prism([[0, 0.51], [0.11, 0.6], [0.11, 0.65], [0, 0.645]], 0.012, [sx * 0.022, 0.07, 0], t.main, { rot: [0, 0, Math.PI / 2 - sx * 0.65] });
+      light(b, [sx * (0.022 + 0.11 * Math.sin(0.65)), 0.07 + 0.11 * Math.cos(0.65), 0.628], 0.018);
+    }
+    // short wings out to the lift fans: team panels on top
     const fans: Vec3[] = [];
+    const fz = -0.08;
     for (const sx of [-1, 1]) {
-      const x = sx * 0.5;
-      b.drum(0.165, 0.155, 0.08, 14, [x, -0.01, -0.03], GM_D, { bevel: 0.02 });
-      b.torus(0.157, 0.024, [x, 0.03, -0.03], t.main, { rot: [Math.PI / 2, 0, 0], seg: 18 });
-      b.cyl(0.13, 0.13, 0.01, 14, [x, -0.045, -0.03], AMBER, { glow: 0.75 });
-      b.cyl(0.03, 0.03, 0.06, 6, [x, 0.0, -0.03], GM_L);
-      b.box(0.3, 0.012, 0.02, [x, -0.02, -0.03], GM_D);
-      light(b, [x + sx * 0.175, 0.0, -0.03], 0.026);
-      fans.push([x, 0.03, -0.03]);
-      // tail booms back from the wings, swept team fins at their ends
-      b.block(0.045, 0.045, 0.48, [sx * 0.25, -0.02, 0.36], GM, { bevel: 0.012 });
-      b.block(0.024, 0.15, 0.13, [sx * 0.25, 0.06, 0.56], t.main, { taper: 0.3, bevel: 0.008, edge: 1.4 });
-      light(b, [sx * 0.25, 0.14, 0.6], 0.022);
+      b.prism([[sx * (W1 - 0.01), fz - 0.1], [sx * 0.32, fz - 0.065], [sx * 0.32, fz + 0.07], [sx * (W1 - 0.01), fz + 0.1]], 0.034, [0, -0.085, 0], GM);
+      b.prism([[sx * (W1 + 0.005), fz - 0.08], [sx * 0.31, fz - 0.052], [sx * 0.31, fz + 0.055], [sx * (W1 + 0.005), fz + 0.08]], 0.008, [0, -0.052, 0], t.main);
+      const x = sx * 0.45;
+      b.drum(0.158, 0.148, 0.08, 16, [x, -0.07, fz], GM, { bevel: 0.016 });
+      b.cyl(0.124, 0.124, 0.006, 16, [x, -0.028, fz], GM_L);
+      b.torus(0.142, 0.024, [x, -0.026, fz], t.main, { rot: [Math.PI / 2, 0, 0], seg: 20 });
+      b.torus(0.05, 0.009, [x, -0.024, fz], AMBER, { rot: [Math.PI / 2, 0, 0], seg: 10, glow: 0.9 });
+      b.cyl(0.03, 0.034, 0.03, 8, [x, -0.016, fz], GM_D);
+      b.box(0.26, 0.01, 0.016, [x, -0.022, fz], GM_D);
+      light(b, [x + sx * 0.162, -0.06, fz], 0.024);
+      fans.push([x, -0.008, fz]);
     }
-    b.block(0.56, 0.018, 0.07, [0, 0.12, 0.58], GM, { bevel: 0.008 });
-    // landing skids
-    for (const sx of [-1, 1]) {
-      b.box(0.022, 0.02, 0.56, [sx * 0.15, -0.22, -0.02], GM_D);
-      for (const z of [-0.2, 0.16]) b.box(0.014, 0.06, 0.014, [sx * 0.15, -0.19, z], GM_D);
+    // landing struts
+    for (const [x, z] of [[0, -0.52], [0.15, 0.1], [-0.15, 0.1]] as [number, number][]) {
+      b.box(0.016, 0.07, 0.016, [x, -0.225, z], GM_D);
+      b.box(0.04, 0.012, 0.06, [x, -0.262, z], GM_D);
     }
     const hull = b.build();
-    // the ramp: closed it is the bay's tailgate (hazard chevrons outside); dropped, its tread faces up
+    // the ramp, hinged at the deck's rear edge: closed it stands up under the hump (hazard chevrons
+    // outside); dropped, its tread faces up between hazard-striped rails, lamps at its lip
+    const L = B.wall + 0.02 - B.floor;
+    const rw = B.rampW;
     const r = partB();
-    r.block(B.w + 0.02, 0.17, 0.026, [0, 0.085, 0], GM, { bevel: 0.008 });
-    for (let i = 0; i < 4; i++) r.box(0.035, 0.15, 0.006, [-0.1 + i * 0.066, 0.085, 0.014], i % 2 ? HAZ_D : HAZ);
-    for (let i = 0; i < 5; i++) r.box(B.w - 0.08, 0.008, 0.008, [0, 0.025 + i * 0.03, -0.016], GM_L);
-    r.pair(0.03, 0.17, 0.008, [B.w / 2 - 0.01, 0.085, -0.016], HAZ);
-    light(r, [0.13, 0.165, -0.006], 0.02);
-    light(r, [-0.13, 0.165, -0.006], 0.02);
-    const rg = rotorGeo(0.14);
+    r.box(rw - 0.004, L, 0.02, [0, L / 2, 0], GM);
+    for (let i = 0; i < 3; i++) r.box(0.035, L * 0.86, 0.006, [-0.066 + i * 0.066, L / 2, 0.012], i % 2 ? HAZ_D : HAZ);
+    for (let i = 0; i < 4; i++) r.box(rw - 0.08, 0.006, 0.006, [0, 0.02 + i * 0.026, -0.012], GM_L);
+    for (let i = 0; i < 4; i++) r.pair(0.026, L / 4, 0.006, [rw / 2 - 0.02, (i + 0.5) * (L / 4), -0.012], i % 2 ? HAZ_D : HAZ);
+    light(r, [rw / 2 - 0.02, L - 0.008, -0.01], 0.02);
+    light(r, [-rw / 2 + 0.02, L - 0.008, -0.01], 0.02);
+    const rg = rotorGeo(0.128);
     return {
-      hull, mount: [0, 0, 0], muzzle: [0, -0.1, 0], height: 0.25,
-      rotors: fans.map((p, i) => ({ geo: rg, at: p, axis: "y" as const, speed: i ? -32 : 32 })),
-      ramp: { geo: r.build(), hinge: [0, B.floor - 0.012, B.z1 + 0.012] }
+      hull, mount: [0, 0, 0], muzzle: [0, -0.1, 0], height: 0.2,
+      rotors: fans.map((p, i) => ({ geo: rg, at: p, axis: "y" as const, speed: i ? -34 : 34 })),
+      ramp: { geo: r.build(), hinge: [0, B.floor, B.ramp], open: 1.85, tip: [0, L, 0] }
     };
   }
 };
 
 /**
  * The Condor's troop bay, in model space: deck and bench-top heights, the
- * gunwales' top, the benches' x, the bay's inner width and its front and rear (z).
+ * gunwales' top, the benches' x, the bay's inner width, the front and rear of
+ * its open roof (z), and the ramp's hinge under the tail and its width.
  */
-export const CONDOR_BAY = { floor: -0.055, bench: -0.01, wall: 0.06, benchX: 0.13, w: 0.34, z0: -0.24, z1: 0.32 };
+export const CONDOR_BAY = { floor: -0.1, bench: -0.064, wall: 0.0, benchX: 0.136, w: 0.34, z0: -0.31, z1: 0.17, ramp: 0.34, rampW: 0.27 };
 
 function squadModel(kind: BotKind, t: Team): ModelDef {
   const f: Faction = t === TEAMS.red ? "red" : "blue";
@@ -1006,7 +1030,7 @@ const UNIT_SIZE: Record<UnitKind, number> = {
   lancer: 1.05, wasp: 1.0, raptor: 1.15, hornet: 1.5, mender: 0.85,
   // (a squad's formation spans about its radius × 2: the robots are modelled at map scale, see unitScale)
   trooper: 0.8, "rocket-squad": 0.8, sniper: 0.7,
-  condor: 1.85
+  condor: 1.5
 };
 /** Robot infantry is built at map scale (tiles): formations sized to the squad's radius. */
 const MAP_SCALE = new Set<UnitKind>(["trooper", "rocket-squad", "sniper"]);

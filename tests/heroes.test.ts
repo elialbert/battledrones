@@ -234,6 +234,13 @@ describe("chronicle analysis", () => {
     expect(pickTip(idle)).toMatch(/idle .* 45%/);
     const won = { ...base, won: true, built: { blue: { "flak-crawler": 3 }, red: {} } };
     expect(pickTip(won)).toMatch(/harder AI/);
+    // a swarm of robot infantry met with no splash or Snipers; Titans met with no Rocket Squads
+    const swarm = { ...base, built: { blue: { "flak-crawler": 3, titan: 6 }, red: { trooper: 7, "rocket-squad": 3 } } };
+    expect(pickTip(swarm)).toMatch(/10 infantry squads.*Mortars/);
+    expect(pickTip({ ...swarm, built: { ...swarm.built, blue: { "flak-crawler": 3, mortar: 2 } } })).not.toMatch(/infantry/);
+    const titans = { ...base, built: { blue: { "flak-crawler": 3 }, red: { titan: 5 } } };
+    expect(pickTip(titans)).toMatch(/5 Titans.*Rocket Squads/);
+    expect(pickTip({ ...titans, built: { ...titans.built, blue: { "flak-crawler": 3, "rocket-squad": 3 } } })).not.toMatch(/Titans/);
   });
 
   it("records a real match: samples, kills, and an MVP that matches the best unit", () => {

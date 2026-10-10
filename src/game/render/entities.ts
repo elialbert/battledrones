@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../../sim/balance";
 import { isInfantry, squadAlive } from "../../sim/infantry";
-import type { Building, BuildingKind, Faction, FxEvent, Unit, WeaponFx, World } from "../../sim/types";
-import { baySeats, SquadRig, type BotKind } from "../three/infantry";
-import { eliteUniform, setVariant, type Variant } from "../three/materials";
+import type { Building, BuildingKind, Faction, FxEvent, Unit, UnitKind, WeaponFx, World } from "../../sim/types";
+import { baySeats, RIDER_SCALE, SquadRig, type BotKind, type Footprint } from "../three/infantry";
+import { discMat, eliteUniform, setVariant, type Variant } from "../three/materials";
 import { buildingDef, instance, unitDef, unitScale, type ModelDef, type ModelInstance } from "../three/models";
 import { AIR_H, HOVER_H, type P3, type View } from "../three/view";
 import { Ease } from "../three/tween";
@@ -55,6 +55,11 @@ interface CondorView {
   ramp: number;
   low: number;
   washT: number;
+  /** It just dropped its squads (or took one aboard): it holds low with the ramp down while they jump clear (ms). */
+  hold: number;
+  /** The bay lights spilling out of the open ramp onto the ground (a child of the root). */
+  pool: THREE.Mesh;
+  poolMat: THREE.MeshBasicMaterial;
 }
 
 interface BuildingView {
@@ -96,8 +101,26 @@ function angleDelta(a: number, b: number): number {
 
 const tmp = new THREE.Vector3();
 const tmp2 = new THREE.Vector3();
-/** A Condor hovering to drop or pick up sits this high over the ground (it flies at AIR_H). */
-const CONDOR_LOW = 0.62;
+/** The Condor's ramp light on the ground (a soft disc). */
+const poolGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+
+/** A vehicle's hull half-length and half-width on the ground (tiles, its model's bounds), plus a robot's girth. */
+const hulls = new Map<UnitKind, [number, number]>();
+function hullHalf(kind: UnitKind): [number, number] {
+  let h = hulls.get(kind);
+  if (!h) {
+    const b = unitDef(kind, "blue").hull.boundingBox!;
+    const s = unitScale(kind);
+    h = [Math.max(-b.min.z, b.max.z) * s + 0.06, Math.max(-b.min.x, b.max.x) * s + 0.07];
+    hulls.set(kind, h);
+  }
+  return h;
+}
+/**
+ * A Condor hovering to drop or pick up sits this high over the ground (it
+ * flies at AIR_H): its belly clears the robots standing under it.
+ */
+const CONDOR_LOW = 0.78;
 /** A smoke puff's source point, refilled per puff (Fx reads it at once). */
 const puffAt: P3 = { x: 0, y: 0, h: 0 };
 
@@ -182,8 +205,9 @@ function topsOf(geo: THREE.BufferGeometry, ox: number, oy: number, oz: number): 
  * Robot infantry squads are rigs of walking robots (three/infantry.ts): they
  * march, raise their weapons to fire, lose a robot (it topples in sparks)
  * each time the squad's HP crosses a step, and leave no wreck — the last
- * ones fall where they stood. The Condor comes down and drops its ramp to
- * load or drop squads, with its riders seated in the open bay.
+ * ones fall where they stood; robots step aside out of vehicles' hulls. The
+ * Condor comes down and drops its ramp to load or drop squads, with its
+ * riders seated in the open bay; they step off the ramp and climb aboard by it.
  */
 export class EntityRenderer {
   private views = new Map<number, View3>();
@@ -201,6 +225,8 @@ export class EntityRenderer {
   /** Squads off the field still on show: robots toppling (wiped out) or hopping aboard. */
   private leaving: { rig: SquadRig; alive: number }[] = [];
   private snipeTurn = 0;
+  /** Vehicle footprints near the squad being updated (reused). */
+  private avoid: Footprint[] = [];
   private groundFn = (x: number, z: number) => this.v.terrain.groundAt(x, z);
   readonly group = new THREE.Group();
 
@@ -450,13 +476,22 @@ export class EntityRenderer {
     const carrierId = this.boarded.get(id) ?? this.carrierOf(id);
     const c = carrierId !== undefined ? this.views.get(carrierId) : undefined;
     if (c?.kind === "unit") {
+      // (counted before they set off: robots hopping aboard aren't "standing", and must not fall)
+      const alive = rig.bots.filter((b) => b.up).length;
       rig.root.updateMatrixWorld(true);
-      rig.board(rig.root.worldToLocal(tmp2.set(c.gx, c.bh - 0.04, c.gy)));
-      this.leaving.push({ rig, alive: rig.standing().length });
+      rig.board(rig.root.worldToLocal(c.m.ramp ? this.rampLip(c, tmp2) : tmp2.set(c.gx, c.bh - 0.04, c.gy)));
+      this.leaving.push({ rig, alive });
     } else {
       rig.fallAll();
       this.leaving.push({ rig, alive: 0 });
     }
+  }
+
+  /** World point of a Condor's ramp lip (where squads step off and climb aboard), into `out`. */
+  private rampLip(c: UnitView, out: THREE.Vector3): THREE.Vector3 {
+    const r = c.m.ramp!;
+    r.updateWorldMatrix(true, false);
+    return r.localToWorld(out.set(...c.m.def.ramp!.tip));
   }
 
   /** The Condor carrying squad `id`, if any. */
@@ -485,7 +520,12 @@ export class EntityRenderer {
       const bay = new THREE.Group();
       bay.scale.setScalar(1 / scale);
       m.body.add(bay);
-      v.condor = { bay, riders: new Map(), ramp: 0, low: 0, washT: 0 };
+      const poolMat = discMat(0xffb04a, 0);
+      const pool = new THREE.Mesh(poolGeo, poolMat);
+      pool.renderOrder = 3;
+      pool.visible = false;
+      m.root.add(pool);
+      v.condor = { bay, riders: new Map(), ramp: 0, low: 0, washT: 0, hold: 0, pool, poolMat };
     }
     // units roll out of the factory with a quick pop-in
     if (this.world.tick > 1) {
@@ -518,11 +558,11 @@ export class EntityRenderer {
     rig.root.rotation.set(0, -u.facing, 0);
     const drop = this.dropped.get(u.id);
     if (drop) {
-      // out of a Condor: the robots jump down from its bay (bailing out of a falling one, from higher)
+      // out of a Condor: the robots jump down off its ramp (bailing out of a falling one, from higher)
       const c = this.views.get(drop.carrierId);
-      const from = c?.kind === "unit" ? tmp2.set(c.gx, c.bh - 0.08, c.gy) : tmp2.set(drop.x, v.bh + (drop.bailout ? 1.1 : 0.6), drop.y);
+      const from = c?.kind === "unit" && c.m.ramp ? this.rampLip(c, tmp2) : tmp2.set(drop.x, v.bh + (drop.bailout ? 1.1 : 0.6), drop.y);
       rig.root.updateMatrixWorld(true);
-      rig.dropFrom(rig.root.worldToLocal(from), drop.bailout ? 0.5 : 0.25);
+      rig.dropFrom(rig.root.worldToLocal(from), drop.bailout ? 0.5 : 0.14, c ? RIDER_SCALE : 1);
     } else if (this.world.tick > 1) rig.popIn();
     this.views.set(u.id, v);
     return v;
@@ -660,7 +700,20 @@ export class EntityRenderer {
       const tg = tid !== null ? this.world.units.get(tid) : undefined;
       if (tg && UNITS[tg.kind].domain === "air") pitch = Math.min(0.9, Math.atan2(AIR_H - 0.2, Math.max(0.6, Math.hypot(tg.x - u.x, tg.y - u.y))));
     }
-    rig.update({ dt: dtMs, speed, aim: fighting ? 1 : 0, pitch, alive: squadAlive(u), ground: this.groundFn });
+    // vehicles rolling through (or parked on) the squad: its robots step out of their hulls
+    const avoid = this.avoid;
+    avoid.length = 0;
+    for (const o of this.world.units.values()) {
+      if (o === u || isInfantry(o.kind) || UNITS[o.kind].domain === "air") continue;
+      const ov = this.views.get(o.id);
+      const ox = ov?.kind === "unit" ? ov.gx : o.x;
+      const oy = ov?.kind === "unit" ? ov.gy : o.y;
+      if (Math.abs(ox - gx) > 1.6 || Math.abs(oy - gy) > 1.6) continue;
+      const [hl, hw] = hullHalf(o.kind);
+      const face = ov?.kind === "unit" ? ov.face : o.facing;
+      avoid.push({ x: ox, z: oy, fx: Math.sin(face), fz: -Math.cos(face), hl, hw });
+    }
+    rig.update({ dt: dtMs, speed, aim: fighting ? 1 : 0, pitch, alive: squadAlive(u), ground: this.groundFn, avoid });
     if (u.rank > v.rank) {
       v.rank = u.rank;
       v.chevronPop = 0;
@@ -671,8 +724,9 @@ export class EntityRenderer {
 
   /**
    * The Condor: down low with its ramp open while it hovers to drop its squads
-   * or squads walk up to board it (downwash kicking up the dust), its riders
-   * sitting along the benches in the bay.
+   * or squads walk up to board it (downwash kicking up the dust, the bay's
+   * light spilling out under the ramp), its riders sitting along the benches
+   * in the bay — on their feet facing the ramp as it opens for a drop.
    */
   private updateCondor(u: Unit, v: UnitView, c: CondorView, gx: number, gy: number, dtMs: number): void {
     const k = dtMs / 1000;
@@ -685,15 +739,33 @@ export class EntityRenderer {
       if (o.hover >= 0 || d < 0.7) open = 1;
     }
     if (this.boarders.has(u.id)) low = open = 1;
+    for (const d of this.dropped.values()) if (d.carrierId === u.id && !d.bailout) c.hold = 850;
+    for (const carrier of this.boarded.values()) if (carrier === u.id) c.hold = Math.max(c.hold, 500);
+    if (c.hold > 0) {
+      c.hold -= dtMs;
+      low = open = 1;
+    }
     c.low += (low - c.low) * (1 - Math.exp(-k * 2.2));
     c.ramp += (open - c.ramp) * (1 - Math.exp(-k * (open > c.ramp ? 3.5 : 2)));
-    v.m.ramp!.rotation.x = c.ramp * 2.05;
+    v.m.ramp!.rotation.x = c.ramp * v.m.def.ramp!.open;
+    // the bay lights spill out of the open ramp onto the ground under it
+    const glow = c.ramp * c.low;
+    c.pool.visible = glow > 0.02 && v.visible;
+    if (c.pool.visible) {
+      const lip = this.rampLip(v, tmp);
+      const s = v.scale;
+      c.pool.position.set((lip.x - gx) / s, (this.v.terrain.surfaceAt(lip.x, lip.z) + 0.04 - v.bh) / s, (lip.z - gy) / s);
+      c.pool.scale.setScalar(1.15 / s);
+      c.poolMat.opacity = glow * (0.5 + 0.06 * Math.sin(this.time / 90));
+    }
+    // downwash: dust blown out in a ring under the fans
     if (c.low > 0.55 && dtMs > 0) {
       c.washT -= dtMs;
       if (c.washT <= 0) {
-        c.washT = 100 + Math.random() * 70;
+        c.washT = 70 + Math.random() * 50;
         const a = Math.random() * Math.PI * 2;
-        this.fx.kick(gx + Math.cos(a) * 0.4, gy + Math.sin(a) * 0.4, 1);
+        this.fx.kick(gx + Math.cos(a) * 0.55, gy + Math.sin(a) * 0.55, 1);
+        this.fx.kick(gx - Math.cos(a) * 0.55, gy - Math.sin(a) * 0.55, 1);
       }
     }
     // riders: a seated rig per squad aboard (a squad that just climbed in takes its seat as it lands)
@@ -714,7 +786,8 @@ export class EntityRenderer {
         r = { rig, side };
         c.riders.set(p.id, r);
       }
-      r.rig.update({ dt: dtMs, speed: 0, aim: 0, pitch: 0, alive: squadAlive(p) });
+      // (on their feet, facing the ramp, as it opens to drop them)
+      r.rig.update({ dt: dtMs, speed: 0, aim: 0, pitch: 0, alive: squadAlive(p), ready: o.type === "unload" ? c.ramp : 0 });
     });
   }
 

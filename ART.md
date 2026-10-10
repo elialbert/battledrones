@@ -29,6 +29,7 @@ python3 art/generate.py            # generate any missing raws (needs OPENAI_API
 python3 art/generate.py 'tex-*' --force   # regenerate matching assets
 python3 art/generate.py --list     # what exists
 python3 art/process.py             # raws -> sprite atlas, icons, key art, PWA icons
+python3 art/process.py --icons-only   # just the HUD portraits
 npx vite-node tools/export-maps.ts # map grids -> art/maps/*.json
 python3 art/terrain.py [map ids]   # paint each map's terrain (and refresh the rock textures)
 python3 art/textures.py            # the biome rock textures alone (Pillow + numpy only)
@@ -59,7 +60,7 @@ stores each raw as `art/raw/<name>.webp` (lossy colour, lossless alpha —
 small enough to commit, faithful enough to reprocess). Sprites use
 `quality="high"` at 1024² or 1536×1024; textures `quality="medium"`.
 
-Inventory (61 raws): 11 units, 8 buildings, rubble, decals, scrap piles,
+Inventory (66 raws): 15 units, 9 buildings, rubble, decals, scrap piles,
 crystal clusters, an 8-frame explosion, 7 materials × 4 biomes (ground,
 ground2, rough, rock, liquid, road, forest canopy), a doodad sheet per
 biome, portrait and landscape key art, the icon, and the two map
@@ -68,6 +69,14 @@ PAIR) and the `supply-crate`. Those use a **NEUTRAL** contract instead of
 STYLE — gunmetal with hazard-yellow stripes and amber lights, no blue or red
 at all — because they belong to no side: the engine draws the holder's
 colour as a ring, so they get no red variant.
+
+The robot infantry and its kit came after the move to 3D, so they exist only
+as HUD portraits, painted to match their in-game models (blocky robots with
+big blue shoulder pads and amber visors): `trooper` (five rifle robots in a
+wedge), `rocket-squad` (three heavy robots with shoulder tubes), `sniper` (two
+cloaked robots with rail rifles), all drawn from a shared **SQUAD** clause
+(straight overhead, every robot facing north); the `condor` dropship (open
+troop bay, two wingtip ducted fans); and the 2×2 `assembly-bay`.
 
 ## 2. Sprites — `art/process.py`
 
@@ -95,7 +104,7 @@ Outputs and the contract the engine relies on:
 |---|---|
 | `public/assets/sprites/game.json` + `game-0.webp` | 2048² multiatlas (~1.3 MB WebP) |
 | `public/assets/sprites/meta.json` | `pxPerTile` (128), per-frame `origin` pivots, turret/head `mounts` (tiles, hull facing north), unit `sizes` |
-| `public/assets/icons/<kind>.webp` | 128 px HUD portraits (blue, turrets composited) |
+| `public/assets/icons/<kind>.webp` | 128 px HUD portraits (blue, turrets composited; content fit to 112 px) |
 | `public/assets/ui/keyart-{portrait,landscape}.webp` | Menu backgrounds |
 | `public/icons/icon-{192,512}.png` | PWA icons |
 | `art/previews/atlas-preview.png` | QA contact sheet |
@@ -139,7 +148,12 @@ them as sprites so they visibly shrink as they're mined.
 
 - Tweak a prompt in `catalog.py`, then `generate.py <name> --force`,
   `process.py`, and rebuild. View `art/previews/*` before shipping.
-- New unit kinds need a catalog entry, a size in `process.py`, and the
-  renderer's frame names follow automatically.
+- New kinds now only need a HUD portrait: add a catalog entry, add the kind to
+  `PORTRAIT_ONLY` in `process.py` (all parts of the raw are kept, so a squad
+  of separate robots works), then `generate.py <kind>` and
+  `process.py --icons-only`. These get no atlas frames.
+- A kind that also needs atlas frames takes a size in `process.py`
+  (`UNIT_SIZES` / `BUILDING_SIZES`) instead, and its frame names follow
+  automatically.
 - Changing a map in `src/sim/maps.ts` requires re-exporting and re-painting
   its terrain (`npm run maps && npm run art:terrain -- <id>`).

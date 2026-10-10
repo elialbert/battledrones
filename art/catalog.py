@@ -159,6 +159,52 @@ unit(
     "a few small green status lights, and three small rotors drawn as faint translucent "
     "blur discs.",
 )
+unit(
+    "condor",
+    "A troop-transport dropship drone called the Condor: a long boxy armored fuselage with an "
+    "armored nose at the top end carrying a small amber cockpit canopy, a large OPEN-TOPPED "
+    "troop bay in the middle of the fuselage showing two rows of fold-down seats either side "
+    "of a central amber floor stripe, a lowered loading ramp at the tail end, two short stubby "
+    "wings sticking straight out sideways from the middle of the fuselage with one large round "
+    "ducted fan at each wingtip (fan blades visible inside the shroud), and a single small "
+    "tail fin at the rear. Chunky and utilitarian.",
+)
+
+# Infantry: squads of small bipedal robots, several robots in one image.
+SQUAD = (
+    "Seen from directly overhead like a drone camera looking straight down: only the tops of "
+    "the heads, the shoulder pads, the backs and the weapons are visible, the legs mostly "
+    "hidden under the bodies. Every robot faces north (toward the top of the image) and "
+    "holds its weapon pointing north; small gaps between them so they do not overlap."
+)
+unit(
+    "trooper",
+    "A Trooper Squad: a tight wedge formation of FIVE small identical bipedal combat robots. "
+    "Each robot is chunky and blocky: a small square light-grey head with a thin amber visor "
+    "slit and a short antenna with an amber tip, two big blocky royal-blue shoulder pads, a "
+    "dark graphite torso and backpack, and a compact dark assault rifle held forward. "
+    f"{SQUAD}",
+)
+unit(
+    "rocket-squad",
+    "A Rocket Squad: THREE bulky heavy bipedal combat robots in a tight triangle formation. "
+    "Each robot is broad and blocky: a small grey head with an amber visor, big blocky "
+    "royal-blue shoulder pads, a wide dark graphite back carrying a small rack of three spare "
+    "rockets with red-tipped noses, and a long thick dark rocket-launcher tube resting on its "
+    f"right shoulder, its open muzzle pointing north. {SQUAD}",
+)
+unit(
+    "sniper",
+    "A Sniper Team: TWO lean bipedal sniper robots standing side by side, one slightly ahead "
+    "of the other. Each robot wears a SHORT olive-green camouflage poncho draped over its "
+    "shoulders and back (a compact cape with a few frayed edges, not trailing behind), a small "
+    "rounded olive hood over the head whose opening faces north toward the rifle (the face is "
+    "hidden under it, seen only as the top of the hood), and a royal-blue collar panel at the "
+    "shoulders; its slim dark graphite arms reach forward to hold a long slender rail rifle "
+    "with small amber coil rings along the barrel, the barrel reaching about one body length "
+    "ahead of the robot. The two robots are drawn large and together fill a roughly square "
+    f"area. {SQUAD}",
+)
 
 # --- buildings -----------------------------------------------------------------
 
@@ -194,6 +240,15 @@ building(
     "depot",
     "Scrap refinery drop-off depot: an industrial building with a large open receiving "
     "hopper, crushers, conveyor belts and neat stacks of processed metal ingots.",
+)
+building(
+    "assembly-bay",
+    "Robot infantry factory (assembly bay): an open-roofed industrial assembly floor with a "
+    "central assembly cradle holding a half-built blocky bipedal robot (grey head with an "
+    "amber visor, royal-blue shoulder pads, legs not yet attached), two articulated robotic "
+    "gantry arms with welding tools reaching over it, a conveyor belt carrying robot parts "
+    "across the floor, a row of three finished robot frames docked in charging alcoves along "
+    "the top edge, a round exit pad near the bottom edge, and amber work lights.",
 )
 pair(
     "turret",
