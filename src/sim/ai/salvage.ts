@@ -1,8 +1,8 @@
-import { BUILDINGS, UNITS } from "../balance";
+import { BUILDINGS, SALVAGE, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
 import { unitSeenBy } from "../infantry";
 import type { Building, Command, Faction, Unit, World, Wreck } from "../types";
-import { distToBuilding } from "../world";
+import { canGetWithin, distToBuilding, moveClassOf } from "../world";
 
 /**
  * The commander's salvage sweeps (salvage.ts has the rules). It plays by the
@@ -99,7 +99,7 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
     let best: Wreck | null = null;
     let bestD = HARVESTER_DIVERT;
     for (const r of ranked) {
-      if (claimed.has(r.id)) continue;
+      if (claimed.has(r.id) || !canGetWithin(w, "ground", h.x, h.y, r.x, r.y, SALVAGE.pickupRadius)) continue;
       const d = Math.hypot(r.x - h.x, r.y - h.y);
       if (d < bestD) {
         bestD = d;
@@ -122,6 +122,8 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
     let bestD = radius;
     for (const u of sweepers) {
       if (ctx.used.has(u.id)) continue;
+      // (a wreck across the water, or on an island: not for this unit)
+      if (!canGetWithin(w, moveClassOf(u.kind), u.x, u.y, r.x, r.y, SALVAGE.pickupRadius)) continue;
       const d = Math.hypot(u.x - r.x, u.y - r.y);
       if (d < bestD) {
         bestD = d;

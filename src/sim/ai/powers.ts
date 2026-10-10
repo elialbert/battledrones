@@ -2,7 +2,7 @@ import { BUILDINGS, POWERS, TICK_RATE, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
 import { calldownBlocker, isStunned, powerStatus } from "../powers";
 import type { BuildingKind, Calldown, Command, Faction, PowerKind, Unit, World } from "../types";
-import { dist, hqOf, passable } from "../world";
+import { dist, hqOf, moveClassOf, passable, regionAt } from "../world";
 import type { AiMode, AiState, Difficulty } from "./commander";
 import { seenEnemies } from "./intel";
 
@@ -78,14 +78,39 @@ export function dodgeCalldowns(w: World, faction: Faction, s: AiState): Command[
         dy = (hq ? hq.ty + 1.5 : w.height / 2) - c.y;
       }
       const len = Math.hypot(dx, dy) || 1;
-      const x = Math.min(w.width - 0.5, Math.max(0.5, u.x + (dx / len) * DODGE_DIST));
-      const y = Math.min(w.height - 0.5, Math.max(0.5, u.y + (dy / len) * DODGE_DIST));
+      const { x, y } = dodgeSpot(w, u, dx / len, dy / len);
       cmds.push({ type: "move", faction, unitIds: [u.id], x, y });
       m.dodging.set(u.id, endTick(c) + 5);
     }
   }
   if (m.seen.size > 64) for (const id of [...m.seen].slice(0, 32)) m.seen.delete(id);
   return cmds;
+}
+
+/**
+ * Where a unit runs to, DODGE_DIST along (ux, uy). On an island map a squad
+ * on a small island would run into the sea (and stop at the shore, still
+ * under the shells): it turns, a little at a time, until the spot is on
+ * ground it can reach, or settles for a shorter run.
+ */
+function dodgeSpot(w: World, u: Unit, ux: number, uy: number): { x: number; y: number } {
+  const at = (a: number, d: number) => {
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    return {
+      x: Math.min(w.width - 0.5, Math.max(0.5, u.x + (ux * c - uy * s) * d)),
+      y: Math.min(w.height - 0.5, Math.max(0.5, u.y + (ux * s + uy * c) * d))
+    };
+  };
+  const mc = moveClassOf(u.kind);
+  const home = mc === "air" ? 0 : regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+  if (!w.rules?.islands || !home) return at(0, DODGE_DIST);
+  for (const d of [DODGE_DIST, 3, 2])
+    for (const a of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) {
+      const p = at(a, d);
+      if (regionAt(w, Math.floor(p.x), Math.floor(p.y), mc) === home) return p;
+    }
+  return at(0, DODGE_DIST);
 }
 
 /** Units currently running from a reticle: the decision pass leaves them be. */
