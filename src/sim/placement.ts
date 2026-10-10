@@ -14,10 +14,12 @@ function groundName(w: World, t: Terrain): string {
   switch (t) {
     case Terrain.Water:
       return w.biome === "volcanic" ? "lava" : "water";
+    case Terrain.Deep:
+      return "open sea";
     case Terrain.Rock:
       return "rock";
     case Terrain.Rough:
-      return { temperate: "mud", desert: "scree", arctic: "slush", volcanic: "cinders" }[w.biome];
+      return { temperate: "mud", desert: "scree", arctic: "slush", volcanic: "cinders", tropical: "mudflat" }[w.biome];
     case Terrain.Forest:
       return "woods";
     case Terrain.Scrap:

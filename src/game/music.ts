@@ -635,6 +635,21 @@ export class Music {
         o.connect(this.env(t, 0.34 * vel, 0.003, end, out));
         break;
       }
+      case "pan": {
+        // steel pan: a sine with a short octave and a metallic third-harmonic strike,
+        // blooming down into pitch
+        const end = t + Math.min(1.6, dur + 0.9);
+        const o = this.osc("bell", "sine", fr, t, end);
+        if (!o) return;
+        o.detune.setValueAtTime(18, t);
+        o.detune.setTargetAtTime(0, t, 0.013);
+        o.connect(this.env(t, 0.42 * vel, 0.003, end, out));
+        const o2 = this.osc("bell", "sine", fr * 2, t, t + 0.5);
+        o2?.connect(this.env(t, 0.2 * vel, 0.003, t + 0.48, out));
+        const o3 = this.osc("bell", "sine", fr * 3, t, t + 0.12);
+        o3?.connect(this.env(t, 0.08 * vel, 0.002, t + 0.11, out));
+        break;
+      }
       case "marimba": {
         // wooden: a sine with a short 4th-harmonic knock
         const end = t + Math.min(1.1, dur + 0.4);

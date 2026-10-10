@@ -325,7 +325,7 @@ export const MAPS: MapDef[] = [
   {
     id: "archipelago",
     name: "Archipelago",
-    biome: "temperate",
+    biome: "tropical",
     size: 96,
     blurb: "Island Uplinks only troops can take: fly them in by Condor. Two bridges.",
     hq: [8, 82],

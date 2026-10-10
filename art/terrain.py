@@ -25,7 +25,8 @@ Chunk quality is chosen per map: the highest of WEBP_QUALITY whose chunks fit in
 BUDGET bytes. Needs Pillow, numpy and scipy.
 
 Terrain codes: 0 Ground, 1 Rock, 2 Scrap, 3 Water (lava on volcanic), 4 Road,
-5 Rough, 6 Forest, 7 Crystal, 8 Bridge, 9 Shallows.
+5 Rough, 6 Forest, 7 Crystal, 8 Bridge, 9 Shallows, 10 Deep (open sea), one
+base-36 character per tile in the exported grid (Deep is "a").
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ SOFTEN = 0.8                             # px blur on ground-level textures (big
 THUMB = 256
 PREVIEW = 1200
 
-GROUND, ROCK, SCRAP, WATER, ROAD, ROUGH, FOREST, CRYSTAL, BRIDGE, SHALLOWS = range(10)
+GROUND, ROCK, SCRAP, WATER, ROAD, ROUGH, FOREST, CRYSTAL, BRIDGE, SHALLOWS, DEEP = range(11)
 
 # Light comes from the upper left; shadows fall toward +x, +y.
 SUN_SLOPE = 0.85  # tan(sun elevation): shadow length == occluder height / SUN_SLOPE
@@ -456,7 +457,7 @@ def paste(img: np.ndarray, Hf: np.ndarray | None, spr: np.ndarray, cx: float, cy
 
 def load_map(mid: str) -> dict:
     d = json.loads((MAPS_DIR / f"{mid}.json").read_text())
-    d["grid"] = np.array([[int(c) for c in row] for row in d["terrain"]], np.int8)
+    d["grid"] = np.array([[int(c, 36) for c in row] for row in d["terrain"]], np.int8)  # base-36: Deep is "a"
     return d
 
 
@@ -473,7 +474,7 @@ def render(mid: str, debug: bool = False) -> dict:
     rng = np.random.default_rng([seed, 1])
     noise = Noise(seed * 7919 + 17)
     volcanic = biome == "volcanic"
-    has = {c: bool((T == c).any()) for c in range(10)}
+    has = {c: bool((T == c).any()) for c in range(11)}
 
     def tex(mat):
         return get_texture(biome, mat, cfg["scale"][mat])
@@ -515,7 +516,7 @@ def render(mid: str, debug: bool = False) -> dict:
     def sdf(codes, blur=0.3):
         return tile_sdf(np.isin(T, codes), blur=blur)
 
-    wetcodes = [WATER, SHALLOWS, BRIDGE]
+    wetcodes = [WATER, SHALLOWS, BRIDGE, DEEP]
     Hterr = np.zeros((H, W), np.float32)   # height field for cast shadows
     ao = np.zeros((H, W), np.float32)      # ambient-occlusion darkening 0..1
 
@@ -628,12 +629,12 @@ def render(mid: str, debug: bool = False) -> dict:
     m_water = np.zeros((H, W), np.float32)
     m_lava = np.zeros((H, W), np.float32)
     sd_deep = None
-    if has[WATER] or has[SHALLOWS]:
+    if has[WATER] or has[SHALLOWS] or has[DEEP]:
         wc = cfg["water"]
         sd_wet = sdf(wetcodes, blur=0.42)
         e_wet = sd_wet + 0.13 * PX * n_edge + 0.035 * PX * n_fine
         m_water = sstep(-1.5, 1.5, e_wet)
-        sd_deep = sdf([WATER, BRIDGE], blur=0.42)
+        sd_deep = sdf([WATER, BRIDGE, DEEP], blur=0.42)
         e_deep = sd_deep + 0.1 * PX * n_edge + 0.03 * PX * n_fine
         m_deep = sstep(-1.5, 1.5, e_deep) * m_water
         liq = ndi.gaussian_filter(tex_layer(tex("liquid"), H, W, rng, noise, feat=3.5 * PX), (0.5, 0.5, 0))
@@ -661,6 +662,15 @@ def render(mid: str, debug: bool = False) -> dict:
             # drop-off edge: darker line just inside deep water
             drop = sstep(0.0, 0.1 * PX, e_deep) * sstep(0.35 * PX, 0.05 * PX, e_deep)
             deep_col *= (1 - 0.22 * drop)[..., None]
+            if has[DEEP]:
+                # the open sea past the coastal shelf: a second, darker drop-off and a
+                # long fall into the abyss colour, so islands sit in rings of light water
+                e_abyss = sdf([DEEP], blur=0.5) + 0.25 * PX * n_edge + 0.05 * PX * n_fine
+                ab = (sstep(-0.2 * PX, 3.5 * PX, e_abyss) ** 0.8)[..., None]
+                abyss = np.asarray(wc.get("abyss", (0.02, 0.08, 0.16)), np.float32)
+                deep_col = deep_col * (1 - 0.7 * ab) + abyss * (0.7 * ab)
+                ledge = sstep(-0.1 * PX, 0.05 * PX, e_abyss) * sstep(0.4 * PX, 0.1 * PX, e_abyss)
+                deep_col *= (1 - 0.18 * ledge)[..., None]
             # shallows: bed seen through a thin water film + ripples
             L = lum(liq)
             rip = (L - ndi.gaussian_filter(L, 4))[..., None]
@@ -830,7 +840,7 @@ def bridge_specs(T: np.ndarray) -> list[dict]:
     lab, n = ndi.label(T == BRIDGE, structure=np.ones((3, 3)))
     specs = []
     h, w = T.shape
-    wet = np.isin(T, [WATER, SHALLOWS, BRIDGE])
+    wet = np.isin(T, [WATER, SHALLOWS, BRIDGE, DEEP])
     for i in range(1, n + 1):
         ys, xs = np.nonzero(lab == i)
         comp = lab == i
@@ -967,7 +977,7 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
     near_rock = ndi.binary_dilation(T == ROCK, np.ones((3, 3)))
     rock_edge = (T == ROCK) & ndi.binary_dilation(T != ROCK, ndi.generate_binary_structure(2, 1))
     forest_edge = (T == FOREST) & ndi.binary_dilation(T != FOREST, np.ones((3, 3)))
-    wet = np.isin(T, [WATER, SHALLOWS, BRIDGE])
+    wet = np.isin(T, [WATER, SHALLOWS, BRIDGE, DEEP])
     near_wet = ndi.binary_dilation(wet, np.ones((3, 3))) & ~wet
     near_lava = ndi.binary_dilation(T == WATER, np.ones((3, 3)), iterations=1) & ~wet
     volcanic = d["biome"] == "volcanic"
@@ -1137,7 +1147,7 @@ def write_outputs(mid: str, im: Image.Image, T: np.ndarray, debug: bool) -> dict
         # outline impassable tiles (rock, deep water) in red, shallows/forest in yellow
         dbg = np.asarray(im).copy()
         h, w = T.shape
-        for codes, col in (([ROCK, WATER], (255, 0, 0)), ([SHALLOWS], (255, 255, 0)), ([FOREST], (0, 255, 255))):
+        for codes, col in (([ROCK, WATER, DEEP], (255, 0, 0)), ([SHALLOWS], (255, 255, 0)), ([FOREST], (0, 255, 255))):
             m = np.isin(T, codes)
             for ty in range(h):
                 for tx in range(w):

@@ -74,11 +74,12 @@ export const MODES = {
   dorian: [0, 2, 3, 5, 7, 9, 10],
   phrygianDominant: [0, 1, 4, 5, 7, 8, 10],
   lydian: [0, 2, 4, 6, 7, 9, 11],
-  aeolian: [0, 2, 3, 5, 7, 8, 10]
+  aeolian: [0, 2, 3, 5, 7, 8, 10],
+  mixolydian: [0, 2, 4, 5, 7, 9, 10]
 } as const;
 
-export type BellKind = "pluck" | "oud" | "glass" | "marimba";
-export type Groove = "pulse" | "tresillo" | "chug" | "glide";
+export type BellKind = "pluck" | "oud" | "glass" | "marimba" | "pan";
+export type Groove = "pulse" | "tresillo" | "chug" | "glide" | "calypso";
 
 export interface Flavour {
   biome: Biome;
@@ -160,6 +161,21 @@ export const FLAVOURS: Record<Biome, Flavour> = {
     bass: { wave: "sawtooth", cutoff: 300, drive: 0.55, groove: "chug" },
     drums: { halfTime: false, tabla: false, toms: true },
     motif: [[0, 6, 0], [6, 2, -1], [8, 8, -1], [16, 6, 2], [22, 2, 1], [24, 8, -2]]
+  },
+  // Archipelago: G mixolydian, G – C – F – C, an island vamp: a reedy
+  // melodica pad, steel pan, a calypso bass line
+  tropical: {
+    biome: "tropical",
+    tonic: 43,
+    mode: MODES.mixolydian,
+    progression: [0, 3, 6, 3],
+    sevenths: false,
+    pad: { a: "square", b: "triangle", bRatio: 2, detune: 8, cutoff: 1700, q: 1.2 },
+    bell: "pan",
+    arp: "triangle",
+    bass: { wave: "triangle", cutoff: 820, drive: 0, groove: "calypso" },
+    drums: { halfTime: false, tabla: false, toms: false },
+    motif: [[0, 3, 0], [3, 3, 1], [6, 2, 1], [8, 4, -1], [12, 2, -1], [14, 2, 2], [16, 6, 1], [22, 2, -1], [24, 8, -2]]
   }
 };
 
@@ -390,7 +406,8 @@ const GROOVES: Record<Groove, [string, string]> = {
   pulse: ["R.r.r.r.R.r.r.O.", "R.rr.r.rR.r.rO.F"],
   tresillo: ["R..r..r.R..r..F.", "R.rr.rr.R.rr.FO."],
   chug: ["R.r.rr.rR.r.rr.F", "Rrr.rrr.Rrr.rrOF"],
-  glide: ["R.......F.......", "R...r...F...r..."]
+  glide: ["R.......F.......", "R...r...F...r..."],
+  calypso: ["R..r..F.R.r.O.F.", "R.rR.rF.R.rrO.Fr"]
 };
 
 /** One bar of bass for the biome's groove; `level` 2 drives harder. */
@@ -696,6 +713,7 @@ export function coinKey(biome: Biome): { shift: number; steps: readonly number[]
   switch (biome) {
     case "temperate": // D dorian = the C major collection
     case "arctic": // F lydian, likewise
+    case "tropical": // G mixolydian, likewise
       return { shift: -4, steps: [0, 2, 4, 7, 9, 12] };
     case "volcanic": // C aeolian = the Eb major collection
       return { shift: -1, steps: [0, 2, 4, 7, 9, 12] };

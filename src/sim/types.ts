@@ -582,7 +582,7 @@ import type { SurvivalState, WaveTheme } from "./modes/survival";
 import type { Rules } from "./rules";
 import type { OpsState } from "./ops";
 
-export type Biome = "temperate" | "desert" | "arctic" | "volcanic";
+export type Biome = "temperate" | "desert" | "arctic" | "volcanic" | "tropical";
 
 export interface World {
   tick: number;

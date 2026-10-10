@@ -40,6 +40,8 @@ describe("harmony", () => {
     expect(names(chordPcs(a, 1))).toBe("G B D F"); // the lydian II
     const v = FLAVOURS.volcanic;
     expect(v.progression.map((x) => names(chordPcs(v, x)))).toEqual(["C Eb G", "Ab C Eb", "Eb G Bb", "Bb D F"]);
+    const tr = FLAVOURS.tropical; // the island vamp: I – IV – bVII – IV
+    expect(tr.progression.map((x) => names(chordPcs(tr, x)))).toEqual(["G B D", "C E G", "F A C", "C E G"]);
   });
 
   it("voice-leads every progression smoothly, in range, with no clashes", () => {

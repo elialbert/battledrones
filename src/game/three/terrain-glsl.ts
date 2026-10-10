@@ -243,6 +243,8 @@ export function patchCrag(s: Shader, rock: RockUniforms): void {
 export interface LiquidUniforms extends EdgeUniforms {
   uShallow: { value: THREE.Color };
   uDeep: { value: THREE.Color };
+  /** The open sea's colour, far past the coastal shelf (only Terrain.Deep is that deep). */
+  uAbyss: { value: THREE.Color };
   /** 0 water, 1 lava, 2 icy sea. */
   uMode: { value: number };
   uWT: { value: number };
@@ -264,7 +266,7 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
   s.fragmentShader = s.fragmentShader
     .replace(FOG_LOOKUP, FOG_MIRRORED)
     .replace("#include <common>", "#include <common>\nvarying float vDepth;\nvarying vec2 vXZ;")
-    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uShallow; uniform vec3 uDeep; uniform float uMode; uniform float uWT;`)
+    .replace("#include <fog_pars_fragment>", `#include <fog_pars_fragment>\n${EDGE_DECL}\nuniform vec3 uShallow; uniform vec3 uDeep; uniform vec3 uAbyss; uniform float uMode; uniform float uWT;`)
     .replace(
       "#include <color_fragment>",
       /* glsl */ `#include <color_fragment>
@@ -279,6 +281,8 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
         float n2 = texture2D( uTNoise, vXZ * 0.11 - vec2( uWT * 0.007, -uWT * 0.011 ) ).g;
         float n = ( n1 + n2 ) * 0.5;
         wc = mix( uShallow, uDeep, dk ) * ( 0.84 + 0.32 * n );
+        // past the coastal shelf the open sea falls away into the abyss colour (rivers never get this deep)
+        wc = mix( wc, uAbyss * ( 0.9 + 0.2 * n ), smoothstep( 0.5, 1.12, vDepth ) );
         alpha = mix( 0.2, 0.9, dk );
         float lap = 0.045 + 0.02 * sin( uWT * 1.4 + n * 10.0 );
         float foam = ( 1.0 - smoothstep( 0.0, lap, vDepth ) ) * ( 0.55 + 0.45 * n );
