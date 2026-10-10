@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "build:pages": "node tools/build-pages.mjs",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run && node --test tools/pages-archive.test.mjs",
     "test:watch": "vitest",
     "smoke": "node tools/smoke.mjs",
     "maps": "vite-node tools/export-maps.ts",

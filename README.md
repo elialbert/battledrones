@@ -183,7 +183,9 @@ node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
 
-GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Each historical version is rebuilt from its own source and lockfile. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
+GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
+
+Each historical build includes a downloadable ZIP, such as <https://simonw.github.io/battledrones/v3/v3.zip>. Later deployments first try to download and reuse that ZIP, checking its integrity and recorded tag, commit, URL path, and archive format. Missing, invalid, or outdated archives fall back to a build from the tag's own source and lockfile, then publish a new ZIP. The current game always builds from source. Set `PAGES_CACHE_URL=` to force all historical builds, or set it to another site root to test cache reuse locally.
 
 Pull requests build the complete site without deploying. The Pages workflow only builds and publishes; the separate Tests workflow runs the unit tests. To build the site locally, run `git fetch --tags`, `npm ci`, and `npm run build:pages`. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
 

@@ -5,10 +5,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createVersionArchive, restoreVersionArchive } from "./pages-archive.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = join(root, "_site");
 const base = "/battledrones/";
+// An empty override forces historical versions to rebuild from source.
+const cacheURL = process.env.PAGES_CACHE_URL ?? "https://simonw.github.io/battledrones/";
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 const tags = git("tag", "--list", "--sort=version:refname", "v[0-9]*")
   .split("\n").filter(Boolean);
@@ -29,6 +32,12 @@ build(root, output, base);
 const versions = [{ tag: null, commit: git("rev-parse", "HEAD"), path: base }];
 
 for (const tag of tags) {
+  const version = { tag, commit: git("rev-parse", `refs/tags/${tag}^{commit}`), path: `${base}${tag}/` };
+  const destination = join(output, tag);
+  versions.push(version);
+  if (cacheURL && await restoreVersionArchive(
+    `${cacheURL.replace(/\/$/, "")}/${tag}/${tag}.zip`, destination, version
+  )) continue;
   console.log(`\nBuilding ${tag}`);
   const temporary = mkdtempSync(join(tmpdir(), "battledrones-pages-"));
   try {
@@ -39,9 +48,8 @@ for (const tag of tags) {
     execFileSync("git", ["archive", "--format=tar", "--output", archive, `refs/tags/${tag}`], { cwd: root });
     execFileSync("tar", ["-xf", archive, "-C", source]);
     execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: source, stdio: "inherit" });
-    const path = `${base}${tag}/`;
-    build(source, join(output, tag), path);
-    versions.push({ tag, commit: git("rev-parse", `${tag}^{commit}`), path });
+    build(source, destination, version.path);
+    createVersionArchive(destination, version);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
