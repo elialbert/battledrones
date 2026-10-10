@@ -346,8 +346,12 @@ export const INFANTRY = {
   boardRange: 1.2,
   /** Seconds a Condor hovers over the drop point before the squads are down. */
   unloadHover: 1.5,
-  /** How far (tiles) a drop may snap to find a tile infantry can stand on. */
+  /** How far (tiles) a drop may snap to find a tile infantry can stand on (past that: the nearest anywhere). */
   dropSearch: 6,
+  /** Squads set down (dropped or bailed out) keep their centre this far (tiles) from ground they can't stand on and the map's edge: their robots stand around it. */
+  dropClear: 0.4,
+  /** After a drop the Condor backs off this far (tiles) the way it came, off its squads' heads. */
+  dropBackOff: 1.5,
   /** A Condor shot down over walkable ground: passengers bail out with at most this share of their max HP. */
   bailoutHp: 0.5
 };

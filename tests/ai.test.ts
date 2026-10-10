@@ -5,6 +5,8 @@ import { AA_COVER, aaWeight } from "../src/sim/ai/intel";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { unitSeenBy } from "../src/sim/infantry";
 import { createSkirmishWorld } from "../src/sim/map";
+import { nearestScrapTile } from "../src/sim/economy";
+import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
 import { buildingCenter, hqOf, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -371,5 +373,94 @@ describe("AI and robot infantry", () => {
         throw new Error("dropped into the flak");
     }
     expect(Math.min(...reached)).toBeGreaterThan(10);
+  }, 30000);
+
+  it("doesn't even board while every way in is covered (the squads stay on the ground)", () => {
+    const { w, ai } = dropSetup("normal");
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const f = spawnUnit(w, "flak-crawler", "blue", blueHq.x + Math.cos(a) * 5, blueHq.y + Math.sin(a) * 5);
+      w.powers.stunned.set(f.id, 1e9);
+    }
+    const scout = spawnUnit(w, "scout", "red", blueHq.x, blueHq.y);
+    scout.hp = 1e9;
+    w.powers.stunned.set(scout.id, 1e9);
+    tickFog(w); // (red sees it all from the first pass)
+    for (let i = 0; i < 60 * TICK_RATE && !w.winner; i++) {
+      const cmds = tickAi(w, "red", ai);
+      expect(cmds.some((c) => c.type === "board")).toBe(false);
+      step(w, cmds);
+    }
+  }, 30000);
+
+  /** dropSetup, plus SAM sites by blue's home field that red hasn't seen when it plans its drop. */
+  function samSetup(n: number) {
+    const s = dropSetup("normal");
+    const field = nearestScrapTile(s.w, buildingCenter(hqOf(s.w, "blue")!).x, buildingCenter(hqOf(s.w, "blue")!).y, "blue")!;
+    for (let i = 0; i < n; i++) spawnBuilding(s.w, "sam-site", "blue", field.x + 2 + i * 2, field.y - 2);
+    return s;
+  }
+
+  it("turns a drop back when anti-air turns up on the way in, sets the squads down at home, and doesn't fly straight back", () => {
+    const { w, ai } = samSetup(2);
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    const redHq = buildingCenter(hqOf(w, "red")!);
+    const condor = units(w, "red", "condor")[0]!;
+    const near = (x: number, y: number) => Math.hypot(x - blueHq.x, y - blueHq.y) < 14;
+    let trips = 0;
+    let homeDrop = false;
+    for (let i = 0; i < 120 * TICK_RATE && !w.winner; i++) {
+      const cmds = tickAi(w, "red", ai);
+      for (const c of cmds) if (c.type === "unload" && c.x !== undefined && near(c.x, c.y!)) trips++;
+      step(w, cmds);
+      for (const e of w.fx)
+        if (e.type === "disembark" && e.faction === "red") {
+          expect(near(e.x, e.y), "dropped under the SAMs").toBe(false);
+          if (Math.hypot(e.x - redHq.x, e.y - redHq.y) < 10) homeDrop = true;
+        }
+    }
+    expect(w.units.has(condor.id)).toBe(true);
+    expect(condor.hp).toBeGreaterThan(UNITS.condor.hp * (1 - CONDOR_AI.abortLoss));
+    expect(homeDrop).toBe(true); // set down at home: they walk
+    expect(trips).toBe(1); // …and no second trip into the SAMs it saw
+  }, 30000);
+
+  it("turns a drop back when it takes fire on the way in, even on a straight run", () => {
+    const { w, ai } = dropSetup("normal");
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    const condor = units(w, "red", "condor")[0]!;
+    let hit = false;
+    for (let i = 0; i < 60 * TICK_RATE && !w.winner; i++) {
+      step(w, tickAi(w, "red", ai));
+      // flying straight in to drop: hit hard (as by fighters it can't see coming)
+      if (!hit && condor.order.type === "unload" && condor.order.hover < 0 && condor.order.x !== undefined &&
+          Math.hypot(condor.order.x - blueHq.x, condor.order.y - blueHq.y) < 14 && Math.hypot(condor.x - blueHq.x, condor.y - blueHq.y) > 25) {
+        condor.hp -= UNITS.condor.hp * (CONDOR_AI.abortLoss + 0.05);
+        hit = true;
+      }
+      for (const e of w.fx)
+        if (e.type === "disembark" && e.faction === "red")
+          expect(Math.hypot(e.x - blueHq.x, e.y - blueHq.y), "dropped after taking fire").toBeGreaterThan(14);
+    }
+    expect(hit).toBe(true);
+  }, 30000);
+
+  it("rebuilds a lost Condor no sooner than CONDOR_AI.rebuild seconds later", () => {
+    const { w, ai } = dropSetup("normal");
+    w.tick -= 10 * TICK_RATE;
+    hqOf(w, "blue")!.hp = 1e9; // (a long watch: blue never falls)
+    for (let i = 0; i < 4 * TICK_RATE; i++) step(w, tickAi(w, "red", ai));
+    const condor = units(w, "red", "condor")[0]!;
+    w.units.delete(condor.id); // shot down (as cleanupDeaths leaves it)
+    const lost = w.tick;
+    let queued = -1;
+    for (let i = 0; i < 120 * TICK_RATE && queued < 0; i++) {
+      w.factions.red.scrap = Math.max(w.factions.red.scrap, 1000); // (the airpad always has the scrap and a free slot)
+      const cmds = tickAi(w, "red", ai);
+      if (cmds.some((c) => c.type === "produce" && c.unit === "condor")) queued = w.tick;
+      step(w, cmds);
+    }
+    expect(queued).toBeGreaterThanOrEqual(lost + CONDOR_AI.rebuild * TICK_RATE);
   }, 30000);
 });

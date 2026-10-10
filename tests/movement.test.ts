@@ -126,6 +126,19 @@ describe("unit movement", () => {
     expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(0.5);
   });
 
+  it("never shoves a ground unit onto the map's edge (its model would hang off it)", () => {
+    // a factory in a corner rolls its units out onto one spot: they part, inside the map
+    for (const kind of ["stinger", "trooper"] as const) {
+      const w = createWorld(24, 24);
+      const units = [1, 2, 3, 4].map(() => spawnUnit(w, kind, "blue", 0.5, 23.5));
+      runTicks(w, 3 * TICK_RATE);
+      for (const u of units) {
+        expect(Math.min(u.x, u.y, w.width - u.x, w.height - u.y), kind).toBeGreaterThanOrEqual(0.4 - 1e-9);
+        for (const o of units) if (o !== u) expect(Math.hypot(u.x - o.x, u.y - o.y)).toBeGreaterThan(0.3);
+      }
+    }
+  });
+
   it("lets air and ground units share a spot (different altitude)", () => {
     const w = createWorld(24, 24);
     const a = spawnUnit(w, "stinger", "blue", 5.5, 5.5);

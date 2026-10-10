@@ -251,7 +251,7 @@ describe("longer fights", () => {
 });
 
 describe("start camera framing", () => {
-  it("frames the HQ, its home field and the factory site on every map", () => {
+  it("frames the HQ, its home field, the factory site and the starting squad on every map", () => {
     for (const def of MAPS) {
       const w = createMapWorld(def.id);
       const box = startBox(w, "blue")!;
@@ -263,6 +263,12 @@ describe("start camera framing", () => {
       expect(field.x + 1).toBeLessThanOrEqual(box.x1);
       expect(field.y).toBeGreaterThanOrEqual(box.y0);
       expect(field.y + 1).toBeLessThanOrEqual(box.y1);
+      // the Trooper Squad on the HQ's far flank, its robots clear of the box edge
+      const squad = units(w, "blue", "trooper")[0]!;
+      expect(squad.x - 1).toBeGreaterThanOrEqual(box.x0);
+      expect(squad.x + 1).toBeLessThanOrEqual(box.x1);
+      expect(squad.y - 1).toBeGreaterThanOrEqual(box.y0);
+      expect(squad.y + 1).toBeLessThanOrEqual(box.y1);
       // compact enough to read on a phone
       expect(box.x1 - box.x0).toBeLessThan(20);
       expect(box.y1 - box.y0).toBeLessThan(20);

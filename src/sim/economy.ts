@@ -215,7 +215,8 @@ function findSpawnSpot(w: World, b: Building, kind: UnitKind): { x: number; y: n
     ring.sort((p, q) => p.pref - q.pref);
     if (ring[0]) return { x: ring[0].x, y: ring[0].y };
   }
-  return { x: b.tx + size / 2, y: flip ? b.ty + size + 1 : b.ty - 1 };
+  // (boxed in: by the bay doors, but never off the map)
+  return { x: b.tx + size / 2, y: Math.min(w.height - 0.5, Math.max(0.5, flip ? b.ty + size + 1 : b.ty - 1)) };
 }
 
 function applyRally(w: World, u: Unit, b: Building): void {

@@ -7,7 +7,7 @@ import { dropPoint, isLoaded } from "../transport";
 import type { Command, Faction, Unit, World } from "../types";
 import { dist } from "../world";
 import type { AiState } from "./commander";
-import { AA_COVER, aaSources, aaStrengthAt, seenEnemies } from "./intel";
+import { AA_COVER, aaSources, aaStrengthAt, aaWeight, seenEnemies, type Sighting } from "./intel";
 
 /**
  * The commander's Condor drops (INFANTRY.md "AI"): Rush and Balanced keep one
@@ -15,7 +15,9 @@ import { AA_COVER, aaSources, aaStrengthAt, seenEnemies } from "./intel";
  * harvester line on a route clear of the anti-air they can see or remember,
  * set the squads down a little short of the harvesters and let them fight.
  * The empty Condor flies home and goes again once two more squads are free;
- * a lost one is rebuilt (a few times a match). Ordinary board / unload /
+ * a lost one is rebuilt (a few times a match). A drop that runs into guards,
+ * anti-air or fire on the way in picks another way in or turns back, and
+ * the next one steers clear of what it ran into. Ordinary board / unload /
  * move commands, same fog as everyone. Easy never drops.
  */
 
@@ -40,8 +42,12 @@ export const CONDOR_AI = {
   minHp: 0.7,
   /** Squads farther than this (tiles) from the Condor, or from home, aren't called to board. */
   reach: 16,
-  /** A Condor that loses this share of its max HP on the way to its waypoint turns back. */
+  /** A Condor that loses this share of its max HP on the way in turns back. */
   abortLoss: 0.3,
+  /** Guards and anti-air a called-off drop ran into are remembered this long (s), where they were seen: the next drop steers clear. */
+  recall: 90,
+  /** …those within this many tiles of the Condor or its landing zone, when the drop is called off. */
+  recallRadius: 8,
   /** Dropped squads go for a harvester (or Depot) they know of within this many tiles; else they hold the field. */
   chase: 8,
   /** Visible armed enemy ground value within this radius (tiles) of a drop point… */
@@ -67,11 +73,13 @@ interface Memo {
   field: { x: number; y: number } | null;
   /** Tick of the last landing (or called-off drop). */
   lastDrop: number;
-  /** HP when the current trip began, and whether it turned back hurt (the squads then walk). */
+  /** HP when the current trip began, and whether it was called off (the squads are then set down at home, and walk). */
   launchHp: number;
   turnedBack: boolean;
   built: number;
   lostTick: number;
+  /** Enemies a called-off drop ran into: where they were seen, remembered until `until` (fog hides them again on the way home). */
+  threats: (Sighting & { until: number })[];
 }
 
 const memos = new WeakMap<AiState, Memo>();
@@ -80,7 +88,8 @@ function memo(s: AiState): Memo {
   if (!m) {
     m = {
       phase: "ready", condorId: null, squads: [], since: 0, waypoint: null, drop: null,
-      raiders: [], raidUntil: 0, field: null, lastDrop: -1e9, launchHp: 0, turnedBack: false, built: 0, lostTick: -1e9
+      raiders: [], raidUntil: 0, field: null, lastDrop: -1e9, launchHp: 0, turnedBack: false, built: 0, lostTick: -1e9,
+      threats: []
     };
     memos.set(s, m);
   }
@@ -107,8 +116,17 @@ export function dropsCondors(w: World, faction: Faction, s: AiState): boolean {
 export function wantCondor(w: World, faction: Faction, s: AiState, have: number, squads: number): boolean {
   if (have > 0 || !dropsCondors(w, faction, s)) return false;
   const m = memo(s);
+  noteLoss(w, m); // (production runs before the tactics: a Condor lost since the last pass counts already)
   if (m.built >= CONDOR_AI.maxBuilt || w.tick - m.lostTick < CONDOR_AI.rebuild * TICK_RATE) return false;
   return w.tick >= (CONDOR_AI.from - 20) * TICK_RATE && squads >= 2;
+}
+
+/** Our Condor gone since we last looked (shot down: its squads bailed out, or went down with it)? Start the rebuild clock. */
+function noteLoss(w: World, m: Memo): void {
+  if (m.condorId !== null && !w.units.has(m.condorId)) {
+    m.lostTick = w.tick;
+    m.condorId = null;
+  }
 }
 
 /** Squads the drop plan has a claim on this pass (boarding, or out raiding): other tactics leave them be. */
@@ -148,12 +166,9 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
   planRaiders(w, faction, m, ctx, cmds);
 
   // --- our Condor (built at the airpad): track it, notice when it's lost --
+  noteLoss(w, m);
   let c = m.condorId !== null ? w.units.get(m.condorId) : undefined;
   if (!c) {
-    if (m.condorId !== null) {
-      m.lostTick = w.tick; // shot down: its squads bailed out (or went down with it)
-      m.condorId = null;
-    }
     for (const u of w.units.values())
       if (u.faction === faction && u.kind === "condor") {
         c = u;
@@ -182,6 +197,34 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
     if (dist(condor.x, condor.y, home.x, home.y) > 2 && condor.order.type === "idle")
       cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
   };
+  /** Squads' worth aboard (what a landing zone's guards are weighed against). */
+  const cargo = () => (condor.passengers ?? []).reduce((v, u) => v + UNITS[u.kind].cost, 0);
+  /** Off on a planned trip: by its flank waypoint, or straight in to drop. */
+  const fly = (plan: DropPlan) => {
+    m.drop = plan.drop;
+    m.field = plan.line;
+    m.waypoint = plan.waypoint;
+    if (plan.waypoint) {
+      cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
+      setPhase(m, "transit", w.tick);
+    } else {
+      cmds.push({ type: "unload", faction, unitIds: [condor.id], x: plan.drop.x, y: plan.drop.y });
+      setPhase(m, "drop", w.tick);
+    }
+  };
+  /** Taking fire on the way in (CONDOR_AI.abortLoss of its HP since launch)? */
+  const hurt = () => condor.hp < m.launchHp - UNITS.condor.hp * CONDOR_AI.abortLoss;
+  /**
+   * Call the trip off: home with the squads, who are set down there and walk
+   * (and the next boarding waits CONDOR_AI.every), remembering what it ran into.
+   */
+  const turnBack = () => {
+    noteThreats(w, faction, m, condor);
+    cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
+    m.lastDrop = w.tick;
+    m.turnedBack = true;
+    setPhase(m, "return", w.tick);
+  };
 
   switch (m.phase) {
     case "ready": {
@@ -202,6 +245,9 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         .sort((a, b) => dist(a.x, a.y, condor.x, condor.y) - dist(b.x, b.y, condor.x, condor.y))
         .slice(0, cap);
       if (picks.length < cap) break;
+      // no way in from here (every approach covered or held): the squads stay on the ground
+      const value = picks.reduce((v, u) => v + UNITS[u.kind].cost, 0);
+      if (!planDrop(w, faction, condor, ctx.hqC, known(w, faction, m), value)) break;
       m.squads = picks.map((u) => u.id);
       for (const id of m.squads) ctx.used.add(id);
       cmds.push({ type: "board", faction, unitIds: m.squads, carrierId: condor.id });
@@ -243,20 +289,11 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         m.turnedBack = false;
         break;
       }
-      const plan = planDrop(w, faction, condor, ctx.hqC);
+      const plan = planDrop(w, faction, condor, ctx.hqC, known(w, faction, m), cargo());
       if (!plan) break; // no clear way in yet: wait
       m.squads = aboard();
-      m.drop = plan.drop;
-      m.field = plan.line;
-      m.waypoint = plan.waypoint;
       m.launchHp = condor.hp;
-      if (plan.waypoint) {
-        cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
-        setPhase(m, "transit", w.tick);
-      } else {
-        cmds.push({ type: "unload", faction, unitIds: [condor.id], x: plan.drop.x, y: plan.drop.y });
-        setPhase(m, "drop", w.tick);
-      }
+      fly(plan);
       break;
     }
     case "transit": {
@@ -264,33 +301,16 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         setPhase(m, "return", w.tick);
         break;
       }
-      if (condor.hp < m.launchHp - UNITS.condor.hp * CONDOR_AI.abortLoss) {
-        // taking fire on the way out: turn back with the squads
-        cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
-        m.lastDrop = w.tick;
-        m.turnedBack = true;
-        setPhase(m, "return", w.tick);
+      if (hurt()) {
+        turnBack(); // taking fire on the way out
         break;
       }
       const wp = m.waypoint;
       if (wp && dist(condor.x, condor.y, wp.x, wp.y) > 1.5 && condor.order.type === "move") break;
       // over the waypoint: re-check the way in from here, then drop
-      const plan = planDrop(w, faction, condor, ctx.hqC);
-      if (plan && !plan.waypoint) {
-        m.drop = plan.drop;
-        m.field = plan.line;
-        cmds.push({ type: "unload", faction, unitIds: [condor.id], x: plan.drop.x, y: plan.drop.y });
-        setPhase(m, "drop", w.tick);
-      } else if (plan?.waypoint) {
-        m.drop = plan.drop;
-        m.field = plan.line;
-        m.waypoint = plan.waypoint;
-        cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
-        setPhase(m, "transit", w.tick);
-      } else {
-        cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
-        setPhase(m, "return", w.tick);
-      }
+      const plan = planDrop(w, faction, condor, ctx.hqC, known(w, faction, m), cargo());
+      if (plan) fly(plan);
+      else turnBack();
       break;
     }
     case "drop": {
@@ -305,21 +325,19 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         setPhase(m, "return", w.tick);
       } else if (condor.order.type !== "unload") {
         setPhase(m, "loaded", w.tick); // knocked off course (a dodge): plan again
-      } else if (condor.order.hover < 0 && m.drop && guarded(seenEnemies(w, faction), condor, m.drop)) {
-        // the landing zone turned out to be held (seen on the way in): pick another, or go home
-        const plan = planDrop(w, faction, condor, ctx.hqC);
-        if (plan) {
-          m.drop = plan.drop;
-          m.field = plan.line;
-          m.waypoint = plan.waypoint;
-          if (plan.waypoint) {
-            cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
-            setPhase(m, "transit", w.tick);
-          } else cmds.push({ type: "unload", faction, unitIds: [condor.id], x: plan.drop.x, y: plan.drop.y });
-        } else {
-          cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
-          m.lastDrop = w.tick;
-          setPhase(m, "return", w.tick);
+      } else if (condor.order.hover < 0 && hurt()) {
+        turnBack(); // taking fire on the way in
+      } else if (condor.order.hover < 0 && m.drop) {
+        // still on the way in: is the landing zone held, or under anti-air, by what we
+        // see now? Then pick another way in, or go home. (Not the way there: what
+        // covers that is mostly fighters passing by — taking fire is hurt()'s call.)
+        const enemies = known(w, faction, m);
+        const lz = m.drop;
+        if (guarded(enemies, cargo(), lz) || airspace(w, faction, enemies).covered(lz.x, lz.y)) {
+          noteThreats(w, faction, m, condor);
+          const plan = planDrop(w, faction, condor, ctx.hqC, known(w, faction, m), cargo());
+          if (plan) fly(plan);
+          else turnBack();
         }
       }
       break;
@@ -383,46 +401,87 @@ function planRaiders(w: World, faction: Faction, m: Memo, ctx: CondorContext, cm
   cmds.push({ type: "attackMove", faction, unitIds: ids, x: goal.x, y: goal.y });
 }
 
-/** Is a drop point held by more visible armed ground enemies than the squads aboard could take on? */
-function guarded(seen: Unit[], c: Unit, p: { x: number; y: number }): boolean {
-  const squads = (c.passengers ?? []).reduce((v, u) => v + UNITS[u.kind].cost, 0);
-  let v = 0;
-  for (const e of seen)
-    if (UNITS[e.kind].dps > 0 && UNITS[e.kind].domain === "ground" && dist(e.x, e.y, p.x, p.y) <= CONDOR_AI.guardRadius)
-      v += UNITS[e.kind].cost;
-  return v > squads * CONDOR_AI.guardShare;
+/**
+ * The enemies the drop plan reckons with: those in sight, and those a
+ * called-off drop ran into lately (where they were seen; Memo.threats).
+ */
+function known(w: World, faction: Faction, m: Memo): Sighting[] {
+  const seen: Sighting[] = seenEnemies(w, faction);
+  m.threats = m.threats.filter((t) => t.until > w.tick);
+  const ids = new Set(seen.map((u) => u.id));
+  return [...seen, ...m.threats.filter((t) => !ids.has(t.id))];
 }
 
 /**
- * Where to drop and how to get there: a point CONDOR_AI.standoff short of an
- * enemy harvester line (a visible harvester, a known Depot, else the mirror
- * image of our own field) that no visible guard holds, no more anti-air on
- * it than AA_COVER, reached on a straight line or around one flank waypoint
- * that stays clear. Candidates are generated relative to the line of flight,
- * so red's choice is the mirror image of blue's. Null when every way in is
- * covered.
+ * A drop called off: remember the guards and anti-air in sight within
+ * CONDOR_AI.recallRadius of the Condor or its landing zone, where they are
+ * now, for CONDOR_AI.recall s, so the next drop doesn't fly back into them.
  */
-function planDrop(
-  w: World,
-  faction: Faction,
-  c: Unit,
-  hqC: { x: number; y: number }
-): { drop: { x: number; y: number }; waypoint: { x: number; y: number } | null; line: { x: number; y: number } } | null {
-  const seen = seenEnemies(w, faction);
-  const sources = aaSources(w, faction, seen);
+function noteThreats(w: World, faction: Faction, m: Memo, c: Unit): void {
+  const until = w.tick + CONDOR_AI.recall * TICK_RATE;
+  const r = CONDOR_AI.recallRadius;
+  for (const e of seenEnemies(w, faction)) {
+    const st = UNITS[e.kind];
+    if (!((st.dps > 0 && st.domain === "ground") || aaWeight(st) > 0)) continue;
+    if (dist(e.x, e.y, c.x, c.y) > r && (!m.drop || dist(e.x, e.y, m.drop.x, m.drop.y) > r)) continue;
+    m.threats = m.threats.filter((t) => t.id !== e.id);
+    m.threats.push({ id: e.id, kind: e.kind, x: e.x, y: e.y, until });
+  }
+}
+
+/** Is a drop point held by more armed ground enemies than squads worth `value` could take on? */
+function guarded(enemies: readonly Sighting[], value: number, p: { x: number; y: number }): boolean {
+  let v = 0;
+  for (const e of enemies)
+    if (UNITS[e.kind].dps > 0 && UNITS[e.kind].domain === "ground" && dist(e.x, e.y, p.x, p.y) <= CONDOR_AI.guardRadius)
+      v += UNITS[e.kind].cost;
+  return v > value * CONDOR_AI.guardShare;
+}
+
+/** The anti-air picture (aaSources over `enemies`): is a spot covered, is a straight flight clear of cover? */
+function airspace(w: World, faction: Faction, enemies: readonly Sighting[]) {
+  const sources = aaSources(w, faction, enemies);
   const covered = (x: number, y: number) => aaStrengthAt(sources, x, y) >= AA_COVER;
   const clear = (ax: number, ay: number, bx: number, by: number) => {
     const n = Math.max(1, Math.ceil(dist(ax, ay, bx, by)));
     for (let i = 1; i <= n; i++) if (covered(ax + ((bx - ax) * i) / n, ay + ((by - ay) * i) / n)) return false;
     return true;
   };
+  return { covered, clear };
+}
+
+interface DropPlan {
+  drop: { x: number; y: number };
+  waypoint: { x: number; y: number } | null;
+  line: { x: number; y: number };
+}
+
+/**
+ * Where squads worth `value` aboard Condor `c` should drop and how to get
+ * there: a point CONDOR_AI.standoff short of an enemy harvester line (a
+ * visible harvester, a known Depot, else the mirror image of our own field)
+ * that no guard we know of (`enemies`: seen or remembered) holds, no more
+ * anti-air on it than AA_COVER, reached on a straight line or around one
+ * flank waypoint that stays clear. Candidates are generated relative to the
+ * line of flight, so red's choice is the mirror image of blue's. Null when
+ * every way in is covered.
+ */
+function planDrop(
+  w: World,
+  faction: Faction,
+  c: Unit,
+  hqC: { x: number; y: number },
+  enemies: readonly Sighting[],
+  value: number
+): DropPlan | null {
+  const { covered, clear } = airspace(w, faction, enemies);
   const inMap = (p: { x: number; y: number }) => ({
     x: Math.min(w.width - 1, Math.max(1, p.x)),
     y: Math.min(w.height - 1, Math.max(1, p.y))
   });
   // harvester lines, nearest to us first
   const lines: { x: number; y: number }[] = [];
-  for (const e of seen) if (e.kind === "harvester") lines.push({ x: e.x, y: e.y });
+  for (const e of enemies) if (e.kind === "harvester") lines.push({ x: e.x, y: e.y }); // (in sight: none is remembered)
   for (const kb of knownBuildings(w, faction)) if (kb.kind === "depot") lines.push({ x: kb.tx + 1, y: kb.ty + 1 });
   if (lines.length === 0) {
     // their home field: the mirror image of ours
@@ -441,7 +500,7 @@ function planDrop(
       const dx = ux * Math.cos(a) - uy * Math.sin(a);
       const dy = ux * Math.sin(a) + uy * Math.cos(a);
       const drop = inMap({ x: t.x + dx * CONDOR_AI.standoff, y: t.y + dy * CONDOR_AI.standoff });
-      if (covered(drop.x, drop.y) || guarded(seen, c, drop)) continue;
+      if (covered(drop.x, drop.y) || guarded(enemies, value, drop)) continue;
       if (clear(c.x, c.y, drop.x, drop.y)) return { drop, waypoint: null, line: t };
       // around a flank: a waypoint off to the side of the straight line
       const len = Math.max(0.01, dist(c.x, c.y, drop.x, drop.y));

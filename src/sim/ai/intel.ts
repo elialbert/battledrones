@@ -39,13 +39,17 @@ export interface AaSource {
   weight: number;
 }
 
+/** An enemy unit as a commander knows it: its kind, and where it is (or was last seen). */
+export type Sighting = Pick<Unit, "id" | "kind" | "x" | "y">;
+
 /**
- * Anti-air we can see (units) or remember (buildings) that could shoot at
- * an aircraft, weighed in Flak (aaWeight). Units reach range + 3, buildings
- * range + 2; the HQ's point-defence gun doesn't count (it swats lone drones,
- * it doesn't close the sky).
+ * Anti-air we can see (units — or `seen`, which may add some we remember)
+ * or remember (buildings) that could shoot at an aircraft, weighed in Flak
+ * (aaWeight). Units reach range + 3, buildings range + 2; the HQ's
+ * point-defence gun doesn't count (it swats lone drones, it doesn't close
+ * the sky).
  */
-export function aaSources(w: World, faction: Faction, seen?: Unit[]): AaSource[] {
+export function aaSources(w: World, faction: Faction, seen?: readonly Sighting[]): AaSource[] {
   const out: AaSource[] = [];
   for (const u of seen ?? seenEnemies(w, faction)) {
     const st = UNITS[u.kind];

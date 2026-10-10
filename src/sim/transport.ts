@@ -2,14 +2,15 @@ import { INFANTRY, TICK_RATE, UNITS } from "./balance";
 import { isInfantry, isTransport } from "./infantry";
 import { moveUnitToward } from "./movement";
 import { isStunned } from "./powers";
-import type { Command, Faction, Unit, World } from "./types";
-import { inBounds, passable, sideFrame } from "./world";
+import type { Command, Faction, Unit, UnitOrder, World } from "./types";
+import { inBounds, passable, sideFrame, type SideFrame } from "./world";
 
 /**
  * The Condor dropship (INFANTRY.md). Infantry squads BOARD it — walk up, and
  * after INFANTRY.boardTime within INFANTRY.boardRange they are taken off the
  * map into `condor.passengers` — and it UNLOADS them: flies to a drop point,
- * hovers INFANTRY.unloadHover, and puts them back (same ids) around the point.
+ * hovers INFANTRY.unloadHover, puts them back (same ids) around the point,
+ * and backs off their heads.
  *
  * Passengers are OUT of `World.units` while aboard, so every system that walks
  * the units (combat, vision, capture, targeting, salvage) ignores them for
@@ -51,61 +52,150 @@ export function isLoaded(c: Unit): boolean {
 /** Can a squad stand on this tile? (Foot-passable ground, no building on it.) */
 const standable = (w: World, tx: number, ty: number): boolean => passable(w, tx, ty, "foot");
 
-/**
- * Where infantry dropped at (x, y) by `faction` touch down: the point itself
- * when a squad can stand there, else the nearest point (kept off tile edges)
- * of a tile it can stand on within INFANTRY.dropSearch — never Water, Rock or
- * a building. Scanned in the side's own frame, so red's choice is always the
- * mirror image of blue's. Null when there is nowhere within reach.
- */
-export function dropPoint(w: World, faction: Faction, x: number, y: number): { x: number; y: number } | null {
-  const fr = sideFrame(w, faction);
-  const p = fr.pt({ x, y });
-  const fx0 = Math.floor(p.x);
-  const fy0 = Math.floor(p.y);
-  const ok = (fx: number, fy: number) => {
+/** Can a squad stand on tile (fx, fy) of a side's frame? (Off the map: no.) */
+type StandOk = (fx: number, fy: number) => boolean;
+
+function standOk(w: World, fr: SideFrame): StandOk {
+  return (fx, fy) => {
     const [tx, ty] = fr.tile(fx, fy, 1);
     return inBounds(w, tx, ty) && standable(w, tx, ty);
   };
-  if (ok(fx0, fy0)) return { x, y };
-  const R = INFANTRY.dropSearch;
-  const span = Math.ceil(R);
-  let best: { x: number; y: number } | null = null;
-  let bestD = Infinity;
-  // fixed (frame) scan order + strict comparison: deterministic, mirror-fair ties
-  for (let dy = -span; dy <= span; dy++)
-    for (let dx = -span; dx <= span; dx++) {
-      const fx = fx0 + dx;
-      const fy = fy0 + dy;
-      if (!ok(fx, fy)) continue;
-      const cx = Math.max(fx + 0.2, Math.min(fx + 0.8, p.x));
-      const cy = Math.max(fy + 0.2, Math.min(fy + 0.8, p.y));
-      const d = Math.hypot(cx - p.x, cy - p.y);
-      if (d > R || d >= bestD) continue;
-      bestD = d;
-      best = { x: cx, y: cy };
-    }
-  return best ? fr.pt(best) : null;
 }
 
 /**
- * Where passenger i of n steps off around a drop point: a small ring (in the
- * side's own frame), or the point itself when that spot is no good.
+ * Is frame point (x, y) somewhere a squad can be set down: on a tile it can
+ * stand on, and at least INFANTRY.dropClear from every tile it can't (and
+ * the map's edge), so none of its robots stands in the water?
  */
-function seatSpot(w: World, faction: Faction, x: number, y: number, i: number, n: number): { x: number; y: number } {
-  if (n <= 1) return { x, y };
-  const a = (i / n) * Math.PI * 2 + 0.4 + (faction === "red" ? Math.PI : 0);
-  const px = x + Math.sin(a) * 0.45;
-  const py = y - Math.cos(a) * 0.45;
-  return inBounds(w, Math.floor(px), Math.floor(py)) && standable(w, Math.floor(px), Math.floor(py)) ? { x: px, y: py } : { x, y };
+function isClear(ok: StandOk, x: number, y: number): boolean {
+  const fx = Math.floor(x);
+  const fy = Math.floor(y);
+  if (!ok(fx, fy)) return false;
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      if ((dx === 0 && dy === 0) || ok(fx + dx, fy + dy)) continue;
+      const gx = Math.max(fx + dx - x, 0, x - (fx + dx + 1));
+      const gy = Math.max(fy + dy - y, 0, y - (fy + dy + 1));
+      if (Math.hypot(gx, gy) < INFANTRY.dropClear - 1e-9) return false;
+    }
+  return true;
+}
+
+const CORNERS = [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const;
+
+/**
+ * The clear point (isClear) of frame tile (fx, fy) nearest (px, py): kept
+ * INFANTRY.dropClear off the sides and corners a squad can't stand past, and
+ * a little off the others (never exactly on a tile edge). The tile's centre
+ * when that fails; null when a squad can't stand on the tile at all.
+ */
+function clearIn(ok: StandOk, fx: number, fy: number, px: number, py: number): { x: number; y: number } | null {
+  if (!ok(fx, fy)) return null;
+  const c = INFANTRY.dropClear;
+  const m = (open: boolean) => (open ? 0.1 : c);
+  let x = Math.max(fx + m(ok(fx - 1, fy)), Math.min(fx + 1 - m(ok(fx + 1, fy)), px));
+  let y = Math.max(fy + m(ok(fx, fy - 1)), Math.min(fy + 1 - m(ok(fx, fy + 1)), py));
+  for (const [dx, dy] of CORNERS) {
+    if (ok(fx + dx, fy + dy)) continue;
+    const cx = fx + (dx > 0 ? 1 : 0);
+    const cy = fy + (dy > 0 ? 1 : 0);
+    const d = Math.hypot(x - cx, y - cy);
+    if (d < c) {
+      x = cx + ((x - cx) / d) * c;
+      y = cy + ((y - cy) / d) * c;
+    }
+  }
+  return isClear(ok, x, y) ? { x, y } : { x: fx + 0.5, y: fy + 0.5 };
+}
+
+/**
+ * The clear point nearest frame point p, over the tiles within `span` of it
+ * and no farther than `maxD`: p itself when it is clear. Fixed (frame) scan
+ * order, and a later spot must be nearer by more than rounding noise:
+ * deterministic, mirror-fair ties (red's frame point is blue's give or take
+ * the last bit).
+ */
+function nearestClear(ok: StandOk, p: { x: number; y: number }, span: number, maxD: number): { x: number; y: number } | null {
+  if (isClear(ok, p.x, p.y)) return { x: p.x, y: p.y };
+  const fx0 = Math.floor(p.x);
+  const fy0 = Math.floor(p.y);
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (let dy = -span; dy <= span; dy++)
+    for (let dx = -span; dx <= span; dx++) {
+      const q = clearIn(ok, fx0 + dx, fy0 + dy, p.x, p.y);
+      if (!q) continue;
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d > maxD + 1e-9 || d >= bestD - 1e-9) continue;
+      bestD = d;
+      best = q;
+    }
+  return best;
+}
+
+/**
+ * Where infantry dropped at (x, y) by `faction` touch down: the point itself
+ * when squads can be set down there (isClear: on ground they can stand on,
+ * INFANTRY.dropClear from any they can't), else the nearest such point within
+ * INFANTRY.dropSearch — or, out over a big lake, the nearest anywhere. Never
+ * Water, Rock or a building. Scanned in the side's own frame, so red's choice
+ * is always the mirror image of blue's. Null only when nowhere on the map will do.
+ */
+export function dropPoint(w: World, faction: Faction, x: number, y: number): { x: number; y: number } | null {
+  const fr = sideFrame(w, faction);
+  const ok = standOk(w, fr);
+  const p = fr.pt({ x, y });
+  if (isClear(ok, p.x, p.y)) return { x, y };
+  const R = INFANTRY.dropSearch;
+  const at = nearestClear(ok, p, Math.ceil(R), R) ?? nearestClear(ok, p, Math.max(w.width, w.height), Infinity);
+  return at ? fr.pt(at) : null;
+}
+
+/** Ring steps (eighths of a turn) a passenger tries from its own spot, alternating either way… */
+const SEAT_STEPS = [0, 1, -1, 2, -2, 3, -3, 4];
+/** …on a small ring round the drop point, then (cramped in a corner) wider ones. */
+const SEAT_RINGS = [0.45, 0.9, 1.35];
+
+/**
+ * Where a Condor's passengers step off around a (clear) drop point: a small
+ * ring, in the side's own frame. Each takes the first spot round the ring
+ * from its own (then round wider rings), nudged clear (isClear) of ground it
+ * can't stand on, that is a separation's width from the squads already down,
+ * so separation never shoves one toward the water; failing that, the point
+ * itself.
+ */
+function seatSpots(w: World, faction: Faction, x: number, y: number, ps: readonly Unit[]): { x: number; y: number }[] {
+  if (ps.length <= 1) return ps.map(() => ({ x, y }));
+  const fr = sideFrame(w, faction);
+  const ok = standOk(w, fr);
+  const p = fr.pt({ x, y });
+  const out: { x: number; y: number }[] = [];
+  ps.forEach((u, i) => {
+    const a0 = (i / ps.length) * Math.PI * 2 + 0.4;
+    const at = (a: number, r: number) => ({ x: p.x + Math.sin(a) * r, y: p.y - Math.cos(a) * r });
+    // (movement.ts separate: squads part to max(0.7, the two radii))
+    const apart = (q: { x: number; y: number }) =>
+      out.every((o, j) => Math.hypot(q.x - o.x, q.y - o.y) >= Math.max(0.7, UNITS[u.kind].radius + UNITS[ps[j]!.kind].radius) - 1e-9);
+    let s: { x: number; y: number } | null = null;
+    for (const a of SEAT_RINGS.flatMap((r) => SEAT_STEPS.map((k) => at(a0 + (k * Math.PI) / 4, r)))) {
+      const q = nearestClear(ok, a, 1, 0.4); // (a spot by the water's edge: just off it)
+      if (q && apart(q)) {
+        s = q;
+        break;
+      }
+    }
+    out.push(s ?? p);
+  });
+  return out.map((q) => fr.pt(q));
 }
 
 /** Put a Condor's passengers back on the field around (x, y); returns their ids. */
 function disembarkAll(w: World, c: Unit, x: number, y: number, bailout: boolean): number[] {
   const ps = c.passengers ?? [];
   const ids: number[] = [];
+  const seats = seatSpots(w, c.faction, x, y, ps);
   ps.forEach((p, i) => {
-    const s = seatSpot(w, c.faction, x, y, i, ps.length);
+    const s = seats[i]!;
     p.x = s.x;
     p.y = s.y;
     p.facing = p.aim = c.facing;
@@ -124,11 +214,11 @@ function disembarkAll(w: World, c: Unit, x: number, y: number, bailout: boolean)
 
 // ---------------------------------------------------------- shot down ---
 
-/** Is the Condor over ground its passengers could bail out onto? (Not Water, Rock or a building.) */
+/** Is the Condor over ground its passengers could bail out onto? (Not Water, Rock or a building; the tile under it in its side's frame.) */
 export function canBailOut(w: World, c: Unit): boolean {
-  const tx = Math.floor(c.x);
-  const ty = Math.floor(c.y);
-  return inBounds(w, tx, ty) && standable(w, tx, ty);
+  const fr = sideFrame(w, c.faction);
+  const p = fr.pt(c);
+  return standOk(w, fr)(Math.floor(p.x), Math.floor(p.y));
 }
 
 /**
@@ -137,7 +227,11 @@ export function canBailOut(w: World, c: Unit): boolean {
  * Returns their ids.
  */
 export function bailOut(w: World, c: Unit): number[] {
-  return disembarkAll(w, c, c.x, c.y, true);
+  // (where it fell, nudged clear of the water's edge: in the side's frame, like a drop)
+  const fr = sideFrame(w, c.faction);
+  const at = nearestClear(standOk(w, fr), fr.pt(c), 1, 1.5);
+  const p = at ? fr.pt(at) : { x: c.x, y: c.y };
+  return disembarkAll(w, c, p.x, p.y, true);
 }
 
 // ----------------------------------------------------------- commands ---
@@ -172,9 +266,24 @@ export function applyTransportCommand(w: World, c: Extract<Command, { type: "boa
 // --------------------------------------------------------------- tick ---
 
 /**
+ * After a drop the Condor lifts off its squads' heads (it would hide them):
+ * it backs off INFANTRY.dropBackOff the way it came (against its facing, so
+ * mirror-image drops part as mirror images), then idles there.
+ */
+function backOff(w: World, c: Unit): UnitOrder {
+  const d = INFANTRY.dropBackOff;
+  return {
+    type: "move",
+    x: Math.min(w.width - 0.5, Math.max(0.5, c.x - Math.sin(c.facing) * d)),
+    y: Math.min(w.height - 0.5, Math.max(0.5, c.y + Math.cos(c.facing) * d))
+  };
+}
+
+/**
  * Per tick, after combat and before movement: boarding squads walk to their
  * Condor and climb in; idle Condors drift to meet squads boarding them;
- * unloading Condors fly to the drop point, hover, and put their squads down.
+ * unloading Condors fly to the drop point, hover, put their squads down and
+ * back off them (backOff).
  * EMP-stunned squads and Condors pause. Passengers ride along (their x/y
  * follow the Condor, for the UI).
  */
@@ -239,7 +348,7 @@ export function tickTransport(w: World): void {
         // re-validated: a building may have gone up on the spot meanwhile
         const at = dropPoint(w, c.faction, o.x, o.y);
         if (at) disembarkAll(w, c, at.x, at.y, false);
-        c.order = { type: "idle" };
+        c.order = at ? backOff(w, c) : { type: "idle" };
       }
     } else if (c.order.type === "idle" && !stunned && freeSeats(c) > 0 && !climbing.has(c.id)) {
       // an idle Condor comes to meet the nearest squad boarding it (not drifting off one that is climbing in)

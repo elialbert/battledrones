@@ -109,7 +109,8 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     bayVsArmour: true
   },
   /**
-   * Greedy economy: extra harvesters, a forward depot, a huge late push.
+   * Greedy economy: extra harvesters, a forward depot, a huge late push;
+   * Rocket Squads from an Assembly Bay once Titans show up.
    * (The depot comes after a turret and the Tech Lab: with every side's
    * starting Trooper Squad on guard, a depot second won it 74–76% of
    * tools/pacing.ts games; 61% this way.)
@@ -120,7 +121,8 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     buildOrder: ["fab-plant", "turret", "tech-lab", "depot", "airpad", "turret", "radar", "sam-site"],
     harvesters: 4,
     assaultValue: 2000,
-    harassGroup: 3
+    harassGroup: 3,
+    bayVsArmour: true
   },
   /**
    * Air force: wasps, raptors and hornets; the late Fab Plant only guards

@@ -258,7 +258,11 @@ describe("unloading", () => {
       expect(s.order.type).toBe("idle");
     }
     expect(c.passengers).toHaveLength(0);
+    // …then lifts off their heads: backs off the way it came (it faced north), and idles
+    expect(c.order).toMatchObject({ type: "move", x: 10.5, y: 10.5 + INFANTRY.dropBackOff });
+    run(w, TICK_RATE);
     expect(c.order.type).toBe("idle");
+    for (const s of squads) expect(Math.hypot(s.x - c.x, s.y - c.y)).toBeGreaterThan(1);
   });
 
   it("flies to a long-pressed point and drops there", () => {
@@ -283,17 +287,57 @@ describe("unloading", () => {
       expect(s.x).toBeLessThan(10); // the near bank (the far one is past the rock)
     }
     expect(dropPoint(w, "blue", 4.2, 7.7)).toEqual({ x: 4.2, y: 7.7 }); // standable: the point itself
-    // over open water with nowhere within reach, the chip does nothing
+    // a drop near the shore snaps onto the beach, INFANTRY.dropClear off the water
     const sea = createWorld(30, 30);
     paint(sea, 0, 0, 29, 29, Terrain.Water);
     paint(sea, 0, 0, 3, 29, Terrain.Ground);
+    expect(dropPoint(sea, "blue", 8.5, 15.5)).toEqual({ x: 4 - INFANTRY.dropClear, y: 15.5 });
+    // …and out over open water with no shore within INFANTRY.dropSearch, onto the nearest one anywhere
     const far = loadedCondor(sea, "blue", 15.5, 15.5);
-    expect(dropPoint(sea, "blue", 15.5, 15.5)).toBeNull();
-    run(sea, 3 * TICK_RATE, [{ type: "unload", faction: "blue", unitIds: [far.c.id] }]);
-    expect(far.c.order.type).toBe("idle");
-    expect(far.c.passengers).toHaveLength(2);
-    // …but a drop near the shore snaps onto the beach
-    expect(dropPoint(sea, "blue", 8.5, 15.5)).toEqual({ x: 3.8, y: 15.5 });
+    expect(dropPoint(sea, "blue", 15.5, 15.5)).toEqual({ x: 4 - INFANTRY.dropClear, y: 15.5 });
+    run(sea, 8 * TICK_RATE, [{ type: "unload", faction: "blue", unitIds: [far.c.id] }]);
+    expect(far.c.passengers).toHaveLength(0);
+    for (const s of far.squads) expect(s.x).toBeLessThanOrEqual(4 - INFANTRY.dropClear + 1e-9);
+    // only with no ground anywhere does the chip do nothing
+    const ocean = createWorld(12, 12);
+    paint(ocean, 0, 0, 11, 11, Terrain.Water);
+    expect(dropPoint(ocean, "blue", 5.5, 5.5)).toBeNull();
+  });
+
+  it("sets squads down clear of the water's edge and a squad's width apart, dropped or bailing out", () => {
+    // the robots stand around the squad's centre: none of them in the water
+    const clearance = (w: World, x: number, y: number) => {
+      let d = Math.min(x, y, w.width - x, w.height - y);
+      for (let ty = Math.floor(y) - 1; ty <= Math.floor(y) + 1; ty++)
+        for (let tx = Math.floor(x) - 1; tx <= Math.floor(x) + 1; tx++)
+          if (!passable(w, tx, ty, "foot"))
+            d = Math.min(d, Math.hypot(Math.max(tx - x, 0, x - tx - 1), Math.max(ty - y, 0, y - ty - 1)));
+      return d;
+    };
+    // a lake with a jagged shore, an inlet and the map's edge close by
+    const shore = () => {
+      const w = createWorld(24, 24);
+      paint(w, 9, 0, 23, 23, Terrain.Water);
+      paint(w, 7, 6, 8, 6, Terrain.Water);
+      paint(w, 8, 12, 8, 13, Terrain.Rock);
+      return w;
+    };
+    for (const f of ["blue", "red"] as const)
+      for (const [x, y] of [[8.95, 8.5], [8.1, 6.9], [8.6, 12.5], [0.2, 0.3], [12.5, 4.5]] as const) {
+        const w = shore();
+        const { c, squads } = loadedCondor(w, f, x, y);
+        run(w, 5 * TICK_RATE, [{ type: "unload", faction: f, unitIds: [c.id] }]);
+        expect(c.passengers).toHaveLength(0);
+        for (const s of squads) expect(clearance(w, s.x, s.y), `${f} drop at ${x},${y}`).toBeGreaterThanOrEqual(INFANTRY.dropClear - 1e-9);
+        expect(Math.hypot(squads[0]!.x - squads[1]!.x, squads[0]!.y - squads[1]!.y)).toBeGreaterThanOrEqual(0.8 - 1e-9);
+        // shot down right at the water's edge
+        if (!passable(w, Math.floor(x), Math.floor(y), "foot")) continue;
+        const w2 = shore();
+        const down = loadedCondor(w2, f, x, y);
+        down.c.hp = 0;
+        run(w2, 1);
+        for (const s of down.squads) expect(clearance(w2, s.x, s.y), `${f} bail-out at ${x},${y}`).toBeGreaterThanOrEqual(INFANTRY.dropClear - 1e-9);
+      }
   });
 
   it("snaps drops as mirror images for the two sides", () => {
@@ -433,6 +477,40 @@ describe("crushing", () => {
     expect(squad.hp).toBe(UNITS.trooper.hp);
     expect(Math.abs(squad.y - 5.5)).toBeGreaterThan(0.2); // the squad stepped off the line
     expect(closest).toBeGreaterThan(0.5);
+  });
+
+  it("…and so do they for a harvester at work (it drives in the economy tick, not movement)", () => {
+    const w = createWorld(30, 12);
+    setTerrain(w, 20, 5, Terrain.Scrap);
+    const h = spawnUnit(w, "harvester", "blue", 3.5, 5.5);
+    const squad = spawnUnit(w, "trooper", "blue", 10.5, 5.5);
+    for (let i = 0; i < 10 * TICK_RATE; i++) {
+      step(w, i === 0 ? [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 20.5, y: 5.5 }] : []);
+      expect(h.y).toBe(5.5); // never shouldered off its line
+    }
+    expect(h.x).toBeGreaterThan(18);
+    expect(Math.abs(squad.y - 5.5)).toBeGreaterThan(0.2);
+  });
+
+  it("a squad walking up to a PARKED friendly vehicle shoulders past it, and arrives", () => {
+    // a mixed group sent to one point: the Stinger parks on it first
+    const w = createWorld(30, 30);
+    const tank = spawnUnit(w, "stinger", "blue", 4.5, 10.5);
+    const squad = spawnUnit(w, "trooper", "blue", 4.5, 11.5);
+    run(w, 30 * TICK_RATE, [{ type: "move", faction: "blue", unitIds: [tank.id, squad.id], x: 15.5, y: 10.5 }]);
+    expect(tank.order.type).toBe("idle");
+    expect(squad.order.type).toBe("idle");
+    // a parked Stinger, Titan or harvester on its way, whichever way it faces
+    for (const kind of ["stinger", "titan", "harvester"] as const)
+      for (const facing of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+        const w2 = createWorld(30, 30);
+        const v = spawnUnit(w2, kind, "blue", 12.5, 10.5);
+        v.facing = facing;
+        const s = spawnUnit(w2, "trooper", "blue", 4.5, 10.5);
+        run(w2, 30 * TICK_RATE, [{ type: "move", faction: "blue", unitIds: [s.id], x: 20.5, y: 10.5 }]);
+        expect(s.order.type, `${kind} facing ${facing}`).toBe("idle");
+        expect(Math.hypot(s.x - 20.5, s.y - 10.5)).toBeLessThan(1);
+      }
   });
 
   it("enemy vehicles drive through squads instead of shoving them", () => {

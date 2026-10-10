@@ -2,7 +2,7 @@ import { BUILDINGS, TICK_RATE, UNITS } from "./balance";
 import { createAiState, type AiState, type Difficulty, type Strategy, type StrategyName } from "./ai/commander";
 import { nearestReachableResource } from "./economy";
 import { setupSurvival, wavesSurvived, type SurvivalOptions } from "./modes/survival";
-import { GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
+import { NO_GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
 import type { BuildingKind, Faction, UnitKind, World } from "./types";
 import { carrierOf } from "./transport";
 import { buildingCenter, hqOf, inBounds, moveClassOf, passable, spawnBuilding, spawnUnit } from "./world";
@@ -278,14 +278,14 @@ export const OPS: OpDef[] = [
     icon: "🏴‍☠️",
     tagline: "Air only: sink their HQ before 7:00",
     brief:
-      "Fab Plants are off-limits: this is an air raid. Red is digging in behind SAM sites you haven't seen yet, and every Wasp you show it teaches it to build more Flak. Scout first, then sink their HQ before 7:00.",
+      "Fab Plants and the Condor are off-limits: this is an air raid. Red is digging in behind SAM sites you haven't seen yet, and every Wasp you show it teaches it to build more Flak. Scout first, then sink their HQ before 7:00.",
     tip: "A Scout finds the SAM sites. Raptors beat their fighters, Hornets flatten SAMs and the HQ. Don't feed bombers into anti-air one at a time.",
     map: "ashlands",
     // a commander that digs in (never attacks) on half income: the clock is the enemy
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
     // (ground units are banned too, so a Drop Pod lands Wasps and a Raptor: it stays an air raid;
-    // the starting Trooper Squad stays home, and no more infantry can be raised)
-    rules: { playerBans: { units: GROUND_COMBAT, buildings: ["fab-plant", "assembly-bay"] }, enemyIncome: 0.5 },
+    // the starting Trooper Squad stays home — no Condor to fly it — and no more infantry can be raised)
+    rules: { playerBans: { units: NO_GROUND_COMBAT, buildings: ["fab-plant", "assembly-bay"] }, enemyIncome: 0.5 },
     scrap: 800,
     setup(_w, o) {
       o.building("blue", "airpad", 9, 54);

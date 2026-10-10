@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { tickFog } from "../src/sim/fog";
 import { isInfantry, squadSize } from "../src/sim/infantry";
 import { MAPS, createMapWorld } from "../src/sim/maps";
 import {
@@ -9,6 +10,7 @@ import {
   THEME_NAMES,
   earlyCallBonus,
   planWave,
+  survivalHoldPoint,
   survivalStatus,
   waveBudget,
   waveName,
@@ -22,9 +24,9 @@ import {
 } from "../src/sim/modes/survival";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
-import type { FxEvent, UnitKind, World } from "../src/sim/types";
+import { Terrain, type FxEvent, type UnitKind, type World } from "../src/sim/types";
 import { wreckValue } from "../src/sim/salvage";
-import { buildingCenter, hqOf, passable, spawnUnit } from "../src/sim/world";
+import { buildingCenter, hqOf, passable, setTerrain, spawnUnit } from "../src/sim/world";
 import { THEME_ICONS } from "../src/game/survival";
 
 const lastStand = (map = "riverlands", seed = 42, difficulty: SurvivalDifficulty = "normal") =>
@@ -555,5 +557,22 @@ describe("AI defender", () => {
       return JSON.stringify([w.tick, w.survival!.wave, [...w.units.values()].map((u) => [u.id, u.kind, u.x.toFixed(3), u.y.toFixed(3), u.hp])]);
     };
     expect(sig()).toBe(sig());
+  });
+
+  it("is never pointed at a wave Sniper Team hidden in the woods", () => {
+    const w = lastStand("proving-grounds");
+    const s = w.survival!;
+    const hq = buildingCenter(hqOf(w, s.defender)!);
+    // in the woods 6 tiles out: in the HQ's sight, but no defender within 3 tiles of it
+    const x = hq.x + 6.5;
+    const y = hq.y - 0.5;
+    setTerrain(w, Math.floor(x), Math.floor(y), Terrain.Forest);
+    const sniper = spawnUnit(w, "sniper", "red", x, y);
+    s.members.set(sniper.id, 1);
+    for (const u of [...w.units.values()]) if (u.faction === s.defender) w.units.delete(u.id);
+    tickFog(w);
+    expect(survivalHoldPoint(w, s.defender)?.engage).toBe(false);
+    sniper.firedTick = w.tick; // a shot gives it away
+    expect(survivalHoldPoint(w, s.defender)).toMatchObject({ x, y, engage: true });
   });
 });

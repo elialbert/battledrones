@@ -141,6 +141,9 @@ describe("mutator effects", () => {
       expect(buildingBlocker(w, f, "turret")).toBeNull();
       for (const k of ["stinger", "flak-crawler", "mortar", "titan", "lancer"] as const)
         expect(unitBlocker(w, f, k)).toBe("Disabled: Air War");
+      // the starting Trooper Squad stays home: no Condor to fly it into the fight
+      expect(unitBlocker(w, f, "condor")).toBe("Disabled: Air War");
+      expect([...w.units.values()].filter((u) => u.faction === f && u.kind === "trooper")).toHaveLength(1);
       expect(bannedBy(w, "harvester")).toBeNull();
     }
     // a direct command is refused too
@@ -168,6 +171,10 @@ describe("mutator effects", () => {
     expect(wasp.xp).toBe(UNITS.wasp.cost); // rank-1 XP, so promotion continues normally
     expect(harvesters.length).toBe(2);
     for (const h of harvesters) expect(h.rank).toBe(0);
+    // …and so does each side's starting Trooper Squad
+    const squads = [...w.units.values()].filter((u) => u.kind === "trooper");
+    expect(squads.map((u) => [u.faction, u.rank])).toEqual([["blue", 1], ["red", 1]]);
+    expect(squads[0]!.xp).toBe(UNITS.trooper.cost);
   });
 
   it("Clear Skies: both sides see the whole map (and the enemy base)", () => {

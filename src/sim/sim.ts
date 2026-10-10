@@ -9,7 +9,7 @@ import {
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
-import { tickMovement } from "./movement";
+import { tickMovement, vehicleSpots } from "./movement";
 import { tickOps } from "./ops";
 import { tickObjectives } from "./objectives";
 import { applyCalldown, chargePowers, tickPowers } from "./powers";
@@ -23,6 +23,7 @@ export function step(w: World, commands: Command[]): void {
   w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
   for (const c of commands) applyCommand(w, c);
+  const spots = vehicleSpots(w); // (before anything drives: squads step aside only for a vehicle on the move)
   tickConstruction(w);
   tickProduction(w);
   tickHarvest(w);
@@ -30,7 +31,7 @@ export function step(w: World, commands: Command[]): void {
   tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
   tickTransport(w); // squads board Condors, Condors fly drops (transport.ts)
-  tickMovement(w, engaged); // (then separation, and Titans crushing squads)
+  tickMovement(w, engaged, spots); // (then separation, and Titans crushing squads)
   cleanupDeaths(w);
   tickSalvage(w);
   tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)

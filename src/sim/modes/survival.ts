@@ -1,5 +1,4 @@
 import { BUILDINGS, COMBAT, TICK_RATE, UNITS } from "../balance";
-import { isVisible } from "../fog";
 import { isInfantry, unitSeenBy } from "../infantry";
 import { worldPick, worldRandom } from "../rand";
 import type { Building, Faction, Unit, UnitKind, World } from "../types";
@@ -1006,7 +1005,7 @@ export function survivalHoldPoint(w: World, faction: Faction): { x: number; y: n
   let near: Unit | null = null;
   let bestD = Infinity;
   for (const u of w.units.values()) {
-    if (!isWaveUnit(s, u) || !isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))) continue;
+    if (!isWaveUnit(s, u) || !unitSeenBy(w, faction, u)) continue; // (a Sniper hidden in the woods is no engage point)
     let d = dist(u.x, u.y, c.x, c.y);
     for (const b of w.buildings.values())
       if (b.faction === faction) d = Math.min(d, distToBuilding(b, u.x, u.y));

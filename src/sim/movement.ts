@@ -251,11 +251,24 @@ export function approachPoint(
 }
 
 /**
+ * Where each ground vehicle stands. sim.ts takes this at the start of a tick,
+ * before harvesting, combat or movement move anything, so separation can tell
+ * a vehicle that drove this tick from a parked one.
+ */
+export function vehicleSpots(w: World): Map<number, { x: number; y: number }> {
+  const out = new Map<number, { x: number; y: number }>();
+  for (const u of w.units.values())
+    if (UNITS[u.kind].domain === "ground" && !isInfantry(u.kind)) out.set(u.id, { x: u.x, y: u.y });
+  return out;
+}
+
+/**
  * Per-tick movement for move / attack-move orders (combat may pause it),
  * then separation, then crushing: a Titan that drove this tick rolls over
- * the enemy squads under it (infantry.ts).
+ * the enemy squads under it (infantry.ts). `spots` is vehicleSpots from the
+ * start of the tick (squads only step aside for a vehicle that drove).
  */
-export function tickMovement(w: World, pausedIds: Set<number>): void {
+export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number, { x: number; y: number }> = new Map()): void {
   /** Where each crusher stood before it moved (to tell who actually drove). */
   const crushers: { u: Unit; x: number; y: number }[] = [];
   for (const u of w.units.values()) if (crushes(u.kind)) crushers.push({ u, x: u.x, y: u.y });
@@ -282,7 +295,12 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
     }
   }
   const moved = crushers.filter((c) => c.u.x !== c.x || c.u.y !== c.y).map((c) => c.u);
-  separate(w);
+  const driving = new Set<number>();
+  for (const [id, p] of spots) {
+    const u = w.units.get(id);
+    if (u && (u.x !== p.x || u.y !== p.y)) driving.add(id);
+  }
+  separate(w, driving);
   if (moved.length > 0) tickCrush(w, moved);
 }
 
@@ -290,12 +308,15 @@ const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS)
 
 /**
  * Gentle separation so same-domain units don't stack. Robot infantry give
- * way: a squad and a FRIENDLY vehicle part by moving only the squad (it
- * steps aside), and a squad and an ENEMY vehicle don't part at all (tanks
- * roll through squads — and Titans crush them). Squads among themselves,
- * and vehicles among themselves, share the push as usual.
+ * way: a squad and a FRIENDLY vehicle that drove this tick (`driving`) part
+ * by moving only the squad (it steps aside), and a squad and an ENEMY
+ * vehicle don't part at all (tanks roll through squads — and Titans crush
+ * them). Squads among themselves, vehicles among themselves, and a squad
+ * and a PARKED friendly vehicle share the push as usual (a squad walking up
+ * to one shoulders it aside, as a second vehicle would — else it would be
+ * pinned there, short of its goal, for good).
  */
-function separate(w: World): void {
+function separate(w: World, driving: Set<number>): void {
   const units = [...w.units.values()];
   for (let i = 0; i < units.length; i++) {
     const a = units[i]!;
@@ -331,8 +352,8 @@ function separate(w: World): void {
         ux = dx / d;
         uy = dy / d;
       }
-      if (ia !== ib) {
-        // a squad steps aside for a friendly vehicle: it takes the whole push
+      if (ia !== ib && driving.has(ia ? b.id : a.id)) {
+        // a squad steps aside for a friendly vehicle on the move: it takes the whole push
         const [veh, squad, sx, sy] = ia ? [b, a, -ux, -uy] : [a, b, ux, uy];
         const s = stepAside(veh, sx, sy);
         nudge(w, squad, s.x * push * 2, s.y * push * 2);
@@ -362,9 +383,13 @@ function stepAside(v: Unit, dx: number, dy: number): { x: number; y: number } {
   return { x: rx * s, y: ry * s };
 }
 
+/** Ground units keep this far (tiles) inside the map's edge (their models stand around the centre). */
+const EDGE = 0.4;
+
 function nudge(w: World, u: Unit, dx: number, dy: number): void {
-  const nx = Math.min(w.width - 0.05, Math.max(0.05, u.x + dx));
-  const ny = Math.min(w.height - 0.05, Math.max(0.05, u.y + dy));
+  const m = UNITS[u.kind].domain === "air" ? 0.05 : EDGE;
+  const nx = Math.min(w.width - m, Math.max(m, u.x + dx));
+  const ny = Math.min(w.height - m, Math.max(m, u.y + dy));
   if (passable(w, Math.floor(nx), Math.floor(ny), moveClassOf(u.kind))) {
     u.x = nx;
     u.y = ny;
