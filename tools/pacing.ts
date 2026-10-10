@@ -9,18 +9,27 @@
 // processes (`--shard 0/4` … `3/4`) and feed all the files to `summary`.
 // `--tune '{"POWERS.passive":0.05,"STRATEGIES.rush.assaultValue":1200}'`
 // overrides exported balance numbers (and AI personalities, and the Condor drop plan:
-// "CONDOR_AI.maxBuilt":0) for an A/B run.
+// "CONDOR_AI.maxBuilt":0, the island airlift: "AIRLIFT.edge":1.5, and a map's own numbers:
+// "MAP.archipelago.hqTrickle":4, "MAP.archipelago.uplinks.0.income":6) for an A/B run.
 // `--mirror` plays each personality against itself instead (the side-fairness
 // check: red's share of decided games and of harvest at 4:00, by map).
 // `--with rush` keeps only the pairings that include that personality (a quick
 // look at one; its pairings keep the seeds they have in the full panel).
+// `--difficulty easy|hard` plays both AIs at that difficulty (default Normal).
+// Every line records the match's wall-clock cost (perf: ms per sim-minute,
+// worst tick), and `summary` breaks each map out on its own: length and
+// draws, win rates, value built by group (infantry / Condor / air /
+// vehicles), Condor drops by destination, island Uplink captures, retakes and
+// crewed time, deaths near Uplinks, and the cost.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import * as balance from "../src/sim/balance";
 import { STRATEGIES, type StrategyName } from "../src/sim/ai/commander";
 import { CONDOR_AI } from "../src/sim/ai/condor";
+import { AIRLIFT } from "../src/sim/ai/airlift";
 import { MAPS } from "../src/sim/maps";
 import type { Faction } from "../src/sim/types";
-import { playMatch, type Match } from "./pacing-match";
+import { playMatch, type Match, type UnitGroup } from "./pacing-match";
+import type { Difficulty } from "../src/sim/ai/commander";
 
 const SIDES: Faction[] = ["blue", "red"];
 
@@ -31,7 +40,7 @@ function arg(name: string): string | undefined {
 
 function applyTune(json: string | undefined): void {
   if (!json) return;
-  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI };
+  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI, AIRLIFT, MAP: Object.fromEntries(MAPS.map((m) => [m.id, m])) };
   for (const [path, v] of Object.entries(JSON.parse(json) as Record<string, unknown>)) {
     const parts = path.split(".");
     let o = roots as Record<string, unknown>;
@@ -52,6 +61,7 @@ function run(): void {
   const names = Object.keys(STRATEGIES) as StrategyName[];
   const mirror = process.argv.includes("--mirror");
   const only = arg("--with");
+  const difficulty = (arg("--difficulty") ?? "normal") as Difficulty;
   writeFileSync(out, "");
   let idx = 0;
   for (let s = 0; s < seeds; s++)
@@ -62,7 +72,7 @@ function run(): void {
           const job = idx++;
           if (only && b !== only && r !== only) continue;
           if (job % shards !== shard) continue;
-          const m = playMatch(map, b, r, 7000 + job * 13 + s * 1000, 11 + job * 2);
+          const m = playMatch(map, b, r, 7000 + job * 13 + s * 1000, 11 + job * 2, { difficulty, timing: true });
           appendFileSync(out, JSON.stringify(m) + "\n");
         }
 }
@@ -135,6 +145,64 @@ function summary(): void {
     return `${pct(dd.filter((x) => x.winner === "red").length, dd.length)} (n=${dd.length})` + (hb ? ` harvest@4:00 ${hr >= hb ? "+" : ""}${((100 * hr) / hb - 100).toFixed(1)}%` : "");
   };
   console.log("red's share of decided games: " + [...maps.map((m) => `${m} ${side(d.filter((x) => x.map === m))}`), `all ${side(d)}`].join(", "));
+  for (const map of maps) perMap(d.filter((x) => x.map === map), map);
+}
+
+/** One map's own panel (the island map's measurements live here). */
+function perMap(d: Match[], map: string): void {
+  const q = (a: number[], p: number) => {
+    const s = [...a].sort((x, y) => x - y);
+    return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN;
+  };
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+  const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : "-");
+  const mmss = (x: number) => (isNaN(x) ? "-" : `${Math.floor(x / 60)}:${String(Math.round(x % 60)).padStart(2, "0")}`);
+  const dec = d.filter((x) => x.winner !== "draw");
+  const len = dec.map((x) => x.min * 60);
+  console.log(`\n== ${map}: ${d.length} matches, draws ${d.length - dec.length}; decided median ${mmss(q(len, 0.5))} (p10 ${mmss(q(len, 0.1))}, p90 ${mmss(q(len, 0.9))})`);
+  const wins: Record<string, [number, number]> = {};
+  for (const x of d)
+    for (const s of SIDES) {
+      wins[x[s]] ??= [0, 0];
+      wins[x[s]]![1]++;
+      if (x.winner === s) wins[x[s]]![0]++;
+    }
+  console.log("  win rates: " + Object.entries(wins).map(([k, [w, n]]) => `${k} ${pct(w, n)}`).join(", "));
+  if (!d.every((x) => x.built)) return; // (lines from before these fields)
+  const groups: UnitGroup[] = ["infantry", "condor", "air", "vehicles"];
+  const share = (x: Match, s: Faction, gs: UnitGroup[]) => {
+    const tot = groups.reduce((a, g) => a + x.built[s][g], 0);
+    return tot ? gs.reduce((a, g) => a + x.built[s][g], 0) / tot : 0;
+  };
+  const per = (gs: UnitGroup[]) => d.flatMap((x) => SIDES.map((s) => share(x, s, gs)));
+  console.log(
+    "  value built (median per side): " +
+      groups.map((g) => `${g} ${Math.round(100 * q(per([g]), 0.5))}%`).join(", ") +
+      `; infantry+Condor ${Math.round(100 * q(per(["infantry", "condor"]), 0.5))}% (p10 ${Math.round(100 * q(per(["infantry", "condor"]), 0.1))}%), ` +
+      `air p10 ${Math.round(100 * q(per(["air"]), 0.1))}%`
+  );
+  const un = d.reduce((a, x) => ({ relay: a.relay + x.unloads.relay, elsewhere: a.elsewhere + x.unloads.elsewhere, bailout: a.bailout + x.unloads.bailout }), { relay: 0, elsewhere: 0, bailout: 0 });
+  console.log(`  Condor drops per match: ${(un.relay / d.length).toFixed(1)} squads onto an Uplink, ${(un.elsewhere / d.length).toFixed(1)} elsewhere, ${(un.bailout / d.length).toFixed(1)} bailed out; Condors lost ${mean(d.map((x) => x.condorsLost.blue + x.condorsLost.red)).toFixed(1)}`);
+  const islands = d.some((x) => x.islandCaptures.blue + x.islandCaptures.red > 0);
+  if (islands) {
+    const first = d.flatMap((x) => SIDES.map((s) => x.firstIsland[s] ?? Infinity));
+    const both2 = d.filter((x) => SIDES.every((s) => (x.firstIsland[s] ?? Infinity) <= 120)).length;
+    const caps = d.map((x) => x.islandCaptures.blue + x.islandCaptures.red);
+    const retakes = d.map((x) => x.islandRetakes.blue + x.islandRetakes.red);
+    console.log(
+      `  island Uplinks: first capture median ${mmss(q(first, 0.5))}, both sides by 2:00 in ${pct(both2, d.length)}; ` +
+        `captures per match ${mean(caps).toFixed(1)} (retakes ${mean(retakes).toFixed(1)}, ${pct(retakes.filter((n) => n >= 2).length, d.length)} with 2+); flips ${mean(d.map((x) => x.uplinkFlips)).toFixed(1)}`
+    );
+    const crewWin = dec.map((x) => x.crewedSecs[x.winner as Faction] / Math.max(1, x.crewedSecs.blue + x.crewedSecs.red));
+    const crewMin = d.map((x) => (x.crewedSecs.blue + x.crewedSecs.red) / 60 / Math.max(1e-9, x.min));
+    console.log(`  island Uplinks crewed at a time, on average: ${mean(crewMin).toFixed(1)}; the winner's share of crewed relay-time: median ${pct(q(crewWin, 0.5), 1)}`);
+  }
+  const near = d.reduce((a, x) => a + x.relayDeaths, 0);
+  const all = d.reduce((a, x) => a + x.unitDeaths, 0);
+  console.log(`  unit deaths within 8 tiles of an Uplink: ${pct(near, all)}`);
+  const perf = d.filter((x) => x.perf).map((x) => x.perf!);
+  if (perf.length)
+    console.log(`  cost: ${Math.round(q(perf.map((p) => p.msPerMin), 0.5))} ms per sim-minute (median; max ${Math.max(...perf.map((p) => p.msPerMin))}), worst tick ${Math.max(...perf.map((p) => p.worstTick))} ms`);
 }
 
 if (process.argv[2] === "run") run();
