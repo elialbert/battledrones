@@ -165,6 +165,8 @@ export class BattleCallouts {
   private strikeQuietUntil = -Infinity;
   /** Squads aboard each Condor (from embark / disembark events), to tell what went down with one. */
   private aboard = new Map<number, number>();
+  /** Squads already aboard when the match began (the island map) have been counted. */
+  private seeded = false;
   private ended = false;
   /** Lines and banners raised, by key (debug/measurement). */
   readonly counts = new Map<string, number>();
@@ -479,6 +481,11 @@ export class BattleCallouts {
    */
   private transport(fx: readonly FxEvent[], t: number): void {
     const h = this.h;
+    if (!this.seeded) {
+      // a match can start with squads already aboard (the island map): count them in
+      this.seeded = true;
+      for (const u of h.world.units.values()) if (u.passengers?.length && !this.aboard.has(u.id)) this.aboard.set(u.id, u.passengers.length);
+    }
     let bailed: Set<number> | null = null;
     for (const ev of fx) if (ev.type === "disembark" && ev.bailout) (bailed ??= new Set()).add(ev.carrierId);
     for (const ev of fx) {
@@ -493,6 +500,13 @@ export class BattleCallouts {
           t
         );
         this.last.set("squad-lost", t); // (the squads' own deaths are this news)
+      } else if (ev.type === "lifeline") {
+        // a free replacement Condor flying in (lifeline.ts)
+        if (h.spectator || ev.faction !== h.player || !this.ready("lifeline", t, 10)) continue;
+        this.say(
+          { key: "lifeline", text: ev.squad ? "Replacement Condor inbound, a squad aboard" : "Replacement Condor inbound", priority: 2, tone: "good", x: ev.x, y: ev.y, caption: true },
+          t
+        );
       } else if (ev.type === "disembark") {
         const left = (this.aboard.get(ev.carrierId) ?? 0) - ev.unitIds.length;
         if (left > 0) this.aboard.set(ev.carrierId, left);

@@ -4662,6 +4662,19 @@ button {
   }
 }
 
+/* a mutator the picked map can't be played with (Air War on the Archipelago) */
+.mutchip.blocked {
+  opacity: 0.45;
+  filter: grayscale(0.8);
+  cursor: not-allowed;
+}
+.mutchip.blocked small {
+  color: var(--red);
+}
+.mutbtn s {
+  opacity: 0.6;
+}
+
 /* opener cards a match rule bans (e.g. Air War: no Fab Plants) */
 .op-card.blocked {
   opacity: 0.45;
@@ -4725,6 +4738,19 @@ button {
 }
 .objpill .pip.busy {
   animation: pipPulse 0.55s ease-in-out infinite alternate;
+}
+/* an island Uplink held with no troops on it (not paying): hollow */
+.objpill .pip.idle {
+  background: transparent;
+}
+.objpill .pip.blue.idle {
+  border-color: #4fa3ff;
+}
+.objpill .pip.red.idle {
+  border-color: #ff5a4a;
+}
+.objpill .lf {
+  color: var(--gold);
 }
 .objpill .od.hot {
   color: var(--gold);

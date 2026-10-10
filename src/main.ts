@@ -204,7 +204,11 @@ function showMenu(): void {
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
     menu.classList.toggle("ops-mode", opsMode);
+    // Last Stand isn't offered on every map (the island map): move off one that isn't
+    const offered = (id: string) => !survival || mapById(id).lastStand !== false;
+    if (!offered(gameMode.mapId)) gameMode.mapId = MAPS.find((m) => offered(m.id))!.id;
     menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) => {
+      el.hidden = !offered(el.dataset.id!);
       el.classList.toggle("on", el.dataset.id === gameMode.mapId);
       // Last Stand: each map card shows its best for the chosen difficulty
       const badge = el.querySelector<HTMLElement>(".mbest")!;

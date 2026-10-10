@@ -259,3 +259,39 @@ describe("the free replacement Condor", () => {
     expect(carrierOf(createMapWorld("riverlands"), 1)).toBeNull();
   });
 });
+
+describe("island UX", () => {
+  it("a tap on an island with the loaded Condor selected drops its troops there", async () => {
+    const { Controller } = await import("../src/game/controller");
+    const w = createMapWorld("archipelago", { objectives: true });
+    const c = new Controller(w);
+    const [condor] = own(w, "blue", "condor");
+    c.selectUnits([condor!.id]);
+    c.tapWorld(10.5, 24.5, { kind: "ground" }); // blue's home isle
+    expect(c.drainCommands()).toEqual([{ type: "unload", faction: "blue", unitIds: [condor!.id], x: 10.5, y: 24.5 }]);
+    expect(c.lastFeedback?.kind).toBe("drop");
+  });
+
+  it("sending a tank at an island says how islands are reached", async () => {
+    const { Controller } = await import("../src/game/controller");
+    const w = createMapWorld("archipelago", { objectives: true });
+    const c = new Controller(w);
+    const b = besideHq(w, "blue");
+    const tank = spawnUnit(w, "stinger", "blue", b.x, b.y);
+    c.selectUnits([tank.id]);
+    c.tapWorld(48.5, 48.5, { kind: "ground" });
+    expect(c.tip).toMatch(/Condor/);
+    expect(c.onIsland(48, 48)).toBe(true);
+    expect(c.onIsland(Math.floor(b.x), Math.floor(b.y))).toBe(false);
+  });
+
+  it("gives the big map a longer ★★ time", async () => {
+    const { starsFor, starSecsFor, starLabelsFor } = await import("../src/game/career");
+    expect(starSecsFor("archipelago")).toBe(720);
+    expect(starSecsFor("riverlands")).toBe(480);
+    expect(starLabelsFor("archipelago")[1]).toBe("Win in under 12:00");
+    const r = { kind: "skirmish" as const, mapId: "archipelago", difficulty: "normal", won: true, secs: 600, buildingsLost: 1, medals: [], mutators: [], daily: null };
+    expect(starsFor(r)).toBe(3);
+    expect(starsFor({ ...r, mapId: "riverlands" })).toBe(1);
+  });
+});

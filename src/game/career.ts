@@ -3,6 +3,7 @@ import { MEDAL_IDS, computeMedals, type MatchRecap, type MedalId } from "../sim/
 import { wavesSurvived } from "../sim/modes/survival";
 import { isMutated, rulesOf, type MutatorId } from "../sim/rules";
 import { OPS, opById, opsUnlocked } from "../sim/ops";
+import { mapById } from "../sim/maps";
 import type { Faction, World } from "../sim/types";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { today as todayIndex } from "./daily";
@@ -82,9 +83,18 @@ export const XP = {
   difficulty: { easy: 1, normal: 1.5, hard: 2.2 } as Record<string, number>
 };
 
-/** Stars per map × difficulty: win · win under 8:00 · win without losing a building. */
+/** Stars per map × difficulty: win · win under 8:00 (a big map gives longer) · win without losing a building. */
 export const STAR_SECS = 8 * 60;
 export const STAR_LABELS = ["Win", "Win in under 8:00", "Win without losing a building"];
+
+/** The ★★ time on a map: 8:00, or the map's own (MapDef.starSecs). */
+export const starSecsFor = (mapId: string): number => mapById(mapId).starSecs ?? STAR_SECS;
+
+/** The three star labels on a map (its ★★ time spelled out). */
+export function starLabelsFor(mapId: string): string[] {
+  const s = starSecsFor(mapId);
+  return [STAR_LABELS[0]!, `Win in under ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`, STAR_LABELS[2]!];
+}
 
 export type GameKind = "skirmish" | "survival" | "op";
 
@@ -139,7 +149,7 @@ export function xpLines(r: MatchResult): XpLine[] {
 export function starsFor(r: MatchResult): number {
   if (r.kind !== "skirmish" || !r.won || r.mutators.length > 0 || r.daily !== null) return 0;
   let s = 1;
-  if (r.secs < STAR_SECS) s |= 2;
+  if (r.secs < starSecsFor(r.mapId)) s |= 2;
   if (r.buildingsLost === 0) s |= 4;
   return s;
 }

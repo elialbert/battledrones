@@ -3,7 +3,7 @@ import { isInfantry, isTransport } from "../sim/infantry";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
 import type { BuildingKind, Command, Faction, Unit, World } from "../sim/types";
-import { buildingAtTile, isResource, tileIndex } from "../sim/world";
+import { buildingAtTile, isResource, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { Squads } from "./squads";
 
 export const PLAYER: Faction = "blue";
@@ -215,6 +215,12 @@ export class Controller {
     // ground tap
     const tx = Math.floor(wx);
     const ty = Math.floor(wy);
+    // an island only a Condor reaches: a tap on it with loaded Condors selected drops their troops
+    // there (no hidden long-press for the island map's main move); anything else gets told why not
+    if (this.selectedUnits.size > 0 && this.onIsland(tx, ty)) {
+      if (this.dropAt(wx, wy)) return;
+      this.islandTip();
+    }
     if (this.selectedUnits.size > 0) {
       const ids = [...this.selectedUnits].filter((id) => w.units.has(id));
       const harvesters = ids.filter((id) => w.units.get(id)!.kind === "harvester");
@@ -247,6 +253,30 @@ export class Controller {
   stopSelected(): void {
     if (this.selectedUnits.size > 0)
       this.enqueue({ type: "stop", faction: PLAYER, unitIds: [...this.selectedUnits] });
+  }
+
+  // -------------------------------------------------------------- islands --
+
+  private tipped = -1e9;
+
+  /** Is tile (tx, ty) island ground, cut off from our base by the sea (an island map only)? */
+  onIsland(tx: number, ty: number): boolean {
+    const w = this.world;
+    return !!w.rules?.islands && regionAt(w, tx, ty, "foot") > 0 && !onHomeLand(w, PLAYER, tx, ty);
+  }
+
+  /** Sent at an island without a loaded Condor: say how islands are reached (now and then). */
+  private islandTip(): void {
+    const now = this.world.tick;
+    if (now - this.tipped < 80) return;
+    this.tipped = now;
+    const hasCondor = this.selectedOwn().some((u) => isTransport(u.kind));
+    const hasSquads = this.selectedOwn().some((u) => isInfantry(u.kind));
+    this.tip = hasCondor
+      ? "That Condor is empty: tap your squads into it first"
+      : hasSquads
+        ? "Squads can't swim: tap a Condor to board, then tap the island"
+        : "No way across: only troops flown in by Condor can take islands";
   }
 
   // ------------------------------------------------------------ transport --

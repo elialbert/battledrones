@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
-import { CRATE_NAMES } from "../../sim/objectives";
+import { CRATE_NAMES, uplinkPay } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, Uplink, World } from "../../sim/types";
 import { buildingCenter, hqOf } from "../../sim/world";
 import { announce } from "../announce";
@@ -34,6 +34,8 @@ export interface ObjectiveRendererOpts {
   notify(msg: string, tone?: "good" | "bad"): void;
   ping(x: number, y: number): void;
   hint(msg: string, x?: number, y?: number): void;
+  /** Does the player have a loaded Condor selected (island relays then show where a tap drops its troops)? */
+  dropReady?(): boolean;
 }
 
 const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
@@ -47,6 +49,7 @@ const FALL = 26;
 /** How high a crate starts its descent (world units). */
 const FALL_H = 7;
 const HINT_KEY = "battledrones.hint.uplinks";
+const ISLAND_HINT_KEY = "battledrones.hint.islands";
 
 const discGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 
@@ -100,6 +103,8 @@ interface UplinkView {
   /** Seconds left of the capture flash. */
   flash: number;
   lastAlert: number;
+  /** Island relay: was it crewed last frame (to warn when its garrison is gone)? */
+  crewed: boolean;
 }
 
 interface CrateView {
@@ -146,7 +151,7 @@ export class ObjectiveRenderer {
     glow.scale.setScalar(3.2);
     glow.renderOrder = 3;
     this.group.add(m.root, glow);
-    return { l, m, glow, glowMat: glowMat_, h, spin: (l.id * 1.7) % (Math.PI * 2), flash: 0, lastAlert: -1e9 };
+    return { l, m, glow, glowMat: glowMat_, h, spin: (l.id * 1.7) % (Math.PI * 2), flash: 0, lastAlert: -1e9, crewed: false };
   }
 
   private friendly(f: Faction): boolean {
@@ -244,15 +249,21 @@ export class ObjectiveRenderer {
     }
     if (ev.owner === me) {
       this.sound("capture", x, y, 1, 0.55);
+      const l = v?.l;
       announce({
         key: "uplink-captured", text: "Uplink captured",
-        sub: `+${OBJECTIVES.uplink.income} scrap/s · vision · ⚡ charge`, tone: "good", priority: 2, x: ev.x, y: ev.y
+        sub: l?.infantryOnly
+          ? `+${uplinkPay(l)} scrap/s while your troops hold it · vision · ⚡`
+          : `+${l ? uplinkPay(l) : OBJECTIVES.uplink.income} scrap/s · vision · ⚡ charge`,
+        tone: "good", priority: 2, x: ev.x, y: ev.y
       });
     } else if (ev.prev === me) {
       this.sound("uplinkLost", x, y, 1, 0.55);
       this.opts.ping(ev.x, ev.y);
       announce({
-        key: "uplink-lost", text: "Uplink lost", sub: "Get units back on it before they take it", tone: "bad", priority: 1, x: ev.x, y: ev.y
+        key: "uplink-lost", text: "Uplink lost",
+        sub: v?.l.infantryOnly ? "Fly troops back in by Condor to retake it" : "Get units back on it before they take it",
+        tone: "bad", priority: 1, x: ev.x, y: ev.y
       });
     } else if (ev.owner) {
       this.sound("uplinkLost", x, y, 0.6, 0.2);
@@ -405,14 +416,17 @@ export class ObjectiveRenderer {
     const { x, y } = l;
     const owner = l.owner;
     const col = owner ? TEAM[owner] : NEUTRAL;
+    // an island relay with no troops on it is held but silent: dimmed, its dish barely turning
+    const idle = !!(l.infantryOnly && owner && !l.crewed);
+    this.watchCrew(v);
     // the dish: idles on a slow scan, turns for its owner, spins up while being captured
-    const rate = l.pushing ? 2.6 : owner ? 0.7 : 0;
+    const rate = l.pushing ? 2.6 : owner ? (idle ? 0.15 : 0.7) : 0;
     v.spin = rate > 0 ? v.spin + rate * dt : Math.sin(this.time * 0.0004 + l.id) * 0.9;
     if (v.m.turret) v.m.turret.rotation.y = -v.spin;
     v.flash = Math.max(0, v.flash - dt * 1.2);
     const breathe = 0.5 + 0.5 * Math.sin(this.time * 0.003 + l.id);
     v.glowMat.color.setHex(col);
-    v.glowMat.opacity = owner ? 0.28 + 0.14 * breathe + 0.5 * v.flash : 0.08 + 0.4 * v.flash;
+    v.glowMat.opacity = owner && !idle ? 0.28 + 0.14 * breathe + 0.5 * v.flash : 0.08 + 0.4 * v.flash;
     v.glow.scale.setScalar(3.2 + v.flash * 2);
 
     const seen = this.opts.visibleAt(l.x, l.y);
@@ -420,14 +434,25 @@ export class ObjectiveRenderer {
     const k = seen ? 1 : 0.7;
     const R = OBJECTIVES.uplink.radius;
     // the capture zone: a dashed ring in the owner's colour, turning while contested
-    const dashes = 28;
+    // (an island relay, infantry only: long dashes with a dotted inner ring)
+    const dashes = l.infantryOnly ? 12 : 28;
     const turn = l.pushing || l.contested ? this.time * 0.0009 : 0;
-    g.lineStyle(owner ? 2.2 : 1.6, col, (owner ? 0.75 : 0.55) * k);
+    g.lineStyle(owner ? 2.2 : 1.6, col, (owner ? (idle ? 0.45 : 0.75) : 0.55) * k);
     for (let i = 0; i < dashes; i += 2) {
       const a0 = (i / dashes) * Math.PI * 2 + turn;
       g.arc(x, y, R, a0, a0 + (Math.PI * 2) / dashes);
     }
-    if (owner && seen) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
+    if (l.infantryOnly) {
+      g.fillStyle(col, (owner ? 0.7 : 0.5) * k);
+      const dot = this.px(x, y, 1.6);
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * Math.PI * 2 - turn;
+        g.fillCircle(x + Math.cos(a) * (R - 0.3), y + Math.sin(a) * (R - 0.3), dot);
+      }
+    }
+    if (owner && seen && !idle) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
+    // a loaded Condor selected: gold chevrons close in on every island relay its troops could take
+    if (l.infantryOnly && !(owner === this.opts.player && l.crewed) && this.opts.dropReady?.()) this.dropMarks(x, y, R);
     // the capture bar: a ring around the platform, filled toward whoever is winning it,
     // on a dark track notched into quarters like the health bars' segments
     const ar = 1.38;
@@ -455,6 +480,43 @@ export class ObjectiveRenderer {
       g.lineStyle(3, 0xffa040, (0.4 + 0.5 * pulse) * k).strokeCircle(x, y, ar + this.px(x, y, 8), bh);
     }
     if (v.flash > 0) g.lineStyle(5, 0xffffff, v.flash * 0.8, 0.5).strokeCircle(x, y, R * (1.15 - 0.15 * v.flash));
+  }
+
+  /** Pulsing gold chevrons round an island relay: "tap here to drop your troops". */
+  private dropMarks(x: number, y: number, R: number): void {
+    const g = this.v.over;
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 0.008);
+    g.lineStyle(3, GOLD, 0.6 + 0.35 * pulse);
+    const ch = this.chev;
+    const px = (css: number) => this.px(x, y, css);
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2 + Math.PI / 4;
+      const ux = Math.cos(a);
+      const uy = Math.sin(a);
+      const d0 = R + px(3 + 4 * pulse);
+      const d1 = d0 + px(9);
+      const s = px(8);
+      ch[0]!.x = x + ux * d1 - uy * s;
+      ch[0]!.y = y + uy * d1 + ux * s;
+      ch[1]!.x = x + ux * d0;
+      ch[1]!.y = y + uy * d0;
+      ch[2]!.x = x + ux * d1 + uy * s;
+      ch[2]!.y = y + uy * d1 - ux * s;
+      g.strokePoints(ch);
+    }
+  }
+
+  /** Our island relay just lost its last trooper: it stops paying, so say so (throttled). */
+  private watchCrew(v: UplinkView): void {
+    const l = v.l;
+    if (!l.infantryOnly) return;
+    const crewed = !!l.crewed && l.owner === this.opts.player;
+    if (v.crewed && !crewed && l.owner === this.opts.player && !this.opts.spectator && this.time - v.lastAlert > 20000) {
+      v.lastAlert = this.time;
+      this.opts.ping(l.x, l.y);
+      this.opts.alert("📡 Uplink unmanned: it pays nothing until troops land", l.x, l.y);
+    }
+    v.crewed = crewed;
   }
 
   private drawCrate(v: CrateView, now: number): void {
@@ -534,15 +596,26 @@ export class ObjectiveRenderer {
     }
   }
 
-  /** One-time tip the first time a match has Uplinks. */
+  /** One-time tip the first time a match has Uplinks (and the first time it has island ones). */
   private firstHint(): void {
+    const islands = this.uplinks.some((u) => u.l.infantryOnly);
     // at 0:45: after the opening's own tips, before the first relay usually falls and the first drop
-    if (this.hinted || this.opts.spectator || this.uplinks.length === 0 || this.world.tick < 45 * TICK_RATE) return;
+    // (on an island map at 0:04: taking them is the whole opening)
+    if (this.hinted || this.opts.spectator || this.uplinks.length === 0 || this.world.tick < (islands ? 4 : 45) * TICK_RATE) return;
     this.hinted = true;
     try {
-      if (localStorage.getItem(HINT_KEY)) return;
-      localStorage.setItem(HINT_KEY, "1");
+      const key = islands ? ISLAND_HINT_KEY : HINT_KEY;
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "1");
     } catch {
+      return;
+    }
+    if (islands) {
+      const c = [...this.world.units.values()].find((u) => u.faction === this.opts.player && u.kind === "condor");
+      this.opts.hint(
+        "Island 📡 Uplinks: only troops can take them, and they pay while troops hold them. Tap your Condor, then tap an island.",
+        c?.x, c?.y
+      );
       return;
     }
     const home = this.home();
@@ -568,7 +641,9 @@ export class ObjectiveRenderer {
       ctx.lineTo(x - d, y);
       ctx.closePath();
       ctx.fillStyle = l.owner === "blue" ? "#4fa3ff" : l.owner === "red" ? "#ff5a4a" : "#6b6450";
+      if (l.infantryOnly && l.owner && !l.crewed) ctx.globalAlpha = 0.4; // held, but no troops on it
       ctx.fill();
+      ctx.globalAlpha = 1;
       const busy = l.pushing || l.contested;
       ctx.lineWidth = busy ? 2.5 : 1.6;
       ctx.strokeStyle = busy && Math.sin(t * 0.012) > 0 ? "#ffa040" : "#f4ecd8";
