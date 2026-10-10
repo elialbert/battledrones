@@ -1,0 +1,57 @@
+name: Publish Pages
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Release events point at the tag. The root site and build tooling
+          # must always come from main; PRs validate their proposed changes.
+          ref: ${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Build current game and every version tag
+        run: npm run build:pages
+      - name: Install browser for deployment checks
+        run: npx playwright-core install --with-deps chromium
+      - name: Check version URLs, games and service workers
+        run: npm run check:pages
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

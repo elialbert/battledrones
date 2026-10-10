@@ -158,8 +158,10 @@ and offers an Update button.
 npm install
 npm run dev            # Vite dev server
 npm test               # Vitest suite for the simulation layer
-npm run build          # typecheck + production build into docs/
-npm run smoke          # headless Playwright test of the real touch flow (against docs/)
+npm run build          # typecheck + production build into dist/
+npm run smoke          # headless Playwright test of the real touch flow (against dist/)
+npm run build:pages    # build current game + all version tags into _site/
+npm run check:pages    # check every built version in Chromium (install it first)
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives)
                        # (any mode takes --tune '{"UNITS.trooper.hp":200}' for an A/B run)
@@ -177,13 +179,16 @@ npx vite-node tools/pacing.ts run out.jsonl --with rush --tune '{…}' # one per
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
                        # model gallery: npm run dev, then open /tools/models.html
                        #   (?only=units|buildings|condor|condor-ring, ?anim=walk|idle|aim|fall for the robots)
-                       # vehicles reference page: /vehicles.html (built into docs/ too)
+                       # vehicles reference page: /vehicles.html (built into dist/ too)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
 
-The built site in `docs/` is committed so GitHub Pages serves it directly
-with no build step — rebuild and commit `docs/` when shipping changes.
+GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Each historical version is rebuilt from its own source and lockfile. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
+
+Pull requests build and browser-check the complete site without deploying. The checks boot every version after the current game's service worker has taken control, verify that each version gets its own HTML and service worker, and check offline navigation at the root. For local checks, run `git fetch --tags`, `npm ci`, `npm run build:pages`, `npx playwright-core install chromium`, and `npm run check:pages`. `CHROME_PATH` can point to an existing Chromium executable instead. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
+
+The repository's **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. The `github-pages` environment must allow deployments from `main` and release tags matching `v*` so release-triggered deployments can publish. To republish after tagging a historical commit that predates the workflow, run **Publish Pages** manually on `main`.
 
 Art pipeline (Python 3 + Pillow/numpy/scipy, `OPENAI_API_KEY` for
 generation) — see **ART.md**:

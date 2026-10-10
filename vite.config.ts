@@ -2,13 +2,12 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
-  // Relative base + committed docs/ output so GitHub Pages can serve the
-  // built game from the repo with no build step.
+  // Local builds are portable; Pages supplies an absolute base for each version.
   base: "./",
   server: { host: true },
   build: {
     target: "es2022",
-    outDir: "docs",
+    outDir: "dist",
     chunkSizeWarningLimit: 1600,
     // the engine in its own chunk: game updates don't re-download three.js
     rollupOptions: {
@@ -25,6 +24,9 @@ export default defineConfig({
       // first play instead
       includeAssets: ["assets/icons/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
       workbox: {
+        // There are no client-side routes. Exact precached URLs still work
+        // offline, but /v1/ etc. must reach their own game and service worker.
+        navigateFallback: null,
         globPatterns: ["**/*.{js,css,html}"],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [

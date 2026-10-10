@@ -1,4 +1,4 @@
-// Headless smoke test: serves docs/ (or uses a given URL), boots the game
+// Headless smoke test: serves dist/ (or uses a given URL), boots the game
 // and drives the REAL input paths with taps: pick an opener card, construct
 // + place a building (tap moves the ghost, tapping the ghost builds), queue
 // a Stinger, select it on the canvas, save it as squad 1 and order it around,
@@ -10,7 +10,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../docs");
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../dist");
 const SHOT_DIR = process.env.SMOKE_SHOT_DIR ?? "/tmp";
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
