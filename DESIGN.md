@@ -172,6 +172,45 @@ two empty corners.
   Island relays have their own ring (long dashes, a dotted inner ring); an
   empty one dims, its HUD pip goes hollow and the radio warns "Uplink
   unmanned". The opener picker marks Air Wing as the one that suits it.
+- **AI** (`ai/airlift.ts`): on a map with island relays the commander's
+  airlift owns every Condor (the harvester-raid planner stands down), for
+  every personality and difficulty. It scores neutral, enemy-held and its
+  own empty relays by pay, flight time, a per-personality caution and what
+  it has seen there; it only lands bringing 1.3× what's there (squads and
+  the Wasps and Hornets circling the island), and a lone squad never races
+  the enemy to a relay equally near both. Each Condor boards 1–2 healthy
+  squads at home (Rocket Squads first once the enemy flies), flies a route
+  clear of the anti-air it has seen or remembers, lands in the ring on the
+  relay's own island and turns back after losing 30%. Garrisons are held on
+  their island and walk back after a chase; a secured island's spare squads
+  are flown on when nobody is free at home. Enemy Condors near its relays,
+  base or dropships get Raptors (the threat response skips unarmed units);
+  idle Wasps and Hornets clear an enemy garrison no anti-air covers. Here
+  every build order has an Assembly Bay second and an Airpad third, 2
+  Condors (3 on Hard), a 30% infantry floor, ground vehicles held to 15% and
+  up to 6 Raptors. Easy flies one Condor from 0:30, to neutral or its own
+  relays only. Everywhere, the AI only sends units where they can go:
+  capture squads and garrisons skip island relays, threat responders must
+  be able to get in range, island squads stay out of army value and waves,
+  harvesters stay on their own side of the bridges and aren't rebuilt once
+  those fields are dry, and sweeps, dodges and veteran retreats check
+  reachability. Before it, the AI never took an island on purpose.
+- **Measured** (`tools/pacing.ts --maps archipelago`, all 30 pairings × 4
+  seeds, Normal, 120 matches): both sides take an island in every match
+  (first capture median 0:32); 19.6 island captures per match, 11.2 of them
+  retakes, 32 relay flips; Condors drop 41.6 squads per match onto relays (5
+  elsewhere); 26% of unit deaths within 8 tiles of a relay. Value built:
+  infantry and Condors 44%, aircraft 45%, ground vehicles 12%. Personality
+  win rates 28–60% (Air Swarm 28, Ironclad 33, Balanced 53, Boom 58, Rush
+  60, Skyforce 60; about ±11 points at 20 games each). 4 of 120 drawn at 25
+  min; decided median **16:02** (p10 11:57, p90 18:33), longer than the
+  other maps: the side that holds the relays (about 80% of crewed
+  relay-time) starves the other, but an air-heavy army is slow to break
+  turrets and SAM sites. Raising relay income 50% took about a minute off
+  and swung the win rates, so the numbers stay as they are for now. Easy vs
+  Easy plays (about 9 squads airlifted a match, first capture median 1:04).
+  Cost: 358 ms per sim-minute against Ashlands' 382; the other maps' round
+  robins and the beginner harness are unchanged.
 
 ### Economy
 
@@ -2095,6 +2134,7 @@ src/
     ai/objectives.ts # capture squads, Uplink garrisons, crate races
     ai/intel.ts     # what the commander sees (fog + concealment), anti-air in Flak, weapon effectiveness
     ai/condor.ts    # the commander's Condor drops on enemy harvesters (or behind its own wave)
+    ai/airlift.ts   # island maps: Condors fly squads out to the relays, hold and retake them, intercept the enemy's
   game/       # three.js: scene, camera, input, rendering
     three/          # the 3D layer: stage (renderer, lights, adaptive quality), camera rig, builder + models,
                     #   robot infantry rigs (infantry.ts), terrain (heightfield, water, props, fog of war),
