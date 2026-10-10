@@ -161,7 +161,6 @@ npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into dist/
 npm run smoke          # headless Playwright test of the real touch flow (against dist/)
 npm run build:pages    # build current game + all version tags into _site/
-npm run check:pages    # check every built version in Chromium (install it first)
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives)
                        # (any mode takes --tune '{"UNITS.trooper.hp":200}' for an A/B run)
@@ -186,7 +185,7 @@ node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 
 GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Each historical version is rebuilt from its own source and lockfile. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
 
-Pull requests build and browser-check the complete site without deploying. The checks boot every version after the current game's service worker has taken control, verify that each version gets its own HTML and service worker, and check offline navigation at the root. For local checks, run `git fetch --tags`, `npm ci`, `npm run build:pages`, `npx playwright-core install chromium`, and `npm run check:pages`. `CHROME_PATH` can point to an existing Chromium executable instead. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
+Pull requests build the complete site without deploying. The Pages workflow only builds and publishes; the separate Tests workflow runs the unit tests. To build the site locally, run `git fetch --tags`, `npm ci`, and `npm run build:pages`. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
 
 The repository's **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. Release events dispatch the workflow on `main`, so the `github-pages` environment can remain restricted to that branch. To republish after tagging a historical commit that predates the workflow, run **Publish Pages** manually on `main`.
 
