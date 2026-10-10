@@ -12,18 +12,32 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'release' && 'release' || 'production' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      # A release runs in a tag context, which the github-pages environment may
+      # disallow. Dispatch main so both the code and deployment identity use main.
+      - name: Publish the updated archive from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
+
   build:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
-          # Release events point at the tag. The root site and build tooling
-          # must always come from main; PRs validate their proposed changes.
+          # The root site and build tooling come from main, even for manual
+          # runs. PRs validate their proposed changes instead.
           ref: ${{ github.event_name == 'pull_request' && github.ref || 'main' }}
           fetch-depth: 0
       - uses: actions/setup-node@v7
@@ -42,7 +56,7 @@ jobs:
           path: _site
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'release'
     needs: build
     runs-on: ubuntu-latest
     permissions:

@@ -188,7 +188,7 @@ GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, 
 
 Pull requests build and browser-check the complete site without deploying. The checks boot every version after the current game's service worker has taken control, verify that each version gets its own HTML and service worker, and check offline navigation at the root. For local checks, run `git fetch --tags`, `npm ci`, `npm run build:pages`, `npx playwright-core install chromium`, and `npm run check:pages`. `CHROME_PATH` can point to an existing Chromium executable instead. Generated `dist/` and `_site/` output is ignored; there is no need to commit a built `docs/` folder.
 
-The repository's **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. The `github-pages` environment must allow deployments from `main` and release tags matching `v*` so release-triggered deployments can publish. To republish after tagging a historical commit that predates the workflow, run **Publish Pages** manually on `main`.
+The repository's **Settings → Pages → Build and deployment → Source** must be **GitHub Actions**. Release events dispatch the workflow on `main`, so the `github-pages` environment can remain restricted to that branch. To republish after tagging a historical commit that predates the workflow, run **Publish Pages** manually on `main`.
 
 Art pipeline (Python 3 + Pillow/numpy/scipy, `OPENAI_API_KEY` for
 generation) — see **ART.md**:
