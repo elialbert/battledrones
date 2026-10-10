@@ -4,7 +4,8 @@ A mobile-friendly real-time strategy game in the Command & Conquer
 tradition: two armies of drones — flying and ground-based — battle for
 territory and resources. Single-player skirmish against an AI commander,
 built for phone browsers (touch-first, portrait or landscape) and
-installable as a PWA.
+installable as a PWA. When a new version is deployed, the home screen says so
+and offers an Update button.
 
 **Play it: <https://simonw.github.io/battledrones/>**
 

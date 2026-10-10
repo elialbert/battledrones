@@ -12,6 +12,7 @@ import { dailyOp, today, type DailyOp } from "./game/daily";
 import { opById, type OpDef } from "./sim/ops";
 import { mountMenuOps } from "./ui/ops";
 import { fullscreen } from "./ui/fullscreen";
+import { appUpdate, mountUpdatePill } from "./ui/update";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -74,6 +75,8 @@ function setupPageZoomRescue(): void {
 setupPageZoomRescue();
 // a rematch or Menu reload dropped full screen: ask again on the first tap
 fullscreen.restoreOnGesture();
+// a new build: the menu offers to reload into it (ui/update.ts)
+appUpdate.watch();
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -170,6 +173,7 @@ function showMenu(): void {
   syncMute();
   const offMute = sfx.onChange(syncMute);
   muteBtn.addEventListener("click", () => sfx.setMuted(!sfx.muted));
+  const offUpdate = mountUpdatePill(menu);
 
   // career: rank badge, Daily Op card, mutator picker, map stars (ui/career.ts)
   const career = mountMenuCareer(menu, {
@@ -274,6 +278,7 @@ function showMenu(): void {
     sfx.play("click");
     await fullscreen.enter(); // (Android/desktop; iOS Safari's dvh layout covers it)
     offMute();
+    offUpdate();
     menu.remove();
     void startGame();
   };
@@ -300,6 +305,7 @@ function showMenu(): void {
   }
   if (rematch) {
     offMute();
+    offUpdate();
     menu.remove();
     void startGame();
     // audio needs a gesture: sfx.unlockOnGesture() (above) starts it on the first touch
