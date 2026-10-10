@@ -222,6 +222,51 @@ describe("AI and robot infantry", () => {
       expect(built.has("sniper")).toBe(snipers);
     });
 
+  it("answers an intruder with units that can hurt it: no Sniper Team sent at a tank", () => {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState("balanced", "normal", 1);
+    const c = buildingCenter(hqOf(w, "red")!);
+    const sniper = spawnUnit(w, "sniper", "red", c.x - 1, c.y + 3);
+    const tank = spawnUnit(w, "stinger", "red", c.x, c.y + 3);
+    const intruder = spawnUnit(w, "stinger", "blue", c.x - 6, c.y + 6);
+    w.powers.stunned.set(intruder.id, 1e9);
+    step(w, []);
+    const cmds = tickAi(w, "red", ai);
+    const answer = cmds.find((cmd) => cmd.type === "attack" && cmd.targetId === intruder.id);
+    expect(answer).toBeDefined();
+    expect((answer as { unitIds: number[] }).unitIds).toContain(tank.id);
+    expect((answer as { unitIds: number[] }).unitIds).not.toContain(sniper.id);
+    // …but a squad of robot infantry is the Sniper's to answer
+    const w2 = createMapWorld("proving-grounds");
+    const ai2 = createAiState("balanced", "normal", 1);
+    const sniper2 = spawnUnit(w2, "sniper", "red", c.x - 1, c.y + 3);
+    const squad = spawnUnit(w2, "trooper", "blue", c.x - 6, c.y + 6);
+    w2.powers.stunned.set(squad.id, 1e9);
+    step(w2, []);
+    const cmds2 = tickAi(w2, "red", ai2);
+    expect(cmds2.some((cmd) => cmd.type === "attack" && cmd.targetId === squad.id && cmd.unitIds.includes(sniper2.id))).toBe(true);
+  });
+
+  it("launches a wave with the robot infantry still marching up to the staging point", () => {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState("balanced", "normal", 1);
+    const hq = buildingCenter(hqOf(w, "red")!);
+    const far = { x: w.width - hq.x, y: w.height - hq.y }; // the enemy HQ, as red guesses it
+    const len = Math.hypot(far.x - hq.x, far.y - hq.y);
+    const stage = { x: hq.x + ((far.x - hq.x) / len) * 9, y: hq.y + ((far.y - hq.y) / len) * 9 };
+    // a wave's worth gathered at the staging point…
+    for (let i = 0; i < 12; i++) spawnUnit(w, "stinger", "red", stage.x - 1 + (i % 4) * 0.7, stage.y - 1 + Math.floor(i / 4) * 0.7);
+    // …and a Trooper Squad still on its way there (slow: 1.8 tiles/s)
+    const late = spawnUnit(w, "trooper", "red", hq.x + ((far.x - hq.x) / len) * 2, hq.y + ((far.y - hq.y) / len) * 2);
+    late.order = { type: "attackMove", x: stage.x, y: stage.y };
+    step(w, []);
+    const cmds = tickAi(w, "red", ai);
+    expect(ai.mode).toBe("assault");
+    const wave = cmds.filter((c) => (c.type === "attack" || c.type === "attackMove") && c.unitIds.includes(late.id));
+    expect(wave).toHaveLength(1);
+    expect(wave[0]!.type === "attackMove" && Math.hypot(wave[0]!.x - stage.x, wave[0]!.y - stage.y) < 1).toBe(false);
+  });
+
   it("Rush opens with an Assembly Bay and fields Troopers alongside its Stingers", () => {
     const w = createSkirmishWorld();
     const ai = createAiState("rush", "normal", 1);

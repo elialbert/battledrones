@@ -40,8 +40,10 @@ export const CONDOR_AI = {
   minHp: 0.7,
   /** Squads farther than this (tiles) from the Condor, or from home, aren't called to board. */
   reach: 16,
-  /** A Condor this hurt (share of max HP) on its way out turns back. */
-  abortHp: 0.5,
+  /** A Condor that loses this share of its max HP on the way to its waypoint turns back. */
+  abortLoss: 0.3,
+  /** Dropped squads go for a harvester (or Depot) they know of within this many tiles; else they hold the field. */
+  chase: 8,
   /** Visible armed enemy ground value within this radius (tiles) of a drop point… */
   guardRadius: 6,
   /** …above this share of the squads' own value makes it a trap, not a raid. */
@@ -59,11 +61,15 @@ interface Memo {
   since: number;
   waypoint: { x: number; y: number } | null;
   drop: { x: number; y: number } | null;
-  /** Squads set down on a raid, and the tick they rejoin the army. */
+  /** Squads set down on a raid, the tick they rejoin the army, and the harvester line they work. */
   raiders: number[];
   raidUntil: number;
+  field: { x: number; y: number } | null;
   /** Tick of the last landing (or called-off drop). */
   lastDrop: number;
+  /** HP when the current trip began, and whether it turned back hurt (the squads then walk). */
+  launchHp: number;
+  turnedBack: boolean;
   built: number;
   lostTick: number;
 }
@@ -74,7 +80,7 @@ function memo(s: AiState): Memo {
   if (!m) {
     m = {
       phase: "ready", condorId: null, squads: [], since: 0, waypoint: null, drop: null,
-      raiders: [], raidUntil: 0, lastDrop: -1e9, built: 0, lostTick: -1e9
+      raiders: [], raidUntil: 0, field: null, lastDrop: -1e9, launchHp: 0, turnedBack: false, built: 0, lostTick: -1e9
     };
     memos.set(s, m);
   }
@@ -162,6 +168,7 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
     m.built++;
     setPhase(m, "ready", w.tick);
     m.squads = [];
+    m.turnedBack = false;
   }
   const condor = c;
   const cap = UNITS.condor.capacity ?? 2;
@@ -231,15 +238,18 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         break;
       }
       if (condor.order.type !== "idle") break;
-      if (ctx.threatened || w.tick - m.since > CONDOR_AI.waitTimeout * tps) {
-        unloadHome();
+      if (ctx.threatened || m.turnedBack || w.tick - m.since > CONDOR_AI.waitTimeout * tps) {
+        unloadHome(); // (squads a Condor turned back with walk from here)
+        m.turnedBack = false;
         break;
       }
       const plan = planDrop(w, faction, condor, ctx.hqC);
       if (!plan) break; // no clear way in yet: wait
       m.squads = aboard();
       m.drop = plan.drop;
+      m.field = plan.line;
       m.waypoint = plan.waypoint;
+      m.launchHp = condor.hp;
       if (plan.waypoint) {
         cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
         setPhase(m, "transit", w.tick);
@@ -254,10 +264,11 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         setPhase(m, "return", w.tick);
         break;
       }
-      if (condor.hp < UNITS.condor.hp * CONDOR_AI.abortHp) {
+      if (condor.hp < m.launchHp - UNITS.condor.hp * CONDOR_AI.abortLoss) {
         // taking fire on the way out: turn back with the squads
         cmds.push({ type: "move", faction, unitIds: [condor.id], x: home.x, y: home.y });
         m.lastDrop = w.tick;
+        m.turnedBack = true;
         setPhase(m, "return", w.tick);
         break;
       }
@@ -267,10 +278,12 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
       const plan = planDrop(w, faction, condor, ctx.hqC);
       if (plan && !plan.waypoint) {
         m.drop = plan.drop;
+        m.field = plan.line;
         cmds.push({ type: "unload", faction, unitIds: [condor.id], x: plan.drop.x, y: plan.drop.y });
         setPhase(m, "drop", w.tick);
       } else if (plan?.waypoint) {
         m.drop = plan.drop;
+        m.field = plan.line;
         m.waypoint = plan.waypoint;
         cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
         setPhase(m, "transit", w.tick);
@@ -297,6 +310,7 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         const plan = planDrop(w, faction, condor, ctx.hqC);
         if (plan) {
           m.drop = plan.drop;
+          m.field = plan.line;
           m.waypoint = plan.waypoint;
           if (plan.waypoint) {
             cmds.push({ type: "move", faction, unitIds: [condor.id], x: plan.waypoint.x, y: plan.waypoint.y });
@@ -326,7 +340,13 @@ function setPhase(m: Memo, p: Phase, tick: number): void {
   m.phase = p;
 }
 
-/** Dropped squads go for the nearest harvester they can see, else the nearest building they know of. */
+/**
+ * Dropped squads work the harvester line: a harvester they can see close by
+ * gets shot (a short chase, not into the base), else a known Depot close by,
+ * else they hold the field the harvesters come back to (attack-moving onto
+ * it, so they fight whatever turns up). They rejoin the army when the raid
+ * time is up.
+ */
 function planRaiders(w: World, faction: Faction, m: Memo, ctx: CondorContext, cmds: Command[]): void {
   if (m.raiders.length === 0) return;
   m.raiders = m.raiders.filter((id) => w.units.has(id));
@@ -338,28 +358,29 @@ function planRaiders(w: World, faction: Faction, m: Memo, ctx: CondorContext, cm
   if (idle.length === 0) return;
   const cx = idle.reduce((a, u) => a + u.x, 0) / idle.length;
   const cy = idle.reduce((a, u) => a + u.y, 0) / idle.length;
+  const ids = idle.map((u) => u.id);
   let best: { id: number; d: number } | null = null;
   for (const e of seenEnemies(w, faction)) {
     if (e.kind !== "harvester") continue;
     const d = dist(e.x, e.y, cx, cy);
-    if (d <= 12 && (!best || d < best.d)) best = { id: e.id, d };
+    if (d <= CONDOR_AI.chase && (!best || d < best.d)) best = { id: e.id, d };
   }
-  const ids = idle.map((u) => u.id);
-  for (const id of ids) ctx.used.add(id);
   if (best) {
+    for (const id of ids) ctx.used.add(id);
     cmds.push({ type: "attack", faction, unitIds: ids, targetId: best.id });
     return;
   }
-  let near: { x: number; y: number; d: number } | null = null;
+  let depot: { x: number; y: number; d: number } | null = null;
   for (const kb of knownBuildings(w, faction)) {
+    if (kb.kind !== "depot") continue;
     const size = BUILDINGS[kb.kind].size;
-    const x = kb.tx + size / 2;
-    const y = kb.ty + size / 2;
-    const d = dist(x, y, cx, cy);
-    if (d <= 12 && (!near || d < near.d)) near = { x, y, d };
+    const d = dist(kb.tx + size / 2, kb.ty + size / 2, cx, cy);
+    if (d <= CONDOR_AI.chase && (!depot || d < depot.d)) depot = { x: kb.tx + size / 2, y: kb.ty + size / 2, d };
   }
-  if (near) cmds.push({ type: "attackMove", faction, unitIds: ids, x: near.x, y: near.y });
-  else m.raiders = []; // nothing left to hit here: rejoin the army
+  const goal = depot ?? m.field;
+  if (!goal || dist(goal.x, goal.y, cx, cy) <= 2) return; // holding the field: wait for the harvesters
+  for (const id of ids) ctx.used.add(id);
+  cmds.push({ type: "attackMove", faction, unitIds: ids, x: goal.x, y: goal.y });
 }
 
 /** Is a drop point held by more visible armed ground enemies than the squads aboard could take on? */
@@ -386,7 +407,7 @@ function planDrop(
   faction: Faction,
   c: Unit,
   hqC: { x: number; y: number }
-): { drop: { x: number; y: number }; waypoint: { x: number; y: number } | null } | null {
+): { drop: { x: number; y: number }; waypoint: { x: number; y: number } | null; line: { x: number; y: number } } | null {
   const seen = seenEnemies(w, faction);
   const sources = aaSources(w, faction, seen);
   const covered = (x: number, y: number) => aaStrengthAt(sources, x, y) >= AA_COVER;
@@ -421,7 +442,7 @@ function planDrop(
       const dy = ux * Math.sin(a) + uy * Math.cos(a);
       const drop = inMap({ x: t.x + dx * CONDOR_AI.standoff, y: t.y + dy * CONDOR_AI.standoff });
       if (covered(drop.x, drop.y) || guarded(seen, c, drop)) continue;
-      if (clear(c.x, c.y, drop.x, drop.y)) return { drop, waypoint: null };
+      if (clear(c.x, c.y, drop.x, drop.y)) return { drop, waypoint: null, line: t };
       // around a flank: a waypoint off to the side of the straight line
       const len = Math.max(0.01, dist(c.x, c.y, drop.x, drop.y));
       const px = -(drop.y - c.y) / len;
@@ -430,7 +451,7 @@ function planDrop(
       const my = (c.y + drop.y) / 2;
       for (const k of SIDE) {
         const wp = inMap({ x: mx + px * k, y: my + py * k });
-        if (clear(c.x, c.y, wp.x, wp.y) && clear(wp.x, wp.y, drop.x, drop.y)) return { drop, waypoint: wp };
+        if (clear(c.x, c.y, wp.x, wp.y) && clear(wp.x, wp.y, drop.x, drop.y)) return { drop, waypoint: wp, line: t };
       }
     }
   }

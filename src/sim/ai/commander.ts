@@ -58,10 +58,14 @@ export interface Strategy {
   /**
    * Share of the army's value it keeps in robot infantry once it has an
    * Assembly Bay (Troopers, with Rocket Squads against armour and air).
-   * Without it, the Bay only answers what it sees: Rockets for Titans
-   * (Ironclad: one per Titan), Snipers for enemy infantry.
+   * Without it, the Bay only answers what it sees: Rockets for Titans,
+   * Snipers for enemy infantry.
    */
   infantry?: number;
+  /** Rocket Squads it keeps per Titan of its own, as escorts (Ironclad). */
+  escorts?: number;
+  /** No Assembly Bay in its plans, but it builds one for Rocket Squads once it has seen heavy armour (Titans, Hornets). */
+  bayVsArmour?: boolean;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -94,25 +98,34 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     groundRaids: true,
     infantry: 0.4
   },
-  /** Airpad first: relentless wasp raids, bombers later. */
+  /** Airpad first: relentless wasp raids, bombers later; Rocket Squads when Titans show up. */
   airswarm: {
     name: "airswarm",
     label: "Air Swarm",
     buildOrder: ["airpad", "fab-plant", "turret", "tech-lab", "depot", "airpad"],
     harvesters: 4,
     assaultValue: 1700,
-    harassGroup: 2
+    harassGroup: 2,
+    bayVsArmour: true
   },
-  /** Greedy economy: extra harvesters, a forward depot, a huge late push. */
+  /**
+   * Greedy economy: extra harvesters, a forward depot, a huge late push.
+   * (The depot comes after a turret and the Tech Lab: with every side's
+   * starting Trooper Squad on guard, a depot second won it 74–76% of
+   * tools/pacing.ts games; 61% this way.)
+   */
   boom: {
     name: "boom",
     label: "Boom",
-    buildOrder: ["fab-plant", "depot", "turret", "tech-lab", "airpad", "turret", "radar", "sam-site"],
+    buildOrder: ["fab-plant", "turret", "tech-lab", "depot", "airpad", "turret", "radar", "sam-site"],
     harvesters: 4,
     assaultValue: 2000,
     harassGroup: 3
   },
-  /** Air force: wasps, raptors and hornets; the late Fab Plant only guards home. */
+  /**
+   * Air force: wasps, raptors and hornets; the late Fab Plant only guards
+   * home, and Rocket Squads from an Assembly Bay join it once Titans show up.
+   */
   skyforce: {
     name: "skyforce",
     label: "Skyforce",
@@ -120,21 +133,24 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     harvesters: 4,
     assaultValue: 2000,
     harassGroup: 2,
-    airOnly: true
+    airOnly: true,
+    bayVsArmour: true
   },
   /**
    * Armoured column: rushes the Tech Lab (right after a turret) for Titans,
    * Lancers and Mortars, and an Assembly Bay for the Rocket Squads that
-   * escort the Titans.
+   * escort the Titans. (Waves at 1400: at 1500 it won 72–76% of
+   * tools/pacing.ts games once infantry was in, at 1800 82%, at 1300 58%.)
    */
   ironclad: {
     name: "ironclad",
     label: "Ironclad",
     buildOrder: ["fab-plant", "turret", "tech-lab", "assembly-bay", "airpad", "depot", "fab-plant", "sam-site"],
     harvesters: 4,
-    assaultValue: 1500,
+    assaultValue: 1400,
     harassGroup: 3,
-    heavy: true
+    heavy: true,
+    escorts: 1
   }
 };
 
@@ -396,13 +412,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   }
 
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
-  // Rockets for armour (Ironclad: one per Titan), Snipers for enemy squads
+  // Rockets for armour (and Ironclad's Titan escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers
   const infantryValue = INFANTRY_KINDS.reduce((v, k) => v + have(k) * UNITS[k].cost, 0);
   for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
     if (bay.queue.length >= depth) continue;
     const r = rand(s);
-    const wantRockets = Math.max(s.strategy.heavy ? have("titan") : 0, Math.round(s.seenHeavy * 0.8));
+    const wantRockets = Math.max(Math.round(have("titan") * (s.strategy.escorts ?? 0)), Math.round(s.seenHeavy * 0.8));
     const wantSnipers = s.difficulty === "easy" || !tech ? 0 : Math.min(3, Math.floor(s.seenInfantry / 3));
     let kind: UnitKind;
     if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
@@ -786,6 +802,9 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   for (let i = 0; i < s.extraTurrets; i++) order.splice(Math.min(order.length, 2 + i), 0, "turret");
+  // Titans (or Hornets) seen: an Assembly Bay for Rocket Squads, early in the queue
+  if (s.strategy.bayVsArmour && s.seenHeavy >= 2 && !order.includes("assembly-bay"))
+    order.splice(Math.min(order.length, 3), 0, "assembly-bay");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
