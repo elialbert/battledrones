@@ -19,13 +19,14 @@ import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectiveness, ty
  * - TARGETS: island relays that are neutral, the enemy's, or ours but with
  *   nobody standing on them, scored by what they pay, how far the Condor has
  *   to fly, how exposed they are to the enemy, and what we've seen there.
- *   An enemy relay is only retaken bringing more than the garrison we saw
- *   (or, unseen, a squad's worth). Easy only goes for neutral relays and
- *   its own empty ones.
- * - LIFTS: per Condor, board one or two healthy squads at home (not Sniper
- *   Teams unless nobody else is free), fly a route clear of the anti-air we
- *   see or remember (condor.ts airspace/route), set the squads down on the
- *   relay's island and fly home; turn back when taking fire.
+ *   An enemy relay (or one their drones circle) is only landed on bringing
+ *   more than what we saw there (or, unseen, a squad's worth). Easy only
+ *   goes for neutral relays and its own empty ones.
+ * - LIFTS: per Condor, board one or two healthy squads at home (Rocket
+ *   Squads first once the enemy flies drones, Sniper Teams last), fly a
+ *   route clear of the anti-air we see or remember (condor.ts
+ *   airspace/route), set the squads down inside the relay's zone on its own
+ *   island and fly home; turn back when taking fire.
  * - GARRISONS: our squads on an island hold its relay (they crew it: an
  *   island relay pays only while its holder's infantry stand in it). They
  *   stay out of every other tactic, and walk back into the zone after a
@@ -33,7 +34,10 @@ import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectiveness, ty
  * - INTERCEPTS: enemy Condors are unarmed, so the threat response never
  *   looks at them; one seen near our relays, our base or our own Condors
  *   gets our idle anti-air sent after it (Raptors from anywhere, ground
- *   units only when they can get in range).
+ *   units only when they can get in range). So do enemy Wasps and Hornets
+ *   working over an island our squads hold (the garrison can't run).
+ * - STRIKES: our own idle Wasps and Hornets clear an enemy garrison they
+ *   outweigh, when nothing else covers its island with anti-air.
  *
  * Plain commands and the same fog as everyone: enemy garrisons are what we
  * see (or saw), never the relay's hidden crew state.
@@ -78,14 +82,35 @@ export const AIRLIFT = {
    * How much each personality shies away from relays nearer the enemy than
    * itself (0: goes anywhere, 1: home isles first).
    */
-  caution: { balanced: 0.5, rush: 0.5, airswarm: 0.4, boom: 1, skyforce: 0.6, ironclad: 0.3 } as Record<StrategyName, number>,
-  /** Robot infantry share of the army's value on these maps (the Assembly Bay keeps it up). */
-  infantry: 0.4,
+  caution: { balanced: 0.5, rush: 0.5, airswarm: 0.6, boom: 1, skyforce: 0.6, ironclad: 0.6 } as Record<StrategyName, number>,
+  /**
+   * Robot infantry share of the force a commander keeps on these maps at
+   * least, on top of the squads the airlift is waiting for (which the
+   * Assembly Bays make first): together about 40% of what it builds.
+   */
+  infantry: 0.3,
+  /**
+   * Fab Plants stop once ground vehicles are this share of the force: tanks
+   * only reach the war over the islands by the bridges, at the enemy's base,
+   * so the rest goes to squads, Condors and the air that holds the islands
+   * (at 25-35% the air-only Skyforce won 80-100% of its games here).
+   */
+  vehicles: 0.15,
+  /** Raptors a commander keeps against enemy air on these maps, at most (elsewhere 4; an air force 7). */
+  raptors: 6,
+  /** No personality goes all-in below this army value here (scrap; Rush and Ironclad otherwise go at 1400). */
+  assaultFloor: 1700,
   /** Enemy Condors within this many tiles of our relays, base or Condors are intercepted… */
   interceptRadius: 12,
   /** …by at most this many units each; ground units only from this close (tiles). */
   interceptors: 2,
   interceptGround: 9,
+  /**
+   * Enemy Wasps and Hornets within this many tiles of a relay count against
+   * a landing there, and over one our squads hold, our Raptors go after them
+   * (the threat response only watches relays we own).
+   */
+  airGuard: 6,
   /**
    * Air strikes on enemy garrisons (the way to clear an island before a
    * lift): idle Wasps and Hornets worth this many times the garrison we know
@@ -97,7 +122,6 @@ export const AIRLIFT = {
   /** …go no more often than this (s) at one relay. */
   strikeEvery: 20
 };
-
 
 type Phase = "home" | "boarding" | "outbound" | "return";
 type P = { x: number; y: number };
@@ -115,6 +139,8 @@ interface Lift {
   waypoint: P | null;
   /** Tick it last came home turned back (a loaded Condor waits AIRLIFT.retry before trying again). */
   turnedBack: number;
+  /** A boarding not done by this tick goes with whoever is aboard (or is called off). */
+  boardBy: number;
 }
 
 interface Memo {
@@ -216,6 +242,10 @@ interface Island {
   theirs: Unit[];
   /** Enemy infantry value we reckon is there (seen now, remembered, or guessed). */
   enemy: number;
+  /** Enemy Wasps and Hornets we see over it… */
+  air: Unit[];
+  /** …and all a landing there has to beat: their squads and those drones. */
+  guard: number;
 }
 
 /** One decision pass: garrisons, lifts, intercepts. */
@@ -240,7 +270,9 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
     const intel = m.intel.get(l.id);
     const recent = intel && w.tick - intel.tick < AIRLIFT.recall * tps;
     const enemyValue = theirs.length > 0 ? seenValue : recent ? intel!.value : l.owner === enemy ? AIRLIFT.guess : 0;
-    return { l, region, ours, theirs, enemy: enemyValue };
+    // their drones circling it (in sight now) shoot up a landing as surely as a garrison
+    const air = ctx.seen.filter((u) => (u.kind === "wasp" || u.kind === "hornet") && dist(u.x, u.y, l.x, l.y) <= AIRLIFT.airGuard);
+    return { l, region, ours, theirs, enemy: enemyValue, air, guard: enemyValue + valueOf(air) };
   });
 
   // --- garrisons: our squads on an island hold its relay -------------------
@@ -267,18 +299,22 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
       const c = w.units.get(cid);
       if (!c) continue;
       v += valueOf(c.passengers ?? []);
-      if (lift.phase === "boarding") for (const sid of lift.squads) { const u = w.units.get(sid); if (u) v += UNITS[u.kind].cost; }
+      if (lift.phase === "boarding")
+        for (const sid of lift.squads) {
+          const u = w.units.get(sid);
+          if (u) v += UNITS[u.kind].cost;
+        }
     }
     return v;
   };
   /** Value still wanted on a relay's island (0: enough there or on the way), for a lift other than `skip`. */
   const deficit = (it: Island, skip: number | null): number => {
     const l = it.l;
-    if (s.difficulty === "easy" && (l.owner === enemy || it.enemy > 0)) return 0; // Easy: neutral and our own only
+    if (s.difficulty === "easy" && (l.owner === enemy || it.guard > 0)) return 0; // Easy: neutral and our own only
     const ours = valueOf(it.ours) + inbound(l.id, skip);
-    const want = it.enemy > 0 ? Math.max(it.enemy * AIRLIFT.edge, crewOf(l) * 100) : crewOf(l) * 100;
+    const want = it.guard > 0 ? Math.max(it.guard * AIRLIFT.edge, crewOf(l) * 100) : crewOf(l) * 100;
     // ours, crewed and quiet: nothing to do
-    if (l.owner === faction && it.ours.length >= crewOf(l) && it.enemy === 0) return 0;
+    if (l.owner === faction && it.ours.length >= crewOf(l) && it.guard === 0) return 0;
     return Math.max(0, want - ours);
   };
 
@@ -302,8 +338,8 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
       const need = deficit(it, skip);
       if (need <= 0) continue;
       const have = valueOf(it.ours) + inbound(l.id, skip);
-      // land on a garrison only able to beat it (with whoever is there already)
-      if (it.enemy > 0 && have + cargo < it.enemy * AIRLIFT.edge) continue;
+      // land on a garrison (or under their drones) only able to beat it (with whoever is there already)
+      if (it.guard > 0 && have + cargo < it.guard * AIRLIFT.edge) continue;
       const at = landingSpot(w, faction, it, hq);
       if (!at) continue;
       const others = enemies.filter((e) => !(isInfantry(e.kind) && footRegion(w, e) === it.region));
@@ -322,7 +358,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
       // a lone squad racing them to a relay as near them as us (the centre at the start) is a
       // coin toss: one that is ours for the taking first, the race with a full load
       if (l.owner === null && it.ours.length === 0 && cargo < 200 && exposure > -0.3) score *= 0.4;
-      score -= it.enemy / 100; // a fight first
+      score -= it.guard / 100; // a fight first
       if (l.owner === faction && !l.crewed) score *= 1.3; // ours, standing empty: cheap to put right
       const key = fr.pt(l);
       const better =
@@ -357,6 +393,23 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
     }
     return out;
   };
+  /**
+   * Spare squads on a relay we hold, crewed and quiet (no enemy squad or drone
+   * in sight there): those beyond its crew, Rocket Squads kept back (they are
+   * its anti-air), at most a Condor's load. The first such island, in our frame.
+   */
+  const surplus = (): { it: Island; squads: Unit[] } | null => {
+    for (const it of [...islands].sort((a, b) => fr.pt(a.l).y - fr.pt(b.l).y || fr.pt(a.l).x - fr.pt(b.l).x)) {
+      const extra = it.ours.length - crewOf(it.l);
+      if (it.l.owner !== faction || !it.l.crewed || extra <= 0 || it.guard > 0) continue;
+      const squads = it.ours
+        .filter((u) => u.order.type === "idle" && u.autoTargetId === null && u.hp >= UNITS[u.kind].hp * AIRLIFT.minHp)
+        .sort((a, b) => (a.kind === "rocket-squad" ? 1 : 0) - (b.kind === "rocket-squad" ? 1 : 0) || a.id - b.id)
+        .slice(0, Math.min(extra, cap));
+      if (squads.length > 0) return { it, squads };
+    }
+    return null;
+  };
   const started = w.tick >= AIRLIFT.from[s.difficulty] * tps;
   const spaced = () => w.tick - m.lastLaunch >= AIRLIFT.every[s.difficulty] * tps;
   const cap = UNITS.condor.capacity ?? 2;
@@ -365,7 +418,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
   for (const c of condors) {
     let lift = m.lifts.get(c.id);
     if (!lift) {
-      lift = { phase: "home", target: null, squads: [], since: w.tick, launchHp: c.hp, drop: null, waypoint: null, turnedBack: -1e9 };
+      lift = { phase: "home", target: null, squads: [], since: w.tick, launchHp: c.hp, drop: null, waypoint: null, turnedBack: -1e9, boardBy: 0 };
       m.lifts.set(c.id, lift);
     }
     const L = lift;
@@ -420,7 +473,20 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
         }
         if (!started || ctx.threatened || !spaced()) break;
         const free = pool.filter((u) => !ctx.used.has(u.id));
-        if (free.length === 0) break;
+        if (free.length === 0) {
+          // nobody free at home: a secured island's spare squads, flown on to where they're short
+          const spare = surplus();
+          if (!spare) break;
+          const plan = pick(c, valueOf(spare.squads), c.id);
+          if (!plan || plan.it === spare.it) break;
+          L.target = plan.it.l.id;
+          L.squads = spare.squads.map((u) => u.id);
+          L.boardBy = w.tick + Math.round((dist(c.x, c.y, spare.it.l.x, spare.it.l.y) / UNITS.condor.speed + AIRLIFT.boardTimeout) * tps);
+          cmds.push({ type: "move", faction, unitIds: [c.id], x: spare.it.l.x, y: spare.it.l.y });
+          cmds.push({ type: "board", faction, unitIds: L.squads, carrierId: c.id });
+          setPhase("boarding");
+          break;
+        }
         const potential = valueOf(free.slice(0, cap));
         const plan = pick(c, potential, c.id);
         if (!plan) break;
@@ -429,6 +495,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
         if (picks.length === 0) break;
         L.target = plan.it.l.id;
         L.squads = picks.map((u) => u.id);
+        L.boardBy = w.tick + AIRLIFT.boardTimeout * tps;
         cmds.push({ type: "board", faction, unitIds: L.squads, carrierId: c.id });
         setPhase("boarding");
         break;
@@ -440,7 +507,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
           return !!u && u.order.type === "board" && u.order.carrierId === c.id;
         });
         for (const id of walking) ctx.used.add(id);
-        const late = w.tick - L.since > AIRLIFT.boardTimeout * tps;
+        const late = w.tick > L.boardBy;
         L.squads = [...inHold, ...walking];
         if (ctx.threatened) {
           if (walking.length > 0) cmds.push({ type: "stop", faction, unitIds: walking });
@@ -478,7 +545,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
         }
         const it = islands.find((x) => x.l.id === L.target);
         // still worth it, and still within our means? Else another relay from here, or home
-        const stale = !it || deficit(it, c.id) <= 0 || (it.enemy > 0 && valueOf(it.ours) + inbound(it.l.id, c.id) + cargo() < it.enemy * AIRLIFT.edge);
+        const stale = !it || deficit(it, c.id) <= 0 || (it.guard > 0 && valueOf(it.ours) + inbound(it.l.id, c.id) + cargo() < it.guard * AIRLIFT.edge);
         if (stale) {
           if (it && it.theirs.length > 0) noteThreats(w, m, c, L.drop, ctx.seen);
           const plan = pick(c, cargo(), c.id);
@@ -514,9 +581,11 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
     open++;
     want += Math.min(cap, Math.ceil(d / avgSquad));
   }
-  const waiting = pool.filter((u) => !ctx.used.has(u.id)).length;
-  m.wantSquads = Math.max(0, want + 1 - waiting);
+  const waiting = pool.filter((u) => !ctx.used.has(u.id));
+  m.wantSquads = Math.max(0, want + 1 - waiting.length);
   m.openTargets = open;
+  // the squads the next lifts will want wait at home (not swept off with a wave or to a guard post)
+  waiting.slice(0, Math.min(want, cap * condors.filter((c) => !isLoaded(c)).length)).forEach((u) => ctx.used.add(u.id));
 
   // --- intercepts: enemy Condors near our relays, base or Condors -----------
   cmds.push(...intercepts(w, faction, ctx, islands));
@@ -637,25 +706,29 @@ function intercepts(w: World, faction: Faction, ctx: AirliftContext, islands: re
   const cmds: Command[] = [];
   const R = AIRLIFT.interceptRadius;
   const ourCondors = ctx.mine.filter((u) => u.kind === "condor");
+  // their drones over an island our squads hold: the garrison can't run, so the fighters come
+  const bombers = new Set(islands.filter((it) => it.ours.length > 0).flatMap((it) => it.air.map((u) => u.id)));
   for (const e of ctx.seen) {
-    if (e.kind !== "condor") continue;
     const near = (p: P, r = R) => dist(e.x, e.y, p.x, p.y) <= r;
-    const relevant =
-      islands.some((it) => (it.l.owner === faction || it.ours.length > 0) && near(it.l)) ||
-      near(ctx.hqC, R + 4) ||
-      ourCondors.some((c) => near(c, 8));
-    if (!relevant) continue;
+    if (e.kind === "condor") {
+      const relevant =
+        islands.some((it) => (it.l.owner === faction || it.ours.length > 0) && near(it.l)) ||
+        near(ctx.hqC, R + 4) ||
+        ourCondors.some((c) => near(c, 8));
+      if (!relevant) continue;
+    } else if (!bombers.has(e.id)) continue;
     const chasing = ctx.army.filter((u) => u.order.type === "attack" && u.order.targetId === e.id).length;
-    if (chasing >= AIRLIFT.interceptors) continue;
+    const want = AIRLIFT.interceptors;
+    if (chasing >= want) continue;
     const able = ctx.army
       .filter((u) => {
         if (ctx.used.has(u.id) || u.order.type !== "idle" || u.kind === "condor") return false;
-        if (effectiveness(u.kind, "condor") < USELESS) return false;
+        if (effectiveness(u.kind, e.kind) < USELESS) return false;
         if (UNITS[u.kind].domain === "air") return true;
         return dist(u.x, u.y, e.x, e.y) <= AIRLIFT.interceptGround && canGetWithin(w, moveClassOf(u.kind), u.x, u.y, e.x, e.y, UNITS[u.kind].range);
       })
       .sort((a, b) => (a.kind === "raptor" ? 0 : 1) - (b.kind === "raptor" ? 0 : 1) || dist(a.x, a.y, e.x, e.y) - dist(b.x, b.y, e.x, e.y))
-      .slice(0, AIRLIFT.interceptors - chasing);
+      .slice(0, want - chasing);
     if (able.length === 0) continue;
     for (const u of able) ctx.used.add(u.id);
     cmds.push({ type: "attack", faction, unitIds: able.map((u) => u.id), targetId: e.id });

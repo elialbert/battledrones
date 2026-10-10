@@ -1,6 +1,6 @@
 import { UNITS } from "../balance";
-import type { Command, Faction, Unit } from "../types";
-import { dist } from "../world";
+import type { Command, Faction, Unit, World } from "../types";
+import { canGetWithin, dist, moveClassOf, onHomeLand } from "../world";
 
 /**
  * The AI values its veterans the way a player would: a ranked unit that is
@@ -33,13 +33,16 @@ export function isWoundedVeteran(u: Unit): boolean {
  * Retreat orders for wounded veterans among `army` not already in `used`
  * (a unit dodging a reticle finishes that first). Every wounded veteran is
  * added to `used` (so no other tactic recruits it); idle Menders not in
- * `used` are sent to veterans resting at home.
+ * `used` are sent to veterans resting at home. Given the world, a veteran
+ * only falls back to a Mender it can walk to (not one hovering over the
+ * sea), and one cut off from home (a squad on an island) holds where it is.
  */
 export function veteranRetreats(
   faction: Faction,
   army: Unit[],
   home: { x: number; y: number },
-  used: Set<number>
+  used: Set<number>,
+  w?: World
 ): Command[] {
   const cmds: Command[] = [];
   const menders = army.filter((u) => u.kind === "mender");
@@ -48,12 +51,15 @@ export function veteranRetreats(
     // (already spoken for: e.g. dodging a reticle — it heads home once clear)
     if (!isWoundedVeteran(u) || used.has(u.id)) continue;
     used.add(u.id);
+    const walks = !!w && UNITS[u.kind].domain !== "air";
+    if (walks && !onHomeLand(w!, faction, Math.floor(u.x), Math.floor(u.y))) continue; // no way home: it holds
     const dHome = dist(u.x, u.y, home.x, home.y);
     // a Mender behind the unit (nearer home) beats the long walk back
     let dest: { x: number; y: number } | null = null;
     let best = Infinity;
     for (const m of menders) {
       if (dist(m.x, m.y, home.x, home.y) > dHome - 4) continue;
+      if (walks && !canGetWithin(w!, moveClassOf(u.kind), u.x, u.y, m.x, m.y, VETERAN_RETREAT.arrive)) continue;
       const d = dist(m.x, m.y, u.x, u.y);
       if (d < best) {
         best = d;
