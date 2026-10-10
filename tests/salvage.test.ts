@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { planSalvage } from "../src/sim/ai/salvage";
 import { SALVAGE, TICK_RATE, UNITS } from "../src/sim/balance";
-import { canPlaceBuilding } from "../src/sim/economy";
+import { canPlaceBuilding, nearestScrapTile } from "../src/sim/economy";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
 import { isInfantry } from "../src/sim/infantry";
@@ -249,22 +249,56 @@ describe("AI salvage sweeps", () => {
     expect(planSalvage(w, "red", { army, harvesters, buildings, used: new Set(), threatened: false, assault: false })).toHaveLength(0);
   });
 
-  it("a nearly-empty harvester diverts to a wreck right next to it", () => {
+  it("a harvester at work diverts to a wreck close by, however full its hold", () => {
     const w = createMapWorld("proving-grounds");
     const h = [...w.units.values()].find((u) => u.faction === "red" && u.kind === "harvester")!;
     kill(w, spawnUnit(w, "wasp", "blue", h.x - 2, h.y));
     coolDown(w);
-    // on its way out to the field, two tiles from the wreck
-    h.x = w.wrecks[0]!.x + 2;
-    h.y = w.wrecks[0]!.y;
+    const r = w.wrecks[0]!;
+    // on its way out to the field, four tiles from the wreck
+    h.x = r.x + 4;
+    h.y = r.y;
     h.order = { type: "harvest", fieldX: 30, fieldY: 30, phase: "toField" };
     tickFog(w);
-    const cmds = planSalvage(w, "red", {
-      army: [], harvesters: [h], buildings: [], used: new Set(), threatened: false, assault: true
-    });
-    expect(cmds).toEqual([{ type: "move", faction: "red", unitIds: [h.id], x: w.wrecks[0]!.x, y: w.wrecks[0]!.y }]);
-    h.cargo = 80; // a full-ish hold goes home first
-    expect(planSalvage(w, "red", { army: [], harvesters: [h], buildings: [], used: new Set(), threatened: false, assault: true })).toHaveLength(0);
+    const plan = () =>
+      planSalvage(w, "red", { army: [], harvesters: [h], buildings: [], used: new Set(), threatened: false, assault: true });
+    const divert = [{ type: "move", faction: "red", unitIds: [h.id], x: r.x, y: r.y }];
+    expect(plan()).toEqual(divert);
+    // a full hold heading home too: a wreck's scrap goes straight to the bank
+    h.cargo = 100;
+    h.order = { type: "harvest", fieldX: 30, fieldY: 30, phase: "toBase" };
+    expect(plan()).toEqual(divert);
+    // …but not halfway through unloading, nor from across the field
+    h.order = { type: "harvest", fieldX: 30, fieldY: 30, phase: "unloading" };
+    expect(plan()).toHaveLength(0);
+    h.order = { type: "harvest", fieldX: 30, fieldY: 30, phase: "toField" };
+    h.x = r.x + 6;
+    expect(plan()).toHaveLength(0);
+  });
+
+  it("a harvester sent back to work with a full hold unloads first", () => {
+    const w = createMapWorld("proving-grounds");
+    const h = [...w.units.values()].find((u) => u.faction === "red" && u.kind === "harvester")!;
+    const field = nearestScrapTile(w, h.x, h.y, "red")!;
+    h.cargo = 100;
+    step(w, [{ type: "harvest", faction: "red", unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 }]);
+    expect(h.order).toMatchObject({ type: "harvest", phase: "toBase" });
+    h.cargo = 40;
+    step(w, [{ type: "harvest", faction: "red", unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 }]);
+    expect(h.order).toMatchObject({ type: "harvest", phase: "toField" });
+  });
+
+  it("while an assault gathers, idle units still sweep the wrecks close by", () => {
+    const { w, guards, army, harvesters, buildings, wreck } = scene();
+    const plan = () =>
+      planSalvage(w, "red", { army, harvesters, buildings, used: new Set(), threatened: false, assault: true });
+    for (const g of guards) {
+      g.x = wreck.x + 4;
+      g.y = wreck.y;
+    }
+    expect(plan()).toHaveLength(1);
+    for (const g of guards) g.x = wreck.x + 7; // (any farther waits for the wave)
+    expect(plan()).toHaveLength(0);
   });
 
   it("the commander actually collects the wrecks of a repelled raid", () => {

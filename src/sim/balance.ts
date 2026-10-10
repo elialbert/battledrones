@@ -315,6 +315,12 @@ export const COMBAT = {
   retaliateRange: 9,
   /** Idle allies this close to a victim join in its defence. */
   assistRadius: 5,
+  /**
+   * Auto-targeting reckons an enemy Mender this many tiles closer than it is,
+   * and a unit that can hit one drops its current auto-target for a Mender
+   * in weapon range: kill the healer first, or the fight never ends.
+   */
+  healerPriority: 2.5,
   /** XP (fraction of own cost in kills) needed for ranks 1, 2, 3. */
   rankXp: [1, 2.5, 5],
   /** Damage bonus per veterancy rank. */

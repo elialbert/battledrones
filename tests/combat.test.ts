@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { COMBAT, TICK_RATE, UNITS } from "../src/sim/balance";
+import { findTarget } from "../src/sim/combat";
 import { step } from "../src/sim/sim";
 import { createWorld, spawnBuilding, spawnUnit } from "../src/sim/world";
 
@@ -132,5 +133,46 @@ describe("attacking buildings", () => {
     }
     expect(sawExplosion).toBe(true);
     expect(w.units.has(victim.id)).toBe(false);
+  });
+});
+
+describe("Menders are shot first", () => {
+  it("auto-targeting picks an enemy Mender over a nearer armed unit", () => {
+    const w = createWorld(24, 24);
+    const flak = spawnUnit(w, "flak-crawler", "blue", 5.5, 5.5);
+    const wasp = spawnUnit(w, "wasp", "red", 7.5, 5.5);
+    // a little farther off than the wasp, but within the healer bonus
+    const mender = spawnUnit(w, "mender", "red", 5.5, 5.5 + 2 + COMBAT.healerPriority - 0.5);
+    expect(findTarget(w, "blue", "air", flak.x, flak.y, 10)?.id).toBe(mender.id);
+    mender.y = 5.5 + 2 + COMBAT.healerPriority + 0.5; // beyond it: the nearest threat comes first
+    expect(findTarget(w, "blue", "air", flak.x, flak.y, 10)?.id).toBe(wasp.id);
+  });
+
+  it("drops the target it was shooting for a Mender that comes into range", () => {
+    const w = createWorld(24, 24);
+    const flak = spawnUnit(w, "flak-crawler", "blue", 5.5, 5.5);
+    const wasp = spawnUnit(w, "wasp", "red", 6.5, 5.5);
+    w.powers.stunned.set(wasp.id, 1e9); // (sits still)
+    runTicks(w, 2);
+    expect(flak.autoTargetId).toBe(wasp.id);
+    // a Mender flies in to patch the wasp up, from the far side of it
+    const mender = spawnUnit(w, "mender", "red", 5.5 + UNITS["flak-crawler"].range - 0.2, 5.5);
+    w.powers.stunned.set(mender.id, 1e9);
+    runTicks(w, 2);
+    expect(flak.autoTargetId).toBe(mender.id);
+    // and back to the wasp once the Mender is down
+    w.units.delete(mender.id);
+    runTicks(w, 2);
+    expect(flak.autoTargetId).toBe(wasp.id);
+  });
+
+  it("an explicit attack order isn't overridden", () => {
+    const w = createWorld(24, 24);
+    const flak = spawnUnit(w, "flak-crawler", "blue", 5.5, 5.5);
+    const wasp = spawnUnit(w, "wasp", "red", 6.5, 5.5);
+    spawnUnit(w, "mender", "red", 5.5, 6.5);
+    step(w, [{ type: "attack", faction: "blue", unitIds: [flak.id], targetId: wasp.id }]);
+    runTicks(w, 3);
+    expect(flak.order).toMatchObject({ type: "attack", targetId: wasp.id });
   });
 });

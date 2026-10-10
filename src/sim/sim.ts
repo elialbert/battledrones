@@ -6,7 +6,7 @@ import {
   tickProduction,
   tickTrickle
 } from "./economy";
-import { FOG } from "./balance";
+import { ECONOMY, FOG } from "./balance";
 import { tickFog } from "./fog";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement, vehicleSpots } from "./movement";
@@ -70,7 +70,9 @@ function applyCommand(w: World, c: Command): void {
       for (const id of c.unitIds) {
         const u = w.units.get(id);
         if (!u || u.faction !== c.faction || u.kind !== "harvester") continue;
-        u.order = { type: "harvest", fieldX: tx, fieldY: ty, phase: "toField" };
+        // a full hold goes home to unload first, not out to the field and back
+        const full = u.cargo >= ECONOMY.harvesterCapacity - 1e-6;
+        u.order = { type: "harvest", fieldX: tx, fieldY: ty, phase: full ? "toBase" : "toField" };
         u.path = null;
       }
       break;

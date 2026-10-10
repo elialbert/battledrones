@@ -1,4 +1,4 @@
-import { BUILDINGS, ECONOMY, UNITS } from "../balance";
+import { BUILDINGS, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
 import { unitSeenBy } from "../infantry";
 import type { Building, Command, Faction, Unit, World, Wreck } from "../types";
@@ -12,18 +12,23 @@ import { distToBuilding } from "../world";
  * near it has been shot at for a few seconds (the fight there is over).
  */
 
-/** Idle ground units sweep cool wrecks within this many tiles of themselves. */
+/** Idle ground units sweep cool wrecks within this many tiles of themselves… */
 export const SWEEP_RADIUS = 8;
-/** Harvesters carrying less than this divert to a wreck within HARVESTER_DIVERT tiles. */
-const HARVESTER_CARGO = ECONOMY.harvesterCapacity / 2;
-const HARVESTER_DIVERT = 3;
+/** …or this many while an assault gathers (the wave waiting at its staging point grabs what's close). */
+const ASSAULT_SWEEP_RADIUS = 5;
+/**
+ * Harvesters going about their work divert to a wreck within this many tiles,
+ * however full they are: a wreck's scrap goes straight to the bank, not into
+ * the hold, so it's a few seconds' detour for a third of a unit's cost.
+ */
+const HARVESTER_DIVERT = 5;
 /** Visible armed enemies this close to a wreck make it bait, not loot. */
 const DANGER_RADIUS = 7;
 /** Our units/buildings this close to a wreck that were hit this recently mean the fight isn't over. */
 const CALM_RADIUS = 8;
 const CALM_TICKS = 50;
 /** Most army units sent sweeping per decision pass (the rest keep their posts). */
-const MAX_SWEEPERS = 4;
+const MAX_SWEEPERS = 6;
 /** Don't chase a wreck that will burn out before a unit can plausibly get there. */
 const MIN_TTL = 40;
 
@@ -35,11 +40,11 @@ export interface SalvageContext {
   used: Set<number>;
   /** A real attack on the base is under way: the army stays put (harvesters may still divert). */
   threatened: boolean;
-  /** Assault waves pick wrecks up by driving over them; only harvesters divert. */
+  /** An assault is gathering: idle units only sweep wrecks close by (ASSAULT_SWEEP_RADIUS). */
   assault: boolean;
 }
 
-/** Orders that send idle ground units (and nearly-empty harvesters) to scoop up nearby wrecks. */
+/** Orders that send idle ground units (and harvesters at work) to scoop up nearby wrecks. */
 export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Command[] {
   const cmds: Command[] = [];
   const loot = w.wrecks.filter(
@@ -86,12 +91,11 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
   const ranked = loot.filter(safe).sort((a, b) => b.value - a.value || a.ttl - b.ttl);
   if (ranked.length === 0) return cmds;
 
-  // nearly-empty harvesters on their way out (or digging) grab a wreck that's right there
+  // harvesters on their way out, digging or heading home grab a wreck that's close by
   for (const h of ctx.harvesters) {
-    if (ctx.used.has(h.id) || h.cargo >= HARVESTER_CARGO || w.tick - h.damagedTick < CALM_TICKS) continue;
+    if (ctx.used.has(h.id) || w.tick - h.damagedTick < CALM_TICKS) continue;
     const o = h.order;
-    if (!(o.type === "idle" || (o.type === "harvest" && (o.phase === "toField" || o.phase === "harvesting"))))
-      continue;
+    if (!(o.type === "idle" || (o.type === "harvest" && o.phase !== "unloading"))) continue;
     let best: Wreck | null = null;
     let bestD = HARVESTER_DIVERT;
     for (const r of ranked) {
@@ -105,7 +109,8 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
     if (best) send(h, best);
   }
 
-  if (ctx.threatened || ctx.assault) return cmds;
+  if (ctx.threatened) return cmds;
+  const radius = ctx.assault ? ASSAULT_SWEEP_RADIUS : SWEEP_RADIUS;
   const sweepers = ctx.army.filter(
     (u) => !ctx.used.has(u.id) && u.order.type === "idle" && UNITS[u.kind].domain === "ground"
   );
@@ -114,7 +119,7 @@ export function planSalvage(w: World, faction: Faction, ctx: SalvageContext): Co
     if (sent >= MAX_SWEEPERS) break;
     if (claimed.has(r.id)) continue;
     let best: Unit | null = null;
-    let bestD = SWEEP_RADIUS;
+    let bestD = radius;
     for (const u of sweepers) {
       if (ctx.used.has(u.id)) continue;
       const d = Math.hypot(u.x - r.x, u.y - r.y);

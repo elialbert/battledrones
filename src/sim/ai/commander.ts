@@ -6,11 +6,12 @@ import { isInfantry } from "../infantry";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
+import { planMenders } from "./menders";
 import { bannedBy, infantryArmy } from "../rules";
 import { planSalvage } from "./salvage";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
-import { condorHolds, planCondor, wantCondor } from "./condor";
+import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
 import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectiveness, effectivenessVs, seenEnemies } from "./intel";
 import type {
   ArmorClass,
@@ -418,7 +419,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (never on Easy), and the personality's share of Troopers. Under Infantry
   // War the Bays field the whole army: Rockets for the defences, more Snipers.
   const infantryWar = infantryArmy(w, faction);
-  const infantryShare = infantryWar ? 1 : s.strategy.infantry ?? 0;
+  // (Airborne: the free Condor needs squads to fly, whatever the personality)
+  const infantryShare = infantryWar
+    ? 1
+    : Math.max(s.strategy.infantry ?? 0, flysGivenCondor(w, faction, s) ? AIRBORNE_INFANTRY : 0);
   const infantryValue = INFANTRY_KINDS.reduce((v, k) => v + have(k) * UNITS[k].cost, 0);
   for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
     if (bay.queue.length >= depth) continue;
@@ -497,6 +501,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
   cmds.push(...veteranRetreats(faction, army, hqC, used));
+  // --- 0b. Menders follow whoever needs them, and come home when nobody does
+  // (ai/menders.ts; no wave, guard post or sweep takes them after this)
+  const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq");
+  const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : mirror(w, hqC.x, hqC.y);
+  cmds.push(...planMenders(faction, army, myBuildings, used, hqC, enemyHqPos));
 
   // --- 1. threat response: answer unengaged intruders with counters -------
   const threats = findThreats(w, faction, seen, myBuildings, harvesters);
@@ -569,18 +578,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   }
 
   // --- 2b. map objectives: take Uplinks, hold them, race for supply crates --
-  const enemyHomeGuess = knownBuildings(w, faction).find((b) => b.kind === "hq");
   cmds.push(
     ...planObjectives(w, faction, s, {
       mode: s.mode, hqC, guardPoint, guardNeed: guardShare * armyValue, army, used,
-      threatened: raidValue >= HOME_ALARM_VALUE,
-      enemyHqPos: enemyHomeGuess ? { x: enemyHomeGuess.tx + 1.5, y: enemyHomeGuess.ty + 1.5 } : mirror(w, hqC.x, hqC.y)
+      threatened: raidValue >= HOME_ALARM_VALUE, enemyHqPos
     })
   );
 
   // --- 3/4. offence by mode -----------------------------------------------
-  const enemyHq = knownBuildings(w, faction).find((b) => b.kind === "hq");
-  const enemyHqPos = enemyHq ? { x: enemyHq.tx + 1.5, y: enemyHq.ty + 1.5 } : mirror(w, hqC.x, hqC.y);
 
   if (s.mode === "harass") {
     const group = raiders.filter((u) => !used.has(u.id));
@@ -657,15 +662,6 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // --- 4c. commander calldowns (ai/powers.ts) ------------------------------
   cmds.push(...planCalldowns(w, faction, s, { mode: s.mode, hqC, guardPoint, enemyHqPos, army, threats }));
-
-  // --- 5. menders tag along with whoever needs them -------------------------
-  for (const m of mine.filter((u) => u.kind === "mender" && u.order.type === "idle" && !used.has(u.id))) {
-    const busy = army.filter((u) => u.kind !== "mender" && u.order.type !== "idle");
-    if (busy.length === 0) continue;
-    busy.sort((a, b) => dist(a.x, a.y, m.x, m.y) - dist(b.x, b.y, m.x, m.y));
-    const buddy = busy[0]!;
-    cmds.push({ type: "attackMove", faction, unitIds: [m.id], x: buddy.x, y: buddy.y });
-  }
 
   return cmds;
 }
@@ -753,7 +749,7 @@ interface Threat {
   domain: Domain;
 }
 
-/** Visible armed enemy units close to our buildings or harvesters. */
+/** Visible armed enemy units (and the Menders keeping them going) close to our buildings or harvesters. */
 function findThreats(
   w: World,
   faction: Faction,
@@ -763,7 +759,7 @@ function findThreats(
 ): Threat[] {
   const out: Threat[] = [];
   for (const u of seen) {
-    if (UNITS[u.kind].dps <= 0) continue;
+    if (UNITS[u.kind].dps <= 0 && !UNITS[u.kind].heal) continue;
     const nearBuilding = myBuildings.some((b) => {
       const c = buildingCenter(b);
       return dist(u.x, u.y, c.x, c.y) <= DEFENSE_RADIUS;
@@ -818,8 +814,8 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   for (let i = 0; i < s.extraTurrets; i++) order.splice(Math.min(order.length, 2 + i), 0, "turret");
-  // Titans (or Hornets) seen: an Assembly Bay for Rocket Squads, early in the queue
-  if (s.strategy.bayVsArmour && s.seenHeavy >= 2 && !order.includes("assembly-bay"))
+  // Titans (or Hornets) seen, or a Condor to fill (Airborne): an Assembly Bay, early in the queue
+  if (((s.strategy.bayVsArmour && s.seenHeavy >= 2) || flysGivenCondor(w, faction, s)) && !order.includes("assembly-bay"))
     order.splice(Math.min(order.length, 3), 0, "assembly-bay");
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
