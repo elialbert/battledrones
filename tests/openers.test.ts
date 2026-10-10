@@ -51,9 +51,11 @@ describe("quick-start openers", () => {
           expect(units(w, f, "harvester")).toHaveLength(o.harvesters);
           for (const k of new Set(o.units))
             expect(units(w, f, k)).toHaveLength(o.units.filter((x) => x === k).length);
-          // (+1: the starting Trooper Squad every side gets, opener or not)
-          expect(units(w, f)).toHaveLength(o.harvesters + o.units.length + 1);
-          expect(units(w, f, "trooper")).toHaveLength(1);
+          // (+1: the starting Trooper Squad every side gets, opener or not —
+          // aboard on the island map, which gives a Condor too)
+          const given = def.startUnits ?? [];
+          expect(units(w, f)).toHaveLength(o.harvesters + o.units.length + given.length + (def.squadAboard ? 0 : 1));
+          expect(units(w, f, "trooper")).toHaveLength(def.squadAboard ? 0 : 1);
           expect(w.factions[f].scrap).toBe(ECONOMY.startingScrap + o.scrap);
           // every harvester is already on its way to work
           for (const h of units(w, f, "harvester")) expect(h.order.type).toBe("harvest");
@@ -62,7 +64,7 @@ describe("quick-start openers", () => {
             expect(w.occupancy[Math.floor(u.y) * w.width + Math.floor(u.x)]).toBe(0);
             if (UNITS[u.kind].domain === "ground") {
               const t = terrainAt(w, Math.floor(u.x), Math.floor(u.y));
-              expect([Terrain.Water, Terrain.Rock]).not.toContain(t);
+              expect([Terrain.Water, Terrain.Rock, Terrain.Deep]).not.toContain(t);
             }
           }
         }
@@ -264,7 +266,8 @@ describe("start camera framing", () => {
       expect(field.y).toBeGreaterThanOrEqual(box.y0);
       expect(field.y + 1).toBeLessThanOrEqual(box.y1);
       // the Trooper Squad on the HQ's far flank, its robots clear of the box edge
-      const squad = units(w, "blue", "trooper")[0]!;
+      // (on the island map it starts aboard the Condor: frame that)
+      const squad = units(w, "blue", "trooper")[0] ?? units(w, "blue", "condor")[0]!;
       expect(squad.x - 1).toBeGreaterThanOrEqual(box.x0);
       expect(squad.x + 1).toBeLessThanOrEqual(box.x1);
       expect(squad.y - 1).toBeGreaterThanOrEqual(box.y0);

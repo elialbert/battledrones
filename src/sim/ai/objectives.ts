@@ -1,7 +1,8 @@
-import { INFANTRY, OBJECTIVES, TICK_RATE, UNITS } from "../balance";
-import { isInfantry, unitSeenBy } from "../infantry";
+import { OBJECTIVES, TICK_RATE, UNITS } from "../balance";
+import { unitSeenBy } from "../infantry";
+import { captureWeight } from "../objectives";
 import type { Command, Crate, Faction, Unit, Uplink, World } from "../types";
-import { dist } from "../world";
+import { canGetWithin, dist, moveClassOf } from "../world";
 import type { AiMode, AiState } from "./commander";
 import { AA_COVER, aaSources, aaStrengthAt } from "./intel";
 
@@ -62,6 +63,8 @@ const unfinished = (l: Uplink, f: Faction) => l.progress * (f === "blue" ? 1 : -
  * Units the objectives have a claim on this pass: garrisons on post,
  * squads standing in an Uplink they're still capturing (or contesting), and
  * runners waiting at a crate that hasn't landed. Other tactics leave them be.
+ * (Island relays only infantry can take are the airlift's, ai/airlift.ts:
+ * its garrisons are held there.)
  */
 export function objectiveHolds(w: World, faction: Faction, s: AiState): number[] {
   const o = w.objectives;
@@ -127,9 +130,9 @@ function enemyValueNear(w: World, faction: Faction, x: number, y: number, r: num
 const aaCover = (w: World, faction: Faction, x: number, y: number): boolean =>
   aaStrengthAt(aaSources(w, faction), x, y) >= AA_COVER;
 
-/** Uplink capture weight of a unit (objectives.ts presence: infantry double, aircraft half). */
-const captureWeight = (u: Unit): number =>
-  UNITS[u.kind].domain === "air" ? OBJECTIVES.uplink.airWeight : isInfantry(u.kind) ? INFANTRY.captureWeight : 1;
+/** Can unit `u` get into Uplink `l`'s zone (on foot, tracks or hover: an island relay's moat stops it)? */
+const canReach = (w: World, u: Unit, l: { x: number; y: number }, r = OBJECTIVES.uplink.radius): boolean =>
+  canGetWithin(w, moveClassOf(u.kind), u.x, u.y, l.x, l.y, r);
 
 /** Orders for Uplinks (garrisons, capture squads) and supply crates. */
 export function planObjectives(w: World, faction: Faction, s: AiState, ctx: ObjectiveContext): Command[] {
@@ -141,8 +144,9 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
   const take = (u: Unit) => ctx.used.add(u.id);
 
   // --- garrisons: one cheap unit parked on every Uplink we hold -----------
+  // (island relays: the airlift's squads hold those, ai/airlift.ts)
   for (const l of o.uplinks) {
-    if (l.owner !== faction) continue;
+    if (l.owner !== faction || l.infantryOnly) continue;
     const posted = m.garrison.get(l.id);
     const pu = posted !== undefined ? w.units.get(posted) : undefined;
     if (pu && inZone(pu, l, POST_SLACK)) continue;
@@ -153,7 +157,11 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
       continue;
     }
     const cands = free()
-      .filter((u) => UNITS[u.kind].domain === "ground" && u.kind !== "mortar" && dist(u.x, u.y, l.x, l.y) < 14)
+      .filter(
+        (u) =>
+          UNITS[u.kind].domain === "ground" && u.kind !== "mortar" && dist(u.x, u.y, l.x, l.y) < 14 &&
+          captureWeight(l, u.kind) > 0 && canReach(w, u, l)
+      )
       .sort((a, b) => {
         const za = inZone(a, l) ? 0 : 1;
         const zb = inZone(b, l) ? 0 : 1;
@@ -182,7 +190,8 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
   const far = (l: Uplink) => dist(l.x, l.y, ctx.enemyHqPos.x, ctx.enemyHqPos.y);
   const ownFlank = [...o.uplinks].sort((a, b) => near(a) - far(a) - (near(b) - far(b)))[0];
   const targets = o.uplinks
-    .filter((l) => l.owner !== faction || l.pushing === enemy)
+    // (island relays only a Condor's squads reach: the airlift's business, ai/airlift.ts)
+    .filter((l) => !l.infantryOnly && (l.owner !== faction || l.pushing === enemy))
     // Boom only holds its own flank (the relay nearest its base); everyone else contests everything
     .filter((l) => s.strategy.name !== "boom" || l === ownFlank)
     // Easy takes neutral relays but never comes to take yours
@@ -196,8 +205,9 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
     const sent = m.sent.get(l.id);
     const mine = ctx.army.filter(
       (u) =>
-        inZone(u, l, 1) ||
-        ((u.order.type === "attackMove" || u.order.type === "move") && Math.hypot(u.order.x - l.x, u.order.y - l.y) <= 3)
+        captureWeight(l, u.kind) > 0 &&
+        (inZone(u, l, 1) ||
+          ((u.order.type === "attackMove" || u.order.type === "move") && Math.hypot(u.order.x - l.x, u.order.y - l.y) <= 3))
     );
     const need = Math.max(UPLINK_SQUAD, 1.3 * enemyValueNear(w, faction, l.x, l.y, SCAN_RADIUS));
     if (value(mine) >= need) continue; // already on its way / holding it
@@ -207,9 +217,13 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
     let guardSpare =
       value(ctx.army.filter((u) => dist(u.x, u.y, ctx.guardPoint.x, ctx.guardPoint.y) <= 5)) - ctx.guardNeed;
     // nearest first, robot infantry (twice the capture weight) as if half as far
-    const turn = (u: Unit) => dist(u.x, u.y, l.x, l.y) / Math.max(1, captureWeight(u));
+    const turn = (u: Unit) => dist(u.x, u.y, l.x, l.y) / Math.max(1, captureWeight(l, u.kind));
     const pool = free()
-      .filter((u) => u.kind !== "mender" && u.kind !== "mortar" && u.kind !== "scout" && u.kind !== "sniper")
+      .filter(
+        (u) =>
+          u.kind !== "mender" && u.kind !== "mortar" && u.kind !== "scout" && u.kind !== "sniper" &&
+          captureWeight(l, u.kind) > 0 && canReach(w, u, l)
+      )
       .sort((a, b) => turn(a) - turn(b));
     const squad: Unit[] = [];
     let v = value(mine);
@@ -259,7 +273,7 @@ function planCrate(
     return (d * (UNITS[u.kind].domain === "air" ? 1 : 1.3)) / UNITS[u.kind].speed;
   };
   const pool = free()
-    .filter((u) => u.kind !== "mender" && dist(u.x, u.y, c.x, c.y) <= reach && etaOf(u) < secsLeft - 2)
+    .filter((u) => u.kind !== "mender" && dist(u.x, u.y, c.x, c.y) <= reach && etaOf(u) < secsLeft - 2 && canReach(w, u, c, 0.8))
     .sort((a, b) => etaOf(a) - etaOf(b));
   if (pool.length === 0) return;
   const need = Math.max(1, 1.2 * enemyNear);

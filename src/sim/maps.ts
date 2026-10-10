@@ -1,15 +1,17 @@
 import { BUILDINGS } from "./balance";
-import { setupObjectives } from "./objectives";
+import { setupObjectives, type UplinkDef } from "./objectives";
 import { applyOpener, spawnStartUnits, type OpenerId } from "./openers";
-import { Terrain, type Biome, type Faction, type World } from "./types";
+import { Terrain, type Biome, type Faction, type UnitKind, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 import { setupSurvival, type SurvivalOptions } from "./modes/survival";
-import { applyMutators, applySpawnRank, rulesOf, type MutatorId } from "./rules";
+import { applyMutators, applySpawnRank, bannedBy, makeRules, rulesOf, type MutatorId } from "./rules";
 import { setupOp } from "./ops";
-import { dropPoint } from "./transport";
+import { dropPoint, stowAboard } from "./transport";
+import { setupLifeline } from "./lifeline";
 
 /**
- * Skirmish maps. Every map is 2-player and point-symmetric (rotated 180°
+ * Skirmish maps, in map-picker order (the classic Proving Grounds first, to
+ * learn on). Every map is 2-player and point-symmetric (rotated 180°
  * about the centre), so both sides get identical terrain. Maps are painted
  * procedurally from a fixed seed with simple shape primitives — the same
  * definition feeds the simulation and (via tools/export-maps.ts) the
@@ -30,10 +32,37 @@ export interface MapDef {
   /**
    * Capturable Uplink relays (objectives.ts), in tiles: each point and its
    * mirror image get one (a point at the exact centre is its own mirror).
+   * An entry can carry its own rules: an island relay only infantry can take.
    */
-  uplinks: Pt[];
+  uplinks: UplinkDef[];
   /** Supply-drop sites (blue-side, tiles); every drop lands a crate at one and at its mirror. */
   dropSites: Pt[];
+  /**
+   * Units both sides start with on top of the classic harvester and Trooper
+   * Squad (skirmish only). They join the rules' startUnits, so the AI plans
+   * around them and Airborne doesn't hand out a second Condor; a Condor the
+   * map gives is free (Unit.free).
+   */
+  startUnits?: UnitKind[];
+  /** The starting Trooper Squad begins aboard the starting Condor. */
+  squadAboard?: boolean;
+  /** Islands only a Condor reaches: no buildings or Drop Pods off a side's home land (Rules.islands). */
+  islands?: boolean;
+  /** A side with no Condor gets a free one, with a squad if it's short (lifeline.ts). */
+  lifeline?: boolean;
+  /** HQ trickle on this map, scrap/s (default ECONOMY.hqTrickle). */
+  hqTrickle?: number;
+  /** Mutators that would break this map: left out of its matches, greyed out on the menu. */
+  bannedMutators?: MutatorId[];
+  /** Offered for Last Stand? (default yes) */
+  lastStand?: boolean;
+  /** Career ★★ "win within" time on this map, in seconds (default STAR_SECS). */
+  starSecs?: number;
+}
+
+/** Why a mutator can't be played on this map (null: it can). */
+export function mapBansMutator(def: MapDef, id: MutatorId): string | null {
+  return def.bannedMutators?.includes(id) ? `Not on ${def.name}: island Uplinks need Condors and infantry` : null;
 }
 
 // ---------------------------------------------------------------- noise ---
@@ -136,6 +165,20 @@ const LAND = [Terrain.Ground, Terrain.Rough, Terrain.Forest, Terrain.Rock];
 // ------------------------------------------------------------------ maps ---
 
 export const MAPS: MapDef[] = [
+  {
+    id: "proving-grounds",
+    name: "Proving Grounds",
+    biome: "temperate",
+    size: 48,
+    blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
+    hq: [4, 40],
+    seed: 5,
+    uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
+    dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
+    paint() {
+      /* painted by createClassicTerrain (kept tile-exact for the test suite) */
+    }
+  },
   {
     id: "riverlands",
     name: "Riverlands",
@@ -280,17 +323,92 @@ export const MAPS: MapDef[] = [
     }
   },
   {
-    id: "proving-grounds",
-    name: "Proving Grounds",
-    biome: "temperate",
-    size: 48,
-    blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
-    hq: [4, 40],
-    seed: 5,
-    uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
-    dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
-    paint() {
-      /* painted by createClassicTerrain (kept tile-exact for the test suite) */
+    id: "archipelago",
+    name: "Archipelago",
+    biome: "tropical",
+    size: 96,
+    blurb: "Island Uplinks only troops can take: fly them in by Condor. Two bridges.",
+    hq: [8, 82],
+    seed: 71,
+    // island relays: infantry only, paid while crewed; the richer ones sit
+    // farther from every shore (home islands lie off each side's own coast)
+    uplinks: [
+      { at: [48, 48], infantryOnly: true, income: 5, charge: 0.04 }, // the centre island
+      { at: [9.9, 24], infantryOnly: true, income: 2.5, charge: 0.025 }, // blue's home isle in the NW gulf (red's in the SE)
+      { at: [24, 9.9], infantryOnly: true, income: 2.5, charge: 0.025 }, // red's home isle in the NW gulf (blue's in the SE)
+      { at: [9.9, 9.9], infantryOnly: true, income: 3.5, charge: 0.03 } // the outer isle, deep in the gulf
+    ],
+    dropSites: [[30, 50], [22, 64], [52, 76]], // bridge 1's landing, the inland flank, bridge 2's landing
+    startUnits: ["condor"],
+    squadAboard: true,
+    lifeline: true,
+    islands: true,
+    hqTrickle: 3,
+    bannedMutators: ["airwar"],
+    lastStand: false,
+    starSecs: 720,
+    paint(p) {
+      const S = p.w.width;
+      const V = S * Math.SQRT2; // the long diagonal, NW corner (0) to SE corner (V)
+      const deep = Terrain.Deep;
+      // the sea: a band along the NW–SE diagonal between the two coasts —
+      // a necked channel at the two bridges, a lagoon round the centre
+      // island, and open gulfs in the empty corners
+      const halfWidth = (v: number): number => {
+        const dv = Math.abs(v - V / 2);
+        if (dv <= 4) return 14;
+        if (dv <= 12) return 14 - ((dv - 4) / 8) * 5;
+        if (dv <= 24) return 9;
+        if (dv <= 36) return 9 + ((dv - 24) / 12) * 13;
+        return 22;
+      };
+      for (let ty = 0; ty < S; ty++)
+        for (let tx = 0; tx < S; tx++) {
+          const x = tx + 0.5;
+          const y = ty + 0.5;
+          const u = (x - y) / Math.SQRT2;
+          const v = (x + y) / Math.SQRT2;
+          const dv = Math.abs(v - V / 2);
+          // ragged coasts, kept straight where the bridges cross
+          const calm = dv > 13 && dv < 21 ? 0.15 : 1;
+          const h = halfWidth(v) + (valueNoise(x * 0.18, y * 0.18, p.seed) - 0.5) * 4 * calm;
+          if (Math.abs(u) < h) p.set(tx, ty, deep);
+          else if (Math.abs(u) < h + 1.3) p.set(tx, ty, Terrain.Water, [G]); // a shelf of shallow water off every coast
+        }
+      // the islands: a shelf of water, a walkable top at least 4 tiles round each relay
+      const island = (cx: number, cy: number, r: number) => {
+        p.blob(cx, cy, r + 1.4, Terrain.Water, 0.12, [deep]);
+        p.blob(cx, cy, r, G, 0.12, [deep, Terrain.Water]);
+      };
+      island(48, 48, 5.2);
+      island(9.9, 24, 4.8);
+      island(24, 9.9, 4.8);
+      island(9.9, 9.9, 5);
+      // island cover: woods for squads to hold in, rocks to dodge round
+      p.blob(46.5, 50.5, 1.6, Terrain.Forest, 0.4, [G]);
+      p.blob(9, 11.5, 1.8, Terrain.Forest, 0.4, [G]);
+      p.blob(7.6, 23, 1.3, Terrain.Forest, 0.4, [G]);
+      p.blob(25.6, 8.2, 1.3, Terrain.Rough, 0.4, [G]);
+      p.blob(12.3, 7.8, 1.1, Terrain.Rough, 0.4, [G]);
+      // the two bridges (one stroke: the Painter mirrors it), straight across the necks
+      p.stroke([[27.4, 44.6], [44.6, 27.4]], 2.4, Terrain.Bridge, 0, [deep, Terrain.Water]);
+      // roads from the HQ to both bridgeheads
+      p.stroke([[10, 82], [16, 72], [21, 60], [25, 50], [27.6, 44.4]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[12, 84], [24, 82], [36, 78], [46, 73], [51.6, 68.4]], 2, Terrain.Road, 0, OPEN);
+      // the mainland: woods, rock outcrops and mud shaping the lanes
+      p.blob(30, 68, 3.2, Terrain.Forest, 0.45, OPEN);
+      p.blob(14, 50, 3, Terrain.Forest, 0.45, OPEN);
+      p.blob(40, 88, 2.8, Terrain.Forest, 0.45, OPEN);
+      p.blob(4, 40, 2.4, Terrain.Forest, 0.45, OPEN);
+      p.blob(62, 90, 2.4, Terrain.Forest, 0.45, OPEN);
+      p.blob(22, 74, 1.8, Terrain.Rock, 0.4, OPEN);
+      p.blob(36, 58, 2, Terrain.Rock, 0.35, OPEN);
+      p.blob(6, 60, 1.6, Terrain.Rock, 0.4, OPEN);
+      p.blob(50, 84, 1.7, Terrain.Rock, 0.4, OPEN);
+      p.scatter(16, 54, 34, 66, 4, 1.4, Terrain.Rough, [G]);
+      // resources are scarce: one home field and a crystal patch by bridge 1
+      p.rect(15, 85, 17, 87, Terrain.Scrap); // 9 tiles, 13,500 scrap
+      p.rect(23, 52, 24, 52, Terrain.Crystal); // 2 rich tiles out by the bridge
     }
   }
 ];
@@ -385,13 +503,26 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
     const p = dropPoint(w, f, at.x, at.y) ?? at;
     return spawnUnit(w, "trooper", f, p.x, p.y);
   });
-  if (opts.mutators?.length) applyMutators(w, opts.mutators);
+  const mutators = (opts.mutators ?? []).filter((m) => !mapBansMutator(def, m));
+  if (mutators.length) applyMutators(w, mutators);
+  const skirmish = !opts.survival && !opts.op;
+  if (skirmish) applyMapRules(w, def);
   for (const u of squads) applySpawnRank(w, u); // (Veterans: it rolls out ranked like every combat unit)
   // Airborne: a Condor and the other two squads, parked round the starting one
+  // (the island map's Condor too)
   const extra = rulesOf(w).startUnits;
-  if (extra.length) for (const u of squads) spawnStartUnits(w, u.faction, extra, u);
+  if (extra.length)
+    for (const u of squads) {
+      const ids = spawnStartUnits(w, u.faction, extra, u);
+      const condor = ids.map((id) => w.units.get(id)!).find((c) => c.kind === "condor");
+      if (condor && skirmish && def.startUnits?.includes("condor")) {
+        condor.free = true; // the map's, not bought
+        if (def.squadAboard) stowAboard(w, condor, u);
+      }
+    }
+  if (skirmish && def.lifeline) setupLifeline(w);
   // openers and map objectives belong to the skirmish; Last Stand and Ops set up their own
-  if (!opts.survival && !opts.op) {
+  if (skirmish) {
     for (const f of ["blue", "red"] as const) {
       const o = opts.openers?.[f];
       if (o) applyOpener(w, f, o);
@@ -401,6 +532,18 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   if (opts.survival) setupSurvival(w, opts.survival);
   if (opts.op) setupOp(w, opts.op);
   return w;
+}
+
+/** The map's own match rules (skirmish): its start units, HQ trickle and free Condors. */
+function applyMapRules(w: World, def: MapDef): void {
+  if (!def.startUnits?.length && def.hqTrickle === undefined && !def.lifeline && !def.islands) return;
+  const r = w.rules ? { ...w.rules } : makeRules([]);
+  w.rules = r;
+  const extra = (def.startUnits ?? []).filter((k) => !bannedBy(w, k));
+  r.startUnits = [...r.startUnits, ...extra.filter((k) => !r.startUnits.includes(k))];
+  if (def.hqTrickle !== undefined) r.hqTrickle = def.hqTrickle;
+  if (def.lifeline && !bannedBy(w, "condor")) r.lifeline = true;
+  if (def.islands) r.islands = true;
 }
 
 /** Guarantee open, buildable ground around each HQ. */

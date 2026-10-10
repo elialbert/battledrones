@@ -65,6 +65,7 @@ export function wreckRestingSpot(w: World, x: number, y: number): { x: number; y
 
 /** Leave a wreck where unit `u` died (called from cleanupDeaths). */
 export function leaveWreck(w: World, u: Unit): Wreck | null {
+  if (u.free) return null; // a map-given unit cost nothing, so it leaves nothing to cash in
   const value = wreckValue(u.kind, wreckShareOf(w, u.faction));
   if (value <= 0) return null;
   const spot = wreckRestingSpot(w, u.x, u.y);

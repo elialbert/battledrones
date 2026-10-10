@@ -1,4 +1,5 @@
 import { TICK_RATE } from "../sim/balance";
+import { isVisible } from "../sim/fog";
 import { dropLandTick } from "../sim/objectives";
 import type { Faction, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
@@ -26,10 +27,12 @@ export function createObjectivePill(world: World, player: Faction, spectator: bo
   if (!bar || (o.uplinks.length === 0 && o.dropSites.length === 0)) return null;
   const el = document.createElement("div");
   el.className = "objpill";
-  el.innerHTML = `<span class="ol" title="Uplinks"><b>📡</b><span class="pips"></span></span><span class="od" title="Supply drops"></span>`;
+  el.innerHTML = `<span class="ol" title="Uplinks"><b>📡</b><span class="pips"></span></span><span class="lf" title="A free Condor is on its way" hidden></span><span class="od" title="Supply drops"></span>`;
   bar.appendChild(el);
   const pipsEl = el.querySelector<HTMLElement>(".pips")!;
   const dropEl = el.querySelector<HTMLElement>(".od")!;
+  const lifeEl = el.querySelector<HTMLElement>(".lf")!;
+  let lastLife = "";
   if (o.uplinks.length === 0) el.querySelector<HTMLElement>(".ol")!.hidden = true;
   if (o.dropSites.length === 0) dropEl.hidden = true;
   // pips run from our side of the map to theirs
@@ -42,16 +45,30 @@ export function createObjectivePill(world: World, player: Faction, spectator: bo
   let lastDrop = "";
 
   function update(): void {
+    // (an island relay held with no troops on it pays nothing: a hollow pip — for the enemy's,
+    // only while we can see it: whether they've left one empty is theirs to hide)
+    const idle = (l: (typeof order)[number]) =>
+      !!(l.infantryOnly && l.owner && !l.crewed) &&
+      (spectator || l.owner === player || isVisible(world, player, Math.floor(l.x), Math.floor(l.y)));
     const pips = order
-      .map((l) => `${l.owner ?? "none"}${l.pushing || l.contested ? "*" : ""}`)
+      .map((l) => `${l.owner ?? "none"}${l.pushing || l.contested ? "*" : ""}${idle(l) ? "o" : ""}`)
       .join(",");
     if (pips !== lastPips) {
       lastPips = pips;
       pipsEl.innerHTML = order
-        .map((l) => `<i class="pip ${l.owner ?? ""} ${l.pushing || l.contested ? "busy" : ""}"></i>`)
+        .map((l) => `<i class="pip ${l.owner ?? ""} ${l.pushing || l.contested ? "busy" : ""} ${idle(l) ? "idle" : ""}"></i>`)
         .join("");
-      const held = o.uplinks.filter((l) => l.owner === player).length;
-      el.title = `Uplinks: you hold ${held} of ${o.uplinks.length}`;
+      const held = o.uplinks.filter((l) => l.owner === player);
+      const unmanned = held.filter(idle).length;
+      el.title = `Uplinks: you hold ${held.length} of ${o.uplinks.length}${unmanned ? ` (${unmanned} with no troops on them: not paying)` : ""}`;
+    }
+    // a free replacement Condor on its way (lifeline.ts)
+    const due = spectator ? null : world.lifeline?.[player]?.due ?? null;
+    const life = due === null ? "" : `🚁 ${clock(due - world.tick)}`;
+    if (life !== lastLife) {
+      lastLife = life;
+      lifeEl.hidden = life === "";
+      lifeEl.textContent = life;
     }
     if (o.dropSites.length === 0) return;
     let text: string;

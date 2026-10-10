@@ -65,18 +65,22 @@ Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings.
 
 ### Maps & terrain
 
-Five 2-player maps, all point-symmetric (rotated 180°) so both sides are
+Six 2-player maps, all point-symmetric (rotated 180°) so both sides are
 equal, painted procedurally from a seed in `src/sim/maps.ts`. The rules are
 symmetric too: every search whose ties go by scan order runs in each side's
-own frame (see *Side fairness* under Balance & pacing).
+own frame (see *Side fairness* under Balance & pacing). The map picker lists
+them in `MAPS` order, the classic Proving Grounds first; the row scrolls
+sideways on a phone, so the side with more cards fades out and shows a
+chevron (`ui/hscroll.ts`).
 
 | Map | Size | Biome | Character |
 |---|---|---|---|
+| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges, one contested field, an expansion field out on each flank |
 | Riverlands | 56² | Temperate | A river splits the valley: one bridge, two muddy fords, woods on the banks |
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
-| Proving Grounds | 48² | Temperate | The original MVP map: rock ridges, one contested field, an expansion field out on each flank |
+| Archipelago | 96² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 
@@ -88,6 +92,7 @@ Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 | Woods | ✓ slow (0.55×) | ✓ slow | ✓ full speed | ✓ | Ground units inside take 30% less damage (infantry 50%) |
 | Shallows (fords) | ✓ slow (0.5×) | ✓ | ✓ (0.8×) | ✓ | |
 | Water / lava | ✗ | ✓ | ✗ | ✓ | The Lancer's party trick |
+| Open sea (Archipelago) | ✗ | ✗ | ✗ | ✓ | Too deep and rough even for hover |
 | Rock | ✗ | ✗ | ✗ | ✓ | |
 | Scrap field | ✓ | ✓ | ✓ | ✓ | Resource: 1500 per tile |
 | Crystal field | ✓ | ✓ | ✓ | ✓ | Rich resource: mines 1.6× faster per load |
@@ -97,6 +102,115 @@ and skirt mud. Robot infantry path on foot by their own speed column
 (`footSpeed`; the `foot` move class in `world.ts`), so squads cut straight
 through woods and mud that tanks go round. Air units fly straight over
 everything.
+
+Every movement class also has **regions** (`world.ts regionLabels`): the
+connected stretches of terrain it can walk, labelled once per map from
+terrain alone (buildings come and go; terrain doesn't). A goal in another
+region (an island, the far shore) is answered in one lookup: A* snaps it to
+the nearest tile within 6 that the unit *can* reach, or gives up at once,
+where it used to flood the whole landmass every tick. Combat drops an attack
+order, auto-target or retaliation on a target out of range that the unit
+can never get within range of (`engageable`), so a garrison shelled from
+across the water doesn't freeze on a dead order while enemies land beside
+it. A* reuses its scratch arrays; a new building re-plans only the paths
+that cross or brush its footprint; a drop point out at sea is found by an
+expanding ring search. On the 96² Archipelago an AI-vs-AI match costs about
+what one on the 64² Ashlands does (a prototype before these fixes ran ~20×
+slower, 85% of it in A*).
+
+### The Archipelago
+
+The map built to make robot infantry, the Condor and aircraft the heart of
+the game, and to make the fight about Uplinks. 96² (three times the area of
+Riverlands). The two HQs' landmasses are split by **open sea** along the
+diagonal, necked at **two bridges** near the middle (the only land route:
+a test cuts them and checks nothing crosses) and opening into gulfs in the
+two empty corners.
+
+- **Seven island Uplinks**, every one on an island: each side's two home
+  isles off its own coasts (2.5 scrap/s), an outer isle deep in each gulf
+  (3.5) and the centre island in a lagoon between the bridges (5). Each
+  island has at least 4 tiles of walkable ground round its relay (room for
+  two drops, and to dodge a Barrage).
+- **Infantry only** (`Uplink.infantryOnly`, `captureWeight` in
+  `objectives.ts`): only robot squads count in an island relay's ring, to
+  take it and to contest it. Aircraft, the Condor itself and vehicles count
+  nothing, so they can't take one, nor freeze a capture by hovering over it.
+- **Crewed**: an island relay pays its scrap and ⚡ charge only while the
+  holder's squads stand in it. Held but empty it stays yours (enemy troops
+  must still land to take it), but pays nothing: holding one costs a squad
+  sitting on it. That's what aircraft are for here: they can't take a relay,
+  but killing its garrison switches it off.
+- **Only by Condor**: the sea stops hover tanks too, and on a map with
+  islands (`Rules.islands`) buildings, factory roll-outs and Drop Pods stay
+  on land joined to the side's own HQ (`onHomeLand`), so no turret, Assembly
+  Bay or pod crew ever reaches an island.
+- **Scarce scrap**: a 9-tile home field (13,500) and two crystal tiles out
+  by a bridge per side; HQ trickle 3/s instead of 2. Relays are the economy.
+- **Start**: each side gets a free **Condor** beside its HQ with its Trooper
+  Squad already aboard (through the rules' `startUnits`, so Airborne doesn't
+  add a second one and the AI plans around it).
+- **The free replacement Condor** (`lifeline.ts`): a side with no Condor
+  flying or being built gets one 45 s later, flown in from the map edge
+  nearest its HQ to set down beside it, with a free Trooper Squad aboard if
+  the side has fewer than 2 squads. Map-given units (`Unit.free`) leave no
+  wreck and charge no ⚡ meter when lost, so throwing a Condor away gains
+  nothing: a bought one comes back free only after the wait, and the squad
+  only when the side is really short of infantry. The top bar counts it down
+  (🚁) and the radio calls it in.
+- **Modes and mutators**: skirmish (and AI vs AI) only. Not in Last Stand
+  (`lastStand: false`: hidden in the picker), not in the Ops, not in the
+  Daily Op (which draws from a frozen list of the five older maps, so adding
+  a map never changes a day's map). **Air War** is banned here
+  (`bannedMutators`: no Condors, no infantry, no way onto an island): greyed
+  out in the picker and dropped from the match. The ★★ star is "win in under
+  12:00" here (`starSecs`).
+- **Controls**: with a loaded Condor selected, a plain **tap on an island**
+  drops its troops there (no hidden long-press for the map's main move),
+  and every island relay they could take shows gold landing chevrons. Tanks
+  or squads sent at an island get a one-line tip on how to get there.
+  Island relays have their own ring (long dashes, a dotted inner ring); an
+  empty one dims, its HUD pip goes hollow and the radio warns "Uplink
+  unmanned". The opener picker marks Air Wing as the one that suits it.
+- **AI** (`ai/airlift.ts`): on a map with island relays the commander's
+  airlift owns every Condor (the harvester-raid planner stands down), for
+  every personality and difficulty. It scores neutral, enemy-held and its
+  own empty relays by pay, flight time, a per-personality caution and what
+  it has seen there; it only lands bringing 1.3× what's there (squads and
+  the Wasps and Hornets circling the island), and a lone squad never races
+  the enemy to a relay equally near both. Each Condor boards 1–2 healthy
+  squads at home (Rocket Squads first once the enemy flies), flies a route
+  clear of the anti-air it has seen or remembers, lands in the ring on the
+  relay's own island and turns back after losing 30%. Garrisons are held on
+  their island and walk back after a chase; a secured island's spare squads
+  are flown on when nobody is free at home. Enemy Condors near its relays,
+  base or dropships get Raptors (the threat response skips unarmed units);
+  idle Wasps and Hornets clear an enemy garrison no anti-air covers. Here
+  every build order has an Assembly Bay second and an Airpad third, 2
+  Condors (3 on Hard), a 30% infantry floor, ground vehicles held to 15% and
+  up to 6 Raptors. Easy flies one Condor from 0:30, to neutral or its own
+  relays only. Everywhere, the AI only sends units where they can go:
+  capture squads and garrisons skip island relays, threat responders must
+  be able to get in range, island squads stay out of army value and waves,
+  harvesters stay on their own side of the bridges and aren't rebuilt once
+  those fields are dry, and sweeps, dodges and veteran retreats check
+  reachability. Before it, the AI never took an island on purpose.
+- **Measured** (`tools/pacing.ts --maps archipelago`, all 30 pairings × 4
+  seeds, Normal, 120 matches): both sides take an island in every match
+  (first capture median 0:32); 19.6 island captures per match, 11.2 of them
+  retakes, 32 relay flips; Condors drop 41.6 squads per match onto relays (5
+  elsewhere); 26% of unit deaths within 8 tiles of a relay. Value built:
+  infantry and Condors 44%, aircraft 45%, ground vehicles 12%. Personality
+  win rates 28–60% (Air Swarm 28, Ironclad 33, Balanced 53, Boom 58, Rush
+  60, Skyforce 60; about ±11 points at 20 games each). 4 of 120 drawn at 25
+  min; decided median **16:02** (p10 11:57, p90 18:33), longer than the
+  other maps: the side that holds the relays (about 80% of crewed
+  relay-time) starves the other, but an air-heavy army is slow to break
+  turrets and SAM sites. Raising relay income 50% took about a minute off
+  and swung the win rates, so the numbers stay as they are for now. Easy vs
+  Easy plays (about 9 squads airlifted a match, first capture median 1:04).
+  Cost: 358 ms per sim-minute against Ashlands' 382; the other maps' round
+  robins and the beginner harness are unchanged.
 
 ### Economy
 
@@ -409,7 +523,9 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
 - **Biomes:** temperate D dorian (Dm7–Fmaj7–Cmaj7–G7, kalimba pluck),
   desert E phrygian dominant (E–F–Am–Dm, oud pluck, tresillo bass, tabla),
   arctic F lydian (Fmaj7–G7–Dm7–Am7, FM glass bells, half-time drums),
-  volcanic C aeolian (Cm–Ab–Eb–Bb, marimba, driven chugging bass, toms).
+  volcanic C aeolian (Cm–Ab–Eb–Bb, marimba, driven chugging bass, toms),
+  tropical G mixolydian (G–C–F–C island vamp, a reedy square/triangle pad,
+  a steel-pan bell blooming down into pitch, calypso bass).
 - **Intensity** (`BattleMood`, from the sim's fx stream):
   `I = audibleShots4s/32 + 0.5·(base under attack) + 0.25·min(1, losses10s/3) + strike`,
   floored at 0.3 while your units fought anywhere in the last 8 s; attack
@@ -440,8 +556,9 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
   tick. Offline renders: calm ≈ −34 dBFS RMS, intense ≈ −26, peaks ≤ 0.6.
 - **Ambience** (`src/game/ambience.ts`): a quiet looped bed per biome —
   wind and birdsong, desert roar and sand hiss, a sliding arctic whistle, a
-  volcanic rumble with crackles — at about −44 dBFS, ducked by
-  `1 − 0.7·I`. It plays under the Music switch.
+  volcanic rumble with crackles, surf rolling in every ten seconds under a
+  trade wind with gull cries and nearer breaking waves — at about −44 dBFS,
+  ducked by `1 − 0.7·I`. It plays under the Music switch.
 - **Menu:** a gentle pad/melody/arp take on the selected map's biome,
   starting on the first touch (browsers block audio until a gesture).
 
@@ -1849,7 +1966,15 @@ y up.
   come from the depth under it — water with soft sun glints and lapping
   foam; Frostbite's frozen sea an ice shelf over the fords breaking into
   drifting, cracked floes; Ashlands' lava a molten flow with yellow-hot
-  veins under drifting crust plates that glow at their rims. Each bridge is
+  veins under drifting crust plates that glow at their rims. The
+  Archipelago's open sea sits deeper than any river (TILE_H −1.3), and past
+  depth 0.5 the water shader mixes in the biome's **abyss** colour with a
+  line of **reef-crest surf** where the lagoon shelf drops away, so every
+  island sits in a ring of turquoise inside dark sapphire; there the skirt
+  past the map's edge eases into open sea instead of land
+  (`BiomeLook.farSea`). Tropical trees are leaning coconut palms, umbrella
+  rainforest emergents, mangroves on stilt roots and banana clumps; its pale
+  limestone crags wear caps of jungle. Each bridge is
   one deck laid along its crossing (timber planks, kerbs and rails;
   riveted steel with a truss on Ashlands) on piers and abutments. Instanced
   trees per biome, salvage heaps of hull plates, girders and drums, and
@@ -1989,16 +2114,17 @@ src/
     ops.ts          # the Ops campaign: op definitions, goals, tickOps
     awards.ts       # medals from an end-of-match recap (pure)
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
-    movement.ts     # terrain-weighted A* (ground/hover/air), steering
+    movement.ts     # terrain-weighted A* (ground/hover/air), region-aware goals, steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     infantry.ts     # robot squads: robots standing, firepower, Sniper concealment (unitSeenBy), Titan crushing
     transport.ts    # the Condor: boarding, drop points and unloading, bail-outs
+    lifeline.ts     # the island map's free replacement Condor
     fog.ts          # per-side visibility maps + building memory
     placement.ts    # why a spot can't be built on, and a suggested spot
 
     salvage.ts      # battlefield wrecks: spawn, cool, pick-up, burn-out
     powers.ts       # command meter, calldowns (Barrage/EMP/Drop Pod), Sky Hammer, EMP stuns
-    objectives.ts   # Uplink capture bars and income, supply drops and crate rewards
+    objectives.ts   # Uplink capture bars and income (island relays: infantry only, paid while crewed), supply drops and crate rewards
     ai/commander.ts # the enemy commander: strategies, difficulty
     ai/veterans.ts  # wounded veterans fall back to a Mender or the HQ
     ai/menders.ts   # Menders follow whoever needs them, and come home when nobody does
@@ -2008,6 +2134,7 @@ src/
     ai/objectives.ts # capture squads, Uplink garrisons, crate races
     ai/intel.ts     # what the commander sees (fog + concealment), anti-air in Flak, weapon effectiveness
     ai/condor.ts    # the commander's Condor drops on enemy harvesters (or behind its own wave)
+    ai/airlift.ts   # island maps: Condors fly squads out to the relays, hold and retake them, intercept the enemy's
   game/       # three.js: scene, camera, input, rendering
     three/          # the 3D layer: stage (renderer, lights, adaptive quality), camera rig, builder + models,
                     #   robot infantry rigs (infantry.ts), terrain (heightfield, water, props, fog of war),

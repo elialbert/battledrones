@@ -15,6 +15,8 @@ export interface OpenerPickerOptions {
   onPick(id: OpenerId): void;
   /** Why an opener is unavailable this match (e.g. a mutator bans its factory), or null. */
   blocked?(id: OpenerId): string | null;
+  /** Why an opener suits this map especially (a badge on its card), or null. */
+  recommended?(id: OpenerId): string | null;
 }
 
 const ICON = (kind: string) => `assets/icons/${kind}.webp`;
@@ -98,6 +100,13 @@ export function showOpenerPicker(opts: OpenerPickerOptions): { destroy(): void }
   el.querySelector(".op-back")!.addEventListener("click", () => fullscreen.reload());
   el.querySelectorAll<HTMLButtonElement>(".op-card").forEach((b) => {
     const why = opts.blocked?.(b.dataset.id as OpenerId);
+    const good = why ? null : opts.recommended?.(b.dataset.id as OpenerId);
+    if (good) {
+      const badge = document.createElement("span");
+      badge.className = "op-rec";
+      badge.textContent = `★ ${good}`;
+      b.querySelector(".op-text")!.appendChild(badge);
+    }
     if (why) {
       b.disabled = true;
       b.classList.add("blocked");

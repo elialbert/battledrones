@@ -1,6 +1,6 @@
 /**
  * Biome ambience: a quiet looped bed under the score so a map sounds like a
- * place — wind and birdsong in the temperate lands, desert hiss and gusts,
+ * place — wind and birdsong in the temperate lands, surf and gulls on the reef, desert hiss and gusts,
  * an arctic whistle, a volcanic rumble with crackles. Built from two looped
  * noise buffers, a few filters and one slow LFO; the occasional bird or
  * crackle is scheduled by the music clock (tick()). Ducked by the battle
@@ -9,7 +9,7 @@
 import type { Biome } from "../sim/types";
 
 /** Base bed level per biome, before the intensity duck. */
-const LEVEL: Record<Biome, number> = { temperate: 0.22, desert: 0.15, arctic: 0.17, volcanic: 0.25 };
+const LEVEL: Record<Biome, number> = { temperate: 0.22, desert: 0.15, arctic: 0.17, volcanic: 0.25, tropical: 0.2 };
 
 interface Bed {
   sources: AudioScheduledSourceNode[];
@@ -53,7 +53,8 @@ export class Ambience {
     bed.out.gain.cancelScheduledValues(at);
     bed.out.gain.setTargetAtTime(0, at, 0.3);
     for (const s of bed.sources) s.stop(at + 1.6);
-    bed.sources[0]!.onended = () => bed.out.disconnect();
+    if (bed.sources[0]) bed.sources[0].onended = () => bed.out.disconnect();
+    else bed.out.disconnect();
   }
 
   /** Battle intensity 0–1: ambience × (1 − 0.7·I). */
@@ -75,6 +76,10 @@ export class Ambience {
       } else if (this.biome === "volcanic") {
         this.crackle(t);
         this.nextEvent = t + 0.6 + Math.random() * 2.4;
+      } else if (this.biome === "tropical") {
+        if (Math.random() < 0.3) this.wave(t);
+        else this.gulls(t);
+        this.nextEvent = t + 7 + Math.random() * 7;
       } else this.nextEvent = Infinity;
     }
   }
@@ -141,6 +146,17 @@ export class Ambience {
         loop(this.white, 1).connect(whistle).connect(gain(0.35)).connect(gust);
         lfo(whistle.frequency, 0.05, 420);
         loop(this.brown, 1.1).connect(filter("lowpass", 380, 0.5)).connect(gain(0.8)).connect(gust);
+        break;
+      }
+      case "tropical": {
+        // surf rolling in about every ten seconds, its foam hiss, and a trade wind in the palms
+        const swell = gain(0.5);
+        swell.connect(gust);
+        loop(this.brown, 0.8).connect(filter("lowpass", 320, 0.6)).connect(gain(1.0)).connect(swell);
+        loop(this.white, 1).connect(filter("bandpass", 2400, 0.8)).connect(gain(0.05)).connect(swell);
+        lfo(swell.gain, 0.1, 0.42);
+        loop(this.white, 0.95).connect(filter("highpass", 5500, 0.5)).connect(gain(0.012)).connect(gust);
+        lfo(gust.gain, 0.05, 0.3);
         break;
       }
       case "volcanic": {
@@ -216,6 +232,71 @@ export class Ambience {
     s.connect(hp).connect(g).connect(this.bed.out);
     s.start(t, Math.random() * 3);
     s.stop(at + 0.05);
+    this.live++;
+    s.onended = () => {
+      this.live--;
+      g.disconnect();
+    };
+  }
+
+  /** Two or three gulls crying "kee-ah" somewhere along the shore. */
+  private gulls(t: number): void {
+    if (!this.bed || this.live > 6) return;
+    const c = this.ctx;
+    const n = 2 + Math.floor(Math.random() * 2);
+    let at = t;
+    for (let i = 0; i < n; i++) {
+      const dur = 0.28 + Math.random() * 0.12;
+      const o = c.createOscillator();
+      o.type = "triangle";
+      const f0 = 1650 + Math.random() * 250;
+      o.frequency.setValueAtTime(f0, at);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.64, at + dur);
+      const vib = c.createOscillator();
+      vib.frequency.value = 6;
+      const vd = c.createGain();
+      vd.gain.value = 50;
+      vib.connect(vd).connect(o.frequency);
+      const bp = c.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.value = 1900;
+      bp.Q.value = 2.5;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.04, at + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+      o.connect(bp).connect(g).connect(this.bed.out);
+      o.start(at);
+      vib.start(at);
+      o.stop(at + dur + 0.02);
+      vib.stop(at + dur + 0.02);
+      this.live++;
+      o.onended = () => {
+        this.live--;
+        g.disconnect();
+      };
+      at += dur + 0.12 + Math.random() * 0.25;
+    }
+  }
+
+  /** A nearer wave breaking on the reef: a swell of brown noise opening up and closing. */
+  private wave(t: number): void {
+    if (!this.bed || this.live > 6) return;
+    const c = this.ctx;
+    const s = c.createBufferSource();
+    s.buffer = this.brown;
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(250, t);
+    lp.frequency.exponentialRampToValueAtTime(1400, t + 0.5);
+    lp.frequency.exponentialRampToValueAtTime(300, t + 2.7);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 2.7);
+    s.connect(lp).connect(g).connect(this.bed.out);
+    s.start(t, Math.random() * 3);
+    s.stop(t + 2.8);
     this.live++;
     s.onended = () => {
       this.live--;

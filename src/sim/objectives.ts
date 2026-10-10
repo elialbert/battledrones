@@ -1,7 +1,7 @@
 import { COMBAT, INFANTRY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "./balance";
 import { isInfantry } from "./infantry";
 import { worldPick, worldRandom } from "./rand";
-import type { Crate, CrateReward, Faction, ObjectiveState, Unit, Uplink, World } from "./types";
+import type { Crate, CrateReward, Faction, ObjectiveState, Unit, UnitKind, Uplink, World } from "./types";
 import { buildingAtTile, inBounds, passable, spawnUnit } from "./world";
 
 /**
@@ -46,23 +46,55 @@ export function mirrorPoint(w: World, x: number, y: number): { x: number; y: num
 }
 
 /**
+ * A map's Uplink: a point (blue side), or a point with its own rules — an
+ * island relay only infantry can take that pays only while crewed, and its
+ * own income and ⚡ charge.
+ */
+export type UplinkDef =
+  | [number, number]
+  | { at: [number, number]; infantryOnly?: boolean; income?: number; charge?: number };
+
+/**
  * Put a map's objectives into the world: an Uplink at each listed point and
  * at its mirror (a point at the very centre is its own mirror: one relay),
  * and the supply-drop sites. Points are blue-side; tiles are continuous.
  */
-export function setupObjectives(w: World, uplinks: [number, number][], dropSites: [number, number][]): void {
+export function setupObjectives(w: World, uplinks: readonly UplinkDef[], dropSites: [number, number][]): void {
   const o = w.objectives;
-  const add = (x: number, y: number) => {
+  const add = (x: number, y: number, extra: Partial<Uplink>) => {
     if (o.uplinks.some((l) => Math.hypot(l.x - x, l.y - y) < 0.01)) return;
-    o.uplinks.push({ id: w.nextId++, x, y, owner: null, progress: 0, pushing: null, contested: false });
+    o.uplinks.push({ id: w.nextId++, x, y, owner: null, progress: 0, pushing: null, contested: false, ...extra });
   };
-  for (const [x, y] of uplinks) {
-    add(x, y);
+  for (const def of uplinks) {
+    const [x, y] = Array.isArray(def) ? def : def.at;
+    const extra: Partial<Uplink> = {};
+    if (!Array.isArray(def)) {
+      if (def.infantryOnly) Object.assign(extra, { infantryOnly: true, crewed: false });
+      if (def.income !== undefined) extra.income = def.income;
+      if (def.charge !== undefined) extra.charge = def.charge;
+    }
+    add(x, y, extra);
     const m = mirrorPoint(w, x, y);
-    add(m.x, m.y);
+    add(m.x, m.y, extra);
   }
   o.dropSites = dropSites.map(([x, y]) => ({ x, y }));
 }
+
+/**
+ * How much unit `u` counts in an Uplink's zone: harvesters nothing; on an
+ * island relay robot infantry only (the Condor that flew them in, aircraft
+ * and vehicles count nothing, so they can neither take it nor freeze it);
+ * elsewhere aircraft half, infantry double, everything else one.
+ */
+export function captureWeight(l: Uplink, kind: UnitKind): number {
+  if (kind === "harvester") return 0;
+  if (isInfantry(kind)) return INFANTRY.captureWeight;
+  if (l.infantryOnly) return 0;
+  return UNITS[kind].domain === "air" ? U.airWeight : 1;
+}
+
+/** Scrap per second an Uplink pays its holder (before income multipliers). */
+export const uplinkPay = (l: Uplink): number => l.income ?? U.income;
 
 /** Tick the drop with index k lands, and the tick it is announced. */
 export function dropLandTick(k: number): number {
@@ -77,16 +109,17 @@ export function nextDropTick(w: World): number | null {
   return w.objectives.dropSites.length > 0 ? dropAnnounceTick(w.objectives.drops) : null;
 }
 
-/** Capture-zone presence: units inside, harvesters excluded, aircraft at half weight, infantry at double. */
+/** Capture-zone presence: each unit inside, weighted by captureWeight. */
 export function presence(w: World, l: Uplink): Record<Faction, number> {
   const p = { blue: 0, red: 0 };
   const r2 = U.radius * U.radius;
   for (const u of w.units.values()) {
-    if (u.kind === "harvester") continue;
+    const k = captureWeight(l, u.kind);
+    if (k === 0) continue;
     const dx = u.x - l.x;
     const dy = u.y - l.y;
     if (dx * dx + dy * dy > r2) continue;
-    p[u.faction] += UNITS[u.kind].domain === "air" ? U.airWeight : isInfantry(u.kind) ? INFANTRY.captureWeight : 1;
+    p[u.faction] += k;
   }
   return p;
 }
@@ -104,6 +137,8 @@ function towards(v: number, target: number, d: number): number {
 function tickUplink(w: World, l: Uplink): void {
   const p = presence(w, l);
   const dt = 1 / TICK_RATE;
+  // an island relay pays only while its holder's squads stand in it
+  if (l.infantryOnly) l.crewed = !!l.owner && p[l.owner] > 0;
   l.contested = p.blue > 0 && p.red > 0;
   if (l.contested) {
     l.pushing = null; // both sides inside: the bar freezes
@@ -131,6 +166,7 @@ function tickUplink(w: World, l: Uplink): void {
   if (!l.owner && Math.abs(l.progress) >= 100) {
     const f: Faction = l.progress > 0 ? "blue" : "red";
     l.owner = f;
+    if (l.infantryOnly) l.crewed = p[f] > 0;
     w.objectives.stats[f].captures++;
     w.fx.push({ type: "uplinkFlip", id: l.id, x: l.x, y: l.y, owner: f, prev: null, by: f });
   }
@@ -145,11 +181,12 @@ export function tickObjectives(w: World): void {
   const paySecond = (w.tick + 1) % TICK_RATE === 0;
   for (const l of o.uplinks) {
     if (!l.owner) continue;
+    if (l.infantryOnly && !l.crewed) continue; // an empty island relay pays nothing
     const m = w.powers.meter;
-    m[l.owner] = Math.min(POWERS.meterMax, m[l.owner] + U.charge / TICK_RATE);
+    m[l.owner] = Math.min(POWERS.meterMax, m[l.owner] + (l.charge ?? U.charge) / TICK_RATE);
     if (!paySecond) continue;
     const f = w.factions[l.owner];
-    const amount = U.income * f.incomeMult;
+    const amount = uplinkPay(l) * f.incomeMult;
     f.scrap += amount;
     o.stats[l.owner].uplinkScrap += amount;
   }
@@ -366,7 +403,12 @@ export function uplinksHeld(w: World): Record<Faction, number> {
   return n;
 }
 
+/** Is this Uplink paying its holder right now? (An island relay only while crewed.) */
+export const uplinkPaying = (l: Uplink): boolean => !!l.owner && (!l.infantryOnly || !!l.crewed);
+
 /** Scrap per minute a side earns from its Uplinks right now (before income multipliers). */
 export function uplinkIncome(w: World, f: Faction): number {
-  return uplinksHeld(w)[f] * U.income * 60;
+  let s = 0;
+  for (const l of w.objectives.uplinks) if (l.owner === f && uplinkPaying(l)) s += uplinkPay(l);
+  return s * 60;
 }

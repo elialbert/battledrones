@@ -1,9 +1,11 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
-import { inBounds, moveClassOf, passable, terrainMult, terrainSpeed, type MoveClass } from "./world";
+import { inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
+/** How long (ticks) a unit leaves alone a target it found it can't get in range of. */
+export const IGNORE_TICKS = 30;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
 /** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
@@ -27,6 +29,9 @@ function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
 function stepCost(w: World, idx: number, mc: MoveClass): number {
   return 1 / (terrainMult(TERRAIN[w.terrain[idx] as Terrain], mc) || 1);
 }
+
+/** A* working arrays, grown to the largest map seen and reused by every search. */
+let scratch: { g: Float32Array; from: Int32Array; seen: Uint32Array; shut: Uint32Array; gen: number } | null = null;
 
 /**
  * 8-directional A* over the tile grid, weighted by terrain speed (roads are
@@ -57,9 +62,15 @@ export function findPath(
     gx = Math.max(0, Math.min(w.width - 1, gx));
     gy = Math.max(0, Math.min(w.height - 1, gy));
   }
-  // If the goal tile itself is blocked, walk to the nearest passable tile
-  // around it (spiral search, small radius), preferring ones nearer to us.
-  if (!pass(gx, gy)) {
+  // Only tiles in our own connected region can be reached (an island, or the
+  // far shore of a sea, can't): world.ts regionLabels, from terrain alone.
+  const region = mc === "air" ? 0 : regionAt(w, sx, sy, mc);
+  const labels = region ? regionLabels(w, mc as LandClass) : null;
+  const ok = (x: number, y: number) => pass(x, y) && (!labels || labels[y * w.width + x] === region);
+  // If the goal tile itself is blocked or cut off, walk to the nearest tile
+  // we can reach around it (spiral search, small radius), preferring ones
+  // nearer to us; nothing in reach gives up at once instead of flooding.
+  if (!ok(gx, gy)) {
     let found: { x: number; y: number } | null = null;
     for (let r = 1; r <= 6 && !found; r++) {
       let bestD = Infinity;
@@ -68,7 +79,7 @@ export function findPath(
           const dy = i * s;
           const dx = j * s;
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          if (!pass(gx + dx, gy + dy)) continue;
+          if (!ok(gx + dx, gy + dy)) continue;
           const d = Math.hypot(gx + dx - sx, gy + dy - sy);
           if (d < bestD) {
             bestD = d;
@@ -85,12 +96,21 @@ export function findPath(
   const W = w.width;
   const H = w.height;
   const n = W * H;
-  const gScore = new Float32Array(n).fill(Infinity);
-  const cameFrom = new Int32Array(n).fill(-1);
-  const closed = new Uint8Array(n);
+  // scratch arrays shared by every search (a generation stamp marks the
+  // entries this search has written, so nothing needs clearing)
+  if (!scratch || scratch.g.length < n) scratch = { g: new Float32Array(n), from: new Int32Array(n), seen: new Uint32Array(n), shut: new Uint32Array(n), gen: 0 };
+  const sc = scratch;
+  if (++sc.gen >= 0xffffffff) {
+    sc.seen.fill(0);
+    sc.shut.fill(0);
+    sc.gen = 1;
+  }
+  const gen = sc.gen;
+  const gOf = (i: number) => (sc.seen[i] === gen ? sc.g[i]! : Infinity);
   const startIdx = sy * W + sx;
   const goalIdx = gy * W + gx;
-  gScore[startIdx] = 0;
+  sc.seen[startIdx] = gen;
+  sc.g[startIdx] = 0;
   // simple binary heap of [f, idx]
   const heap: number[] = [];
   const push = (f: number, idx: number) => {
@@ -142,13 +162,13 @@ export function findPath(
     const cur = pop();
     if (cur === goalIdx) {
       const path: { x: number; y: number }[] = [];
-      for (let idx = goalIdx; idx !== startIdx; idx = cameFrom[idx]!)
+      for (let idx = goalIdx; idx !== startIdx; idx = sc.from[idx]!)
         path.push({ x: (idx % W) + 0.5, y: Math.floor(idx / W) + 0.5 });
       path.reverse();
       return path;
     }
-    if (closed[cur]) continue;
-    closed[cur] = 1;
+    if (sc.shut[cur] === gen) continue;
+    sc.shut[cur] = gen;
     const cx = cur % W;
     const cy = Math.floor(cur / W);
     for (let i = -1; i <= 1; i++)
@@ -162,12 +182,13 @@ export function findPath(
         // no diagonal corner-cutting past blocked orthogonals
         if (dx !== 0 && dy !== 0 && (!pass(cx + dx, cy) || !pass(cx, cy + dy))) continue;
         const nIdx = ny * W + nx;
-        if (closed[nIdx]) continue;
+        if (sc.shut[nIdx] === gen) continue;
         const cost = (dx !== 0 && dy !== 0 ? 1.4142 : 1) * stepCost(w, nIdx, mc);
-        const g = gScore[cur]! + cost;
-        if (g < gScore[nIdx]!) {
-          gScore[nIdx] = g;
-          cameFrom[nIdx] = cur;
+        const g = sc.g[cur]! + cost;
+        if (g < gOf(nIdx)) {
+          sc.seen[nIdx] = gen;
+          sc.g[nIdx] = g;
+          sc.from[nIdx] = cur;
           push(g + h(nIdx), nIdx);
         }
       }
@@ -289,8 +310,15 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
         // artillery: back off out of minimum range instead of closing in
         const k = (minRange + 0.8) / Math.max(d, 0.01);
         moveUnitToward(w, u, p.x + (u.x - p.x) * k, p.y + (u.y - p.y) * k);
-      } else {
-        moveUnitToward(w, u, p.x, p.y); // combat pauses it once in range
+      } else if (moveUnitToward(w, u, p.x, p.y) && d > UNITS[u.kind].range) {
+        // (combat pauses it once in range.) Got as close as the ground allows and still out of
+        // range of a target across the water: give it up, so the unit fights what it can reach
+        const mc = moveClassOf(u.kind);
+        const here = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+        if (here && regionAt(w, Math.floor(p.x), Math.floor(p.y), mc) !== here) {
+          u.ignore = { id: o.targetId, until: w.tick + IGNORE_TICKS };
+          u.order = { type: "idle" };
+        }
       }
     }
   }
@@ -390,8 +418,14 @@ function nudge(w: World, u: Unit, dx: number, dy: number): void {
   const m = UNITS[u.kind].domain === "air" ? 0.05 : EDGE;
   const nx = Math.min(w.width - m, Math.max(m, u.x + dx));
   const ny = Math.min(w.height - m, Math.max(m, u.y + dy));
-  if (passable(w, Math.floor(nx), Math.floor(ny), moveClassOf(u.kind))) {
-    u.x = nx;
-    u.y = ny;
+  const mc = moveClassOf(u.kind);
+  if (!passable(w, Math.floor(nx), Math.floor(ny), mc)) return;
+  // never across a corner into another region (a one-tile pocket of water, an island): A* can't
+  // take that step back, so the unit would be stranded
+  if (mc !== "air") {
+    const from = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+    if (from && regionAt(w, Math.floor(nx), Math.floor(ny), mc) !== from) return;
   }
+  u.x = nx;
+  u.y = ny;
 }

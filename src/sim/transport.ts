@@ -39,6 +39,23 @@ export function carrierOf(w: World, unitId: number): Unit | null {
   return null;
 }
 
+/**
+ * Put a squad straight into a Condor's hold, no walk or climb (a match that
+ * starts with the squad aboard; the free replacement Condor's crew).
+ */
+export function stowAboard(w: World, c: Unit, squad: Unit): void {
+  if (freeSeats(c) === 0) return;
+  w.fx.push({ type: "embark", faction: squad.faction, carrierId: c.id, unitId: squad.id, x: squad.x, y: squad.y });
+  w.units.delete(squad.id);
+  squad.order = { type: "idle" };
+  squad.path = null;
+  squad.pathGoal = null;
+  squad.autoTargetId = null;
+  squad.x = c.x;
+  squad.y = c.y;
+  c.passengers!.push(squad);
+}
+
 /** Seats left aboard a transport (0 for anything that carries nothing). */
 export function freeSeats(c: Unit): number {
   return Math.max(0, (UNITS[c.kind].capacity ?? 0) - (c.passengers?.length ?? 0));
@@ -121,15 +138,26 @@ function nearestClear(ok: StandOk, p: { x: number; y: number }, span: number, ma
   const fy0 = Math.floor(p.y);
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
-  for (let dy = -span; dy <= span; dy++)
-    for (let dx = -span; dx <= span; dx++) {
-      const q = clearIn(ok, fx0 + dx, fy0 + dy, p.x, p.y);
-      if (!q) continue;
-      const d = Math.hypot(q.x - p.x, q.y - p.y);
-      if (d > maxD + 1e-9 || d >= bestD - 1e-9) continue;
-      bestD = d;
-      best = q;
-    }
+  let bdx = 0;
+  let bdy = 0;
+  // rings of tiles outward from p's; a tile r rings out holds no point
+  // nearer than r - 1, so the search stops once that can't beat the best.
+  // Ties keep the first in row-major order, as a plain square scan would.
+  for (let r = 0; r <= span && bestD > r - 1; r++)
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx += Math.abs(dy) === r ? 1 : 2 * r) {
+        const q = clearIn(ok, fx0 + dx, fy0 + dy, p.x, p.y);
+        if (!q) continue;
+        const d = Math.hypot(q.x - p.x, q.y - p.y);
+        if (d > maxD + 1e-9) continue;
+        const nearer = d < bestD - 1e-9;
+        const tie = !nearer && d < bestD + 1e-9 && (dy < bdy || (dy === bdy && dx < bdx));
+        if (!nearer && !tie) continue;
+        bestD = d;
+        best = q;
+        bdx = dx;
+        bdy = dy;
+      }
   return best;
 }
 

@@ -8,6 +8,7 @@ import {
 } from "./economy";
 import { ECONOMY, FOG } from "./balance";
 import { tickFog } from "./fog";
+import { tickLifeline } from "./lifeline";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement, vehicleSpots } from "./movement";
 import { tickOps } from "./ops";
@@ -33,6 +34,7 @@ export function step(w: World, commands: Command[]): void {
   tickTransport(w); // squads board Condors, Condors fly drops (transport.ts)
   tickMovement(w, engaged, spots); // (then separation, and Titans crushing squads)
   cleanupDeaths(w);
+  if (w.lifeline) tickLifeline(w); // a side left with no Condor gets a free one (lifeline.ts)
   tickSalvage(w);
   tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)
   chargePowers(w); // Command meters fill from this tick's losses

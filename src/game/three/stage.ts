@@ -46,6 +46,11 @@ const LOOKS: Record<Biome, Look> = {
   volcanic: {
     bg: 0x120b0a, sky: 0xb0a0a8, ground: 0x6a3a24, hemi: 1.5, sun: 0xffd2b0, sunI: 3.7, exposure: 1.05,
     fog: { shroud: 0x141012, wisp: 0x302727, memory: [1.1, 0.94, 0.86], cloud: [1, 1, 1] }
+  },
+  // high noon over the reef: a white-gold sun, cool sea-glass bounce light, a night-ocean shroud
+  tropical: {
+    bg: 0x05202b, sky: 0xc4ecff, ground: 0x9cc4b0, hemi: 1.5, sun: 0xfff6e2, sunI: 3.9, exposure: 0.95,
+    fog: { shroud: 0x061a20, wisp: 0x15363c, memory: [0.84, 1.0, 1.1], cloud: [1, 0.93, 0.8] }
   }
 };
 

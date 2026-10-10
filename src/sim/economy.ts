@@ -27,7 +27,9 @@ import {
   spawnBuilding,
   spawnUnit,
   terrainAt,
-  tileIndex
+  tileIndex,
+  invalidatePathsThrough,
+  onHomeLand
 } from "./world";
 import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 
@@ -88,6 +90,7 @@ export function canPlaceBuilding(
       if (!inBounds(w, x, y)) return false;
       if (!TERRAIN[terrainAt(w, x, y)].buildable) return false;
       if (buildingAtTile(w, x, y)) return false;
+      if (!onHomeLand(w, faction, x, y)) return false; // never out on an island (or across the sea)
     }
   // no ground unit parked inside the footprint
   for (const u of w.units.values())
@@ -114,8 +117,8 @@ export function placeBuilding(w: World, faction: Faction, tx: number, ty: number
   const b = spawnBuilding(w, f.pending.kind, faction, tx, ty);
   f.pending = null;
   w.fx.push({ type: "built", faction, id: b.id });
-  // parked ground paths may now be stale; force replans
-  for (const u of w.units.values()) u.path = null;
+  // paths that ran across the new footprint must re-plan
+  invalidatePathsThrough(w, b);
 }
 
 export function sellBuilding(w: World, faction: Faction, buildingId: number): void {
@@ -208,7 +211,7 @@ function findSpawnSpot(w: World, b: Building, kind: UnitKind): { x: number; y: n
         const tx = b.tx + dx;
         const ty = b.ty + dy;
         if (!inBounds(w, tx, ty)) continue;
-        if (mc !== "air" && !passable(w, tx, ty, mc)) continue;
+        if (mc !== "air" && (!passable(w, tx, ty, mc) || !onHomeLand(w, b.faction, tx, ty))) continue;
         const back = flip ? dy - (size - 1) : -dy; // own-frame "south" first
         ring.push({ x: tx + 0.5, y: ty + 0.5, pref: back + Math.abs(dx - (size - 1) / 2) * 0.5 });
       }
@@ -264,8 +267,16 @@ export function nearestScrapTile(w: World, x: number, y: number, faction?: Facti
  * Nearest resource tile a ground unit at (x, y) can actually drive to,
  * by breadth-first search over passable tiles (8-way, no corner cutting).
  * Straight-line distance is fooled by rivers and rock-locked tiles.
+ * `accept` (optional) skips fields it turns down (the AI keeps to its own
+ * side of an island map's bridges).
  */
-export function nearestReachableResource(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
+export function nearestReachableResource(
+  w: World,
+  x: number,
+  y: number,
+  faction?: Faction,
+  accept?: (tx: number, ty: number) => boolean
+): { x: number; y: number } | null {
   const W = w.width;
   // neighbour order in the side's own frame: red's BFS is blue's, turned 180°
   const s = faction === "red" ? -1 : 1;
@@ -279,7 +290,7 @@ export function nearestReachableResource(w: World, x: number, y: number, faction
   seen[start] = 1;
   while (head < tail) {
     const cur = queue[head++]!;
-    if (isResource(w, cur)) return { x: cur % W, y: Math.floor(cur / W) };
+    if (isResource(w, cur) && (!accept || accept(cur % W, Math.floor(cur / W)))) return { x: cur % W, y: Math.floor(cur / W) };
     const cx = cur % W;
     const cy = Math.floor(cur / W);
     for (let i = -1; i <= 1; i++)
@@ -306,7 +317,7 @@ export function tickTrickle(w: World): void {
   if ((w.tick + 1) % TICK_RATE !== 0) return; // once per full second
   for (const b of w.buildings.values())
     if (b.kind === "hq") {
-      w.factions[b.faction].scrap += ECONOMY.hqTrickle * incomeOf(w, b.faction);
+      w.factions[b.faction].scrap += (rulesOf(w).hqTrickle ?? ECONOMY.hqTrickle) * incomeOf(w, b.faction);
     }
 }
 

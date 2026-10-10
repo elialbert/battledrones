@@ -19,7 +19,7 @@ import {
 import { pickAiOpener } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, UnitKind, World } from "../src/sim/types";
-import { createWorld, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { createWorld, passable, spawnBuilding, spawnUnit } from "../src/sim/world";
 
 const U = OBJECTIVES.uplink;
 const D = OBJECTIVES.drops;
@@ -68,22 +68,23 @@ describe("map objectives setup", () => {
     }
   });
 
-  it("every map gets 2–3 mirrored Uplinks on ground units can stand on", () => {
+  it("every map gets 2–3 mirrored Uplinks on ground units can stand on (an island map, more, for infantry)", () => {
     for (const m of MAPS) {
       const w = createMapWorld(m.id, { objectives: true });
       const ls = w.objectives.uplinks;
       expect(ls.length).toBeGreaterThanOrEqual(2);
-      expect(ls.length).toBeLessThanOrEqual(3);
+      expect(ls.length).toBeLessThanOrEqual(m.islands ? 9 : 3);
       for (const l of ls) {
         const mm = mirrorPoint(w, l.x, l.y);
         expect(ls.some((o) => Math.hypot(o.x - mm.x, o.y - mm.y) < 1e-9)).toBe(true);
         expect(l.owner).toBeNull();
         expect(l.progress).toBe(0);
-        // a tank can stand in the zone (Riverlands' centre Uplink sits on the bridge)
+        // a tank can stand in the zone (Riverlands' centre Uplink sits on the bridge);
+        // on an island, a squad
         const open = [...Array(25).keys()].filter((i) => {
           const tx = Math.floor(l.x) - 2 + (i % 5);
           const ty = Math.floor(l.y) - 2 + Math.floor(i / 5);
-          return canStand(w, tx, ty);
+          return l.infantryOnly ? passable(w, tx, ty, "foot") : canStand(w, tx, ty);
         }).length;
         expect(open).toBeGreaterThan(8);
       }

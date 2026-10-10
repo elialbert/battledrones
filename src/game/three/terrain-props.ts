@@ -110,7 +110,11 @@ export function cragGeometry(spots: CragSpot[], biome: Biome, textured = false):
   // lighter than the paint so their shape reads, but dark enough under the bright arctic light that
   // their frosted caps read too, rather than the whole crag going white)
   const minL = biome === "volcanic" ? 0.05 : snow ? 0.07 : 0.12;
-  const maxL = snow ? 0.1 : 0.3;
+  // (pale limestone karst on the reef would grey out under the usual cap)
+  const maxL = snow ? 0.1 : biome === "tropical" ? 0.42 : 0.3;
+  // karst towers wear a cap of jungle where arctic crags wear snow
+  const jungle = biome === "tropical";
+  const jungleCol = new THREE.Color(0x3a7a3a);
   const hsl = { h: 0, s: 0, l: 0 };
   for (const sp of spots) {
     const rnd = prng(sp.seed * 7919 + 17);
@@ -155,6 +159,7 @@ export function cragGeometry(spots: CragSpot[], biome: Biome, textured = false):
         c.copy(base).multiplyScalar(shade);
         // snow lies only on the flat of the cap, a dusting that thickens toward the top
         if (snow && _n.y > 0.72 && k > 0.6) c.lerp(snowCol, Math.min(0.42, 0.18 + (k - 0.6) * 0.7) * facet);
+        else if (jungle && _n.y > 0.72 && k > 0.6) c.lerp(jungleCol, Math.min(0.55, 0.25 + (k - 0.6) * 0.9) * facet);
         else if (_n.y > 0.75 && k > 0.6) c.lerp(grey, 0.12);
         for (const v of TRI) {
           v.add(_off).applyMatrix4(_m);
@@ -220,6 +225,61 @@ export function treeGeos(biome: Biome): THREE.BufferGeometry[] {
       } else {
         ico(0.24, [0, 0.18, 0], 0x6b8a3a, b, [1.2, 0.7, 1.1]);
         ico(0.16, [0.18, 0.14, 0.1], 0x7c9a44, b, [1, 0.7, 1]);
+      }
+    } else if (biome === "tropical") {
+      if (v === 0 || v === 3) {
+        // coconut palm: a trunk curving up in an arc, a crown of arching fronds, coconuts under it
+        const lean = v === 0 ? 1 : -1;
+        const tall = v === 3 ? 1.15 : 1;
+        let x = 0;
+        let y = 0;
+        for (let i = 0; i < 5; i++) {
+          b.cyl(0.035, 0.045, 0.2 * tall, 5, [x, y + 0.1 * tall, 0], 0x8a7458, { rot: [0, 0, lean * (-0.15 - i * 0.08)] });
+          x += lean * (0.02 + i * 0.016);
+          y += 0.19 * tall;
+        }
+        for (let i = 0; i < 9; i++) {
+          const a = (i / 9) * Math.PI * 2 + v;
+          const col = [0x3f8f3a, 0x58a83e][i % 2]!;
+          b.box(0.22, 0.012, 0.08, [x + Math.cos(a) * 0.1, y + 0.04, Math.sin(a) * 0.1], col, { rot: [0, -a, 0.25] });
+          b.box(0.24, 0.012, 0.07, [x + Math.cos(a) * 0.3, y - 0.03, Math.sin(a) * 0.3], col, { rot: [0, -a, -0.9] });
+        }
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2;
+          b.sphere(0.04, [x + Math.cos(a) * 0.05, y - 0.03, Math.sin(a) * 0.05], 0x6a5a2a, { w: 5, h: 4 });
+        }
+      } else if (v === 1 || v === 4) {
+        // rainforest emergent: a slim pale trunk with a flared foot under a flat umbrella crown
+        b.cyl(0.035, 0.06, 0.62, 5, [0, 0.31, 0], 0x9a8a72);
+        b.cone(0.11, 0.12, 5, [0, 0.06, 0], 0x8a7a62);
+        ico(0.3, [0, 0.66, 0], 0x1f6b35, b, [1.3, 0.55, 1.2]);
+        ico(0.24, [0.14, 0.76, 0.06], 0x2a7f3c, b, [1.3, 0.5, 1.2]);
+        ico(0.2, [-0.12, 0.6, -0.1], 0x3a8f42, b, [1.2, 0.55, 1.1]);
+        if (v === 4)
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * Math.PI * 2 + 0.4;
+            b.sphere(0.03, [Math.cos(a) * 0.25, 0.8, Math.sin(a) * 0.22], 0xf3efe0, { w: 4, h: 3 });
+          }
+      } else if (v === 2) {
+        // mangrove: splayed stilt roots under a short trunk and a dense dark crown
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          b.cyl(0.012, 0.016, 0.26, 4, [Math.cos(a) * 0.11, 0.09, Math.sin(a) * 0.11], 0x5a4a3a, {
+            rot: [Math.sin(a) * 0.6, 0, -Math.cos(a) * 0.6]
+          });
+        }
+        b.cyl(0.04, 0.05, 0.22, 5, [0, 0.28, 0], 0x5a4a3a);
+        ico(0.3, [0, 0.48, 0], 0x2d5a2e, b, [1.2, 0.7, 1.2]);
+        ico(0.2, [0.16, 0.42, 0.1], 0x355f30, b, [1.1, 0.7, 1.1]);
+      } else {
+        // banana and fern clump: broad leaves radiating up and out
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          b.box(0.36, 0.012, 0.12, [Math.cos(a) * 0.15, 0.2, Math.sin(a) * 0.15], [0x7cbf3e, 0x6aa83a][i % 2]!, {
+            rot: [0, -a, 0.55]
+          });
+        }
+        b.cyl(0.03, 0.04, 0.2, 5, [0, 0.1, 0], 0x6a7a3a);
       }
     } else if (v % 3 !== 2) {
       // volcanic: charred dead trees and ash shrubs with smouldering embers

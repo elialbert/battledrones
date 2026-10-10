@@ -279,7 +279,22 @@ export const TERRAIN: Record<Terrain, TerrainInfo> = {
   [Terrain.Forest]: { name: "Woods", ground: true, hover: true, speed: 0.55, hoverSpeed: 0.6, footSpeed: 1, buildable: false, cover: 0.7 },
   [Terrain.Crystal]: { name: "Crystal field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, footSpeed: 0.85, buildable: false, cover: 1 },
   [Terrain.Bridge]: { name: "Bridge", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, footSpeed: 1.35, buildable: false, cover: 1 },
-  [Terrain.Shallows]: { name: "Shallows", ground: true, hover: true, speed: 0.5, hoverSpeed: 1, footSpeed: 0.8, buildable: false, cover: 1 }
+  [Terrain.Shallows]: { name: "Shallows", ground: true, hover: true, speed: 0.5, hoverSpeed: 1, footSpeed: 0.8, buildable: false, cover: 1 },
+  [Terrain.Deep]: { name: "Open sea", ground: false, hover: false, speed: 0, hoverSpeed: 0, footSpeed: 0, buildable: false, cover: 1 }
+};
+
+/**
+ * The island map's free replacement Condor (lifeline.ts): a side with no
+ * Condor (none flying, none being built) gets one `delay` s later, flown in
+ * from the map edge nearest its HQ. It brings a free Trooper Squad only while
+ * the side has fewer than `squadUnder` squads, so it rescues a side that has
+ * lost its infantry and can't be farmed for troops.
+ */
+export const LIFELINE = {
+  delay: 45,
+  squadUnder: 2,
+  /** How far inside the map edge it appears (tiles). */
+  edgeInset: 1.5
 };
 
 export const ECONOMY = {

@@ -13,7 +13,7 @@ engine loads.
 > contract — gunmetal, royal-blue/crimson team panels, amber lights — and
 > particle textures are drawn at runtime (`src/game/three/textures.ts`).
 > The painted **terrain** (section 3) is draped over the 3D heightfield as
-> its albedo, and the four painted **rock materials** become small tileable
+> its albedo, and the five painted **rock materials** become small tileable
 > textures (`art/textures.py` → `public/assets/textures/rock-<biome>.webp`,
 > 512², seamless) that texture the outcrops' cliff walls and crags, so they
 > are the same stone as the painted tops. The generated **unit and building art** still provides the
@@ -60,10 +60,11 @@ stores each raw as `art/raw/<name>.webp` (lossy colour, lossless alpha —
 small enough to commit, faithful enough to reprocess). Sprites use
 `quality="high"` at 1024² or 1536×1024; textures `quality="medium"`.
 
-Inventory (66 raws): 15 units, 9 buildings, rubble, decals, scrap piles,
-crystal clusters, an 8-frame explosion, 7 materials × 4 biomes (ground,
-ground2, rough, rock, liquid, road, forest canopy), a doodad sheet per
-biome, portrait and landscape key art, the icon, and the two map
+Inventory (74 raws): 15 units, 9 buildings, rubble, decals, scrap piles,
+crystal clusters, an 8-frame explosion, 7 materials × 5 biomes (ground,
+ground2, rough, rock, liquid, road, forest canopy; for temperate, desert,
+arctic, volcanic and tropical), a doodad sheet per biome, portrait and
+landscape key art, the icon, and the two map
 objectives: the `uplink` relay (a round platform + its rotating dish, as a
 PAIR) and the `supply-crate`. Those use a **NEUTRAL** contract instead of
 STYLE — gunmetal with hazard-yellow stripes and amber lights, no blue or red
@@ -131,15 +132,60 @@ plus `meta.json` and a 256 px `thumb.webp` (map picker and minimap). It:
 - builds a height field for rock, hillshades it from the upper left, casts
   soft shadows and ambient occlusion;
 - paints water with depth gradients, wet banks and shore foam — lava with a
-  glow bleeding onto nearby ground — and shallows as see-through fords;
+  glow bleeding onto nearby ground — shallows as see-through fords, and the
+  open sea (Deep) falling away past the coastal shelf (below);
 - draws bridges as built decks with railings and shadows, oriented along
   each bridge's principal axis;
 - scatters tree-crown doodads through and over forest edges and other
   decorations sparsely (big ones only on unbuildable ground, never near an
   HQ), each with a soft drop shadow;
-- chooses the highest WebP quality that keeps each map near 1.5 MB.
+- chooses the highest WebP quality that keeps each map near 1.5 MB (the
+  budget scales with area past 64×64 tiles: the 96-tile Archipelago's 25
+  chunks get ~3.4 MB and come out at ~3.0 MB, q78).
 
 `python3 art/terrain.py --debug` also writes a grid-overlay QA image.
+
+Painting a 96-tile map takes about 4 minutes and ~7 GB of RAM, so paint
+just the map you changed (`python3 art/terrain.py archipelago`).
+
+### The tropical set and the open sea (Archipelago)
+
+The fifth biome, **tropical** (the Coral Archipelago, midday), has its own
+7 materials — pale sun-bleached sandy turf (ground), warm white coral beach
+sand (ground2), a dark mangrove mudflat (rough), pale pitted limestone karst
+(rock), a clear turquoise lagoon (liquid), a silver-grey timber boardwalk of
+lengthwise planks (road; its grain is turned to run along each road) and an
+emerald rainforest canopy with palm crowns (forest) — and a doodad sheet: a
+coconut palm, a rainforest crown and a mangrove crown (the trees), then a
+limestone boulder, coral rubble and shells, a driftwood log, a sea-grape bush,
+a beached landing craft and crates under a tarp. Its `BIOMES["tropical"]`
+config turns on a few painter features no other biome uses (each is a config
+key, off by default, so the other maps paint exactly as before):
+
+- **beach**: ground2 is forced up into a band ~1.1 tiles wide along every
+  wet edge (from the wet SDF), so every coast and island gets a white beach
+  ring; its inland edge wobbles and follows the texture detail like the
+  other ground2 patches.
+- **Deep sea** (Terrain.Deep, `a` in the exported grid): painted as water
+  that keeps getting deeper, with a second drop-off at the Water→Deep edge
+  (the reef crest) into the `abyss` colour — `abyss_mix` within
+  `abyss_reach` tiles (open sea, ~#0a3f66) and `abyss_far` on toward the
+  abyss (~#062a48) far from any shore. A bridge's span out over the sea
+  counts as sea, so no shelf colour rings the deck. **surf** paints a broken
+  white line of breaking surf just past the reef crest, a fainter second
+  line behind it and spray thrown back onto the reef; **coral** faint pink,
+  ochre and olive coral heads under the film near the drop; **swell** broad
+  light and dark patches and long swell streaks (white noise blurred far
+  more along one direction than across it) over the open sea.
+- **trestle**: the timber plank decks show their bents' cap beams past each
+  side every 1.5 tiles; **bridge_reach** lets a deck run up to 24 tiles
+  either side of its centre (each Archipelago bridge spans ~20 tiles).
+- smaller touches: straighter boardwalk edges (`road_blur`, `road_wobble`),
+  a dark wave-cut notch where limestone stands in the sea (`rock_notch`),
+  smoother mudflat edges (`rough_soft`), mangroves standing in the mudflats
+  (`rough_big_mul` and the `mangrove` big doodad), coral rubble only near
+  the water (`small_shore`), and per-channel `forest_mul`, `ground2_tint`
+  and `tree_tint` to pull the canopy toward jade and the sand toward white.
 
 Scrap piles and crystals are *not* painted into the terrain — the game draws
 them as sprites so they visibly shrink as they're mined.

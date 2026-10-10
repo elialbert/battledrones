@@ -87,7 +87,7 @@ export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo:
           const nx = (i % W) + dx;
           const ny = Math.floor(i / W) + dy;
           const t = T(nx, ny);
-          if (t < 0 || t === Terrain.Bridge || t === Terrain.Water || t === Terrain.Rock || bank.has(ny * W + nx)) continue;
+          if (t < 0 || t === Terrain.Bridge || t === Terrain.Water || t === Terrain.Deep || t === Terrain.Rock || bank.has(ny * W + nx)) continue;
           bank.add(ny * W + nx);
           const ddx = nx + 0.5 - mx;
           const ddz = ny + 0.5 - mz;

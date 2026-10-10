@@ -621,7 +621,9 @@ describe("infantry and the map", () => {
 });
 
 describe("the starting Trooper Squad", () => {
-  const troopers = (w: World, f: Faction) => [...w.units.values()].filter((u) => u.faction === f && u.kind === "trooper");
+  // (on the island map it starts aboard the side's Condor: counted there)
+  const troopers = (w: World, f: Faction) =>
+    [...w.units.values()].flatMap((u) => [u, ...(u.passengers ?? [])]).filter((u) => u.faction === f && u.kind === "trooper");
 
   it("stands beside every HQ, as mirror images, on ground it can stand on", () => {
     for (const def of MAPS)
@@ -633,8 +635,14 @@ describe("the starting Trooper Squad", () => {
         expect(troopers(w, "red")).toHaveLength(1);
         expect(mirrorPt(w, r!)).toEqual({ x: expect.closeTo(b!.x, 9), y: expect.closeTo(b!.y, 9) });
         for (const [u, f] of [[b!, "blue"], [r!, "red"]] as const) {
-          expect(passable(w, Math.floor(u.x), Math.floor(u.y), "foot")).toBe(true);
-          expect(distToBuilding(hqOf(w, f)!, u.x, u.y)).toBeLessThanOrEqual(3);
+          if (def.squadAboard) {
+            // aboard the map's Condor, parked beside the HQ
+            expect(carrierOf(w, u.id)?.faction).toBe(f);
+            expect(distToBuilding(hqOf(w, f)!, u.x, u.y)).toBeLessThanOrEqual(4);
+          } else {
+            expect(passable(w, Math.floor(u.x), Math.floor(u.y), "foot")).toBe(true);
+            expect(distToBuilding(hqOf(w, f)!, u.x, u.y)).toBeLessThanOrEqual(3);
+          }
           expect(u.order.type).toBe("idle");
         }
       }

@@ -1,6 +1,6 @@
 import { DIFFICULTY, STRATEGIES, type Difficulty } from "../sim/ai/commander";
 import { AWARDS, MEDALS, MEDAL_IDS, type MedalId } from "../sim/awards";
-import { MAPS } from "../sim/maps";
+import { MAPS, mapById, mapBansMutator } from "../sim/maps";
 import { MUTATORS, MUTATOR_IDS, bannedBy, rulesOf, toggleMutator, type MutatorId } from "../sim/rules";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
@@ -9,6 +9,7 @@ import { OPS, fmtClock } from "../sim/ops";
 import {
   RANKS,
   STAR_LABELS,
+  starLabelsFor,
   currentStreak,
   opsCompleted,
   loadCareer,
@@ -122,8 +123,13 @@ function dailyHtml(op: DailyOp, c: CareerData): string {
 function mutButtonHtml(): string {
   const on = gameMode.mutators;
   if (on.length === 0) return `<span class="mb-k">🧪 Mutators</span><span class="mb-v">Off</span>`;
-  const names = on.map((id) => `${MUTATORS[id].icon} ${MUTATORS[id].name}`).join(" · ");
-  return `<span class="mb-k">🧪</span><span class="mb-v on">${names}</span><span class="mb-n">no stars</span>`;
+  // (one the picked map can't be played with is left out of its matches: struck through)
+  const def = mapById(gameMode.mapId);
+  const names = on
+    .map((id) => (mapBansMutator(def, id) ? `<s>${MUTATORS[id].icon} ${MUTATORS[id].name}</s>` : `${MUTATORS[id].icon} ${MUTATORS[id].name}`))
+    .join(" · ");
+  const live = on.some((id) => !mapBansMutator(def, id));
+  return `<span class="mb-k">🧪</span><span class="mb-v on">${names}</span>${live ? `<span class="mb-n">no stars</span>` : ""}`;
 }
 
 export interface MenuCareer {
@@ -192,11 +198,13 @@ function openSheet(host: HTMLElement, cls: string, html: string): HTMLElement {
 
 /** Mutator picker: tap chips to toggle; applies to Skirmish (and AI vs AI). */
 export function showMutatorSheet(host: HTMLElement, onDone: () => void): void {
+  const def = mapById(gameMode.mapId);
   const chips = MUTATOR_IDS.map((id) => {
     const m = MUTATORS[id];
     const on = gameMode.mutators.includes(id);
-    return `<button class="mutchip${on ? " on" : ""}" data-id="${id}" aria-pressed="${on}">
-      <em>${m.icon}</em><b>${m.name}</b><small>${m.desc}</small></button>`;
+    const why = mapBansMutator(def, id);
+    return `<button class="mutchip${on ? " on" : ""}${why ? " blocked" : ""}" data-id="${id}" aria-pressed="${on}">
+      <em>${m.icon}</em><b>${m.name}</b><small>${why ?? m.desc}</small></button>`;
   }).join("");
   const wrap = openSheet(
     host,
@@ -215,6 +223,8 @@ export function showMutatorSheet(host: HTMLElement, onDone: () => void): void {
     });
   wrap.querySelectorAll<HTMLElement>(".mutchip").forEach((el) =>
     el.addEventListener("click", () => {
+      // (can't be played on the picked map: it may be switched off, never on)
+      if (el.classList.contains("blocked") && !gameMode.mutators.includes(el.dataset.id as MutatorId)) return;
       gameMode.mutators = toggleMutator(gameMode.mutators, el.dataset.id as MutatorId);
       sfx.play("click", 0.5);
       refresh();
@@ -239,6 +249,10 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
     return `<div class="medalcell${n ? " got" : ""}"><em>${m.icon}</em><b>${m.name}</b><small>${m.desc}</small>${n ? `<span class="cnt">×${n}</span>` : ""}</div>`;
   }).join("");
   const totalStars = Object.values(c.stars).reduce((s, m) => s + starCount(m), 0);
+  // maps with their own ★★ time (the Archipelago: 12:00)
+  const ownTimes = MAPS.filter((m) => m.starSecs !== undefined)
+    .map((m) => ` (${starLabelsFor(m.id)[1]!.replace("Win in under ", "")} on ${m.name})`)
+    .join("");
   const starRows = MAPS.map(
     (m) => `<tr><td>${m.name}</td>${diffs
       .map((d) => {
@@ -247,7 +261,7 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
       })
       .join("")}</tr>`
   ).join("");
-  const lsRows = MAPS.map(
+  const lsRows = MAPS.filter((m) => m.lastStand !== false).map(
     (m) => `<tr><td>${m.name}</td>${diffs
       .map((d) => {
         const b = loadBest(m.id, d);
@@ -277,7 +291,7 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
        return `<tr><td>${o.icon} ${o.title}</td><td class="st${r?.stars ? " got" : ""}">${starsText(r?.stars ?? 0)}</td><td>${r?.bestSecs != null ? fmtClock(r.bestSecs) : "—"}</td></tr>`;
      }).join("")}</table>
      <h3>Medals</h3><div class="medalgrid">${medalCells}</div>
-     <h3>Map stars <small>${STAR_LABELS.map((l, i) => `${"★".repeat(i + 1)} ${l.toLowerCase()}`).join(" · ")}</small></h3>
+     <h3>Map stars <small>${STAR_LABELS.map((l, i) => `${"★".repeat(i + 1)} ${l.toLowerCase()}${i === 1 ? ownTimes : ""}`).join(" · ")}</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${starRows}</table>
      <h3>Last Stand bests <small>${c.laststand.runs} run${c.laststand.runs === 1 ? "" : "s"} · ${fmt(c.laststand.waves)} waves in all</small></h3>
      <table class="cs-table"><tr><th></th>${diffs.map((d) => `<th>${diffName(d)}</th>`).join("")}</tr>${lsRows}</table>
@@ -341,10 +355,11 @@ export function careerBlockHtml(s: Settlement, rules: string): string {
     if (res.mutators.length > 0 || res.daily !== null) stars = `<p class="cr-stars dim">Mutated match: no map stars</p>`;
     else {
       const gained = s.starsAfter & ~s.starsBefore;
+      const labels = starLabelsFor(res.mapId);
       const cells = [1, 2, 4]
-        .map((b, i) => `<i class="${s.starsAfter & b ? "on" : ""}${gained & b ? " new" : ""}" title="${STAR_LABELS[i]}">${s.starsAfter & b ? "★" : "☆"}</i>`)
+        .map((b, i) => `<i class="${s.starsAfter & b ? "on" : ""}${gained & b ? " new" : ""}" title="${labels[i]}">${s.starsAfter & b ? "★" : "☆"}</i>`)
         .join("");
-      const note = gained ? STAR_LABELS.filter((_, i) => gained & (1 << i)).join(" · ") : "";
+      const note = gained ? labels.filter((_, i) => gained & (1 << i)).join(" · ") : "";
       stars = `<p class="cr-stars"><span class="cr-st">${cells}</span><span>${where}${note ? ` <em>New: ${note.toLowerCase()}</em>` : ""}</span></p>`;
     }
   }

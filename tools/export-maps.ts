@@ -10,15 +10,16 @@ import { MAPS, createMapWorld } from "../src/sim/maps";
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "../art/maps");
 mkdirSync(OUT, { recursive: true });
 const ascii = process.argv.includes("--ascii");
-// terrain enum -> char: Ground . Rock # Scrap $ Water ~ Road = Rough : Forest T Crystal * Bridge H Shallows ,
-const CH = ".#$~=:T*H,";
+// terrain enum -> char: Ground . Rock # Scrap $ Water ~ Road = Rough : Forest T Crystal * Bridge H Shallows , Deep (space)
+const CH = ".#$~=:T*H, ";
 
 for (const def of MAPS) {
   const w = createMapWorld(def.id);
   const rows: string[] = [];
   for (let ty = 0; ty < w.height; ty++) {
     let row = "";
-    for (let tx = 0; tx < w.width; tx++) row += String(w.terrain[ty * w.width + tx]);
+    // one base-36 digit per tile (codes 10+ are letters: Deep is "a"), read back with int(c, 36)
+    for (let tx = 0; tx < w.width; tx++) row += w.terrain[ty * w.width + tx]!.toString(36);
     rows.push(row);
   }
   const hqs = [...w.buildings.values()].map((b) => ({ faction: b.faction, tx: b.tx, ty: b.ty, size: BUILDINGS[b.kind].size }));

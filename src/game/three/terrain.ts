@@ -50,7 +50,9 @@ const TILE_H: Record<number, number> = {
   [Terrain.Rock]: 0.95,
   [Terrain.Water]: -0.55,
   [Terrain.Bridge]: -0.55,
-  [Terrain.Shallows]: -0.2
+  [Terrain.Shallows]: -0.2,
+  // the open sea falls away past the coastal shelf (the water shader darkens it with depth)
+  [Terrain.Deep]: -1.3
 };
 /** Extra noise relief by terrain (rock is craggy, rough ground lumpy). */
 const TILE_NOISE: Record<number, number> = {
@@ -58,7 +60,8 @@ const TILE_NOISE: Record<number, number> = {
   [Terrain.Rough]: 0.07,
   [Terrain.Forest]: 0.04,
   [Terrain.Ground]: 0.025,
-  [Terrain.Water]: 0.08
+  [Terrain.Water]: 0.08,
+  [Terrain.Deep]: 0.12
 };
 
 /** Flat colours per terrain, used only if the painted art is missing. */
@@ -66,12 +69,16 @@ const FALLBACK: Record<number, number> = {
   [Terrain.Ground]: 0x5b6b3a, [Terrain.Rock]: 0x55565c, [Terrain.Scrap]: 0x4b4234,
   [Terrain.Water]: 0x1f4f6b, [Terrain.Road]: 0x6b6962, [Terrain.Rough]: 0x5a4a35,
   [Terrain.Forest]: 0x2f4a24, [Terrain.Crystal]: 0x3f5a44, [Terrain.Bridge]: 0x7a6a55,
-  [Terrain.Shallows]: 0x3f7a8a
+  [Terrain.Shallows]: 0x3f7a8a, [Terrain.Deep]: 0x123a55
 };
 
 interface BiomeLook {
   shallow: number;
   deep: number;
+  /** The open sea past the coastal shelf (Terrain.Deep); default: `deep` darkened. */
+  abyss?: number;
+  /** The world past the map's edge is open sea (the skirt eases into `abyss`), not the biome's ground. */
+  farSea?: boolean;
   /** 0 water, 1 lava, 2 icy sea. */
   liquid: number;
   rock: number;
@@ -121,6 +128,12 @@ const LOOK: Record<Biome, BiomeLook> = {
   volcanic: {
     shallow: 0xffd060, deep: 0xff4a10, liquid: 1, rock: 0x2e2b2a, bridge: 0x6c6660, steel: true, detail: [0.22, 2.6, 0.55],
     stone: { wall: 5, crag: 4, contrast: 1.8, lift: 0.85, foot: 0.35, rough: 0.45 }
+  },
+  // turquoise lagoons over coral sand, falling away past the reef into sapphire open sea
+  tropical: {
+    shallow: 0x46e0d2, deep: 0x0b6f86, abyss: 0x062a48, farSea: true, liquid: 0, rock: 0xb4b0a2, bridge: 0x8a735a, steel: false,
+    detail: [0.2, 2.8, 0.6],
+    stone: { wall: 4.5, crag: 3.5, contrast: 1.4, lift: 1.2, foot: 0.5, rough: 0.85 }
   }
 };
 
@@ -248,7 +261,8 @@ export class Terrain3D {
     fowUniforms.uFowSize.value.set(fw, fh);
     const clouds = cloudTexture();
     fowUniforms.uCloudMap.value = clouds;
-    fowUniforms.uCloudK.value = world.biome === "volcanic" ? 0.4 : world.biome === "arctic" ? 0.22 : 0.3;
+    fowUniforms.uCloudK.value =
+      world.biome === "volcanic" ? 0.4 : world.biome === "arctic" ? 0.22 : world.biome === "tropical" ? 0.32 : 0.3;
   }
 
   // ---------------------------------------------------------- heights --
@@ -371,7 +385,7 @@ export class Terrain3D {
     const uniforms: GroundUniforms = {
       ...this.edge,
       uDetail: { value: new THREE.Vector3(...L.detail) },
-      uFarGround: { value: this.openGround(painted) }
+      uFarGround: { value: this.look.farSea ? new THREE.Color(this.look.abyss ?? this.look.deep) : this.openGround(painted) }
     };
     const walls = this.stone?.walls ?? null;
     const groundMat = <T extends THREE.Material>(m: T) =>
@@ -721,6 +735,7 @@ export class Terrain3D {
       ...this.edge,
       uShallow: { value: new THREE.Color(L.shallow) },
       uDeep: { value: new THREE.Color(L.deep) },
+      uAbyss: { value: L.abyss !== undefined ? new THREE.Color(L.abyss) : new THREE.Color(L.deep).multiplyScalar(0.55) },
       uMode: { value: L.liquid },
       uWT: this.waterTime
     };
