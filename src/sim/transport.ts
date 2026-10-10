@@ -39,6 +39,23 @@ export function carrierOf(w: World, unitId: number): Unit | null {
   return null;
 }
 
+/**
+ * Put a squad straight into a Condor's hold, no walk or climb (a match that
+ * starts with the squad aboard; the free replacement Condor's crew).
+ */
+export function stowAboard(w: World, c: Unit, squad: Unit): void {
+  if (freeSeats(c) === 0) return;
+  w.fx.push({ type: "embark", faction: squad.faction, carrierId: c.id, unitId: squad.id, x: squad.x, y: squad.y });
+  w.units.delete(squad.id);
+  squad.order = { type: "idle" };
+  squad.path = null;
+  squad.pathGoal = null;
+  squad.autoTargetId = null;
+  squad.x = c.x;
+  squad.y = c.y;
+  c.passengers!.push(squad);
+}
+
 /** Seats left aboard a transport (0 for anything that carries nothing). */
 export function freeSeats(c: Unit): number {
   return Math.max(0, (UNITS[c.kind].capacity ?? 0) - (c.passengers?.length ?? 0));

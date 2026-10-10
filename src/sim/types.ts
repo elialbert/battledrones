@@ -72,7 +72,9 @@ export const enum Terrain {
   /** Bridge deck over water: a road that can't be built on. */
   Bridge = 8,
   /** Shallow ford: slow for ground units, open to hover. */
-  Shallows = 9
+  Shallows = 9,
+  /** Open sea: too deep and rough for anything but aircraft (hover included). */
+  Deep = 10
 }
 
 /** Harvester internal cycle state. */
@@ -139,6 +141,13 @@ export interface Unit {
    * Absent on every other unit.
    */
   passengers?: Unit[];
+  /**
+   * Handed out by the map, not bought: the island map's starting Condor and
+   * the free replacement Condor with its squad (lifeline.ts). A free unit
+   * leaves no wreck and its loss charges no one's ⚡ meter, so throwing one
+   * away gains nothing.
+   */
+  free?: boolean;
 }
 
 export interface QueueItem {
@@ -269,6 +278,8 @@ export type FxEvent =
       /** Victim's veterancy rank and kill count at death (0 for buildings). */
       rank: number;
       kills: number;
+      /** A map-given unit (Unit.free): its loss charges no ⚡ meter. */
+      free?: boolean;
     }
   | {
       /** A harvester started unloading `amount` scrap at a drop-off. */
@@ -413,6 +424,15 @@ export type FxEvent =
     }
   | { type: "crateExpired"; id: number; x: number; y: number }
   | {
+      /** A free replacement Condor `id` flew in at (x, y) (lifeline.ts), `squad`: with a free squad aboard. */
+      type: "lifeline";
+      faction: Faction;
+      id: number;
+      x: number;
+      y: number;
+      squad: boolean;
+    }
+  | {
       /** Infantry squad `unitId` climbed into Condor `carrierId` (it left World.units). */
       type: "embark";
       faction: Faction;
@@ -460,6 +480,18 @@ export interface Uplink {
   pushing: Faction | null;
   /** Both sides are inside the zone (the bar is frozen). */
   contested: boolean;
+  /**
+   * An island relay: only robot infantry count in its zone, to take it AND to
+   * contest it (aircraft, the Condor and vehicles don't), and it pays only
+   * while the holder's infantry stand in it ("crewed"). Set by the map.
+   */
+  infantryOnly?: boolean;
+  /** Scrap per second to the holder (default OBJECTIVES.uplink.income). */
+  income?: number;
+  /** ⚡ meter per second to the holder (default OBJECTIVES.uplink.charge). */
+  charge?: number;
+  /** Infantry-only relays: the holder has a squad in the zone this tick, so it pays. */
+  crewed?: boolean;
 }
 
 /** What a supply crate holds (the same for both crates of a drop: fair). */
@@ -591,6 +623,16 @@ export interface World {
   rules?: Rules | null;
   /** Ops campaign scenario state (ops.ts); absent in skirmish and Last Stand. */
   ops?: OpsState | null;
+  /** Free replacement Condors (lifeline.ts); absent unless the map hands them out. */
+  lifeline?: Record<Faction, LifelineSlot> | null;
+}
+
+/** One side's free-Condor clock (lifeline.ts). */
+export interface LifelineSlot {
+  /** Tick the replacement flies in (null: the side has a Condor, or none is owed). */
+  due: number | null;
+  /** Free Condors handed out so far. */
+  given: number;
 }
 
 export type Command =

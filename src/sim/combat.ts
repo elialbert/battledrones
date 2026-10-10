@@ -548,7 +548,8 @@ export function cleanupDeaths(w: World): void {
     w.fx.push({ type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2, air, kind: "unit" });
     w.fx.push({
       type: "death", id, faction: u.faction, unitKind: u.kind, buildingKind: null,
-      x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
+      x: u.x, y: u.y, air, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills,
+      ...(u.free ? { free: true } : {})
     });
     leaveWreck(w, u); // combat units leave salvage (salvage.ts)
   }
@@ -557,7 +558,8 @@ export function cleanupDeaths(w: World): void {
     w.factions[u.faction].stats.unitsLost++;
     w.fx.push({
       type: "death", id: u.id, faction: u.faction, unitKind: u.kind, buildingKind: null,
-      x: carrier.x, y: carrier.y, air: true, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills
+      x: carrier.x, y: carrier.y, air: true, value: UNITS[u.kind].cost, ...killer, rank: u.rank, kills: u.kills,
+      ...(u.free ? { free: true } : {})
     });
   }
   for (const { carrier } of lost) carrier.passengers = [];

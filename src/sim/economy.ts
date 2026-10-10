@@ -28,7 +28,8 @@ import {
   spawnUnit,
   terrainAt,
   tileIndex,
-  invalidatePathsThrough
+  invalidatePathsThrough,
+  onHomeLand
 } from "./world";
 import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 
@@ -89,6 +90,7 @@ export function canPlaceBuilding(
       if (!inBounds(w, x, y)) return false;
       if (!TERRAIN[terrainAt(w, x, y)].buildable) return false;
       if (buildingAtTile(w, x, y)) return false;
+      if (!onHomeLand(w, faction, x, y)) return false; // never out on an island (or across the sea)
     }
   // no ground unit parked inside the footprint
   for (const u of w.units.values())
@@ -209,7 +211,7 @@ function findSpawnSpot(w: World, b: Building, kind: UnitKind): { x: number; y: n
         const tx = b.tx + dx;
         const ty = b.ty + dy;
         if (!inBounds(w, tx, ty)) continue;
-        if (mc !== "air" && !passable(w, tx, ty, mc)) continue;
+        if (mc !== "air" && (!passable(w, tx, ty, mc) || !onHomeLand(w, b.faction, tx, ty))) continue;
         const back = flip ? dy - (size - 1) : -dy; // own-frame "south" first
         ring.push({ x: tx + 0.5, y: ty + 0.5, pref: back + Math.abs(dx - (size - 1) / 2) * 0.5 });
       }
@@ -307,7 +309,7 @@ export function tickTrickle(w: World): void {
   if ((w.tick + 1) % TICK_RATE !== 0) return; // once per full second
   for (const b of w.buildings.values())
     if (b.kind === "hq") {
-      w.factions[b.faction].scrap += ECONOMY.hqTrickle * incomeOf(w, b.faction);
+      w.factions[b.faction].scrap += (rulesOf(w).hqTrickle ?? ECONOMY.hqTrickle) * incomeOf(w, b.faction);
     }
 }
 

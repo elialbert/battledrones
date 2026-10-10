@@ -55,6 +55,15 @@ export interface Rules {
    * a fixed strike group or a fixed budget (a free Drop Pod would break it).
    */
   noCalldowns?: boolean;
+  /** The map's HQ trickle, scrap/s (default ECONOMY.hqTrickle). */
+  hqTrickle?: number;
+  /** The map hands a side with no Condor a free one (lifeline.ts). */
+  lifeline?: boolean;
+  /**
+   * The map has islands only a Condor can reach: buildings, production and
+   * Drop Pods stay on land joined to the side's HQ (world.ts onHomeLand).
+   */
+  islands?: boolean;
 }
 
 export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({

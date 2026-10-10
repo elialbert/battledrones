@@ -181,6 +181,20 @@ export function canGetWithin(w: World, mc: MoveClass, fx: number, fy: number, x:
   return false;
 }
 
+/**
+ * Is tile (tx, ty) on land joined to this side's HQ (by ground: bridges and
+ * fords count, the sea doesn't)? Islands are not. Only an island map asks
+ * (Rules.islands); elsewhere, and for a side with no HQ, it is all home.
+ */
+export function onHomeLand(w: World, faction: Faction, tx: number, ty: number): boolean {
+  if (!w.rules?.islands) return true;
+  const hq = hqOf(w, faction);
+  if (!hq) return true;
+  const s = BUILDINGS.hq.size;
+  const home = regionAt(w, hq.tx + (s >> 1), hq.ty + (s >> 1), "ground");
+  return !home || regionAt(w, tx, ty, "ground") === home;
+}
+
 /** A terrain's speed multiplier for a (non-air) movement class. */
 export function terrainMult(info: TerrainInfo, mc: MoveClass): number {
   return mc === "hover" ? info.hoverSpeed : mc === "foot" ? info.footSpeed : info.speed;

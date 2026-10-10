@@ -4,7 +4,7 @@ import { isExplored, isVisible } from "./fog";
 import { worldRandom } from "./rand";
 import { applySpawnRank, bannedBy, rulesOf } from "./rules";
 import type { Calldown, Command, Faction, PowerKind, PowerState, UnitKind, World } from "./types";
-import { distToBuilding, hasBuilding, hqOf, inBounds, moveClassOf, passable, spawnUnit } from "./world";
+import { distToBuilding, hasBuilding, hqOf, inBounds, moveClassOf, onHomeLand, passable, regionAt, spawnUnit } from "./world";
 
 /**
  * Commander calldowns. Each side has a Command meter (0–100) that fills
@@ -122,6 +122,7 @@ export function targetBlocker(w: World, faction: Faction, power: PowerKind, x: n
   if (power === "droppod") {
     if (!isVisible(w, faction, tx, ty)) return "Drop Pods need eyes on the landing zone";
     if (!passable(w, tx, ty, "ground")) return "Drop Pods need open ground to land on";
+    if (!onHomeLand(w, faction, tx, ty)) return "Drop Pods can't land on islands: fly troops in by Condor";
   }
   return null;
 }
@@ -201,7 +202,7 @@ export function chargePowers(w: World): void {
   for (const f of FACTIONS) m[f] += POWERS.passive / TICK_RATE;
   for (const ev of w.fx) {
     if (ev.type !== "death") continue;
-    m[ev.faction] += ev.value * POWERS.perScrapLost;
+    if (!ev.free) m[ev.faction] += ev.value * POWERS.perScrapLost; // (a free Condor's loss cost nothing)
     m[enemyOf(ev.faction)] += ev.value * POWERS.perScrapKilled;
   }
   for (const f of FACTIONS) m[f] = Math.min(POWERS.meterMax, m[f]);
@@ -288,7 +289,10 @@ function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: n
   const s = flip ? -1 : 1;
   const px = x + Math.sin(a) * 0.65;
   const py = y - Math.cos(a) * 0.65;
-  if (passable(w, Math.floor(px), Math.floor(py), mc)) return { x: px, y: py };
+  // crew step out onto the pod's own landmass, never across water onto an island
+  const land = regionAt(w, Math.floor(x), Math.floor(y), "ground");
+  if (passable(w, Math.floor(px), Math.floor(py), mc) && regionAt(w, Math.floor(px), Math.floor(py), "ground") === land)
+    return { x: px, y: py };
   for (let r = 0; r <= 3; r++) {
     let best: { x: number; y: number } | null = null;
     let bestD = Infinity;
@@ -299,7 +303,7 @@ function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: n
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const tx = Math.floor(px) + dx;
         const ty = Math.floor(py) + dy;
-        if (!passable(w, tx, ty, mc)) continue;
+        if (!passable(w, tx, ty, mc) || regionAt(w, tx, ty, "ground") !== land) continue;
         const d = Math.hypot(tx + 0.5 - px, ty + 0.5 - py);
         if (d < bestD) {
           bestD = d;
