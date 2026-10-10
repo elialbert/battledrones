@@ -58,6 +58,7 @@ export function terrainAt(w: World, tx: number, ty: number): Terrain {
 
 export function setTerrain(w: World, tx: number, ty: number, t: Terrain): void {
   const i = tileIndex(w, tx, ty);
+  if (w.terrain[i] !== t) regionCache.delete(w);
   w.terrain[i] = t;
   w.scrap[i] =
     t === Terrain.Scrap ? ECONOMY.scrapPerTile : t === Terrain.Crystal ? ECONOMY.crystalPerTile : 0;
@@ -94,6 +95,90 @@ export function passable(w: World, tx: number, ty: number, mc: MoveClass): boole
   const info = TERRAIN[w.terrain[i] as Terrain];
   if (!(mc === "hover" ? info.hover : mc === "foot" ? info.footSpeed > 0 : info.ground)) return false;
   return w.occupancy[i] === 0;
+}
+
+// --------------------------------------------------------------- regions ---
+
+/** Movement classes that walk (air flies anywhere, so it has one region). */
+export type LandClass = Exclude<MoveClass, "air">;
+
+const regionCache = new WeakMap<World, Partial<Record<LandClass, Int32Array>>>();
+
+const standsOn = (info: TerrainInfo, mc: LandClass): boolean =>
+  mc === "hover" ? info.hover : mc === "foot" ? info.footSpeed > 0 : info.ground;
+
+/**
+ * Connected regions of the map per movement class, from terrain alone:
+ * two tiles share a label when a unit of that class could walk from one to
+ * the other with no building in the way; 0 is terrain it can't stand on.
+ * Buildings are left out (they come and go; terrain doesn't once a map is
+ * painted), so this answers "is that island cut off?" in one lookup where
+ * an A* search would flood the whole landmass first. 4-connected, which is
+ * what A*'s no-corner-cutting rule amounts to. Cached per world and dropped
+ * whenever a tile's terrain changes.
+ */
+export function regionLabels(w: World, mc: LandClass): Int32Array {
+  let byClass = regionCache.get(w);
+  if (!byClass) regionCache.set(w, (byClass = {}));
+  const have = byClass[mc];
+  if (have) return have;
+  const W = w.width;
+  const n = W * w.height;
+  const labels = new Int32Array(n);
+  const stack: number[] = [];
+  let next = 0;
+  for (let start = 0; start < n; start++) {
+    if (labels[start] || !standsOn(TERRAIN[w.terrain[start] as Terrain], mc)) continue;
+    const id = ++next;
+    labels[start] = id;
+    stack.push(start);
+    while (stack.length) {
+      const i = stack.pop()!;
+      const x = i % W;
+      for (const j of [i - W, i + W, x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1]) {
+        if (j < 0 || j >= n || labels[j] || !standsOn(TERRAIN[w.terrain[j] as Terrain], mc)) continue;
+        labels[j] = id;
+        stack.push(j);
+      }
+    }
+  }
+  byClass[mc] = labels;
+  return labels;
+}
+
+/** Region label of a tile for a movement class (air: 1 anywhere on the map; 0 off it or on impassable terrain). */
+export function regionAt(w: World, tx: number, ty: number, mc: MoveClass): number {
+  if (!inBounds(w, tx, ty)) return 0;
+  if (mc === "air") return 1;
+  return regionLabels(w, mc)[tileIndex(w, tx, ty)]!;
+}
+
+/**
+ * Could a unit of class `mc` standing at (fx, fy) get within `range` of
+ * (x, y) on foot or tracks? Air always can. A point in the unit's own region
+ * is reachable; otherwise (an island, a target out over the sea) some tile of
+ * that region must lie within `range` of it.
+ */
+export function canGetWithin(w: World, mc: MoveClass, fx: number, fy: number, x: number, y: number, range: number): boolean {
+  if (mc === "air") return true;
+  const reg = regionAt(w, Math.floor(fx), Math.floor(fy), mc);
+  if (!reg) return true; // standing somewhere odd (a bail-out, a building edge): don't second-guess
+  if (regionAt(w, Math.floor(x), Math.floor(y), mc) === reg) return true;
+  const labels = regionLabels(w, mc);
+  const R = Math.ceil(range);
+  const x0 = Math.max(0, Math.floor(x - R));
+  const x1 = Math.min(w.width - 1, Math.floor(x + R));
+  const y0 = Math.max(0, Math.floor(y - R));
+  const y1 = Math.min(w.height - 1, Math.floor(y + R));
+  for (let ty = y0; ty <= y1; ty++)
+    for (let tx = x0; tx <= x1; tx++) {
+      if (labels[ty * w.width + tx] !== reg) continue;
+      // nearest point of the tile to (x, y)
+      const nx = Math.max(tx, Math.min(tx + 1, x));
+      const ny = Math.max(ty, Math.min(ty + 1, y));
+      if (Math.hypot(nx - x, ny - y) <= range) return true;
+    }
+  return false;
 }
 
 /** A terrain's speed multiplier for a (non-air) movement class. */
@@ -178,8 +263,24 @@ export function spawnBuilding(
 export function removeBuilding(w: World, b: Building): void {
   w.buildings.delete(b.id);
   stampOccupancy(w, b, 0);
-  // footprint freed: ground paths through here may open up
-  for (const u of w.units.values()) u.path = null;
+  // footprint freed: re-plan the units heading for it (its approach point
+  // moved, or a path ended at its edge); everyone else's path still works
+  const size = BUILDINGS[b.kind].size;
+  for (const u of w.units.values()) {
+    const g = u.pathGoal;
+    if (g && g.x >= b.tx - 2 && g.x <= b.tx + size + 2 && g.y >= b.ty - 2 && g.y <= b.ty + size + 2) u.path = null;
+  }
+}
+
+/**
+ * A building now stands on these tiles: re-plan only the paths that cross
+ * them or brush past them (a diagonal step beside the new footprint may now
+ * cut its corner, which A* never allows).
+ */
+export function invalidatePathsThrough(w: World, b: Building): void {
+  const size = BUILDINGS[b.kind].size;
+  const inside = (p: { x: number; y: number }) => p.x >= b.tx - 1 && p.x < b.tx + size + 1 && p.y >= b.ty - 1 && p.y < b.ty + size + 1;
+  for (const u of w.units.values()) if (u.path && u.path.some(inside)) u.path = null;
 }
 
 function stampOccupancy(w: World, b: Building, id: number): void {

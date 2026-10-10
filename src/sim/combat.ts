@@ -6,7 +6,7 @@ import { leaveWreck } from "./salvage";
 import { bailOut, canBailOut } from "./transport";
 import { Terrain, type ArmorClass, type Building, type Domain, type Faction, type TargetDomain, type Unit, type World } from "./types";
 import { rulesOf } from "./rules";
-import { buildingCenter, distToBuilding, removeBuilding, terrainAt } from "./world";
+import { buildingCenter, canGetWithin, distToBuilding, moveClassOf, removeBuilding, terrainAt } from "./world";
 
 type Attacker = { unit: Unit } | { building: Building };
 
@@ -37,16 +37,20 @@ export function findTarget(
   x: number,
   y: number,
   radius: number,
-  minRange = 0
+  minRange = 0,
+  shooter?: Unit
 ): TargetRef | null {
   if (targets === "none") return null;
   let best: TargetRef | null = null;
   let bestScore = Infinity;
+  const range = shooter ? UNITS[shooter.kind].range : Infinity;
   for (const u of w.units.values()) {
     if (u.faction === faction || !canHit(targets, unitDomain(u))) continue;
     const d = Math.hypot(u.x - x, u.y - y);
     if (d > radius || d < minRange) continue;
     if (concealedFrom(w, faction, u)) continue;
+    // out of range and out of reach (over the sea, on an island): not ours to chase
+    if (shooter && d > range && !engageable(w, shooter, u.id)) continue;
     const st = UNITS[u.kind];
     const s = d + (st.heal ? -COMBAT.healerPriority : st.targets === "none" ? 1.5 : 0);
     if (s < bestScore) {
@@ -68,6 +72,20 @@ export function findTarget(
       }
     }
   return best;
+}
+
+/**
+ * Can unit `u` get within weapon range of target `id` at all? Aircraft always
+ * can; a tank or squad can't reach a squad on an island, or a dropship
+ * hovering out over the sea, so it must not lock onto one (it would sit at
+ * the shore with a dead order, deaf to enemies landing next to it).
+ */
+export function engageable(w: World, u: Unit, id: number): boolean {
+  const t = targetPosition(w, id);
+  if (!t) return false;
+  const b = w.buildings.get(id);
+  const reach = UNITS[u.kind].range + (b ? BUILDINGS[b.kind].size / 2 : 0);
+  return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, reach);
 }
 
 function targetPosition(w: World, id: number): { x: number; y: number; domain: Domain } | null {
@@ -345,6 +363,8 @@ export function tickCombat(w: World): Set<number> {
       const t = targetPosition(w, u.order.targetId);
       if (!t || !canHit(stats.targets, t.domain) || hidden(w, u.faction, u.order.targetId)) {
         u.order = { type: "idle" }; // gone, out of reach, or vanished into the woods
+      } else if (distTo(w, u.order.targetId, u.x, u.y) > stats.range && !engageable(w, u, u.order.targetId)) {
+        u.order = { type: "idle" }; // across the water from us: stand down and fight what we can reach
       } else {
         targetId = u.order.targetId;
       }
@@ -355,13 +375,14 @@ export function tickCombat(w: World): Set<number> {
       if (u.autoTargetId !== null) {
         const d = distTo(w, u.autoTargetId, u.x, u.y);
         if (d > acquire + 0.5 || d < minRange || hidden(w, u.faction, u.autoTargetId)) u.autoTargetId = null;
+        else if (d > stats.range && !engageable(w, u, u.autoTargetId)) u.autoTargetId = null;
         else if (healers.length > 0) {
           const cur = w.units.get(u.autoTargetId);
           if (!cur || !UNITS[cur.kind].heal) u.autoTargetId = healerInRange(u, healers, stats.range, minRange) ?? u.autoTargetId;
         }
       }
       if (u.autoTargetId === null && (u.order.type === "idle" || u.order.type === "attackMove")) {
-        const found = findTarget(w, u.faction, stats.targets, u.x, u.y, acquire, minRange);
+        const found = findTarget(w, u.faction, stats.targets, u.x, u.y, acquire, minRange, u);
         u.autoTargetId = found?.id ?? null;
       }
       targetId = u.autoTargetId;
@@ -438,6 +459,8 @@ function retaliate(w: World, incidents: Incident[]): void {
       if (Math.hypot(u.x - attacker.x, u.y - attacker.y) > COMBAT.retaliateRange) continue;
       // already busy with a target in range? keep shooting that instead
       if (u.autoTargetId !== null && distTo(w, u.autoTargetId, u.x, u.y) <= stats.range) continue;
+      // a shooter across the water (shore artillery, a dropship's escort) can't be answered here
+      if (Math.hypot(u.x - attacker.x, u.y - attacker.y) > stats.range && !engageable(w, u, attackerId)) continue;
       u.order = { type: "attack", targetId: attackerId };
       u.path = null;
     }

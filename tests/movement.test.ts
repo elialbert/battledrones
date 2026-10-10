@@ -3,7 +3,7 @@ import { ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
 import { Terrain } from "../src/sim/types";
-import { createWorld, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { canGetWithin, createWorld, regionAt, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 
 function runTicks(w: ReturnType<typeof createWorld>, n: number) {
   for (let i = 0; i < n; i++) step(w, []);
@@ -27,12 +27,37 @@ describe("pathfinding", () => {
     expect(path.some((p) => p.x === 8.5 && p.y === 8.5)).toBe(true);
   });
 
-  it("returns null when the goal is fully sealed off", () => {
-    const w = createWorld(16, 16);
+  it("returns null when the goal is sealed off far from anything reachable", () => {
+    const w = createWorld(24, 16);
     for (let i = 0; i < 16; i++) {
       setTerrain(w, 8, i, Terrain.Rock);
     }
-    expect(findPath(w, 2.5, 2.5, 13.5, 2.5)).toBeNull();
+    expect(findPath(w, 2.5, 2.5, 20.5, 2.5)).toBeNull();
+  });
+
+  it("walks to the nearest reachable tile when the goal is cut off nearby", () => {
+    // a wall between us and the goal: stop on our side of it, not flood the map
+    const w = createWorld(16, 16);
+    for (let i = 0; i < 16; i++) setTerrain(w, 8, i, Terrain.Rock);
+    const end = findPath(w, 2.5, 2.5, 11.5, 2.5)!.at(-1)!;
+    expect(end).toEqual({ x: 7.5, y: 2.5 });
+  });
+
+  it("knows an island is cut off without searching the mainland", () => {
+    const w = createWorld(40, 40);
+    for (let y = 0; y < 40; y++) for (let x = 20; x < 40; x++) setTerrain(w, x, y, Terrain.Water);
+    for (let y = 18; y < 22; y++) for (let x = 30; x < 34; x++) setTerrain(w, x, y, Terrain.Ground);
+    expect(regionAt(w, 31, 19, "ground")).not.toBe(regionAt(w, 5, 5, "ground"));
+    expect(regionAt(w, 31, 19, "hover")).toBe(regionAt(w, 25, 5, "hover"));
+    expect(regionAt(w, 25, 5, "foot")).toBe(0);
+    expect(findPath(w, 5.5, 5.5, 31.5, 19.5)).toBeNull();
+    expect(findPath(w, 5.5, 5.5, 31.5, 19.5, "hover")).not.toBeNull();
+    expect(canGetWithin(w, "ground", 5.5, 19.5, 30.5, 19.5, 4)).toBe(false);
+    expect(canGetWithin(w, "ground", 5.5, 19.5, 22.5, 19.5, 4)).toBe(true);
+    expect(canGetWithin(w, "air", 5.5, 19.5, 31.5, 19.5, 1)).toBe(true);
+    // painting changes the regions: a causeway joins the island to the shore
+    for (let x = 20; x < 30; x++) setTerrain(w, x, 19, Terrain.Bridge);
+    expect(regionAt(w, 31, 19, "ground")).toBe(regionAt(w, 5, 5, "ground"));
   });
 
   it("redirects to a nearby tile when the goal tile is blocked", () => {
@@ -224,5 +249,41 @@ describe("harvesting cycle", () => {
     step(w, [{ type: "harvest", faction: "blue", unitIds: [u.id], x: 8.5, y: 3.5 }]);
     runTicks(w, 5);
     expect(u.order.type).toBe("idle");
+  });
+});
+
+describe("fighting across water", () => {
+  /** A 40×24 map: blue's shore on the left, sea from x=14, a 6×6 island at x=26..31. */
+  function islandWorld() {
+    const w = createWorld(40, 24);
+    for (let y = 0; y < 24; y++) for (let x = 14; x < 40; x++) setTerrain(w, x, y, Terrain.Water);
+    for (let y = 9; y < 15; y++) for (let x = 26; x < 32; x++) setTerrain(w, x, y, Terrain.Rough);
+    return w;
+  }
+
+  it("an island garrison shelled from out of reach isn't locked onto the shooter", () => {
+    const w = islandWorld();
+    const garrison = spawnUnit(w, "trooper", "blue", 27.5, 12);
+    const mortar = spawnUnit(w, "mortar", "red", 20, 12); // 7.5 tiles off, across the water
+    setTerrain(w, 20, 12, Terrain.Ground);
+    for (let x = 15; x < 22; x++) for (let y = 10; y < 15; y++) setTerrain(w, x, y, Terrain.Ground);
+    runTicks(w, 6 * TICK_RATE);
+    expect(w.units.get(garrison.id)!.hp).toBeLessThan(UNITS.trooper.hp); // the shells landed
+    expect(w.units.get(garrison.id)!.order).toEqual({ type: "idle" }); // …and it didn't take an order it can't carry out
+    // enemy squads dropped beside it get shot
+    const raider = spawnUnit(w, "trooper", "red", 29.5, 12);
+    const hp0 = raider.hp;
+    w.units.delete(mortar.id);
+    runTicks(w, 3 * TICK_RATE);
+    expect(w.units.get(raider.id)?.hp ?? 0).toBeLessThan(hp0);
+  });
+
+  it("an attack order on an island target from the mainland is dropped, not chased forever", () => {
+    const w = islandWorld();
+    const tank = spawnUnit(w, "stinger", "blue", 8, 12);
+    const squad = spawnUnit(w, "trooper", "red", 28.5, 12);
+    step(w, [{ type: "attack", faction: "blue", unitIds: [tank.id], targetId: squad.id }]);
+    runTicks(w, 2);
+    expect(w.units.get(tank.id)!.order.type).toBe("idle");
   });
 });

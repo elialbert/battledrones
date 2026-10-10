@@ -27,7 +27,8 @@ import {
   spawnBuilding,
   spawnUnit,
   terrainAt,
-  tileIndex
+  tileIndex,
+  invalidatePathsThrough
 } from "./world";
 import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 
@@ -114,8 +115,8 @@ export function placeBuilding(w: World, faction: Faction, tx: number, ty: number
   const b = spawnBuilding(w, f.pending.kind, faction, tx, ty);
   f.pending = null;
   w.fx.push({ type: "built", faction, id: b.id });
-  // parked ground paths may now be stale; force replans
-  for (const u of w.units.values()) u.path = null;
+  // paths that ran across the new footprint must re-plan
+  invalidatePathsThrough(w, b);
 }
 
 export function sellBuilding(w: World, faction: Faction, buildingId: number): void {
