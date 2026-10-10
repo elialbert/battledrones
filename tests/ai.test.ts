@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGIES, createAiState, tickAi } from "../src/sim/ai/commander";
 import { CONDOR_AI } from "../src/sim/ai/condor";
+import { planMenders } from "../src/sim/ai/menders";
 import { AA_COVER, aaWeight } from "../src/sim/ai/intel";
-import { TICK_RATE, UNITS } from "../src/sim/balance";
+import { BUILDINGS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { unitSeenBy } from "../src/sim/infantry";
 import { createSkirmishWorld } from "../src/sim/map";
 import { nearestScrapTile } from "../src/sim/economy";
@@ -446,6 +447,64 @@ describe("AI and robot infantry", () => {
     expect(hit).toBe(true);
   }, 30000);
 
+  it("boards a lone squad, and calls the next one aboard as it comes free (even off to a guard post)", () => {
+    const { w, ai } = dropSetup("normal");
+    const [first, ...rest] = units(w, "red", "trooper");
+    for (const u of rest) w.units.delete(u.id); // only one squad at home to start with
+    const boards: number[][] = [];
+    let landed: number[] = [];
+    let recalled = false;
+    for (let i = 0; i < 120 * TICK_RATE && !w.winner && landed.length === 0; i++) {
+      const cmds = tickAi(w, "red", ai);
+      for (const c of cmds) if (c.type === "board") boards.push(c.unitIds);
+      step(w, cmds);
+      // a fresh squad turns up once the first is aboard, on its way somewhere
+      if (!recalled && boards.length === 1) {
+        const c = buildingCenter(hqOf(w, "red")!);
+        const fresh = spawnUnit(w, "trooper", "red", c.x - 2, c.y + 7);
+        fresh.order = { type: "attackMove", x: c.x - 8, y: c.y + 8 };
+        recalled = true;
+      }
+      for (const e of w.fx) if (e.type === "disembark" && e.faction === "red" && !e.bailout) landed = e.unitIds;
+    }
+    expect(boards[0]).toEqual([first!.id]);
+    expect(boards).toHaveLength(2);
+    expect(landed).toHaveLength(2);
+  }, 30000);
+
+  it("with every harvester line covered, flies the squads up behind an assault wave instead", () => {
+    const { w, ai } = dropSetup("normal");
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    const redHq = buildingCenter(hqOf(w, "red")!);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const f = spawnUnit(w, "flak-crawler", "blue", blueHq.x + Math.cos(a) * 5, blueHq.y + Math.sin(a) * 5);
+      w.powers.stunned.set(f.id, 1e9);
+    }
+    const scout = spawnUnit(w, "scout", "red", blueHq.x, blueHq.y);
+    scout.hp = 1e9;
+    w.powers.stunned.set(scout.id, 1e9);
+    // a wave pushing out (held where it is), halfway to the enemy
+    const lead = { x: redHq.x + (blueHq.x - redHq.x) * 0.5, y: redHq.y + (blueHq.y - redHq.y) * 0.5 };
+    for (let i = 0; i < 6; i++) {
+      const u = spawnUnit(w, "stinger", "red", lead.x + (i % 3) * 0.8, lead.y + Math.floor(i / 3) * 0.8);
+      u.order = { type: "attackMove", x: blueHq.x, y: blueHq.y };
+      w.powers.stunned.set(u.id, 1e9);
+    }
+    ai.mode = "assault";
+    tickFog(w);
+    let drop: Extract<FxEvent, { type: "disembark" }> | null = null;
+    for (let i = 0; i < 60 * TICK_RATE && !w.winner && !drop; i++) {
+      step(w, tickAi(w, "red", ai));
+      for (const e of w.fx) if (e.type === "disembark" && e.faction === "red" && !e.bailout) drop = e;
+    }
+    expect(drop).not.toBeNull();
+    expect(Math.hypot(drop!.x - lead.x, drop!.y - lead.y)).toBeLessThan(CONDOR_AI.frontBack + 3);
+    // …and on the next decision pass they follow the wave in, rather than walking back to the staging point
+    for (let i = 0; i < 3 * TICK_RATE; i++) step(w, tickAi(w, "red", ai));
+    for (const id of drop!.unitIds) expect(w.units.get(id)!.order).toMatchObject({ type: "attackMove", x: blueHq.x, y: blueHq.y });
+  }, 30000);
+
   it("rebuilds a lost Condor no sooner than CONDOR_AI.rebuild seconds later", () => {
     const { w, ai } = dropSetup("normal");
     w.tick -= 10 * TICK_RATE;
@@ -463,4 +522,73 @@ describe("AI and robot infantry", () => {
     }
     expect(queued).toBeGreaterThanOrEqual(lost + CONDOR_AI.rebuild * TICK_RATE);
   }, 30000);
+});
+
+describe("AI Menders", () => {
+  /** Proving Grounds: red's home, blue's HQ, and a red Mender at `at`. */
+  function scene(at: (blueHq: { x: number; y: number }) => { x: number; y: number }) {
+    const w = createMapWorld("proving-grounds");
+    const home = buildingCenter(hqOf(w, "red")!);
+    const blueHq = buildingCenter(hqOf(w, "blue")!);
+    const p = at(blueHq);
+    const mender = spawnUnit(w, "mender", "red", p.x, p.y);
+    return { w, home, blueHq, mender };
+  }
+  const army = (w: World) => [...w.units.values()].filter((u) => u.faction === "red" && u.kind !== "harvester");
+
+  it("a Mender left on its own in enemy ground flies home instead of hanging around", () => {
+    const { w, home, blueHq, mender } = scene((b) => ({ x: b.x + 6, y: b.y - 6 }));
+    // a lone raider in there isn't worth following
+    const raider = spawnUnit(w, "stinger", "red", blueHq.x + 4, blueHq.y - 4);
+    raider.order = { type: "attackMove", x: blueHq.x, y: blueHq.y };
+    const cmds = planMenders("red", army(w), [], new Set(), home, blueHq);
+    expect(cmds).toEqual([{ type: "move", faction: "red", unitIds: [mender.id], x: home.x, y: home.y }]);
+    // the whole AI does the same with an idle one, and keeps it out of its waves
+    const ai = createAiState("balanced", "normal", 1);
+    ai.mode = "assault";
+    const issued = tickAi(w, "red", ai).filter((c) => "unitIds" in c && c.unitIds.includes(mender.id));
+    expect(issued).toEqual(cmds);
+  });
+
+  it("follows a wave into enemy ground", () => {
+    const { w, home, blueHq, mender } = scene((b) => ({ x: b.x + 12, y: b.y - 12 }));
+    const wave = [0, 1, 2, 3].map((i) => {
+      const u = spawnUnit(w, "stinger", "red", blueHq.x + 6 + i * 0.7, blueHq.y - 6);
+      u.order = { type: "attackMove", x: blueHq.x, y: blueHq.y };
+      return u;
+    });
+    const cmds = planMenders("red", army(w), [], new Set(), home, blueHq);
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toMatchObject({ type: "attackMove", unitIds: [mender.id] });
+    const c = cmds[0] as { x: number; y: number };
+    expect(wave.some((u) => u.x === c.x && u.y === c.y)).toBe(true);
+  });
+
+  it("goes to the wounded first, and patches up the base when there's nobody to follow", () => {
+    const { w, home, blueHq, mender } = scene(() => ({ x: 24.5, y: 24.5 }));
+    const busy = spawnUnit(w, "stinger", "red", 26.5, 24.5);
+    busy.order = { type: "attackMove", x: 10, y: 30 };
+    const hurt = spawnUnit(w, "stinger", "red", 24.5, 30.5);
+    hurt.hp = UNITS.stinger.hp * 0.4;
+    let cmds = planMenders("red", army(w), [], new Set(), home, blueHq);
+    expect(cmds).toEqual([{ type: "attackMove", faction: "red", unitIds: [mender.id], x: hurt.x, y: hurt.y }]);
+    w.units.delete(busy.id);
+    w.units.delete(hurt.id);
+    const hq = hqOf(w, "red")!;
+    hq.hp = BUILDINGS.hq.hp * 0.5;
+    cmds = planMenders("red", army(w), [hq], new Set(), home, blueHq);
+    expect(cmds).toEqual([{ type: "move", faction: "red", unitIds: [mender.id], ...buildingCenter(hq) }]);
+  });
+
+  it("the commander sends anti-air after an enemy Mender working near its base", () => {
+    const w = createMapWorld("proving-grounds");
+    const home = buildingCenter(hqOf(w, "red")!);
+    const mender = spawnUnit(w, "mender", "blue", home.x - 4, home.y + 5);
+    w.powers.stunned.set(mender.id, 1e9);
+    spawnUnit(w, "raptor", "red", home.x + 4, home.y - 3);
+    tickFog(w);
+    const ai = createAiState("balanced", "normal", 1);
+    const cmds = tickAi(w, "red", ai);
+    expect(cmds.some((c) => c.type === "attack" && c.targetId === mender.id)).toBe(true);
+  });
 });

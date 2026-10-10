@@ -26,8 +26,9 @@ interface TargetRef {
 
 /**
  * Best valid enemy (unit or building) within `radius` of (x, y): nearest,
- * with armed units preferred over unarmed ones and buildings. A Sniper Team
- * concealed from `faction` in Woods (infantry.ts) is never picked.
+ * with Menders preferred over everything (COMBAT.healerPriority), and armed
+ * units over unarmed ones and buildings. A Sniper Team concealed from
+ * `faction` in Woods (infantry.ts) is never picked.
  */
 export function findTarget(
   w: World,
@@ -46,7 +47,8 @@ export function findTarget(
     const d = Math.hypot(u.x - x, u.y - y);
     if (d > radius || d < minRange) continue;
     if (concealedFrom(w, faction, u)) continue;
-    const s = d + (UNITS[u.kind].targets === "none" && !UNITS[u.kind].heal ? 1.5 : 0);
+    const st = UNITS[u.kind];
+    const s = d + (st.heal ? -COMBAT.healerPriority : st.targets === "none" ? 1.5 : 0);
     if (s < bestScore) {
       bestScore = s;
       best = { id: u.id, x: u.x, y: u.y, dist: d };
@@ -318,6 +320,10 @@ export function tickCombat(w: World): Set<number> {
   const engaged = new Set<number>();
   const incidents: Incident[] = [];
 
+  // Menders on the field this tick (rarely more than a handful): auto-targeting switches to one in range
+  const healers: Unit[] = [];
+  for (const u of w.units.values()) if (UNITS[u.kind].heal) healers.push(u);
+
   for (const u of w.units.values()) {
     if (u.cooldown > 0) u.cooldown--;
     if (isStunned(w, u.id)) {
@@ -349,6 +355,10 @@ export function tickCombat(w: World): Set<number> {
       if (u.autoTargetId !== null) {
         const d = distTo(w, u.autoTargetId, u.x, u.y);
         if (d > acquire + 0.5 || d < minRange || hidden(w, u.faction, u.autoTargetId)) u.autoTargetId = null;
+        else if (healers.length > 0) {
+          const cur = w.units.get(u.autoTargetId);
+          if (!cur || !UNITS[cur.kind].heal) u.autoTargetId = healerInRange(u, healers, stats.range, minRange) ?? u.autoTargetId;
+        }
       }
       if (u.autoTargetId === null && (u.order.type === "idle" || u.order.type === "attackMove")) {
         const found = findTarget(w, u.faction, stats.targets, u.x, u.y, acquire, minRange);
@@ -382,6 +392,22 @@ export function tickCombat(w: World): Set<number> {
   tickProjectiles(w, incidents);
   retaliate(w, incidents);
   return engaged;
+}
+
+/** The nearest enemy Mender `u` can hit right now (within weapon range), if any. */
+function healerInRange(u: Unit, healers: Unit[], range: number, minRange: number): number | null {
+  const targets = UNITS[u.kind].targets;
+  let best: number | null = null;
+  let bestD = range;
+  for (const h of healers) {
+    if (h.faction === u.faction || !canHit(targets, unitDomain(h))) continue;
+    const d = Math.hypot(h.x - u.x, h.y - u.y);
+    if (d <= bestD && d >= minRange) {
+      bestD = d;
+      best = h.id;
+    }
+  }
+  return best;
 }
 
 /** Is unit `id` an enemy Sniper Team hidden from `faction` in Woods? (Buildings never are.) */

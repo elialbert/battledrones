@@ -347,6 +347,12 @@ and loses hard to Rocket Squads.
   attacker, and nearby idle allies join in.
 - Auto-acquire targets in range; attack-move is the default command, with
   a "Move only" chip for retreats.
+- **Menders are shot first.** Auto-targeting (units and turrets alike)
+  reckons an enemy Mender 2.5 tiles nearer than it is, and a unit that can
+  hit one drops whatever it was auto-targeting for a Mender that comes into
+  weapon range (back to the next best once it's down). An explicit attack
+  order is never overridden. Otherwise a Mender parked behind a push kept
+  it alive while everything around it shot the tanks.
 
 ### Combat readability & feedback ("juice")
 
@@ -874,14 +880,25 @@ launched once three quarters of the personality's assault threshold has
 gathered at the staging point, so a big wave goes, then there is a lull
 while the next gathers (the bar drops 6% a minute after 7:00) — that go
 for harvesters, then production, then defences, then the HQ;
-menders escorting the army; wounded veterans (rank ≥ 2 under 35% HP) falling
+Menders that are never a wave, raid or guard post of their own
+(`ai/menders.ts`): each pass a Mender goes to the worst-hurt unit close by
+(under 85% HP, within 20 tiles), else tags along with the nearest unit on
+the move, but never after a lone unit deep in enemy ground (within 16 tiles
+of the enemy HQ with under 400 scrap of company): with nobody worth
+following it flies home to the base's most battered building, instead of
+hovering where the fight was; enemy Menders near its buildings, harvesters
+or Uplinks count as intruders, so threat response sends anti-air at them;
+wounded veterans (rank ≥ 2 under 35% HP) falling
 back to a Mender behind them or to the HQ, with an idle Mender sent to patch
 them up (`ai/veterans.ts`); commander calldowns and a reflex for
 dodging the enemy's (see Commander calldowns); salvage sweeps once a fight near home is
-over (idle ground units within 8 tiles go for visible, cooled wrecks that
-no visible enemy or known turret covers, and harvesters with a light load
-detour to a wreck within 3 tiles — never into the enemy for loot); map
-objectives (capture squads, Uplink garrisons, crate races — see Map objectives).
+over (idle ground units within 8 tiles — 5 while an assault gathers, so the
+wave waiting at its staging point grabs what's close — go for visible,
+cooled wrecks that no visible enemy or known turret covers, and harvesters
+going about their work detour to a wreck within 5 tiles however full they
+are, since a wreck's scrap goes straight to the bank — never into the enemy
+for loot; a harvester sent back to work with a full hold unloads first);
+map objectives (capture squads, Uplink garrisons, crate races — see Map objectives).
 
 Robot infantry (`ai/intel.ts`, `ai/condor.ts`):
 
@@ -905,13 +922,22 @@ Robot infantry (`ai/intel.ts`, `ai/condor.ts`):
   whose damage multiplier against the target is below 0.45: no Sniper Team
   at a tank or a building. Infantry still marching up to the staging point
   goes with a launching wave.
-- **Condor drops** (Rush and Balanced; never on Easy, in Last Stand, or
+- **Condor drops** (Rush and Balanced, and every personality under Airborne
+  or Infantry War; never on Easy, in Last Stand, or
   under rules that ban the Condor): from 2:30 it picks a landing zone 2.5
   tiles short of the enemy harvesters with no anti-air it can see or
   remember and no ground defenders it knows of worth more than 0.8× the
   squads within 6 tiles, and a route in that flies round known anti-air by
-  a flank waypoint. Only when it has one does it load two healthy squads
-  (≥ 70% HP, within 16 tiles) at home; while every way in is covered they
+  a flank waypoint. If every harvester line is covered but an assault is
+  under way, it flies the squads up behind the wave instead (the biggest
+  group of ours pushing out past 18 tiles from home, worth 500+, set down 3
+  tiles behind it if that spot and a way there are clear of anti-air), and
+  they follow the wave to where it's headed: squads walk at half a tank's
+  speed, so this is how they keep up. Only when it has a way in does it
+  start loading healthy squads (≥ 70% HP, within 16 tiles, idle or just
+  walking to a post) at home: whoever is free boards at once and more are
+  called aboard as they come free, and it flies when both seats are full,
+  or after 40 s with whoever is aboard; while every way in is covered they
   stay on the ground. It calls the trip off if it loses 30% of its HP on
   the way in (on a straight run to the drop too, until the hover starts),
   or if the landing zone turns out held or under anti-air (it tries another
@@ -1543,7 +1569,11 @@ Reasons to come back between matches. Spectated games never count.
   knows (up to 6) and up to 5 Snipers. Under Infantry War or Airborne every
   Normal/Hard personality flies Condor drops (not just Rush and Balanced);
   under Airborne the first may board at 1:00 (`CONDOR_AI.airborneFrom`),
-  while the starting squads still wait at home (the Sniper stays behind).
+  while the starting squads still wait at home (the Sniper stays behind),
+  and every personality adds an Assembly Bay fourth in its build and keeps
+  at least a quarter of its army's value in squads, so the free Condor has
+  someone to fly (`flysGivenCondor`; Air Swarm, Boom and Skyforce otherwise
+  raised none, and their Condors sat at home all match).
   Shown in an opening banner, the pause screen and the end screen.
 - **Daily Op** (`game/daily.ts`): the local date hashes into a map, an AI
   personality, Normal or Hard, two compatible mutators and the match seed —
@@ -1971,12 +2001,13 @@ src/
     objectives.ts   # Uplink capture bars and income, supply drops and crate rewards
     ai/commander.ts # the enemy commander: strategies, difficulty
     ai/veterans.ts  # wounded veterans fall back to a Mender or the HQ
+    ai/menders.ts   # Menders follow whoever needs them, and come home when nobody does
 
     ai/salvage.ts   # the commander's wreck sweeps
     ai/powers.ts    # the commander's calldowns and its dodge reflex
     ai/objectives.ts # capture squads, Uplink garrisons, crate races
     ai/intel.ts     # what the commander sees (fog + concealment), anti-air in Flak, weapon effectiveness
-    ai/condor.ts    # the commander's Condor drops on enemy harvesters
+    ai/condor.ts    # the commander's Condor drops on enemy harvesters (or behind its own wave)
   game/       # three.js: scene, camera, input, rendering
     three/          # the 3D layer: stage (renderer, lights, adaptive quality), camera rig, builder + models,
                     #   robot infantry rigs (infantry.ts), terrain (heightfield, water, props, fog of war),

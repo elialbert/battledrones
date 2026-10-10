@@ -337,6 +337,25 @@ describe("infantry mutators", () => {
     expect(condor.passengers!.map((p) => p.kind).sort()).toEqual(["rocket-squad", "trooper"]); // the Sniper stays home
   });
 
+  it("under Airborne every personality keeps its Condor busy: an Assembly Bay for squads, and drop after drop", () => {
+    const w = createMapWorld("frostbite", { seed: 3, mutators: ["airborne"] });
+    const ai = { blue: createAiState("skyforce", "normal", 1), red: createAiState("airswarm", "normal", 2) };
+    const bays = { blue: 0, red: 0 };
+    const drops = { blue: 0, red: 0 };
+    const home = { blue: hqOf(w, "blue")!, red: hqOf(w, "red")! };
+    for (let i = 0; i < 8 * 60 * TICK_RATE && !w.winner; i++) {
+      step(w, [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)]);
+      for (const e of w.fx)
+        if (e.type === "disembark" && !e.bailout && Math.hypot(e.x - home[e.faction].tx, e.y - home[e.faction].ty) > 15)
+          drops[e.faction]++;
+      for (const b of w.buildings.values()) if (b.kind === "assembly-bay") bays[b.faction] = 1;
+    }
+    // (neither plans a Bay in a classic match, nor flies drops)
+    expect(bays).toEqual({ blue: 1, red: 1 });
+    expect(drops.blue).toBeGreaterThanOrEqual(2);
+    expect(drops.red).toBeGreaterThanOrEqual(2);
+  }, 60_000);
+
   it("plays an Infantry War to a finish from Assembly Bays, never building a banned kind", () => {
     const w = createMapWorld("frostbite", { seed: 11, mutators: ["infantrywar"] });
     const a = createAiState("balanced", "normal", 1);

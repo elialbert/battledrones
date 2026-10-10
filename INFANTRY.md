@@ -188,7 +188,9 @@ Role: "Builds robot infantry."
 - **Build orders:** Balanced adds an Assembly Bay after its Tech Lab. Rush
   opens with Troopers. Ironclad pairs Titans with Rocket escorts.
 - **Condor:** Rush and Balanced send one loaded Condor at harvester lines
-  as a harass option.
+  as a harass option (every personality under Airborne or Infantry War).
+  With every harvester line covered by anti-air, an assault under way gets
+  the squads flown up behind the wave instead.
 - **Easy:** no Snipers and no Condor drops.
 
 ## Last Stand
