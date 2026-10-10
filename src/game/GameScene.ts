@@ -362,7 +362,9 @@ export class GameScene {
       const picker = showOpenerPicker({
         context: `${mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
         onPick: (id) => this.startWithOpener(id),
-        blocked: (id) => openerBlocked(this.world, PLAYER, id)
+        blocked: (id) => openerBlocked(this.world, PLAYER, id),
+        // islands are taken by troops and defended from the air: the Airpad matters most there
+        recommended: (id) => (mapById(gameMode.mapId).islands && id === "airwing" ? "Good here: an Airpad for more Condors" : null)
       });
       this.teardown.push(() => picker.destroy());
     }
