@@ -562,6 +562,11 @@ export class SquadRig {
     return this.bots.every((b) => b.gone);
   }
 
+  /** Free the GPU side (the skeleton's bone texture) once the rig is off the scene for good. */
+  dispose(): void {
+    this.mesh.skeleton.dispose();
+  }
+
   /** Robots pop in one after another (rolled out of the Assembly Bay), after `delay` ms. */
   popIn(delay = 0): void {
     this.bots.forEach((b, i) => (b.pop = -delay / 280 - i * 0.28));
@@ -600,6 +605,33 @@ export class SquadRig {
       const p = b.b[J.root]!.position;
       b.trip = { from: p.clone(), to: to.clone(), t: -i * 55, dur: 360, arc: 0.25, away: true, s0: 1 };
     });
+  }
+
+  /**
+   * Out of sight: skip to the end of whatever was playing (no sparks). The
+   * pop-in and a drop are over, robots the squad has lost are gone and the
+   * rest stand in their slots — else they'd play out on first sight (dropped
+   * robots streaking in from a Condor drawn far away).
+   */
+  settle(alive: number): void {
+    const s = this.spec;
+    const down = s.n - Math.max(0, Math.min(s.n, alive));
+    for (let r = 0; r < s.n; r++) {
+      const bot = this.bots[s.falls[r]!]!;
+      bot.pop = 1;
+      bot.recoil = 0;
+      bot.fallT = -1;
+      if (bot.trip && !bot.trip.away) bot.trip = null;
+      if (r < down) {
+        bot.trip = null;
+        bot.up = false;
+        bot.gone = true;
+        bot.b[J.root]!.scale.setScalar(1e-4);
+      } else if (!bot.trip) {
+        bot.up = true;
+        bot.gone = false;
+      }
+    }
   }
 
   /** Every standing robot falls (the squad was wiped out). */

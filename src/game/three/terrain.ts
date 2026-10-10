@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { ECONOMY } from "../../sim/balance";
 import { Vis } from "../../sim/fog";
 import { Terrain, type Biome, type Faction, type World } from "../../sim/types";
-import { fogged, fowUniforms, modelMat } from "./materials";
+import { Canopy } from "./canopy";
+import { canopyMat, fogged, fowUniforms, modelMat } from "./materials";
 import { patchCrag, patchGround, patchLiquid, type GroundUniforms, type LiquidUniforms, type RockUniforms } from "./terrain-glsl";
 import { bridgeGeometry, type DeckSpan } from "./terrain-bridges";
 import { cragGeometry, crystalGeos, hash, scrapGeos, treeGeos, type CragSpot } from "./terrain-props";
@@ -168,6 +169,16 @@ interface Pile {
   rot: number;
 }
 
+/** A scattered prop: ground position, scale, turn and geometry variant (and how far it sinks in). */
+interface Spot {
+  x: number;
+  y: number;
+  s: number;
+  r: number;
+  v: number;
+  sink?: number;
+}
+
 const _pos = new THREE.Vector3();
 const _quat = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
@@ -186,6 +197,8 @@ export class Terrain3D {
   private fogData: Uint8Array;
   private fogAcc = 0;
   private piles: Pile[] = [];
+  /** The trees, thinned over squads in the woods (null: no woods). */
+  private canopy: Canopy | null = null;
   /** The bridges' main decks (they reach a little past their tiles onto the banks). */
   private spans: DeckSpan[] = [];
   private waterTime = { value: 0 };
@@ -734,12 +747,13 @@ export class Terrain3D {
 
   // ------------------------------------------------------------ props --
 
-  /** Instanced copies of a few geometry variants at (x, y, scale, rot) spots. */
-  private scatter(geos: THREE.BufferGeometry[], spots: { x: number; y: number; s: number; r: number; v: number; sink?: number }[], shadows = true): void {
+  /** Instanced copies of a few geometry variants at (x, y, scale, rot) spots: each variant's mesh and its spots, slot by slot. */
+  private scatter<S extends Spot>(geos: THREE.BufferGeometry[], spots: S[], mat: THREE.Material = modelMat("normal"), shadows = true): { mesh: THREE.InstancedMesh; spots: S[] }[] {
+    const out: { mesh: THREE.InstancedMesh; spots: S[] }[] = [];
     geos.forEach((geo, v) => {
       const mine = spots.filter((p) => p.v % geos.length === v);
       if (mine.length === 0) return;
-      const mesh = new THREE.InstancedMesh(geo, modelMat("normal"), mine.length);
+      const mesh = new THREE.InstancedMesh(geo, mat, mine.length);
       const m = new THREE.Matrix4();
       mine.forEach((p, i) => {
         _quat.setFromAxisAngle(UP, p.r);
@@ -750,11 +764,13 @@ export class Terrain3D {
       mesh.receiveShadow = true;
       mesh.computeBoundingSphere();
       this.group.add(mesh);
+      out.push({ mesh, spots: mine });
     });
+    return out;
   }
 
   private buildTrees(): void {
-    const spots: { x: number; y: number; s: number; r: number; v: number }[] = [];
+    const spots: Spot[] = [];
     const w = this.world;
     for (let i = 0; i < w.terrain.length; i++) {
       if (w.terrain[i] !== Terrain.Forest) continue;
@@ -771,7 +787,18 @@ export class Terrain3D {
         });
       }
     }
-    if (spots.length) this.scatter(treeGeos(this.world.biome), spots);
+    // (thinned over squads in the woods: see thinCanopy)
+    if (spots.length) this.canopy = new Canopy(this.W, this.H, this.scatter(treeGeos(this.world.biome), spots, canopyMat()));
+  }
+
+  /**
+   * Thin the trees over squads on show at `points` (x, y pairs, tiles; `n` of
+   * them) so they aren't lost under the canopy, for a camera pitched at
+   * `cot` (see Canopy.thin). Call every frame, with no points to let the
+   * woods grow back.
+   */
+  thinCanopy(points: ArrayLike<number>, n: number, cot: number, dtMs: number): void {
+    this.canopy?.thin(points, n, cot, dtMs);
   }
 
   /**
