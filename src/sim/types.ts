@@ -142,6 +142,11 @@ export interface Unit {
    */
   passengers?: Unit[];
   /**
+   * A target this unit found it can't get in range of (across the water), left
+   * alone until `until` (tick) so it fights what it can reach meanwhile.
+   */
+  ignore?: { id: number; until: number };
+  /**
    * Handed out by the map, not bought: the island map's starting Condor and
    * the free replacement Condor with its squad (lifeline.ts). A free unit
    * leaves no wreck and its loss charges no one's ⚡ meter, so throwing one

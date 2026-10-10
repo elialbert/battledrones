@@ -3,7 +3,7 @@ import { ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
 import { Terrain } from "../src/sim/types";
-import { canGetWithin, createWorld, regionAt, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { canGetWithin, createWorld, regionAt, removeBuilding, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 
 function runTicks(w: ReturnType<typeof createWorld>, n: number) {
   for (let i = 0; i < n; i++) step(w, []);
@@ -285,5 +285,20 @@ describe("fighting across water", () => {
     step(w, [{ type: "attack", faction: "blue", unitIds: [tank.id], targetId: squad.id }]);
     runTicks(w, 2);
     expect(w.units.get(tank.id)!.order.type).toBe("idle");
+  });
+});
+
+describe("re-planning when a building goes", () => {
+  it("an army detouring round a building wall takes the breach once the building falls", () => {
+    const w = createWorld(40, 40);
+    for (let y = 0; y < 40; y++) if (y !== 10 && y !== 38) setTerrain(w, 20, y, Terrain.Rock);
+    const plug = spawnBuilding(w, "radar", "red", 20, 10);
+    const tank = spawnUnit(w, "stinger", "blue", 5.5, 10.5);
+    step(w, [{ type: "move", faction: "blue", unitIds: [tank.id], x: 35.5, y: 10.5 }]);
+    runTicks(w, 2 * TICK_RATE);
+    expect(Math.max(...tank.path!.map((p) => p.y))).toBeGreaterThan(30); // the long way round
+    removeBuilding(w, plug);
+    runTicks(w, 2);
+    expect(Math.max(...tank.path!.map((p) => p.y))).toBeLessThan(20); // through the gap
   });
 });

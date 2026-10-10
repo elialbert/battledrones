@@ -153,31 +153,41 @@ export function regionAt(w: World, tx: number, ty: number, mc: MoveClass): numbe
   return regionLabels(w, mc)[tileIndex(w, tx, ty)]!;
 }
 
+/** How far short of a tile centre a unit may stop (crowds, arrival slack), for canGetWithin. */
+const REACH_SLACK = 0.35;
+
 /**
  * Could a unit of class `mc` standing at (fx, fy) get within `range` of
  * (x, y) on foot or tracks? Air always can. A point in the unit's own region
- * is reachable; otherwise (an island, a target out over the sea) some tile of
- * that region must lie within `range` of it.
+ * is reachable; otherwise (an island, a target out over the sea) the centre
+ * of some tile of that region — where pathing stops — must lie within range
+ * of it, with a little slack. `dist` measures from a point to the target
+ * (default: to (x, y); a building passes its footprint distance).
  */
-export function canGetWithin(w: World, mc: MoveClass, fx: number, fy: number, x: number, y: number, range: number): boolean {
+export function canGetWithin(
+  w: World,
+  mc: MoveClass,
+  fx: number,
+  fy: number,
+  x: number,
+  y: number,
+  range: number,
+  dist: (px: number, py: number) => number = (px, py) => Math.hypot(px - x, py - y),
+  span = 0
+): boolean {
   if (mc === "air") return true;
   const reg = regionAt(w, Math.floor(fx), Math.floor(fy), mc);
   if (!reg) return true; // standing somewhere odd (a bail-out, a building edge): don't second-guess
   if (regionAt(w, Math.floor(x), Math.floor(y), mc) === reg) return true;
   const labels = regionLabels(w, mc);
-  const R = Math.ceil(range);
+  const R = Math.ceil(range + span);
   const x0 = Math.max(0, Math.floor(x - R));
   const x1 = Math.min(w.width - 1, Math.floor(x + R));
   const y0 = Math.max(0, Math.floor(y - R));
   const y1 = Math.min(w.height - 1, Math.floor(y + R));
   for (let ty = y0; ty <= y1; ty++)
-    for (let tx = x0; tx <= x1; tx++) {
-      if (labels[ty * w.width + tx] !== reg) continue;
-      // nearest point of the tile to (x, y)
-      const nx = Math.max(tx, Math.min(tx + 1, x));
-      const ny = Math.max(ty, Math.min(ty + 1, y));
-      if (Math.hypot(nx - x, ny - y) <= range) return true;
-    }
+    for (let tx = x0; tx <= x1; tx++)
+      if (labels[ty * w.width + tx] === reg && dist(tx + 0.5, ty + 0.5) <= range - REACH_SLACK) return true;
   return false;
 }
 
@@ -278,11 +288,18 @@ export function removeBuilding(w: World, b: Building): void {
   w.buildings.delete(b.id);
   stampOccupancy(w, b, 0);
   // footprint freed: re-plan the units heading for it (its approach point
-  // moved, or a path ended at its edge); everyone else's path still works
+  // moved, or a path ended at its edge), and any path that is a detour (it may
+  // have gone round this very building); a direct path still works
   const size = BUILDINGS[b.kind].size;
   for (const u of w.units.values()) {
     const g = u.pathGoal;
     if (g && g.x >= b.tx - 2 && g.x <= b.tx + size + 2 && g.y >= b.ty - 2 && g.y <= b.ty + size + 2) u.path = null;
+    else if (u.path && u.path.length > 4) {
+      const end = u.path[u.path.length - 1]!;
+      const dx = Math.abs(end.x - u.x);
+      const dy = Math.abs(end.y - u.y);
+      if (u.path.length > 1.3 * (Math.max(dx, dy) + 0.4142 * Math.min(dx, dy)) + 3) u.path = null;
+    }
   }
 }
 

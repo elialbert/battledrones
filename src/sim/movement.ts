@@ -4,6 +4,8 @@ import { Terrain, type Faction, type Unit, type World } from "./types";
 import { inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
+/** How long (ticks) a unit leaves alone a target it found it can't get in range of. */
+export const IGNORE_TICKS = 30;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
 /** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
@@ -308,8 +310,15 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
         // artillery: back off out of minimum range instead of closing in
         const k = (minRange + 0.8) / Math.max(d, 0.01);
         moveUnitToward(w, u, p.x + (u.x - p.x) * k, p.y + (u.y - p.y) * k);
-      } else {
-        moveUnitToward(w, u, p.x, p.y); // combat pauses it once in range
+      } else if (moveUnitToward(w, u, p.x, p.y) && d > UNITS[u.kind].range) {
+        // (combat pauses it once in range.) Got as close as the ground allows and still out of
+        // range of a target across the water: give it up, so the unit fights what it can reach
+        const mc = moveClassOf(u.kind);
+        const here = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+        if (here && regionAt(w, Math.floor(p.x), Math.floor(p.y), mc) !== here) {
+          u.ignore = { id: o.targetId, until: w.tick + IGNORE_TICKS };
+          u.order = { type: "idle" };
+        }
       }
     }
   }
@@ -409,8 +418,14 @@ function nudge(w: World, u: Unit, dx: number, dy: number): void {
   const m = UNITS[u.kind].domain === "air" ? 0.05 : EDGE;
   const nx = Math.min(w.width - m, Math.max(m, u.x + dx));
   const ny = Math.min(w.height - m, Math.max(m, u.y + dy));
-  if (passable(w, Math.floor(nx), Math.floor(ny), moveClassOf(u.kind))) {
-    u.x = nx;
-    u.y = ny;
+  const mc = moveClassOf(u.kind);
+  if (!passable(w, Math.floor(nx), Math.floor(ny), mc)) return;
+  // never across a corner into another region (a one-tile pocket of water, an island): A* can't
+  // take that step back, so the unit would be stranded
+  if (mc !== "air") {
+    const from = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
+    if (from && regionAt(w, Math.floor(nx), Math.floor(ny), mc) !== from) return;
   }
+  u.x = nx;
+  u.y = ny;
 }

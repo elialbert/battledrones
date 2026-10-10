@@ -295,3 +295,50 @@ describe("island UX", () => {
     expect(starsFor({ ...r, mapId: "riverlands" })).toBe(1);
   });
 });
+
+describe("fighting across the sea (review fixes)", () => {
+  it("a shore squad ordered at a dropship it can't reach drops the order and fights what lands beside it", () => {
+    const w = createMapWorld("archipelago");
+    const condor = spawnUnit(w, "condor", "red", 35.54, 30.5); // parked over open sea, just off blue's coast
+    const t = spawnUnit(w, "trooper", "blue", 40.5, 30.5);
+    step(w, [{ type: "attack", faction: "blue", unitIds: [t.id], targetId: condor.id }]);
+    runTicks(w, 20 * TICK_RATE);
+    condor.x = 35.54;
+    condor.y = 30.5;
+    expect(t.order.type).toBe("idle");
+    const raider = spawnUnit(w, "trooper", "red", t.x + 1.8, t.y);
+    runTicks(w, 8 * TICK_RATE);
+    expect(w.units.get(raider.id)?.hp ?? 0).toBeLessThan(UNITS.trooper.hp);
+  });
+
+  it("a garrison isn't lured off its island relay by a Scout hovering offshore", () => {
+    const w = createMapWorld("archipelago", { objectives: true });
+    const l = w.objectives.uplinks.find((u) => u.x === 48 && u.y === 48)!;
+    const g = spawnUnit(w, "trooper", "blue", l.x + 1.6, l.y);
+    runTicks(w, 16 * TICK_RATE);
+    expect(l.crewed).toBe(true);
+    for (const [dx, dy] of [[5.5, 0], [0, 6], [-6.5, 1], [4, 4.5]] as const) {
+      const scout = spawnUnit(w, "scout", "red", l.x + dx, l.y + dy);
+      scout.hp = 1e6; // (it just hovers there, out of reach of the squad's rifles)
+      for (let i = 0; i < 6 * TICK_RATE; i++) {
+        scout.x = l.x + dx;
+        scout.y = l.y + dy;
+        step(w, []);
+      }
+      expect(Math.hypot(g.x - l.x, g.y - l.y)).toBeLessThanOrEqual(2.5);
+      expect(l.crewed).toBe(true);
+      w.units.delete(scout.id);
+    }
+  });
+
+  it("separation never shoves a hover tank across a corner into water it can't leave", () => {
+    const w = createMapWorld("archipelago");
+    const a = spawnUnit(w, "lancer", "blue", 58.92, 37.92);
+    const b = spawnUnit(w, "lancer", "blue", 58.6, 37.6);
+    const ra = regionAt(w, Math.floor(a.x), Math.floor(a.y), "hover");
+    const rb = regionAt(w, Math.floor(b.x), Math.floor(b.y), "hover");
+    runTicks(w, 5);
+    expect(regionAt(w, Math.floor(a.x), Math.floor(a.y), "hover")).toBe(ra);
+    expect(regionAt(w, Math.floor(b.x), Math.floor(b.y), "hover")).toBe(rb);
+  });
+});

@@ -1,6 +1,6 @@
-import { BUILDINGS, COMBAT, DAMAGE_VS, INFANTRY, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
+import { BUILDINGS, COMBAT, DAMAGE_VS, INFANTRY, OBJECTIVES, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
 import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
-import { moveUnitToward } from "./movement";
+import { IGNORE_TICKS, moveUnitToward } from "./movement";
 import { isStunned } from "./powers";
 import { leaveWreck } from "./salvage";
 import { bailOut, canBailOut } from "./transport";
@@ -50,7 +50,7 @@ export function findTarget(
     if (d > radius || d < minRange) continue;
     if (concealedFrom(w, faction, u)) continue;
     // out of range and out of reach (over the sea, on an island): not ours to chase
-    if (shooter && d > range && !engageable(w, shooter, u.id)) continue;
+    if (shooter && d > range && (ignoring(w, shooter, u.id) || !engageable(w, shooter, u.id))) continue;
     const st = UNITS[u.kind];
     const s = d + (st.heal ? -COMBAT.healerPriority : st.targets === "none" ? 1.5 : 0);
     if (s < bestScore) {
@@ -83,9 +83,27 @@ export function findTarget(
 export function engageable(w: World, u: Unit, id: number): boolean {
   const t = targetPosition(w, id);
   if (!t) return false;
+  const range = UNITS[u.kind].range;
   const b = w.buildings.get(id);
-  const reach = UNITS[u.kind].range + (b ? BUILDINGS[b.kind].size / 2 : 0);
-  return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, reach);
+  if (b) return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, range, (px, py) => distToBuilding(b, px, py), BUILDINGS[b.kind].size);
+  return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, range);
+}
+
+/** Is `u` leaving target `id` alone for now (it found it couldn't get in range: Unit.ignore)? */
+const ignoring = (w: World, u: Unit, id: number): boolean => !!u.ignore && u.ignore.id === id && w.tick < u.ignore.until;
+
+/**
+ * An idle squad crewing an island relay its side holds (or is taking): it
+ * holds its post and fires from there, never chasing out of the ring after a
+ * target (a Scout hovering offshore would otherwise lure it off, and an empty
+ * island relay pays nothing).
+ */
+function crewing(w: World, u: Unit): boolean {
+  if (!isInfantry(u.kind)) return false;
+  const r = OBJECTIVES.uplink.radius;
+  for (const l of w.objectives.uplinks)
+    if (l.infantryOnly && (l.owner === u.faction || l.pushing === u.faction) && Math.hypot(u.x - l.x, u.y - l.y) <= r) return true;
+  return false;
 }
 
 function targetPosition(w: World, id: number): { x: number; y: number; domain: Domain } | null {
@@ -394,8 +412,13 @@ export function tickCombat(w: World): Set<number> {
       fire(w, { unit: u }, targetId, incidents);
     } else if (u.order.type === "idle" && d > stats.range && targetId === u.autoTargetId) {
       // idle units close the last short gap to something in acquire range
+      // (not a squad holding an island relay: it keeps its post)
       const t = targetPosition(w, targetId);
-      if (t) moveUnitToward(w, u, t.x, t.y);
+      if (t && !crewing(w, u) && moveUnitToward(w, u, t.x, t.y) && distTo(w, targetId, u.x, u.y) > stats.range) {
+        // as close as the ground goes and still out of range: leave it, fight what we can reach
+        u.ignore = { id: targetId, until: w.tick + IGNORE_TICKS };
+        u.autoTargetId = null;
+      }
       engaged.add(u.id);
     }
   }
