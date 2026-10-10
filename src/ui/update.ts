@@ -108,7 +108,7 @@ export function mountUpdatePill(menu: HTMLElement, update: AppUpdate = appUpdate
   pill.className = "update-pill";
   pill.setAttribute("role", "status");
   pill.hidden = true;
-  pill.innerHTML = `<span class="up-t"><b>✨ New version ready</b><span>Reload to play the latest build</span></span><button class="up-go">Update ↻</button>`;
+  pill.innerHTML = `<span class="up-t"><b>✨ New version ready</b><span>Tap Update to switch to it</span></span><button class="up-go">Update ↻</button>`;
   menu.appendChild(pill);
   const btn = pill.querySelector<HTMLButtonElement>(".up-go")!;
   btn.addEventListener("click", () => {
