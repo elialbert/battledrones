@@ -3,7 +3,8 @@
 
 The same painted rock materials art/terrain.py paints every map's outcrops
 with (art/raw/tex-<biome>-rock.webp: granite with lichen, red sandstone with
-layered strata, dark basalt with snow in its cracks, black obsidian) become
+layered strata, dark basalt with snow in its cracks, black obsidian, pale
+pitted limestone with moss and ferns) become
 small tileable textures: the game projects them onto the cliff walls and the
 crags standing on the outcrops, so the walls and crags are the same stone as
 the painted tops.
@@ -39,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "art" / "raw"
 OUT = ROOT / "public" / "assets" / "textures"
 
-BIOMES = ("temperate", "desert", "arctic", "volcanic")
+BIOMES = ("temperate", "desert", "arctic", "volcanic", "tropical")
 SIZE = 512
 WEBP_QUALITY = (88, 84, 80, 76, 72, 68, 64, 60)  # highest that fits the budget wins
 BUDGET = 150 * 1024                                # bytes per texture

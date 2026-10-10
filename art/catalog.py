@@ -427,6 +427,23 @@ BIOMES: dict[str, dict[str, str]] = {
         "forest": "dense field of dead charred black tree trunks and broken branches seen from "
         "directly above, ash-covered, with dark gaps between",
     },
+    "tropical": {
+        "ground": "pale sun-bleached tropical sandy grassland: sparse short green-gold grass and "
+        "creeping beach vines over warm white coral sand that shows through",
+        "ground2": "warm white coral beach sand, faintly pink, with crushed shell fragments, tiny "
+        "pieces of broken coral and soft footprint dimples",
+        "rough": "dark grey-brown tidal mangrove mudflat with small crab holes, shallow puddles "
+        "reflecting pale sky and thin tangled roots",
+        "rock": "pale grey limestone karst rock surface with sharp pitted weathering, dark vertical "
+        "rain streaks, and green moss and small ferns in the cracks",
+        "liquid": "clear turquoise tropical lagoon water surface over pale sand, with soft bright "
+        "caustic light ripples",
+        "road": "weathered silver-grey timber boardwalk of long planks laid lengthwise, fine sand "
+        "drifted into the gaps, small rusty nail heads",
+        "forest": "dense tropical rainforest canopy seen from directly above: tightly packed "
+        "coconut palm crowns and broadleaf jungle trees in vivid emerald and jade greens, with "
+        "dark shade between the crowns",
+    },
 }
 
 for biome, mats in BIOMES.items():
@@ -452,6 +469,14 @@ DOODAD_SETS = {
     "obsidian boulder, a cluster of small glowing-cracked lava rocks, a steaming fumarole "
     "vent, a pile of ash-covered debris, a rusted burned-out vehicle wreck, a cluster of "
     "sulfur-yellow crystals",
+    # in reading order (the painter keys off the cell): 0-2 tree crowns, then the rest
+    "tropical": "in reading order, left to right and top row first: a lush coconut palm crown "
+    "(long arching feathery vivid-green fronds radiating from the centre, a cluster of brown "
+    "coconuts in the middle), a broad layered emerald rainforest tree crown, a dense dark-green "
+    "mangrove tree crown, a pale grey pitted limestone boulder, a scatter of bleached white "
+    "coral rubble and seashells, a sun-bleached silver-grey driftwood log, a low sea-grape bush "
+    "with round leaves, a rusted beached military landing-craft wreck with its bow ramp down, a "
+    "stack of weathered wooden supply crates under a faded green tarp",
 }
 for biome, objs in DOODAD_SETS.items():
     A[f"doodads-{biome}"] = dict(

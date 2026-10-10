@@ -22,7 +22,7 @@ the map seed). ``--debug`` also writes a full-size QA image with impassable tile
 ``art/previews/terrain-<id>-grid.jpg`` for checking edge fidelity.
 
 Chunk quality is chosen per map: the highest of WEBP_QUALITY whose chunks fit in
-BUDGET bytes. Needs Pillow, numpy and scipy.
+BUDGET bytes (scaled by area for maps bigger than 64 x 64). Needs Pillow, numpy and scipy.
 
 Terrain codes: 0 Ground, 1 Rock, 2 Scrap, 3 Water (lava on volcanic), 4 Road,
 5 Rough, 6 Forest, 7 Crystal, 8 Bridge, 9 Shallows, 10 Deep (open sea), one
@@ -53,7 +53,8 @@ PREVIEW_DIR = ROOT / "art" / "previews"
 PX = 48  # pixels per tile
 CHUNK = 1024
 WEBP_QUALITY = (82, 78, 74, 70, 66, 62)  # highest that fits the budget wins
-BUDGET = 1.5 * 1024 * 1024               # bytes of chunks per map (soft target)
+BUDGET = 1.5 * 1024 * 1024               # bytes of chunks per map up to 64 x 64 tiles (soft target)
+BUDGET_TILES = 64 * 64                   # bigger maps get the budget scaled by their area
 SOFTEN = 0.8                             # px blur on ground-level textures (big byte saver)
 THUMB = 256
 PREVIEW = 1200
@@ -157,6 +158,43 @@ BIOMES: dict[str, dict] = {
         trees=[0, 1, 2], tree_size=(1.45, 1.85),
         big={3: ("boulder", 0.8, 1.05, 0.3, 5), 5: ("fumarole", 0.9, 1.1, 0.12, 2), 7: ("wreck", 1.05, 1.25, 0.18, 1)},
         small={4: ("lavarocks", 0.6, 0.8, 0.08, 3), 6: ("debris", 0.65, 0.85, 0.06, 2), 8: ("sulfur", 0.55, 0.7, 0.1, 1)},
+    ),
+    # Coral Archipelago at midday: white beaches round low jungle islands, turquoise lagoons
+    # falling away past a line of surf into sapphire open sea (Terrain.Deep).
+    "tropical": dict(
+        scale=dict(ground=0.42, ground2=0.42, rough=0.44, rock=0.5, liquid=0.6, road=0.32, forest=0.6),
+        ground2_cover=0.18, ground2_tint=(1.03, 1.08, 1.06),
+        ground_tint=(0.79, 0.9, 0.85),
+        beach=1.1,  # ground2 (white coral sand) forced into a band this many tiles wide along every wet edge
+        lowfreq=(0.05, 0.025),
+        water=dict(
+            near_mul=(0.5, 1.18, 1.16), near_add=(0.0, 0.15, 0.14),
+            deep_mul=(0.1, 0.5, 0.62), deep_add=(0.0, 0.03, 0.08), depth_reach=2.6,
+            clarity=0.65, bed="ground2", bed_mul=(0.75, 0.98, 0.96),
+            sh_mul=(0.85, 1.15, 1.12), sh_add=(0.05, 0.2, 0.2), sh_opacity=0.3, ford_stones=True,
+            foam=(0.96, 0.99, 0.98), wet=0.22, drop=0.1,
+            # the open sea: abyss colour, how far (tiles) past the reef it takes over, swells, surf, coral
+            abyss=(0.045, 0.17, 0.285), abyss_mix=0.62, abyss_reach=1.6, abyss_far=(0.3, 8.0),
+            swell=0.055, surf=0.85, coral=0.4,
+        ),
+        rock_h=1.0, forest_h=0.55, tree_h=0.9,
+        rock_mul=(1.3, 1.27, 1.38), rock_notch=0.4,
+        forest_mul=(0.76, 1.2, 1.4), tree_tint=(0.88, 1.0, 1.08),
+        rail=(0.42, 0.37, 0.31), deck_tint=(1.0, 1.0, 1.0), deck="planks", wood=(0.6, 0.53, 0.45),
+        bridge_reach=24,  # each Archipelago bridge spans ~20 tiles of sea
+        trestle=1.5,      # timber trestles: a bent every 1.5 tiles
+        road_blur=0.75, road_wobble=0.45,
+        stain=(0.82, 0.78, 0.72), crystal_tint=(0.9, 1.0, 0.93), road_curb=0.06,
+        road_mul=(0.92, 0.86, 0.78),
+        grade=dict(sat=1.1, contrast=1.05, lift=(0.0, 0.006, 0.012), gain=(1.01, 1.01, 0.99), gamma=1.0),
+        shadow_col=(0.42, 0.56, 0.62), shadow_k=0.8,
+        trees=[0, 1, 2], tree_size=(1.15, 1.6), tree_w=[0.45, 0.35, 0.2],
+        rough_big_mul=2.5,  # mangroves (and driftwood, boulders) standing in the mudflats
+        rough_soft=2.5,
+        big={2: ("mangrove", 0.8, 1.1, 0.5, 6), 3: ("boulder", 0.85, 1.1, 0.3, 4), 5: ("log", 0.95, 1.2, 0.12, 3),
+             7: ("wreck", 1.2, 1.45, 0.18, 1), 8: ("crate", 0.7, 0.85, 0.14, 2)},
+        small={4: ("coral", 0.55, 0.75, 0.03, 3), 6: ("bush", 0.6, 0.85, 0.14, 3)},
+        small_shore=("coral",),  # only within a couple of tiles of the water
     ),
 }
 
@@ -278,6 +316,20 @@ def hillshade(Hf: np.ndarray) -> np.ndarray:
     n = 1.0 / np.sqrt(gx * gx + gy * gy + 1.0)
     d = (-gx * L[0] - gy * L[1] + L[2]) * n
     return d / L[2]
+
+
+def swell_field(noise: Noise, H: int, W: int, angle: float, along: float, across: float) -> np.ndarray:
+    """Long streaks (unit std): white noise blurred far more along one direction than across
+    it, turned to `angle` degrees; worked at quarter resolution."""
+    h4, w4 = H // 4, W // 4
+    D = int(math.ceil(math.hypot(h4, w4))) + 8
+    g = noise.rng.standard_normal((D, D)).astype(np.float32)
+    g = ndi.gaussian_filter(g, (across / 4, along / 4), mode="wrap")
+    g = ndi.rotate(g, angle, reshape=False, order=1, mode="wrap")
+    oy, ox = (D - h4) // 2, (D - w4) // 2
+    g = g[oy:oy + h4, ox:ox + w4]
+    g = g / (g.std() + 1e-6)
+    return upsample(g, H, W)
 
 
 # --------------------------------------------------------------- textures ---
@@ -485,6 +537,13 @@ def render(mid: str, debug: bool = False) -> dict:
     n_big = noise.fbm(H // 4, W // 4, 3 * PX / 4, octaves=3)
     n_big = upsample(n_big, H, W)
 
+    def sdf(codes, blur=0.3):
+        return tile_sdf(np.isin(T, codes), blur=blur)
+
+    wetcodes = [WATER, SHALLOWS, BRIDGE, DEEP]
+    any_wet = has[WATER] or has[SHALLOWS] or has[DEEP]
+    sd_wet = sdf(wetcodes, blur=0.42) if any_wet else None  # signed distance to the water's edge (px)
+
     # ---- 1. base ground: ground + ground2 patches + low-frequency variation
     img = tex_layer(tex("ground"), H, W, rng, noise)
     if "ground_tint" in cfg:
@@ -493,6 +552,8 @@ def render(mid: str, debug: bool = False) -> dict:
         L = lum(img)[..., None]
         img = L + (img - L) * cfg["ground_sat"]
     g2 = tex_layer(tex("ground2"), H, W, rng, noise, variants=2)
+    if "ground2_tint" in cfg:
+        g2 *= np.asarray(cfg["ground2_tint"], np.float32)
     g2s = cfg.get("ground2_scale_tiles", 7.0)
     f = noise.fbm(H // 4, W // 4, g2s * PX / 4, octaves=5, persistence=0.55)
     f = upsample(f, H, W) + 0.18 * n_edge
@@ -501,7 +562,15 @@ def render(mid: str, debug: bool = False) -> dict:
     da = La - ndi.gaussian_filter(La, 3)
     db = Lb - ndi.gaussian_filter(Lb, 3)
     x = (f - thr) / 0.45 + 0.8 * (db / (db.std() + 1e-6) - da / (da.std() + 1e-6))
-    m2 = sstep(-1.2, 1.2, x) * cfg.get("ground2_max", 0.92)
+    g2max = cfg.get("ground2_max", 0.92)
+    if cfg.get("beach", 0.0) > 0 and sd_wet is not None:
+        # a beach: ground2 forced up into a band `beach` tiles wide along every wet edge
+        # (its inland edge wobbles and follows the textures' detail like the other patches)
+        band = sstep(-0.35 * PX, 0.25 * PX, sd_wet + cfg["beach"] * PX + 0.3 * PX * n_edge)
+        x = x + 4.0 * band
+        g2max = g2max + (1.0 - g2max) * band
+        del band
+    m2 = sstep(-1.2, 1.2, x) * g2max
     del La, Lb, da, db, x
     img = img * (1 - m2[..., None]) + g2 * m2[..., None]
     del g2
@@ -512,11 +581,6 @@ def render(mid: str, debug: bool = False) -> dict:
     img *= (1.0 + lb * nb)[..., None]
     img *= np.stack([1 + lw * nw, np.ones_like(nw), 1 - lw * nw], -1)
 
-    # ---- SDFs
-    def sdf(codes, blur=0.3):
-        return tile_sdf(np.isin(T, codes), blur=blur)
-
-    wetcodes = [WATER, SHALLOWS, BRIDGE, DEEP]
     Hterr = np.zeros((H, W), np.float32)   # height field for cast shadows
     ao = np.zeros((H, W), np.float32)      # ambient-occlusion darkening 0..1
 
@@ -547,7 +611,12 @@ def render(mid: str, debug: bool = False) -> dict:
     if has[ROUGH]:
         e_rough = sdf([ROUGH] + wetcodes, blur=0.32) + 0.2 * PX * n_edge + 0.07 * PX * n_fine
         rl = ndi.gaussian_filter(tex_layer(rough_t, H, W, rng, noise), (SOFTEN * 0.8, SOFTEN * 0.8, 0))
-        m = hmask(e_rough, 0.1 * PX, detail(rl) - detail(img))
+        if "rough_soft" in cfg:  # smoother, less speckled edges (a dark mud against pale sand)
+            det = ndi.gaussian_filter(detail(rl) - detail(img), cfg["rough_soft"])
+            m = hmask(e_rough, 0.12 * PX, det / (det[::5, ::5].std() + 1e-6))
+            del det
+        else:
+            m = hmask(e_rough, 0.1 * PX, detail(rl) - detail(img))
         # the underlay beneath water only near real rough tiles (no mud rim on grassy shores)
         m *= sstep(-1.1 * PX, -0.55 * PX, tile_sdf(T == ROUGH, blur=0.3))
         img = img * (1 - m[..., None]) + rl * m[..., None]
@@ -577,8 +646,11 @@ def render(mid: str, debug: bool = False) -> dict:
     # ---- 4. roads
     road_t = tex("road")
     if has[ROAD] or has[BRIDGE]:
-        rs = tile_sdf(np.isin(T, [ROAD, BRIDGE]), blur=0.45)
-        e_road = rs + 0.07 * PX * n_edge + 0.035 * PX * n_fine
+        rs = tile_sdf(np.isin(T, [ROAD, BRIDGE]), blur=cfg.get("road_blur", 0.45))
+        if "road_wobble" in cfg:  # built roads (boardwalks) keep straighter edges
+            e_road = rs + cfg["road_wobble"] * (0.07 * PX * n_edge + 0.035 * PX * n_fine)
+        else:
+            e_road = rs + 0.07 * PX * n_edge + 0.035 * PX * n_fine
         m_road = sstep(-1.2, 1.2, e_road)
         verge = sstep(-0.32 * PX, -0.02 * PX, e_road) * (1 - m_road)
         # shoulders: gravelly and darker
@@ -629,9 +701,8 @@ def render(mid: str, debug: bool = False) -> dict:
     m_water = np.zeros((H, W), np.float32)
     m_lava = np.zeros((H, W), np.float32)
     sd_deep = None
-    if has[WATER] or has[SHALLOWS] or has[DEEP]:
+    if any_wet:
         wc = cfg["water"]
-        sd_wet = sdf(wetcodes, blur=0.42)
         e_wet = sd_wet + 0.13 * PX * n_edge + 0.035 * PX * n_fine
         m_water = sstep(-1.5, 1.5, e_wet)
         sd_deep = sdf([WATER, BRIDGE, DEEP], blur=0.42)
@@ -646,7 +717,7 @@ def render(mid: str, debug: bool = False) -> dict:
             # land side: wet darker band
             wet = sstep(-0.3 * PX, 0.0, e_wet) * (1 - m_water) * wc["wet"]
             img *= (1 - wet[..., None] * np.array([1.0, 0.95, 0.85], np.float32))
-            depth = np.clip(e_deep / (1.7 * PX), 0, 1) ** 0.75
+            depth = np.clip(e_deep / (wc.get("depth_reach", 1.7) * PX), 0, 1) ** 0.75
             if has[SHALLOWS]:
                 # a distinct drop-off where deep water meets fordable shallows
                 near_sh = sstep(-1.4 * PX, -0.4 * PX, tile_sdf(T == SHALLOWS, blur=0.42))
@@ -661,16 +732,66 @@ def render(mid: str, debug: bool = False) -> dict:
             deep_col = deep_col * (1 - clar) + bed * 0.8 * clar
             # drop-off edge: darker line just inside deep water
             drop = sstep(0.0, 0.1 * PX, e_deep) * sstep(0.35 * PX, 0.05 * PX, e_deep)
-            deep_col *= (1 - 0.22 * drop)[..., None]
+            deep_col *= (1 - wc.get("drop", 0.22) * drop)[..., None]
             if has[DEEP]:
                 # the open sea past the coastal shelf: a second, darker drop-off and a
-                # long fall into the abyss colour, so islands sit in rings of light water
-                e_abyss = sdf([DEEP], blur=0.5) + 0.25 * PX * n_edge + 0.05 * PX * n_fine
-                ab = (sstep(-0.2 * PX, 3.5 * PX, e_abyss) ** 0.8)[..., None]
+                # long fall into the abyss colour, so islands sit in rings of light water.
+                # A bridge out over the sea counts as sea (only its ends stand in the shelf).
+                wet_t = np.isin(T, wetcodes)
+                offshore = (T == BRIDGE) & (ndi.distance_transform_edt(wet_t) > 1.5)
+                e_abyss = tile_sdf((T == DEEP) | offshore, blur=0.5) + 0.25 * PX * n_edge + 0.05 * PX * n_fine
+                del wet_t, offshore
+                if wc.get("coral", 0.0) > 0:
+                    # faint coral heads (pink, ochre, olive) under the film on the reef flat near the drop
+                    cm = sstep(0.35, 1.15, noise.fbm(H, W, 0.32 * PX, octaves=3))
+                    cm *= sstep(-1.6 * PX, -0.7 * PX, e_abyss) * sstep(0.0, -0.15 * PX, e_abyss)
+                    cm *= sstep(0.25 * PX, 0.7 * PX, e_deep)  # not in the swash at the beach
+                    hue = noise.fbm(H // 4, W // 4, 1.2 * PX / 4, octaves=2)
+                    hue = upsample(hue, H, W)[..., None]
+                    pink = np.array([1.75, 0.82, 0.86], np.float32)
+                    ochre = np.array([1.7, 1.02, 0.62], np.float32)
+                    olive = np.array([1.15, 0.98, 0.62], np.float32)
+                    tint = np.where(hue > 0.35, pink, np.where(hue < -0.35, olive, ochre))
+                    tint = ndi.gaussian_filter(tint, (2.0, 2.0, 0))
+                    a = (wc["coral"] * cm)[..., None]
+                    deep_col = deep_col * (1 - a) + deep_col * tint * a
+                    del cm, hue, tint, a
+                r1, mix1 = wc.get("abyss_reach", 3.5), wc.get("abyss_mix", 0.7)
+                ab = sstep(-0.2 * PX, r1 * PX, e_abyss) ** 0.8 * mix1
+                if "abyss_far" in wc:  # and on into the abyss colour far from any shore
+                    mix2, r2 = wc["abyss_far"]
+                    ab = ab + mix2 * sstep(0.5 * r1 * PX, r2 * PX, e_abyss)
+                ab = ab[..., None]
                 abyss = np.asarray(wc.get("abyss", (0.02, 0.08, 0.16)), np.float32)
-                deep_col = deep_col * (1 - 0.7 * ab) + abyss * (0.7 * ab)
+                deep_col = deep_col * (1 - ab) + abyss * ab
                 ledge = sstep(-0.1 * PX, 0.05 * PX, e_abyss) * sstep(0.4 * PX, 0.1 * PX, e_abyss)
                 deep_col *= (1 - 0.18 * ledge)[..., None]
+                sea = sstep(0.1 * PX, 1.5 * PX, e_abyss)
+                if wc.get("swell", 0.0) > 0:
+                    # the sea isn't a slab: broad lighter/darker patches and long swell streaks
+                    patch = upsample(noise.fbm(H // 8, W // 8, 9 * PX / 8, octaves=3), H, W)
+                    sw = swell_field(noise, H, W, angle=-28.0, along=2.6 * PX, across=0.16 * PX)
+                    crest = sstep(1.5, 2.9, sw)
+                    k = wc["swell"]
+                    deep_col *= (1 + sea * (0.6 * k * patch + k * np.clip(sw, -2, 2)))[..., None]
+                    deep_col += (0.04 * sea * crest * sstep(-0.5, 1.0, patch))[..., None] * np.array(
+                        [0.6, 0.85, 1.0], np.float32)
+                    del patch, sw, crest
+                if wc.get("surf", 0.0) > 0:
+                    # the reef crest: a broken white line of breaking surf just past the drop, a
+                    # fainter second line of wave behind it and spray thrown back onto the reef
+                    churn = noise.fbm(H, W, 0.3 * PX, octaves=3, persistence=0.6)
+                    es = e_abyss + 0.06 * PX * churn
+                    line1 = sstep(-0.16 * PX, 0.0, es) * sstep(0.34 * PX, 0.08 * PX, es)
+                    line1 *= np.clip(0.55 + 0.75 * churn, 0, 1)
+                    line2 = sstep(0.42 * PX, 0.52 * PX, es) * sstep(0.78 * PX, 0.6 * PX, es)
+                    line2 *= np.clip(noise.fbm(H, W, 0.45 * PX, octaves=2) - 0.15, 0, 1) * 0.55
+                    spray = sstep(-0.55 * PX, -0.05 * PX, es) * sstep(0.1 * PX, -0.05 * PX, es)
+                    spray *= sstep(0.9, 1.9, noise.fbm(H, W, 0.1 * PX, octaves=2)) * 0.6
+                    fo = (wc["surf"] * np.clip(line1 + line2 + spray, 0, 1))[..., None]
+                    deep_col = deep_col * (1 - fo) + np.asarray(wc["foam"], np.float32) * fo
+                    del churn, es, line1, line2, spray, fo
+                del ab, sea
             # shallows: bed seen through a thin water film + ripples
             L = lum(liq)
             rip = (L - ndi.gaussian_filter(L, 4))[..., None]
@@ -734,7 +855,8 @@ def render(mid: str, debug: bool = False) -> dict:
         m_for = sstep(-0.06 * PX, 0.06 * PX, e_for)
         # AO on the ground around woods
         ao = np.maximum(ao, np.exp(np.minimum(e_for, 0) / (0.28 * PX)) * (1 - m_for) * 0.32)
-        can = tex_layer(tex("forest"), H, W, rng, noise) * cfg.get("forest_mul", 1.0)
+        fm = cfg.get("forest_mul", 1.0)
+        can = tex_layer(tex("forest"), H, W, rng, noise) * (np.asarray(fm, np.float32) if isinstance(fm, tuple) else fm)
         Lc = lum(can)
         Hc = cfg["forest_h"] * PX * sstep(0.0, 0.55 * PX, e_for) + 7.0 * (Lc - ndi.gaussian_filter(Lc, 6))
         Hc = ndi.gaussian_filter(Hc, 1.0)
@@ -778,6 +900,11 @@ def render(mid: str, debug: bool = False) -> dict:
         # darker cliff faces near the rim, lighter tops
         face = sstep(0.35 * PX, 0.0, e_rock)
         rk = rk * (1 - 0.12 * face)[..., None]
+        if cfg.get("rock_notch", 0.0) > 0 and sd_wet is not None:
+            # a dark wave-cut notch along the foot where the stone stands in the sea
+            notch = sstep(0.4 * PX, 0.0, e_rock) * sstep(-1.2 * PX, -0.2 * PX, sd_wet)
+            rk = rk * (1 - cfg["rock_notch"] * notch)[..., None]
+            del notch
         ao = np.maximum(ao, np.exp(np.minimum(e_rock, 0) / (0.2 * PX)) * (1 - m_rock) * 0.42)
         img = img * (1 - m_rock[..., None]) + rk * m_rock[..., None]
         Hterr = np.maximum(Hterr, Hr * m_rock)
@@ -789,7 +916,7 @@ def render(mid: str, debug: bool = False) -> dict:
     img *= (1 - ao)[..., None]
 
     # ---- 8. bridges
-    bridges = bridge_specs(T)
+    bridges = bridge_specs(T, cfg.get("bridge_reach", 12.0))
     m_deck = np.zeros((H, W), np.float32)
     for b in bridges:
         draw_bridge(img, Hterr, m_deck, b, road_t, cfg, rng)
@@ -836,7 +963,8 @@ def grade(img: np.ndarray, g: dict) -> np.ndarray:
 
 # ---------------------------------------------------------------- bridges ---
 
-def bridge_specs(T: np.ndarray) -> list[dict]:
+def bridge_specs(T: np.ndarray, reach: float = 12.0) -> list[dict]:
+    """Each bridge's centre, axis, width and painted extent (at most `reach` tiles either side)."""
     lab, n = ndi.label(T == BRIDGE, structure=np.ones((3, 3)))
     specs = []
     h, w = T.shape
@@ -865,7 +993,7 @@ def bridge_specs(T: np.ndarray) -> list[dict]:
             best = 0.0
             for off in (-width / 2 + 0.2, 0.0, width / 2 - 0.2):
                 t = 0.0
-                while t < 12:
+                while t < reach:
                     p = c + a * sgn * t + b * off
                     tx, ty = int(math.floor(p[0])), int(math.floor(p[1]))
                     if not (0 <= tx < w and 0 <= ty < h) or not wet[ty, tx]:
@@ -893,8 +1021,9 @@ def draw_bridge(img, Hterr, m_deck, b, road_t, cfg, rng):
     corners = [c + a * t + bb * s_ for t in (t0, t1) for s_ in (-wd / 2, wd / 2)]
     xs_ = [p[0] for p in corners]
     ys_ = [p[1] for p in corners]
-    x0, x1 = max(0, int(min(xs_)) - 4), min(W, int(max(xs_)) + 5)
-    y0, y1 = max(0, int(min(ys_)) - 4), min(H, int(max(ys_)) + 5)
+    pad = 4 + (int(0.3 * PX) if cfg.get("trestle") else 0)
+    x0, x1 = max(0, int(min(xs_)) - pad), min(W, int(max(xs_)) + pad + 1)
+    y0, y1 = max(0, int(min(ys_)) - pad), min(H, int(max(ys_)) + pad + 1)
     yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
     rx, ry = xx + 0.5 - c[0], yy + 0.5 - c[1]
     u = rx * a[0] + ry * a[1]         # along the bridge
@@ -955,6 +1084,18 @@ def draw_bridge(img, Hterr, m_deck, b, road_t, cfg, rng):
     reg[:] = reg * (1 - m) + deck * m
     # height: fade up from the banks, deck + railing lip
     hb = (0.55 * PX * sstep(0.0, 0.5 * PX, dend) + 0.08 * PX * rail) * mask
+    if cfg.get("trestle"):
+        # a timber trestle: the cap beams of its bents (every `trestle` tiles) show past the deck's sides
+        sp = cfg["trestle"] * PX
+        ph = np.mod(u - t0 - sp / 2, sp)
+        du = np.minimum(ph, sp - ph)
+        over = 0.2 * PX
+        beam = sstep(0.085 * PX, 0.05 * PX, du) * sstep(hw + over, hw + over - 2.0, av)
+        beam *= sstep(0.6 * PX, 1.0 * PX, dend) * (1 - mask)
+        bc = railc * (0.85 - 0.3 * sstep(hw, hw + over, av))[..., None]
+        bm = beam[..., None]
+        reg[:] = reg * (1 - bm) + bc * bm
+        hb = np.maximum(hb, 0.45 * PX * beam)
     Hterr[y0:y1, x0:x1] = np.maximum(Hterr[y0:y1, x0:x1], hb)
     m_deck[y0:y1, x0:x1] = np.maximum(m_deck[y0:y1, x0:x1], mask)
 
@@ -980,6 +1121,8 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
     wet = np.isin(T, [WATER, SHALLOWS, BRIDGE, DEEP])
     near_wet = ndi.binary_dilation(wet, np.ones((3, 3))) & ~wet
     near_lava = ndi.binary_dilation(T == WATER, np.ones((3, 3)), iterations=1) & ~wet
+    near_shore = ndi.binary_dilation(wet, np.ones((3, 3)), iterations=2) & ~wet
+    shore_only = cfg.get("small_shore", ())
     volcanic = d["biome"] == "volcanic"
 
     placed_big: list[tuple[float, float]] = []
@@ -1003,7 +1146,7 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
         choices = []
         offset = (0.0, 0.0)
         if code == ROUGH:
-            p = 0.11 if not near_wet[ty, tx] else 0.08
+            p = (0.11 if not near_wet[ty, tx] else 0.08) * cfg.get("rough_big_mul", 1.0)
             choices = big_ids
         elif forest_edge[ty, tx]:
             p = 0.035
@@ -1038,7 +1181,7 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
         free_rot = name in ("wreck", "log", "crate", "debris")
         ang = rng.uniform(-180, 180) if free_rot else rng.uniform(-25, 25)
         placed_big.append((cx, cy))
-        jobs.append((1, cy, k, cx, cy, size, ht, ang, bool(rng.random() < 0.5) and free_rot, None, name == "boulder"))
+        jobs.append((1, cy, k, cx, cy, size, ht, ang, bool(rng.random() < 0.5) and free_rot, None, name in ("boulder", "mangrove")))
 
     # small, flat decorations
     small_ids = list(small.keys())
@@ -1063,6 +1206,8 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
                 cands = [k for k in cands if small[k][0] != "lavarocks"]
             if code != ROUGH:
                 cands = [k for k in cands if small[k][0] != "sulfur"]
+        if shore_only and not near_shore[ty, tx]:
+            cands = [k for k in cands if small[k][0] not in shore_only]
         if not cands:
             continue
         wts = np.array([small[c][4] for c in cands], float)
@@ -1072,7 +1217,7 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
         cy = ty + 0.5 + rng.uniform(-0.3, 0.3)
         if not far_from_big(cx, cy, 1.0):
             continue
-        ang = rng.uniform(-180, 180) if name in ("rocks", "ice", "debris", "skull", "drift") else rng.uniform(-30, 30)
+        ang = rng.uniform(-180, 180) if name in ("rocks", "ice", "debris", "skull", "drift", "coral") else rng.uniform(-30, 30)
         jobs.append((0, cy, k, cx, cy, rng.uniform(s0, s1), ht, ang, bool(rng.random() < 0.5), None, False))
 
     # trees: jittered grid inside the (organic) forest mask
@@ -1101,6 +1246,8 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
                 size = rng.uniform(s0, s1) * (0.9 if edge else 1.0)
                 tint = tuple(float(x) for x in (cfg.get("tree_bright", 1.0) * rng.uniform(0.86, 1.08) * np.array(
                     [rng.uniform(0.95, 1.05), 1.0, rng.uniform(0.93, 1.05)])))
+                if "tree_tint" in cfg:
+                    tint = tuple(t_ * c_ for t_, c_ in zip(tint, cfg["tree_tint"]))
                 jobs.append((2, cy, k, cx, cy, size, cfg["tree_h"], rng.uniform(-30, 30), False, tint, True))
 
     jobs.sort(key=lambda j: (j[0], j[1]))
@@ -1111,8 +1258,13 @@ def place_doodads(img, Hterr, d, cfg, sprites, e_for, e_rock):
 
 # ----------------------------------------------------------------- output ---
 
+def map_budget(T: np.ndarray) -> float:
+    return BUDGET * max(1.0, T.size / BUDGET_TILES)
+
+
 def write_outputs(mid: str, im: Image.Image, T: np.ndarray, debug: bool) -> dict:
     out = OUT_DIR / mid
+    budget = map_budget(T)
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob("t_*.webp"):
         old.unlink()
@@ -1131,7 +1283,7 @@ def write_outputs(mid: str, im: Image.Image, T: np.ndarray, debug: bool) -> dict
             cim.save(b, "WEBP", quality=q, method=6)
             blobs[key] = b.getvalue()
         total = sum(len(v) for v in blobs.values())
-        if total <= BUDGET:
+        if total <= budget:
             break
     for (c, r), data in blobs.items():
         (out / f"t_{c}_{r}.webp").write_bytes(data)
@@ -1163,7 +1315,8 @@ def write_outputs(mid: str, im: Image.Image, T: np.ndarray, debug: bool) -> dict
                     if ty == h - 1 or not m[ty + 1, tx]:
                         dbg[y0 + PX - 2:y0 + PX, x0:x0 + PX] = col
         Image.fromarray(dbg).save(PREVIEW_DIR / f"terrain-{mid}-grid.jpg", "JPEG", quality=85)
-    return dict(bytes=total, quality=q, thumb=(out / "thumb.webp").stat().st_size, cols=cols, rows=rows)
+    return dict(bytes=total, quality=q, thumb=(out / "thumb.webp").stat().st_size, cols=cols, rows=rows,
+                budget=budget)
 
 
 def main(argv: list[str]) -> None:
@@ -1173,7 +1326,7 @@ def main(argv: list[str]) -> None:
         ids = sorted(p.stem for p in MAPS_DIR.glob("*.json"))
     for mid in ids:
         st = render(mid, debug)
-        over = " (over budget)" if st["bytes"] > BUDGET else ""
+        over = " (over budget)" if st["bytes"] > st["budget"] else ""
         print(f"{mid}: {st['cols']}x{st['rows']} chunks, {st['bytes'] / 1024:.0f} KB at q{st['quality']}{over} "
               f"(+thumb {st['thumb'] / 1024:.0f} KB) in {st['seconds']}s")
     # the same rock materials, shipped for the 3D cliff walls and crags (those of the biomes just painted)
