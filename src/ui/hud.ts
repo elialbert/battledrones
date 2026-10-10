@@ -6,7 +6,7 @@ import type { BuildingKind, Faction, Unit, UnitKind, World } from "../sim/types"
 import { sfx } from "../game/audio";
 import { mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
-import { PLAYER, isProducer } from "../game/controller";
+import { PLAYER, isArmyUnit, isProducer } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
 import { radioCue } from "../game/announcer";
 import { mountAudioToggles } from "./audio-panel";
@@ -584,7 +584,17 @@ export function createHud(api: HudApi): Hud {
   const hints = new HintQueue();
   const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
   const hasFactory = () => mine("fab-plant") || mine("airpad");
-  const armySize = () => [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+  const armySize = () => [...w.units.values()].filter(isArmyUnit).length;
+  /** Move the tutorial on to stage `next`; at 99 it's done for good. */
+  function advance(next: number): void {
+    hintStage = next;
+    if (next < 99) return;
+    try {
+      localStorage.setItem(TUTORIAL_KEY, "done");
+    } catch {
+      /* ignore */
+    }
+  }
   /** The tutorial's next stage, offered to the queue once its moment comes; the stage moves on when it is shown. */
   function tutorial(): void {
     if (hintStage >= 99 || hints.has(`tut-${hintStage}`)) return;
@@ -614,7 +624,10 @@ export function createHud(api: HudApi): Hud {
       msg = "Long-press any build button to see what it counters. ⚔ Select army grabs everyone.";
       next = 3;
     } else if (stage === 3 && secs > 150) {
+      // (one already stands: nothing left to teach)
+      if (mine("tech-lab")) return advance(99);
       msg = "Build a Tech Lab to unlock Titans, Lancers, Mortars, Hornets and Snipers.";
+      still = () => !mine("tech-lab");
       next = 99;
     }
     if (!msg) return;
@@ -624,15 +637,7 @@ export function createHud(api: HudApi): Hud {
       priority: HINTS.priority.tutorial,
       ttlS: 600,
       valid: () => hintStage === stage && still(),
-      onShow: () => {
-        hintStage = next;
-        if (next < 99) return;
-        try {
-          localStorage.setItem(TUTORIAL_KEY, "done");
-        } catch {
-          /* ignore */
-        }
-      }
+      onShow: () => advance(next)
     });
   }
 
@@ -801,7 +806,7 @@ export function createHud(api: HudApi): Hud {
       }
       chips.push({ id: "clear", label: "✕", on: () => ctrl.clearSelection() });
     } else if (!ctrl.spectator) {
-      const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+      const army = [...w.units.values()].filter(isArmyUnit).length;
       // units with no orders, when that's not simply everyone
       const idle = army > 0 ? ctrl.idleArmy() : [];
       const showIdle = idle.length > 0 && idle.length < army;

@@ -19,9 +19,13 @@ export interface Insets {
   left: number;
 }
 
+/** Units within this many tiles of the HQ's centre are part of the opening shot. */
+const START_UNIT_REACH = 8;
+
 /**
- * The opening shot: the HQ, its home field and where the opener's factory
- * goes, so the player sees their whole economy at a glance.
+ * The opening shot: the HQ, its home field, where the opener's factory
+ * goes and the units the side starts with (the Trooper Squad on the HQ's
+ * far flank), so the player sees their whole start at a glance.
  */
 export function startBox(w: World, faction: Faction): Box | null {
   const hq = hqOf(w, faction);
@@ -54,6 +58,10 @@ export function startBox(w: World, faction: Faction): Box | null {
           add(tx, ty, tx + 1, ty + 1);
   const site = predictOpenerSite(w, faction, "fab-plant");
   if (site) add(site.tx, site.ty, site.tx + 2, site.ty + 2);
+  // (a squad's robots stand a little way round its centre)
+  for (const u of w.units.values())
+    if (u.faction === faction && Math.hypot(u.x - c.x, u.y - c.y) <= START_UNIT_REACH)
+      add(u.x - 0.75, u.y - 0.75, u.x + 0.75, u.y + 0.75);
   // breathing room round the edges
   return { x0: box.x0 - 1, y0: box.y0 - 1, x1: box.x1 + 1, y1: box.y1 + 1 };
 }
@@ -88,6 +96,9 @@ export function hudInsets(): Insets {
     const r = rect(sel);
     if (r && r.height > 0) ins.top = Math.max(ins.top, r.bottom + 6);
   }
+  // the zoom buttons stand over the map at the left edge, where the starting squad waits
+  const zoom = rect(".zoombtns");
+  if (zoom && zoom.width > 0) ins.left = Math.max(ins.left, zoom.right + 6);
   const landscape = W > H;
   const bar = rect(".buildbar");
   const dock = rect(".dock");

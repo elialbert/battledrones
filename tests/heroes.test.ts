@@ -6,7 +6,12 @@ import { createSkirmishWorld } from "../src/sim/map";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
 import type { Command, FactionStats, World } from "../src/sim/types";
-import { buildingCenter, dist, hqOf, spawnUnit } from "../src/sim/world";
+import { buildingCenter, createWorld, dist, hqOf, setTerrain, spawnUnit } from "../src/sim/world";
+import { isVisible, tickFog } from "../src/sim/fog";
+import { unitSeenBy } from "../src/sim/infantry";
+import { Terrain } from "../src/sim/types";
+import { HeroPresenter } from "../src/game/hero-fx";
+import type { View } from "../src/game/three/view";
 import {
   CALLSIGNS,
   CallsignRegistry,
@@ -284,6 +289,35 @@ describe("chronicle: squads riding in a Condor", () => {
     c.sample();
     expect(c.samples.at(-1)!.army.blue).toBeCloseTo(before);
     expect(c.mvp().blue).toMatchObject({ id: ace.id, kind: "sniper", kills: 7, alive: true });
+  });
+});
+
+describe("promotion titles", () => {
+  it("float over an enemy veteran in sight, never over a Sniper Team hidden in the woods", () => {
+    const w = createWorld(32, 32);
+    setTerrain(w, 10, 10, Terrain.Forest);
+    spawnUnit(w, "scout", "blue", 5.5, 10.5); // 5 tiles off: the woods tile is in sight
+    const sniper = spawnUnit(w, "sniper", "red", 10.5, 10.5);
+    const titan = spawnUnit(w, "titan", "red", 8.5, 13.5);
+    sniper.rank = titan.rank = 2;
+    w.tick = 100;
+    tickFog(w);
+    expect(isVisible(w, "blue", 10, 10)).toBe(true);
+    const titles: string[] = [];
+    const view = {
+      rig: { onScreen: () => true },
+      screen: { label: (o: { text: string }) => (titles.push(o.text), { ...o }), remove: () => {} },
+      tweens: { add: () => {}, kill: () => {} }
+    } as unknown as View;
+    const hp = new HeroPresenter(view, w, {
+      player: "blue", spectator: false, seesPoint: () => true, seesUnit: (u) => unitSeenBy(w, "blue", u),
+      unitPos: () => null, notify: () => {}
+    });
+    // (a Veterans crate promotes everything near the collector, the hidden sniper included)
+    hp.handleFx({ type: "rankUp", id: sniper.id });
+    expect(titles).toEqual([]);
+    hp.handleFx({ type: "rankUp", id: titan.id });
+    expect(titles).toEqual(["HARDENED"]);
   });
 });
 

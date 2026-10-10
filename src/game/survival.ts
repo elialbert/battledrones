@@ -129,13 +129,14 @@ export class SurvivalPresenter {
     switch (ev.type) {
       case "waveIncoming": {
         const boss = ev.theme === "boss";
-        // the theme is the headline (it's what to react to); one line on a phone
+        // the theme is the headline (it's what to react to), then where and when, then what beats
+        // it (the wave before's "cleared" banner names it too, but wave 1 has none)
         const sub = [`${THEME_ICONS[ev.theme]} ${boss ? "Boss wave" : "Wave"} ${ev.wave} from the ${ev.dir} in ${Math.round(ev.eta / TICK_RATE)} s`];
         if (ev.early > 0) sub.push(`+${ev.early} scrap`);
         announce({
           key: boss ? "boss-incoming" : "wave-incoming",
           text: ev.name,
-          sub: sub.join(" · "),
+          sub: `${sub.join(" · ")} — ${THEME_COUNTERS[ev.theme]}`,
           tone: boss ? "epic" : "bad",
           x: ev.x,
           y: ev.y,

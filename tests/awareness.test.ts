@@ -273,7 +273,7 @@ describe("inbound warning", () => {
     expect(raidAdvice("air", "condor").what).toBe("dropships");
   });
 
-  it("a Sniper Team hidden in the woods raises no warning; a loaded Condor does", () => {
+  it("a Sniper Team hidden in the woods raises no warning; a Condor does, loaded or not", () => {
     const r = rig();
     // in sight of the HQ, in woods, more than 3 tiles from anything of ours
     setTerrain(r.w, 11, 6, Terrain.Forest);
@@ -281,15 +281,17 @@ describe("inbound warning", () => {
     r.w.tick = 100;
     expect(r.tick(3)).toEqual([]);
     expect(isVisible(r.w, "blue", 11, 6)).toBe(true);
-    // an empty Condor is no threat to a base…
+    // what a Condor carries is hidden: an empty one warns just as a loaded one would
     const c = spawnUnit(r.w, "condor", "red", 21, 9);
-    expect(r.tick(3)).toEqual([]);
-    // …a loaded one is about to put squads on top of us
-    const t = spawnUnit(r.w, "trooper", "red", 21, 9);
-    r.w.units.delete(t.id);
-    c.passengers!.push(t);
     const [wn] = r.tick();
     expect(wn).toMatchObject({ domain: "air", text: "Enemy dropships inbound", ids: [c.id] });
+    r.w.units.delete(c.id);
+    const loaded = spawnUnit(r.w, "condor", "red", 21, 9);
+    const t = spawnUnit(r.w, "trooper", "red", 21, 9);
+    r.w.units.delete(t.id);
+    loaded.passengers!.push(t);
+    const [wl] = r.tick(40);
+    expect(wl).toMatchObject({ domain: "air", text: "Enemy dropships inbound", ids: [loaded.id] });
     // the sniper gives itself away by firing: now it counts
     sn.firedTick = r.w.tick;
     const [ws] = r.tick();

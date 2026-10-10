@@ -8,6 +8,13 @@ import { Squads } from "./squads";
 
 export const PLAYER: Faction = "blue";
 
+/**
+ * Is this one of the player's fighting units (⚔ Select army, 💤 Idle)? Not a
+ * harvester, and not an unarmed Condor: it would outrun the army and park
+ * alone in the enemy base.
+ */
+export const isArmyUnit = (u: Unit): boolean => u.faction === PLAYER && u.kind !== "harvester" && !isTransport(u.kind);
+
 const PRODUCERS: ReadonlySet<BuildingKind> = new Set(Object.values(UNITS).map((u) => u.builtAt));
 /** Does this building turn out units (so a tap with it selected sets its rally point)? HQ, Fab Plant, Airpad, Assembly Bay. */
 export const isProducer = (kind: BuildingKind): boolean => PRODUCERS.has(kind);
@@ -106,16 +113,14 @@ export class Controller {
 
   /** Select every combat unit the player owns. */
   selectArmy(): void {
-    const ids = [...this.world.units.values()]
-      .filter((u) => u.faction === PLAYER && u.kind !== "harvester")
-      .map((u) => u.id);
+    const ids = [...this.world.units.values()].filter(isArmyUnit).map((u) => u.id);
     this.selectUnits(ids);
   }
 
   /** Combat units with no orders (sitting at home, or done with their last order). */
   idleArmy(): number[] {
     return [...this.world.units.values()]
-      .filter((u) => u.faction === PLAYER && u.kind !== "harvester" && u.order.type === "idle")
+      .filter((u) => isArmyUnit(u) && u.order.type === "idle")
       .map((u) => u.id);
   }
 

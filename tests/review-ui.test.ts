@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMapWorld } from "../src/sim/maps";
 import { OPS } from "../src/sim/ops";
-import type { Announcement } from "../src/game/announce";
+import { TICK_RATE } from "../src/sim/balance";
+import { THEME_COUNTERS } from "../src/sim/modes/survival";
+import { onAnnounce, type Announcement } from "../src/game/announce";
+import { SurvivalPresenter } from "../src/game/survival";
 import { BattleCallouts, type RadioLine } from "../src/game/callouts";
 import { finaleOutcome } from "../src/game/finale";
 import { GestureRecognizer } from "../src/game/gestures";
@@ -37,6 +40,25 @@ describe("a watched Last Stand ends on a lament", () => {
     w.winner = "red";
     c.events([], 300);
     expect(radio.at(-1)).toMatchObject({ key: "defeat", tone: "bad", text: "Base overrun. The HQ has fallen." });
+  });
+});
+
+describe("Last Stand wave warnings", () => {
+  it("say what beats the wave, wave 1 included (no 'cleared' banner names it before)", () => {
+    const w = createMapWorld("riverlands", { seed: 7, survival: { difficulty: "normal" } });
+    const p = new SurvivalPresenter(w, { mapId: "riverlands", difficulty: "normal", spectator: true, ping: () => {}, gfx: null });
+    const seen: Announcement[] = [];
+    const off = onAnnounce((a) => seen.push(a));
+    try {
+      p.handleFx({ type: "waveIncoming", wave: 1, theme: "swarm", name: "Bot Swarm", x: 50, y: 10, dir: "north-east", eta: 15 * TICK_RATE, early: 0 });
+      p.handleFx({ type: "waveIncoming", wave: 3, theme: "air", name: "Air Raid", x: 50, y: 10, dir: "north", eta: 15 * TICK_RATE, early: 40 });
+    } finally {
+      off();
+    }
+    expect(seen.map((a) => a.sub)).toEqual([
+      `🤖 Wave 1 from the north-east in 15 s — ${THEME_COUNTERS.swarm}`,
+      `✈ Wave 3 from the north in 15 s · +40 scrap — ${THEME_COUNTERS.air}`
+    ]);
   });
 });
 

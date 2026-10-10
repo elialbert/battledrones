@@ -14,9 +14,8 @@
  * unit-tested (tests/awareness.test.ts).
  */
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
-import { unitSeenBy } from "../sim/infantry";
+import { isTransport, unitSeenBy } from "../sim/infantry";
 import { POWER_NAMES } from "../sim/powers";
-import { isLoaded } from "../sim/transport";
 import type { Faction, FxEvent, Unit, UnitKind, World } from "../sim/types";
 import { CalldownCredit } from "./calldown-credit";
 
@@ -432,8 +431,8 @@ interface Group {
 }
 
 /**
- * "Enemy drones inbound": watches for visible armed enemy units (and loaded
- * Condors) coming within AWARE.inbound.radius tiles of the player's buildings or harvesters,
+ * "Enemy drones inbound": watches for visible armed enemy units (and Condors,
+ * loaded or not) coming within AWARE.inbound.radius tiles of the player's buildings or harvesters,
  * and warns once per group (a group seen in the zone within the last 20 s
  * isn't new), with counter advice by domain. Only what the player can see
  * counts, so it never reveals anything the fog hides.
@@ -483,8 +482,8 @@ export class InboundWatch {
       if (u.faction === player) continue;
       const st = UNITS[u.kind];
       // only what can hurt what we guard: buildings and harvesters are ground targets
-      // (a Condor bringing squads counts: they're about to land on top of us)
-      if ((st.targets === "none" || st.targets === "air" || st.dps <= 0) && !isLoaded(u)) continue;
+      // (a Condor counts: it may bring squads to land on top of us, and what it carries is hidden)
+      if ((st.targets === "none" || st.targets === "air" || st.dps <= 0) && !isTransport(u.kind)) continue;
       if (!unitSeenBy(w, player, u)) continue;
       if (!guards.some((g) => Math.hypot(g.x - u.x, g.y - u.y) - g.r <= I.radius)) continue;
       near.push({ id: u.id, x: u.x, y: u.y, kind: u.kind });

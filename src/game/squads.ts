@@ -78,8 +78,10 @@ export class Squads {
     const out: number[] = [];
     let aboard: Map<number, Aboard> | null = null;
     for (const id of this.slots[i] ?? []) {
-      if (w.units.has(id)) out.push(id);
-      else {
+      // (a member Condor may already be in, for a member riding in it)
+      if (w.units.has(id)) {
+        if (!out.includes(id)) out.push(id);
+      } else {
         aboard ??= aboardOf(w);
         const c = aboard.get(id)?.carrier;
         if (c && c.faction === this.faction && !out.includes(c.id)) out.push(c.id);

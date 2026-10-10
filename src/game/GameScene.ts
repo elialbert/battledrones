@@ -250,6 +250,7 @@ export class GameScene {
       player: PLAYER,
       spectator: gameMode.spectator,
       visibleAt: (x, y) => this.tileVisible(x, y),
+      seesUnit: (u) => this.unitVisible(u),
       earshot: (x, y) => this.earshot(x, y),
       alert: (msg, x, y) => this.hud.alert(msg, x, y),
       notify: (msg, tone) => this.hud.notify(msg, tone),
@@ -269,6 +270,7 @@ export class GameScene {
       player: PLAYER,
       spectator: gameMode.spectator,
       seesPoint: (x, y) => this.seesPoint(x, y),
+      seesUnit: (u) => this.unitVisible(u),
       unitPos: (id) => this.entities.pos(id),
       notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
     });
@@ -713,6 +715,9 @@ export class GameScene {
         break;
       case "heal": {
         if (!this.seesPoint(ev.x, ev.y)) return;
+        // (no beam into the fog, or onto a Sniper Team hidden in the woods: it would mark the spot)
+        const target = w.units.get(ev.targetId);
+        if (target ? !this.unitVisible(target) : !this.seesPoint(ev.tx, ev.ty)) return;
         const from = this.entities.pos(ev.sourceId);
         const to = this.entities.pos(ev.targetId);
         if (from && to) this.fx.heal({ x: from.x, y: from.y, h: from.h - 0.05 }, { x: to.x, y: to.y, h: (to.h + to.top) / 2 });
@@ -752,7 +757,8 @@ export class GameScene {
         break;
       case "rankUp": {
         const u = w.units.get(ev.id);
-        if (!u || !this.seesPoint(u.x, u.y)) return;
+        // (a Veterans crate promotes a hidden Sniper Team too: no gold ring on its spot)
+        if (!u || !this.unitVisible(u)) return;
         const p = this.entities.pos(u.id);
         this.fx.pulse(u.x, u.y, 0xffd66e, 1, UNITS[u.kind].domain === "air" && p ? p.h - 0.1 : undefined);
         if (u.faction === PLAYER && !voices.answers(this.voiceHooks)) sfx.play("rank", 0.7); // else a voiced sparkle
@@ -1100,14 +1106,18 @@ export class GameScene {
           this.boxRect.y1 = sy;
         }
       },
-      onBoxEnd: (sx, sy) => {
+      onBoxEnd: (sx, sy, released) => {
         if (!this.boxRect) return;
         const b = this.boxRect;
         this.boxRect = null;
-        // a long-press released without dragging (the degenerate box): with loaded
-        // Condors selected, they fly there and drop their squads
+        // cut short (a second finger to pinch, a cancelled pointer): no drop, no selection
+        if (!released) return;
+        // a long-press released without dragging (the degenerate box): an armed
+        // calldown fires there (press and hold to aim), as a tap would; else, with
+        // loaded Condors selected, they fly there and drop their squads
         if (isHoldRelease(b.x0, b.y0, sx, sy)) {
           const p = this.worldAt(sx, sy);
+          if (this.powerUi?.tapWorld(p.x, p.y)) return;
           if (this.ctrl.dropAt(p.x, p.y)) return;
         }
         const x0 = Math.min(b.x0, sx);

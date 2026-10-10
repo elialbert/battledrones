@@ -23,7 +23,10 @@ for (const type of ["gesturestart", "gesturechange", "gestureend"])
 document.addEventListener(
   "touchmove",
   (e) => {
-    if ((e as TouchEvent & { scale?: number }).scale !== 1) e.preventDefault();
+    // (only iOS has a pinch scale; elsewhere it's undefined, and an uncancelable
+    // move — a scroll already under way — just logs an intervention)
+    const scale = (e as TouchEvent & { scale?: number }).scale;
+    if (e.cancelable && typeof scale === "number" && scale !== 1) e.preventDefault();
   },
   { passive: false }
 );

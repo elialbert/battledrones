@@ -280,7 +280,7 @@ describe("hotspots and hero toasts", () => {
     const w = arena();
     const notes: string[] = [];
     const hp = new HeroPresenter(null, w, {
-      player: "blue", spectator: false, seesPoint: () => true, unitPos: () => null,
+      player: "blue", spectator: false, seesPoint: () => true, seesUnit: () => true, unitPos: () => null,
       notify: (m) => notes.push(m)
     });
     const vet = { id: 501, faction: "blue" as Faction, rank: 2, kills: 7, killerId: hqOf(w, "red")!.id };

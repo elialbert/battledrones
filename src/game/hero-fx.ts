@@ -1,5 +1,5 @@
 import { UNITS } from "../sim/balance";
-import type { Faction, FxEvent, PowerKind, World } from "../sim/types";
+import type { Faction, FxEvent, PowerKind, Unit, World } from "../sim/types";
 import { announce } from "./announce";
 import type { Label } from "./three/screen";
 import { Ease } from "./three/tween";
@@ -22,6 +22,8 @@ export interface HeroPresenterOpts {
   spectator: boolean;
   /** May the local player see this tile position? */
   seesPoint(x: number, y: number): boolean;
+  /** May the local player see this unit (its tile in sight, and not a Sniper Team hidden in the woods)? */
+  seesUnit(u: Unit): boolean;
   /** Rendered position of a unit (tiles) and the height of its top, if drawn. */
   unitPos(id: number): { x: number; y: number; top: number } | null;
   /** Show a small HUD notice; tapping it jumps the camera to (x, y). */
@@ -123,7 +125,7 @@ export class HeroPresenter {
     // titles over your own units; an enemy's only once it's dangerous
     const p = this.opts.unitPos(id) ?? { x: u.x, y: u.y, top: UNITS[u.kind].radius };
     const onScreen = this.v?.rig.onScreen(p.x, p.y) ?? false;
-    if (onScreen && this.opts.seesPoint(u.x, u.y) && (mine || u.rank >= NAMED_RANK))
+    if (onScreen && this.opts.seesUnit(u) && (mine || u.rank >= NAMED_RANK))
       this.floatTitle(id, p.x, p.y, p.top + 0.15, u.rank, mine);
     if (u.rank < NAMED_RANK || this.opts.spectator || u.faction !== this.opts.player) return;
     const name = callsignOf(this.w, u);

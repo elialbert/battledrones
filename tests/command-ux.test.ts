@@ -188,6 +188,19 @@ describe("controller: touch placement", () => {
     expect(c.idleArmy()).toEqual([a.id]);
   });
 
+  it("⚔ Select army and 💤 Idle leave out harvesters and the unarmed Condor", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const squad = spawnUnit(w, "trooper", "blue", 11, 10);
+    spawnUnit(w, "harvester", "blue", 12, 10);
+    spawnUnit(w, "condor", "blue", 13, 10);
+    spawnUnit(w, "stinger", "red", 14, 10);
+    c.selectArmy();
+    expect([...c.selectedUnits]).toEqual([tank.id, squad.id]);
+    expect(c.idleArmy()).toEqual([tank.id, squad.id]);
+  });
+
   it("Shift+click adds a unit to the selection, or takes it out", () => {
     const w = field();
     const c = new Controller(w);
@@ -372,6 +385,28 @@ describe("build advisor", () => {
     expect(counterAdvice(w, "blue", intel, "flak-crawler", 1).active).toBe(false); // 380 ≥ 300
     // the info card still explains it
     expect(adviceNote(counterAdvice(w, "blue", intel, "flak-crawler", 1))).toBe("Counters Wasps (seen ×2)");
+  });
+
+  it("counts squads riding in Condors toward the answer", () => {
+    const w = scene();
+    const intel = new EnemyIntel(w, "blue");
+    spawnUnit(w, "titan", "red", 8, 9);
+    spawnUnit(w, "titan", "red", 9, 9);
+    tickFog(w);
+    intel.update(0);
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(true);
+    // enough Rocket Squads on the field answer the Titans…
+    const squads: Unit[] = [];
+    while (counterAdvice(w, "blue", intel, "rocket-squad", 0).active) squads.push(spawnUnit(w, "rocket-squad", "blue", 5, 12));
+    // …and still do once they're aboard Condors for a drop
+    for (let i = 0; i < squads.length; i += 2) {
+      const condor = spawnUnit(w, "condor", "blue", 6, 12);
+      for (const u of squads.slice(i, i + 2)) {
+        w.units.delete(u.id);
+        condor.passengers!.push(u);
+      }
+    }
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(false);
   });
 
   it("never suggests an option the match rules ban (Air War: no Flak, no SAM Sites)", () => {
@@ -645,5 +680,15 @@ describe("Condor: boarding and drops from taps", () => {
     w.units.delete(condor.id);
     c.prune();
     expect(c.squads.slots[0]).toEqual([t2.id, tank.id]);
+  });
+
+  it("a squad saved with its Condor selects that Condor once when its riders are aboard", () => {
+    const { w, c, condor, t1 } = bay();
+    c.selectUnits([t1.id, condor.id]);
+    c.assignSquad(0);
+    embark(w, condor, t1);
+    expect(c.squads.ids(0, w)).toEqual([condor.id]);
+    expect(c.selectSquad(0)).toBe(1);
+    expect(c.squads.matches(0, c.selectedUnits, w)).toBe(true); // (the chip lights up)
   });
 });
