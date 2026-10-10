@@ -126,6 +126,8 @@ function memo(s: AiState): Memo {
  */
 export function dropsCondors(w: World, faction: Faction, s: AiState): boolean {
   if (s.difficulty === "easy" || w.survival || !Number.isFinite(s.strategy.harassGroup)) return false;
+  // island relays: every Condor flies the airlift (ai/airlift.ts), not raids
+  if (w.objectives.uplinks.some((l) => l.infantryOnly)) return false;
   const everyone = infantryArmy(w, faction) || rulesOf(w).startUnits.includes("condor");
   if (s.strategy.name !== "rush" && s.strategy.name !== "balanced" && !everyone) return false;
   return bannedBy(w, "condor", faction) === null && bannedBy(w, "trooper", faction) === null;
@@ -514,7 +516,7 @@ function guarded(enemies: readonly Sighting[], value: number, p: { x: number; y:
 }
 
 /** The anti-air picture (aaSources over `enemies`): is a spot covered, is a straight flight clear of cover? */
-function airspace(w: World, faction: Faction, enemies: readonly Sighting[]) {
+export function airspace(w: World, faction: Faction, enemies: readonly Sighting[]) {
   const sources = aaSources(w, faction, enemies);
   const covered = (x: number, y: number) => aaStrengthAt(sources, x, y) >= AA_COVER;
   const clear = (ax: number, ay: number, bx: number, by: number) => {
@@ -534,7 +536,7 @@ interface DropPlan {
 }
 
 /** A point kept a tile inside the map. */
-const inMap = (w: World, p: { x: number; y: number }) => ({
+export const inMap = (w: World, p: { x: number; y: number }) => ({
   x: Math.min(w.width - 1, Math.max(1, p.x)),
   y: Math.min(w.height - 1, Math.max(1, p.y))
 });
@@ -544,7 +546,7 @@ const inMap = (w: World, p: { x: number; y: number }) => ({
  * null for straight in, a flank waypoint off to one side of the straight
  * line, or undefined when there's no clear way.
  */
-function route(
+export function route(
   w: World,
   c: Unit,
   drop: { x: number; y: number },

@@ -267,8 +267,16 @@ export function nearestScrapTile(w: World, x: number, y: number, faction?: Facti
  * Nearest resource tile a ground unit at (x, y) can actually drive to,
  * by breadth-first search over passable tiles (8-way, no corner cutting).
  * Straight-line distance is fooled by rivers and rock-locked tiles.
+ * `accept` (optional) skips fields it turns down (the AI keeps to its own
+ * side of an island map's bridges).
  */
-export function nearestReachableResource(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
+export function nearestReachableResource(
+  w: World,
+  x: number,
+  y: number,
+  faction?: Faction,
+  accept?: (tx: number, ty: number) => boolean
+): { x: number; y: number } | null {
   const W = w.width;
   // neighbour order in the side's own frame: red's BFS is blue's, turned 180°
   const s = faction === "red" ? -1 : 1;
@@ -282,7 +290,7 @@ export function nearestReachableResource(w: World, x: number, y: number, faction
   seen[start] = 1;
   while (head < tail) {
     const cur = queue[head++]!;
-    if (isResource(w, cur)) return { x: cur % W, y: Math.floor(cur / W) };
+    if (isResource(w, cur) && (!accept || accept(cur % W, Math.floor(cur / W)))) return { x: cur % W, y: Math.floor(cur / W) };
     const cx = cur % W;
     const cy = Math.floor(cur / W);
     for (let i = -1; i <= 1; i++)

@@ -12,6 +12,7 @@ import { planSalvage } from "./salvage";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
+import { AIRLIFT, airliftActive, airliftHolds, airliftSquadsWanted, airliftWantsCondor, offHomeLand, planAirlift } from "./airlift";
 import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectiveness, effectivenessVs, seenEnemies } from "./intel";
 import type {
   ArmorClass,
@@ -27,9 +28,11 @@ import type {
 } from "../types";
 import {
   buildingCenter,
+  canGetWithin,
   dist,
   hqOf,
   isResource,
+  moveClassOf,
   nearestDropOff,
   sideFrame,
   tileIndex
@@ -298,7 +301,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const mine = [...w.units.values()].filter((u) => u.faction === faction);
   const myBuildings = [...w.buildings.values()].filter((b) => b.faction === faction);
   const harvesters = mine.filter((u) => u.kind === "harvester");
-  const army = mine.filter((u) => COMBAT_KINDS.includes(u.kind));
+  // (island maps: squads holding an island relay, or stranded on one, are the airlift's — ai/airlift.ts —
+  // never counted toward a wave they can't walk to)
+  const army = mine.filter((u) => COMBAT_KINDS.includes(u.kind) && !offHomeLand(w, faction, u));
+  const airlifts = airliftActive(w, faction, s);
   const armyValue = value(army);
   const count = (k: UnitKind) => mine.filter((u) => u.kind === k).length;
   const queued = (k: UnitKind) =>
@@ -310,7 +316,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   observeEnemy(s, seen);
 
   const hqC = buildingCenter(hq);
-  const activeField = nearestScrapTile(w, hqC.x, hqC.y, faction);
+  // island maps: the two landmasses meet only at the bridges, and a field on
+  // the enemy's side of them is theirs to defend, not ours to mine
+  const islandMap = !!w.rules?.islands;
+  const enemyHome = mirror(w, hqC.x, hqC.y);
+  const ourSide = (tx: number, ty: number) =>
+    dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
+  const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
+  const activeField = nearestField && (!islandMap || ourSide(nearestField.x, nearestField.y)) ? nearestField : null;
   /** Where the economy needs defending: the mined field, shaded toward home. */
   const guardPoint = activeField
     ? {
@@ -341,14 +354,22 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- economy: keep the harvester count mining ---------------------------
   const depots = myBuildings.filter((b) => b.kind === "depot").length;
   const wantHarvesters = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots);
-  if (harvesters.length < wantHarvesters && hq.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
+  // (island maps: only fields on our side of the bridges; none left, no more harvesters)
+  const fieldFrom = (x: number, y: number) => nearestReachableResource(w, x, y, faction, islandMap ? ourSide : undefined);
+  const fieldsLeft =
+    !islandMap || harvesters.some((h) => h.order.type === "harvest" && ourSide(h.order.fieldX, h.order.fieldY)) ||
+    !!fieldFrom(hqC.x, hqC.y + (sideFrame(w, faction).flip ? -2.5 : 2.5));
+  if (fieldsLeft && harvesters.length < wantHarvesters && hq.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
     cmds.push({ type: "produce", faction, buildingId: hq.id, unit: "harvester" });
-  for (const h of harvesters)
-    if (h.order.type === "idle") {
-      const field = nearestReachableResource(w, h.x, h.y, faction);
-      if (field)
-        cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
-    }
+  for (const h of harvesters) {
+    const o = h.order;
+    // (a dry field sends a harvester to the nearest one it can reach: never across the bridges)
+    const astray = islandMap && o.type === "harvest" && !ourSide(o.fieldX, o.fieldY);
+    if (h.order.type !== "idle" && !astray) continue;
+    const field = fieldFrom(h.x, h.y);
+    if (field) cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
+    else if (astray) cmds.push({ type: "move", faction, unitIds: [h.id], x: hqC.x, y: hqC.y + (sideFrame(w, faction).flip ? -3 : 3) });
+  }
 
   // --- production: adaptive counters to the enemy composition -------------
   // reserve scrap while an important building is still wanted
@@ -372,75 +393,106 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // floating scrap? keep queues two deep
   const depth = f.scrap > 700 ? 2 : 1;
-  for (const fab of myBuildings.filter((b) => b.kind === "fab-plant")) {
-    if (fab.queue.length >= depth) continue;
-    let kind: UnitKind = "stinger";
-    const r = rand(s);
-    if (s.strategy.airOnly) {
-      // home guard only: a few stingers vs raiders, flak when the skies fill
-      if (ownAA < Math.ceil(s.seenAir * 0.5)) kind = "flak-crawler";
-      else if (have("stinger") >= 3) continue;
-    } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = tech && r < 0.35 ? "lancer" : "flak-crawler";
-    else if (tech && have("mortar") < Math.min(3, 1 + enemyDefenses) && (enemyDefenses > 0 || r < 0.2))
-      kind = "mortar";
-    else if (infantryHeavy && r < 0.65)
-      // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
-      kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
-    else if (tech && s.seenHeavy >= 2 && r < 0.6) kind = "lancer"; // lasers burn through armour
-    else if (tech && (s.strategy.heavy ? r < 0.45 : r < 0.25)) kind = "titan";
-    else if (tech && r < (s.strategy.heavy ? 0.8 : 0.5)) kind = "lancer";
-    produce(fab, kind);
-  }
-  for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
-    if (pad.queue.length >= depth) continue;
-    // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
-    const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
-    const airOnly = s.strategy.airOnly || airWar;
-    const wantRaptors = Math.min(airWar ? 5 : airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
-    const armySize = army.length;
-    let kind: UnitKind;
-    if (have("scout") < 1 && w.tick - s.lastScoutTick > 60 * TICK_RATE) {
-      kind = "scout";
-      s.lastScoutTick = w.tick;
-    }
-    else if (have("raptor") < wantRaptors && !unitBlocker(w, faction, "raptor")) kind = "raptor"; // (Infantry War: no fighters)
-    else if (wantCondor(w, faction, s, have("condor"), count("trooper") + count("rocket-squad"))) kind = "condor";
-    else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
-      kind = "mender";
-    else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < 0.25 + s.seenHeavy * 0.08))
-      kind = "hornet";
-    else if (s.strategy.heavy && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks
-    else kind = "wasp";
-    produce(pad, kind);
-  }
-
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
   // Rockets for armour (and Ironclad's Titan escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers. Under Infantry
   // War the Bays field the whole army: Rockets for the defences, more Snipers.
+  // Island relays (ai/airlift.ts): squads are what holds them, so the Bays
+  // come first, keep a bigger share, and make what the airlift is waiting for.
   const infantryWar = infantryArmy(w, faction);
   // (Airborne: the free Condor needs squads to fly, whatever the personality)
   const infantryShare = infantryWar
     ? 1
-    : Math.max(s.strategy.infantry ?? 0, flysGivenCondor(w, faction, s) ? AIRBORNE_INFANTRY : 0);
+    : Math.max(
+        s.strategy.infantry ?? 0,
+        flysGivenCondor(w, faction, s) ? AIRBORNE_INFANTRY : 0,
+        airlifts ? AIRLIFT.infantry : 0
+      );
   const infantryValue = INFANTRY_KINDS.reduce((v, k) => v + have(k) * UNITS[k].cost, 0);
-  for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
-    if (bay.queue.length >= depth) continue;
-    const r = rand(s);
-    const wantRockets = Math.max(
-      Math.round(have("titan") * (s.strategy.escorts ?? 0)),
-      Math.round(s.seenHeavy * 0.8),
-      infantryWar ? Math.min(6, enemyDefenses) : 0
-    );
-    const wantSnipers =
-      s.difficulty === "easy" || !tech ? 0 : Math.min(infantryWar ? 5 : 3, Math.floor(s.seenInfantry / 3));
-    let kind: UnitKind;
-    if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
-    else if (have("sniper") < wantSnipers) kind = "sniper";
-    else if (infantryValue < infantryShare * Math.max(500, armyValue))
-      kind = ownAA < Math.ceil(s.seenAir * 0.6) || r < 0.2 ? "rocket-squad" : "trooper";
-    else continue;
-    produce(bay, kind);
+  // (the whole force, island garrisons included: the share is of everything we field)
+  const forceValue = airlifts ? value(mine.filter((u) => COMBAT_KINDS.includes(u.kind))) : armyValue;
+  const runBays = () => {
+    let liftWants = airlifts ? airliftSquadsWanted(s) - INFANTRY_KINDS.reduce((n, k) => n + queued(k), 0) : 0;
+    for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
+      if (bay.queue.length >= depth) continue;
+      const r = rand(s);
+      const wantRockets = Math.max(
+        Math.round(have("titan") * (s.strategy.escorts ?? 0)),
+        Math.round(s.seenHeavy * 0.8),
+        infantryWar ? Math.min(6, enemyDefenses) : 0
+      );
+      const wantSnipers =
+        s.difficulty === "easy" || !tech ? 0 : Math.min(infantryWar ? 5 : 3, Math.floor(s.seenInfantry / 3));
+      let kind: UnitKind;
+      if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
+      else if (have("sniper") < wantSnipers) kind = "sniper";
+      else if (liftWants > 0 || infantryValue < infantryShare * Math.max(500, forceValue))
+        // (island garrisons face the enemy's drones alone: Rocket Squads once they fly)
+        kind = ownAA < Math.ceil(s.seenAir * 0.6) || r < 0.2 || (airlifts && s.seenAir >= 2 && r < 0.5) ? "rocket-squad" : "trooper";
+      else continue;
+      liftWants--;
+      produce(bay, kind);
+    }
+  };
+  const runFabs = () => {
+    for (const fab of myBuildings.filter((b) => b.kind === "fab-plant")) {
+      if (fab.queue.length >= depth) continue;
+      let kind: UnitKind = "stinger";
+      const r = rand(s);
+      if (s.strategy.airOnly) {
+        // home guard only: a few stingers vs raiders, flak when the skies fill
+        if (ownAA < Math.ceil(s.seenAir * 0.5)) kind = "flak-crawler";
+        else if (have("stinger") >= 3) continue;
+      } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = tech && r < 0.35 ? "lancer" : "flak-crawler";
+      else if (tech && have("mortar") < Math.min(3, 1 + enemyDefenses) && (enemyDefenses > 0 || r < 0.2))
+        kind = "mortar";
+      else if (infantryHeavy && r < 0.65)
+        // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
+        kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
+      else if (tech && s.seenHeavy >= 2 && r < 0.6) kind = "lancer"; // lasers burn through armour
+      else if (tech && (s.strategy.heavy ? r < 0.45 : r < 0.25)) kind = "titan";
+      else if (tech && r < (s.strategy.heavy ? 0.8 : 0.5)) kind = "lancer";
+      produce(fab, kind);
+    }
+  };
+  const runPads = () => {
+    for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
+      if (pad.queue.length >= depth) continue;
+      // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
+      const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
+      const airOnly = s.strategy.airOnly || airWar;
+      const wantRaptors = Math.min(airWar ? 5 : airOnly ? 7 : 4, Math.ceil(s.seenAir * 0.6));
+      const armySize = army.length;
+      let kind: UnitKind;
+      if (have("scout") < 1 && w.tick - s.lastScoutTick > 60 * TICK_RATE) {
+        kind = "scout";
+        s.lastScoutTick = w.tick;
+      }
+      else if (have("raptor") < wantRaptors && !unitBlocker(w, faction, "raptor")) kind = "raptor"; // (Infantry War: no fighters)
+      else if (
+        airlifts
+          ? airliftWantsCondor(w, faction, s, have("condor"))
+          : wantCondor(w, faction, s, have("condor"), count("trooper") + count("rocket-squad"))
+      )
+        kind = "condor";
+      else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
+        kind = "mender";
+      else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < 0.25 + s.seenHeavy * 0.08))
+        kind = "hornet";
+      else if (s.strategy.heavy && !airlifts && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks (not with islands to clear)
+      else kind = "wasp";
+      produce(pad, kind);
+    }
+  };
+  // (island relays: squads, Condors and the air that clears islands are bought first; tanks with what's left)
+  if (airlifts) {
+    runBays();
+    runPads();
+    runFabs();
+  } else {
+    runFabs();
+    runPads();
+    runBays();
   }
 
   // --- scouting -----------------------------------------------------------
@@ -497,6 +549,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const used = new Set<number>(dodgingUnits(w, s)); // units running from a reticle stay put
   // squads walking up a Condor's ramp, or dropped on a raid, follow the drop plan (ai/condor.ts)
   for (const id of condorHolds(w, s)) used.add(id);
+  for (const id of airliftHolds(w, s)) used.add(id);
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
 
   // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
@@ -513,8 +566,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   for (const t of threats.slice(0, 3)) {
     const wantedValue = UNITS[t.kind].cost * 1.5;
     // (and can hurt it: no Sniper Team sent at a tank)
+    // (and can get at it: no tank sent at a squad on an island)
     const capable = idleArmy()
-      .filter((u) => canHitDomain(UNITS[u.kind].targets, t.domain) && effectiveness(u.kind, t.kind) >= USELESS)
+      .filter(
+        (u) =>
+          canHitDomain(UNITS[u.kind].targets, t.domain) && effectiveness(u.kind, t.kind) >= USELESS &&
+          canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, UNITS[u.kind].range)
+      )
       .sort((a, b) => dist(a.x, a.y, t.x, t.y) - dist(b.x, b.y, t.x, t.y));
     const squad: number[] = [];
     let v = 0;
@@ -553,7 +611,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // --- 1c. Condor drops on the enemy's harvesters (ai/condor.ts) ----------
   // (two cheap squads picked before the guard takes its share: the drop is a deliberate commitment)
-  cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened: raidValue >= HOME_ALARM_VALUE }));
+  // (island relays: every Condor flies the airlift instead, ai/airlift.ts)
+  if (airlifts)
+    cmds.push(...planAirlift(w, faction, s, { mine, army, used, hqC, seen, threatened: raidValue >= HOME_ALARM_VALUE }));
+  else cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened: raidValue >= HOME_ALARM_VALUE }));
 
   // --- 2. economy guard: a share of the army holds the mining line --------
   const guardShare = s.mode === "assault" ? 0.15 : 0.35;
@@ -817,6 +878,15 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   // Titans (or Hornets) seen, or a Condor to fill (Airborne): an Assembly Bay, early in the queue
   if (((s.strategy.bayVsArmour && s.seenHeavy >= 2) || flysGivenCondor(w, faction, s)) && !order.includes("assembly-bay"))
     order.splice(Math.min(order.length, 3), 0, "assembly-bay");
+  // island relays (ai/airlift.ts): squads hold them, so the Assembly Bay comes
+  // second; and an Airpad by third, for more Condors and the air that clears islands
+  if (airliftActive(w, faction, s))
+    (["assembly-bay", "airpad"] as const).forEach((k, slot) => {
+      const i = order.indexOf(k);
+      if (i >= 0 && i <= slot + 1) return;
+      if (i > 0) order.splice(i, 1);
+      order.splice(Math.min(order.length, slot + 1), 0, k);
+    });
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
