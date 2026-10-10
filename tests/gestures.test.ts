@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GestureRecognizer } from "../src/game/gestures";
+import { GestureRecognizer, TAP_SLOP_PX, isHoldRelease } from "../src/game/gestures";
 
 function makeCallbacks() {
   return {
@@ -63,7 +63,7 @@ describe("touch gestures", () => {
     g.move(touch(1, 180, 160), 350);
     expect(cb.onBoxMove).toHaveBeenCalledWith(180, 160);
     g.up(touch(1, 180, 160), 400);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(180, 160);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(180, 160, true);
     expect(cb.onTap).not.toHaveBeenCalled();
     expect(cb.onPan).not.toHaveBeenCalled();
   });
@@ -72,7 +72,60 @@ describe("touch gestures", () => {
     g.down(touch(1, 100, 100), 0);
     g.tick(300);
     g.up(touch(1, 100, 100), 500);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(100, 100);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(100, 100, true);
+    expect(cb.onTap).not.toHaveBeenCalled();
+  });
+
+  it("tells a hold released in place (a Condor drop) from a box drag", () => {
+    const box = () => {
+      const [x0, y0] = cb.onBoxStart.mock.calls.at(-1)!;
+      const [x1, y1] = cb.onBoxEnd.mock.calls.at(-1)!;
+      return isHoldRelease(x0, y0, x1, y1);
+    };
+    // held still (a finger's jitter included), with or without the tick firing first
+    g.down(touch(1, 100, 100), 0);
+    g.tick(300);
+    g.move(touch(1, 104, 103), 350);
+    g.up(touch(1, 104, 103), 400);
+    expect(box()).toBe(true);
+    g.down(touch(1, 200, 200), 1000);
+    g.up(touch(1, 202, 199), 1400);
+    expect(box()).toBe(true);
+    // a real box drag
+    g.down(touch(1, 100, 100), 2000);
+    g.tick(2300);
+    g.move(touch(1, 100 + TAP_SLOP_PX + 6, 140), 2350);
+    g.up(touch(1, 100 + TAP_SLOP_PX + 6, 140), 2400);
+    expect(box()).toBe(false);
+    expect(cb.onTap).not.toHaveBeenCalled();
+    // the line is the tap slop
+    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX * 0.7, 100 + TAP_SLOP_PX * 0.7)).toBe(true);
+    expect(isHoldRelease(100, 100, 100 + TAP_SLOP_PX + 1, 100)).toBe(false);
+  });
+
+  it("a box cut short by a second finger or a cancel is not released (never a Condor drop)", () => {
+    const ended = () => cb.onBoxEnd.mock.calls.at(-1)!;
+    // a still hold, then a second finger comes down to pinch
+    g.down(touch(1, 100, 100), 0);
+    g.tick(300);
+    g.down(touch(2, 200, 100), 400);
+    expect(ended()).toEqual([100, 100, false]);
+    g.move(touch(2, 260, 100), 450);
+    g.up(touch(2, 260, 100), 500);
+    g.up(touch(1, 100, 100), 510);
+    expect(cb.onBoxEnd).toHaveBeenCalledTimes(1);
+    expect(cb.onPinch).toHaveBeenCalled();
+    // a still hold, then the OS takes the pointer
+    g.down(touch(1, 100, 100), 1000);
+    g.tick(1300);
+    g.cancel(touch(1, 100, 100));
+    expect(ended()).toEqual([100, 100, false]);
+    // a dragged box cut short ends where it was dragged to, not where it began
+    g.down(touch(1, 100, 100), 2000);
+    g.tick(2300);
+    g.move(touch(1, 160, 170), 2350);
+    g.down(touch(2, 300, 300), 2400);
+    expect(ended()).toEqual([160, 170, false]);
     expect(cb.onTap).not.toHaveBeenCalled();
   });
 
@@ -127,7 +180,7 @@ describe("mouse gestures", () => {
     expect(cb.onBoxStart).toHaveBeenCalledWith(60, 60);
     expect(cb.onBoxMove).toHaveBeenCalledWith(120, 130);
     g.up(mouse(120, 130), 100);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130, true);
     expect(cb.onPan).not.toHaveBeenCalled();
   });
 

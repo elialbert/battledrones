@@ -8,12 +8,16 @@
 // seeds, one JSON line per match (see pacing-match.ts). Shard it across
 // processes (`--shard 0/4` … `3/4`) and feed all the files to `summary`.
 // `--tune '{"POWERS.passive":0.05,"STRATEGIES.rush.assaultValue":1200}'`
-// overrides exported balance numbers (and AI personalities) for an A/B run.
+// overrides exported balance numbers (and AI personalities, and the Condor drop plan:
+// "CONDOR_AI.maxBuilt":0) for an A/B run.
 // `--mirror` plays each personality against itself instead (the side-fairness
 // check: red's share of decided games and of harvest at 4:00, by map).
+// `--with rush` keeps only the pairings that include that personality (a quick
+// look at one; its pairings keep the seeds they have in the full panel).
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import * as balance from "../src/sim/balance";
 import { STRATEGIES, type StrategyName } from "../src/sim/ai/commander";
+import { CONDOR_AI } from "../src/sim/ai/condor";
 import { MAPS } from "../src/sim/maps";
 import type { Faction } from "../src/sim/types";
 import { playMatch, type Match } from "./pacing-match";
@@ -27,7 +31,7 @@ function arg(name: string): string | undefined {
 
 function applyTune(json: string | undefined): void {
   if (!json) return;
-  const roots: Record<string, unknown> = { ...balance, STRATEGIES };
+  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI };
   for (const [path, v] of Object.entries(JSON.parse(json) as Record<string, unknown>)) {
     const parts = path.split(".");
     let o = roots as Record<string, unknown>;
@@ -47,6 +51,7 @@ function run(): void {
   const maps = arg("--maps")?.split(",") ?? MAPS.map((x) => x.id);
   const names = Object.keys(STRATEGIES) as StrategyName[];
   const mirror = process.argv.includes("--mirror");
+  const only = arg("--with");
   writeFileSync(out, "");
   let idx = 0;
   for (let s = 0; s < seeds; s++)
@@ -55,6 +60,7 @@ function run(): void {
         for (const r of names) {
           if ((b === r) !== mirror) continue;
           const job = idx++;
+          if (only && b !== only && r !== only) continue;
           if (job % shards !== shard) continue;
           const m = playMatch(map, b, r, 7000 + job * 13 + s * 1000, 11 + job * 2);
           appendFileSync(out, JSON.stringify(m) + "\n");

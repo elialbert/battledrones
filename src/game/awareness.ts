@@ -7,16 +7,16 @@
  *
  * Everything here is fog-respecting: hotspots come only from hits on the
  * player's own things and shots fired by them, inbound warnings and the
- * meter only count enemies the player can currently see. Spectators get
- * everything. Detection windows and cooldowns are sim seconds, so the game
+ * meter only count enemies the player can currently see (never a Sniper
+ * Team hidden in the woods). Spectators get everything. Detection windows and cooldowns are sim seconds, so the game
  * speed needs no special casing. Rendering and DOM live in
  * src/game/awareness-view.ts and src/ui/awareness.ts; this file is
  * unit-tested (tests/awareness.test.ts).
  */
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
-import { isVisible } from "../sim/fog";
+import { isTransport, unitSeenBy } from "../sim/infantry";
 import { POWER_NAMES } from "../sim/powers";
-import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
+import type { Faction, FxEvent, Unit, UnitKind, World } from "../sim/types";
 import { CalldownCredit } from "./calldown-credit";
 
 export const AWARE = {
@@ -394,11 +394,18 @@ export function raidAdvice(domain: RaidDomain, lead: UnitKind): { what: string; 
   if (domain === "mixed") return { what: "strike force", advice: "Flak and Titans, or a Turret" };
   if (domain === "air") {
     if (lead === "hornet") return { what: "bombers", advice: "Flak, Raptors or a SAM" };
+    if (lead === "condor") return { what: "dropships", advice: "Flak, Raptors or a SAM" };
     return { what: "drones", advice: "Flak, Raptors or a Turret" };
   }
   switch (lead) {
     case "titan":
-      return { what: "Titans", advice: "Lancers, Wasps or Hornets" };
+      return { what: "Titans", advice: "Rocket Squads, Lancers or Wasps" };
+    case "trooper":
+      return { what: "troops", advice: "Mortars, Turrets or Snipers" };
+    case "rocket-squad":
+      return { what: "rocket troops", advice: "Troopers, Mortars or Snipers" };
+    case "sniper":
+      return { what: "snipers", advice: "rush them with Stingers or Wasps" };
     case "mortar":
       return { what: "artillery", advice: "close in with Stingers or Wasps" };
     case "lancer":
@@ -424,8 +431,8 @@ interface Group {
 }
 
 /**
- * "Enemy drones inbound": watches for visible armed enemy units coming
- * within AWARE.inbound.radius tiles of the player's buildings or harvesters,
+ * "Enemy drones inbound": watches for visible armed enemy units (and Condors,
+ * loaded or not) coming within AWARE.inbound.radius tiles of the player's buildings or harvesters,
  * and warns once per group (a group seen in the zone within the last 20 s
  * isn't new), with counter advice by domain. Only what the player can see
  * counts, so it never reveals anything the fog hides.
@@ -475,8 +482,9 @@ export class InboundWatch {
       if (u.faction === player) continue;
       const st = UNITS[u.kind];
       // only what can hurt what we guard: buildings and harvesters are ground targets
-      if (st.targets === "none" || st.targets === "air" || st.dps <= 0) continue;
-      if (!isVisible(w, player, Math.floor(u.x), Math.floor(u.y))) continue;
+      // (a Condor counts: it may bring squads to land on top of us, and what it carries is hidden)
+      if ((st.targets === "none" || st.targets === "air" || st.dps <= 0) && !isTransport(u.kind)) continue;
+      if (!unitSeenBy(w, player, u)) continue;
       if (!guards.some((g) => Math.hypot(g.x - u.x, g.y - u.y) - g.r <= I.radius)) continue;
       near.push({ id: u.id, x: u.x, y: u.y, kind: u.kind });
     }
@@ -647,14 +655,17 @@ export interface SideTally {
 /**
  * Who is winning the fight in view? Units (and armed defences) inside the
  * view rectangle, scored cost × remaining HP fraction. Enemies count only if
- * the player can see them (`visible`); harvesters and other unarmed units
- * don't count. Spectators: `player` is blue and `visible` always true.
+ * the player can see them (`visible`, and `seen` for the unit itself: a
+ * Sniper Team hidden in the woods doesn't count); harvesters and other
+ * unarmed units don't count. Spectators: `player` is blue and `visible`
+ * always true.
  */
 export function tallyView(
   w: World,
   player: Faction,
   inView: (x: number, y: number) => boolean,
-  visible: (x: number, y: number) => boolean
+  visible: (x: number, y: number) => boolean,
+  seen: (u: Unit) => boolean = () => true
 ): { own: SideTally; enemy: SideTally } {
   const own: SideTally = { n: 0, value: 0 };
   const enemy: SideTally = { n: 0, value: 0 };
@@ -662,7 +673,7 @@ export function tallyView(
     const st = UNITS[u.kind];
     if (st.targets === "none" || !inView(u.x, u.y)) continue;
     const mine = u.faction === player;
-    if (!mine && !visible(u.x, u.y)) continue;
+    if (!mine && (!visible(u.x, u.y) || !seen(u))) continue;
     const side = mine ? own : enemy;
     side.n++;
     side.value += st.cost * Math.max(0, u.hp) / st.hp;

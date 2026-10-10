@@ -82,6 +82,8 @@ describe("Ops: rules", () => {
     expect(buildingBlocker(w, "blue", "fab-plant")).toBe("Disabled in this op");
     expect(buildingBlocker(w, "red", "fab-plant")).toBeNull();
     expect(unitBlocker(w, "blue", "raptor")).toBeNull();
+    // ground units banned: so is the Condor that would fly the starting squad into the fight
+    expect(unitBlocker(w, "blue", "condor")).toBe("Disabled in this op");
   });
 
   it("Decapitation: no production of any kind, and no income", () => {

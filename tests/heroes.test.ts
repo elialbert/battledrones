@@ -6,7 +6,12 @@ import { createSkirmishWorld } from "../src/sim/map";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
 import type { Command, FactionStats, World } from "../src/sim/types";
-import { buildingCenter, dist, hqOf, spawnUnit } from "../src/sim/world";
+import { buildingCenter, createWorld, dist, hqOf, setTerrain, spawnUnit } from "../src/sim/world";
+import { isVisible, tickFog } from "../src/sim/fog";
+import { unitSeenBy } from "../src/sim/infantry";
+import { Terrain } from "../src/sim/types";
+import { HeroPresenter } from "../src/game/hero-fx";
+import type { View } from "../src/game/three/view";
 import {
   CALLSIGNS,
   CallsignRegistry,
@@ -234,6 +239,13 @@ describe("chronicle analysis", () => {
     expect(pickTip(idle)).toMatch(/idle .* 45%/);
     const won = { ...base, won: true, built: { blue: { "flak-crawler": 3 }, red: {} } };
     expect(pickTip(won)).toMatch(/harder AI/);
+    // a swarm of robot infantry met with no splash or Snipers; Titans met with no Rocket Squads
+    const swarm = { ...base, built: { blue: { "flak-crawler": 3, titan: 6 }, red: { trooper: 7, "rocket-squad": 3 } } };
+    expect(pickTip(swarm)).toMatch(/10 infantry squads.*Mortars/);
+    expect(pickTip({ ...swarm, built: { ...swarm.built, blue: { "flak-crawler": 3, mortar: 2 } } })).not.toMatch(/infantry/);
+    const titans = { ...base, built: { blue: { "flak-crawler": 3 }, red: { titan: 5 } } };
+    expect(pickTip(titans)).toMatch(/5 Titans.*Rocket Squads/);
+    expect(pickTip({ ...titans, built: { ...titans.built, blue: { "flak-crawler": 3, "rocket-squad": 3 } } })).not.toMatch(/Titans/);
   });
 
   it("records a real match: samples, kills, and an MVP that matches the best unit", () => {
@@ -258,6 +270,54 @@ describe("chronicle analysis", () => {
       else expect(live).toBe(0);
     }
     expect(Object.values(c.built.blue).reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+  });
+});
+
+describe("chronicle: squads riding in a Condor", () => {
+  it("still count toward the army, and a veteran aboard can still be the MVP", () => {
+    const w = createMapWorld("frostbite", { seed: 3 });
+    const c = new Chronicle(w);
+    const hq = buildingCenter(hqOf(w, "blue")!);
+    const condor = spawnUnit(w, "condor", "blue", hq.x + 4, hq.y + 4);
+    const ace = spawnUnit(w, "sniper", "blue", hq.x + 4, hq.y + 5);
+    ace.kills = 7;
+    ace.rank = 2;
+    c.sample();
+    const before = c.samples.at(-1)!.army.blue;
+    w.units.delete(ace.id);
+    condor.passengers!.push(ace);
+    c.sample();
+    expect(c.samples.at(-1)!.army.blue).toBeCloseTo(before);
+    expect(c.mvp().blue).toMatchObject({ id: ace.id, kind: "sniper", kills: 7, alive: true });
+  });
+});
+
+describe("promotion titles", () => {
+  it("float over an enemy veteran in sight, never over a Sniper Team hidden in the woods", () => {
+    const w = createWorld(32, 32);
+    setTerrain(w, 10, 10, Terrain.Forest);
+    spawnUnit(w, "scout", "blue", 5.5, 10.5); // 5 tiles off: the woods tile is in sight
+    const sniper = spawnUnit(w, "sniper", "red", 10.5, 10.5);
+    const titan = spawnUnit(w, "titan", "red", 8.5, 13.5);
+    sniper.rank = titan.rank = 2;
+    w.tick = 100;
+    tickFog(w);
+    expect(isVisible(w, "blue", 10, 10)).toBe(true);
+    const titles: string[] = [];
+    const view = {
+      rig: { onScreen: () => true },
+      screen: { label: (o: { text: string }) => (titles.push(o.text), { ...o }), remove: () => {} },
+      tweens: { add: () => {}, kill: () => {} }
+    } as unknown as View;
+    const hp = new HeroPresenter(view, w, {
+      player: "blue", spectator: false, seesPoint: () => true, seesUnit: (u) => unitSeenBy(w, "blue", u),
+      unitPos: () => null, notify: () => {}
+    });
+    // (a Veterans crate promotes everything near the collector, the hidden sniper included)
+    hp.handleFx({ type: "rankUp", id: sniper.id });
+    expect(titles).toEqual([]);
+    hp.handleFx({ type: "rankUp", id: titan.id });
+    expect(titles).toEqual(["HARDENED"]);
   });
 });
 

@@ -1,11 +1,12 @@
-import { BUILDINGS, ECONOMY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
+import { BUILDINGS, ECONOMY, INFANTRY as INF, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
 import { buildingBlocker, unitBlocker } from "../sim/economy";
 import { Vis } from "../sim/fog";
-import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
+import { isTransport, squadAlive, squadSize, unitSeenBy } from "../sim/infantry";
+import type { BuildingKind, Faction, Unit, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { mapAssetBase } from "../game/assets";
 import type { Controller } from "../game/controller";
-import { PLAYER } from "../game/controller";
+import { PLAYER, isArmyUnit, isProducer } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
 import { radioCue } from "../game/announcer";
 import { mountAudioToggles } from "./audio-panel";
@@ -71,17 +72,27 @@ export interface Hud {
   destroy(): void;
 }
 
-type Tab = "build" | "ground" | "air";
+type Tab = "build" | "ground" | "infantry" | "air";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "build", label: "Base", icon: "🏗" },
   { id: "ground", label: "Vehicles", icon: "⛓" },
+  { id: "infantry", label: "Infantry", icon: "🤖" },
   { id: "air", label: "Aircraft", icon: "✈" }
 ];
 
-const BUILDABLE: BuildingKind[] = ["fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar"];
+const BUILDABLE: BuildingKind[] = ["fab-plant", "airpad", "assembly-bay", "tech-lab", "depot", "turret", "sam-site", "radar"];
 const GROUND: UnitKind[] = ["harvester", "stinger", "flak-crawler", "mortar", "titan", "lancer"];
-const AIR: UnitKind[] = ["scout", "wasp", "raptor", "hornet", "mender"];
+const INFANTRY: UnitKind[] = ["trooper", "rocket-squad", "sniper"];
+const AIR: UnitKind[] = ["scout", "wasp", "raptor", "hornet", "mender", "condor"];
+const UNIT_TABS: { tab: Tab; kinds: UnitKind[] }[] = [
+  { tab: "ground", kinds: GROUND },
+  { tab: "infantry", kinds: INFANTRY },
+  { tab: "air", kinds: AIR }
+];
+const ALL_UNITS = UNIT_TABS.flatMap((t) => t.kinds);
+/** The build-bar tab a unit's button sits on. */
+const tabOf = (kind: UnitKind): Tab => UNIT_TABS.find((t) => t.kinds.includes(kind))?.tab ?? "ground";
 
 /** Counter hints for the info card, distilled from the duel matrix (tools/balance.ts). */
 const MATCHUPS: Partial<Record<UnitKind | BuildingKind, { strong: string; weak: string }>> = {
@@ -90,19 +101,25 @@ const MATCHUPS: Partial<Record<UnitKind | BuildingKind, { strong: string; weak: 
   stinger: { strong: "Flak, Mortars, Lancers, Harvesters", weak: "Wasps, Titans, Hornets" },
   "flak-crawler": { strong: "All aircraft", weak: "Any ground unit" },
   mortar: { strong: "Buildings, clumped armies", weak: "Stingers up close, aircraft" },
-  titan: { strong: "Stingers, Flak, Mortars", weak: "Lancers, Wasps, Hornets" },
+  titan: { strong: "Stingers, Flak, Mortars", weak: "Rocket Squads, Lancers, Wasps" },
   lancer: { strong: "Titans, Flak, Raptors; crosses water", weak: "Stinger swarms, Hornets" },
   wasp: { strong: "Stingers, Titans, Mortars", weak: "Flak, Raptors, Lancers" },
   raptor: { strong: "Wasps, Hornets, Scouts", weak: "Flak, Lancers, SAMs" },
   hornet: { strong: "Bases, Titans, clumps", weak: "Flak, Raptors, SAMs" },
   mender: { strong: "Keeps your army alive", weak: "Anything that shoots air" },
-  turret: { strong: "Raids by ground or air", weak: "Mortars, Hornets" },
-  "sam-site": { strong: "Aircraft at long range", weak: "Any ground unit" }
+  trooper: { strong: "Rocket Squads, light raids; shoots air too", weak: "Snipers, Mortars, Hornets, Turrets" },
+  "rocket-squad": { strong: "Titans, Hornets, heavy armour", weak: "Troopers, Snipers, Mortars" },
+  sniper: { strong: "Infantry at long range; hides in woods", weak: "Stingers, Wasps, anything armoured" },
+  condor: { strong: "Drops 2 squads anywhere, over water and rock", weak: "Flak, Raptors, SAMs" },
+  turret: { strong: "Raids by ground or air, infantry", weak: "Mortars, Hornets" },
+  "sam-site": { strong: "Aircraft at long range", weak: "Any ground unit" },
+  "assembly-bay": { strong: "Cheap squads that hold woods and Uplinks", weak: "Splash: Mortars, Hornets" }
 };
 
 /** Compact labels for the narrow build buttons. */
 const SHORT: Partial<Record<UnitKind | BuildingKind, string>> = {
-  "fab-plant": "Fab", "tech-lab": "Tech", "sam-site": "SAM", "flak-crawler": "Flak", harvester: "Harvester"
+  "fab-plant": "Fab", "tech-lab": "Tech", "sam-site": "SAM", "flak-crawler": "Flak", harvester: "Harvester",
+  "assembly-bay": "Bay", trooper: "Troopers", "rocket-squad": "Rockets", sniper: "Snipers"
 };
 
 const MINIMAP_PX = 256;
@@ -280,7 +297,7 @@ export function createHud(api: HudApi): Hud {
       sfx.play("click");
     }, () => showCard(kind));
 
-  for (const kind of [...GROUND, ...AIR])
+  for (const kind of ALL_UNITS)
     makeButton(`u:${kind}`, kind, UNITS[kind].cost, SHORT[kind] ?? UNITS[kind].name, () => {
       const why = unitBlocker(w, PLAYER, kind);
       if (why) return toast(why);
@@ -298,7 +315,7 @@ export function createHud(api: HudApi): Hud {
   function renderGrid(): void {
     gridEl.innerHTML = "";
     const keys =
-      tab === "build" ? BUILDABLE.map((k) => `b:${k}`) : (tab === "ground" ? GROUND : AIR).map((k) => `u:${k}`);
+      tab === "build" ? BUILDABLE.map((k) => `b:${k}`) : UNIT_TABS.find((t) => t.tab === tab)!.kinds.map((k) => `u:${k}`);
     for (const k of keys) gridEl.appendChild(buttons.get(k)!);
     for (const el of tabsEl.children) (el as HTMLElement).classList.toggle("on", (el as HTMLElement).dataset.tab === tab);
     cardEl.hidden = true;
@@ -321,6 +338,9 @@ export function createHud(api: HudApi): Hud {
       const u = UNITS[kind as UnitKind];
       rows.push(`<tr><td>Speed</td><td>${u.speed}</td><td>Armor</td><td>${u.armor}</td></tr>`);
       if (u.heal) rows.push(`<tr><td>Repair</td><td colspan="3">${u.heal} HP/s</td></tr>`);
+      // a squad is one unit drawn as several robots; the Condor is a flying bus
+      if (u.squad) rows.push(`<tr><td>Squad</td><td colspan="3">${u.squad} robots · firepower drops as they fall</td></tr>`);
+      if (u.capacity) rows.push(`<tr><td>Cargo</td><td colspan="3">Carries ${u.capacity} squads · unarmed</td></tr>`);
       rows.push(`<tr><td>Built at</td><td colspan="3">${BUILDINGS[u.builtAt].name}${u.requires ? ` + ${BUILDINGS[u.requires].name}` : ""}</td></tr>`);
     }
     const note = api.cardNote?.(kind) ?? null;
@@ -414,34 +434,50 @@ export function createHud(api: HudApi): Hud {
         const k = head ? 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE) : 0;
         live = { hp: `${Math.ceil(b.hp)} / ${st.hp}`, head: `${Math.round(k * 100)}%` };
         // producers say how to set a rally point here (it used to be a chip; the row needs the room)
-        const rally = b.kind === "hq" || b.kind === "fab-plant" || b.kind === "airpad";
+        const rally = isProducer(b.kind);
         html = `<img class="pi" src="${icon(b.kind)}" alt=""/><div class="pt"><b>${st.name}</b>
           <span class="hp">${Math.ceil(b.hp)} / ${st.hp}</span>
           ${b.queue.length ? `<div class="queue">${q.join("")}</div>` : `<span class="hint">${rally && !ctrl.spectator ? "Tap the map to set a rally point" : st.role}</span>`}</div>`;
       }
     } else if (ctrl.selectedUnits.size > 0) {
       const counts = new Map<UnitKind, number>();
+      /** Squads riding in the selected Condors, by kind. */
+      const aboard = new Map<UnitKind, number>();
       for (const id of ctrl.selectedUnits) {
         const u = w.units.get(id);
-        if (u) counts.set(u.kind, (counts.get(u.kind) ?? 0) + 1);
+        if (!u) continue;
+        counts.set(u.kind, (counts.get(u.kind) ?? 0) + 1);
+        for (const p of u.passengers ?? []) aboard.set(p.kind, (aboard.get(p.kind) ?? 0) + 1);
       }
-      key = `u:${[...counts].map(([k, n]) => k + n).join(",")}`;
+      key = `u:${[...counts].map(([k, n]) => k + n).join(",")}|${[...aboard].map(([k, n]) => k + n).join(",")}`;
       if (ctrl.selectedUnits.size === 1) {
         const u = w.units.get([...ctrl.selectedUnits][0]!);
         if (u) {
-          key += `:${Math.round(u.hp)}:${u.rank}:${u.kills}`;
+          key += `:${Math.round(u.hp)}:${u.rank}:${u.kills}:${(u.passengers ?? []).map((p) => `${p.id}/${squadAlive(p)}`).join(",")}`;
           const st = UNITS[u.kind];
           // veterans earn a callsign: "★★ Viper · Lancer · 9 kills"
           const title =
             u.rank >= NAMED_RANK
               ? heroLine(w, u).replace(/^(★+)/, '<span class="rank">$1</span>')
               : `${st.name}${u.rank ? ` <span class="rank">${stars(u.rank)}</span>` : ""}${u.kills ? ` · ${killsLabel(u.kills)}` : ""}`;
+          // a squad counts its robots still standing ("4/5 robots")
+          const n = squadSize(u.kind);
+          const robots = n > 1 ? `<span class="robots"> · ${squadAlive(u)}/${n} robots</span>` : "";
+          // a Condor shows who is aboard, seat by seat, instead of its role line
+          const transport = isTransport(u.kind);
+          const hint = transport
+            ? (u.passengers?.length ?? 0) > 0 || ctrl.spectator
+              ? ""
+              : `<span class="hint">Empty: tap a squad to load it</span>`
+            : `<span class="hint">${st.role}</span>`;
           html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
-            <span class="hp">${Math.ceil(u.hp)} / ${st.hp}</span><span class="hint">${st.role}</span></div>`;
+            <span class="hp">${Math.ceil(u.hp)} / ${st.hp}${robots}</span>${hint}</div>${transport ? cargoHtml(u) : ""}`;
         }
       } else {
         html = `<div class="group">${[...counts]
           .map(([k, n]) => `<span class="gi"><img src="${icon(k)}" alt=""/><b>${n}</b></span>`)
+          .join("")}${[...aboard]
+          .map(([k, n]) => `<span class="gi aboard" title="Aboard a Condor"><img src="${icon(k)}" alt=""/><b>${n}</b></span>`)
           .join("")}</div>`;
       }
     }
@@ -548,7 +584,17 @@ export function createHud(api: HudApi): Hud {
   const hints = new HintQueue();
   const mine = (k: string) => [...w.buildings.values()].some((b) => b.faction === PLAYER && b.kind === k);
   const hasFactory = () => mine("fab-plant") || mine("airpad");
-  const armySize = () => [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+  const armySize = () => [...w.units.values()].filter(isArmyUnit).length;
+  /** Move the tutorial on to stage `next`; at 99 it's done for good. */
+  function advance(next: number): void {
+    hintStage = next;
+    if (next < 99) return;
+    try {
+      localStorage.setItem(TUTORIAL_KEY, "done");
+    } catch {
+      /* ignore */
+    }
+  }
   /** The tutorial's next stage, offered to the queue once its moment comes; the stage moves on when it is shown. */
   function tutorial(): void {
     if (hintStage >= 99 || hints.has(`tut-${hintStage}`)) return;
@@ -578,7 +624,10 @@ export function createHud(api: HudApi): Hud {
       msg = "Long-press any build button to see what it counters. ⚔ Select army grabs everyone.";
       next = 3;
     } else if (stage === 3 && secs > 150) {
-      msg = "Build a Tech Lab to unlock Titans, Lancers, Mortars and Hornets.";
+      // (one already stands: nothing left to teach)
+      if (mine("tech-lab")) return advance(99);
+      msg = "Build a Tech Lab to unlock Titans, Lancers, Mortars, Hornets and Snipers.";
+      still = () => !mine("tech-lab");
       next = 99;
     }
     if (!msg) return;
@@ -588,15 +637,7 @@ export function createHud(api: HudApi): Hud {
       priority: HINTS.priority.tutorial,
       ttlS: 600,
       valid: () => hintStage === stage && still(),
-      onShow: () => {
-        hintStage = next;
-        if (next < 99) return;
-        try {
-          localStorage.setItem(TUTORIAL_KEY, "done");
-        } catch {
-          /* ignore */
-        }
-      }
+      onShow: () => advance(next)
     });
   }
 
@@ -741,11 +782,21 @@ export function createHud(api: HudApi): Hud {
       });
       chips.push({ id: "cancel", label: "✕", cls: "warn", on: () => (ctrl.placing = null) });
     } else if (ctrl.selectedUnits.size > 0 && !ctrl.spectator) {
-      chips.push({ id: "stop", label: "■ Stop", on: () => ctrl.stopSelected() });
-      chips.push({
-        id: "move", label: narrow ? "➜ Move" : "➜ Move only", active: ctrl.forceMove,
-        on: () => (ctrl.forceMove = !ctrl.forceMove)
+      // loaded Condors: drop the squads where they are (a long-press on the map drops them there)
+      const aboard = ctrl.aboardSelected();
+      chips.push({ id: "stop", label: narrow && aboard > 0 ? "■" : "■ Stop", on: () => ctrl.stopSelected() });
+      if (aboard > 0) chips.push({ id: "unload", label: `⇣ Unload ${aboard}`, cls: "unload", on: () => ctrl.unloadSelected() });
+      // (unarmed Condors have no fights to skip: Move only would change nothing; on a phone
+      // the Unload chip takes its place in a mixed selection, so the row stays one row)
+      const onlyTransports = [...ctrl.selectedUnits].every((id) => {
+        const u = w.units.get(id);
+        return !u || isTransport(u.kind);
       });
+      if (!onlyTransports && (!narrow || aboard === 0 || ctrl.forceMove))
+        chips.push({
+          id: "move", label: narrow ? "➜ Move" : "➜ Move only", active: ctrl.forceMove,
+          on: () => (ctrl.forceMove = !ctrl.forceMove)
+        });
       chips.push({ id: "clear", label: "✕", on: () => ctrl.clearSelection() });
     } else if (ctrl.selectedBuilding !== null && !ctrl.spectator) {
       const b = w.buildings.get(ctrl.selectedBuilding);
@@ -755,7 +806,7 @@ export function createHud(api: HudApi): Hud {
       }
       chips.push({ id: "clear", label: "✕", on: () => ctrl.clearSelection() });
     } else if (!ctrl.spectator) {
-      const army = [...w.units.values()].filter((u) => u.faction === PLAYER && u.kind !== "harvester").length;
+      const army = [...w.units.values()].filter(isArmyUnit).length;
       // units with no orders, when that's not simply everyone
       const idle = army > 0 ? ctrl.idleArmy() : [];
       const showIdle = idle.length > 0 && idle.length < army;
@@ -803,9 +854,8 @@ export function createHud(api: HudApi): Hud {
       } else prog.hidden = true;
     }
     // unit buttons
-    let groundQ = 0;
-    let airQ = 0;
-    for (const kind of [...GROUND, ...AIR]) {
+    const tabQ: Record<Tab, number> = { build: 0, ground: 0, infantry: 0, air: 0 };
+    for (const kind of ALL_UNITS) {
       const el = buttons.get(`u:${kind}`)!;
       const { prog, lock, badge } = parts.get(`u:${kind}`)!;
       const producers = unitProducers(kind);
@@ -817,8 +867,7 @@ export function createHud(api: HudApi): Hud {
           queued++;
           if (i === 0) headProg = Math.max(headProg, 1 - q.remaining / (UNITS[kind].buildTime * TICK_RATE));
         });
-      if (UNITS[kind].domain === "air") airQ += queued;
-      else groundQ += queued;
+      tabQ[tabOf(kind)] += queued;
       const blocked = unitBlocker(w, PLAYER, kind);
       el.classList.toggle("locked", !!blocked);
       el.classList.toggle("poor", fs.scrap < UNITS[kind].cost);
@@ -831,7 +880,7 @@ export function createHud(api: HudApi): Hud {
     }
     for (const el of tabsEl.children) {
       const t = (el as HTMLElement).dataset.tab as Tab;
-      const n = t === "ground" ? groundQ : t === "air" ? airQ : p ? 1 : 0;
+      const n = t === "build" ? (p ? 1 : 0) : tabQ[t];
       const badge = el.querySelector<HTMLElement>(".tbadge")!;
       badge.hidden = n === 0 || t === tab;
       badge.textContent = t === "build" ? (p?.ready ? "!" : "•") : String(n);
@@ -892,11 +941,10 @@ export function createHud(api: HudApi): Hud {
       mctx.fillRect(b.tx * k, b.ty * k, size * k, size * k);
     }
     for (const u of w.units.values()) {
-      const ty = Math.floor(u.y);
-      const tx = Math.floor(u.x);
       if (u.faction === PLAYER) mctx.fillStyle = "#9fd0ff";
       else {
-        if (fogOn && vis[ty * w.width + tx] !== Vis.Visible) continue;
+        // (in sight, and not a Sniper Team hidden in the woods)
+        if (fogOn && !unitSeenBy(w, PLAYER, u)) continue;
         mctx.fillStyle = "#ffb0a0";
       }
       mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
@@ -1010,20 +1058,31 @@ export function createHud(api: HudApi): Hud {
   };
 }
 
+/** A Condor's seats for the selection panel: a portrait (and robots standing) per squad aboard, dashed empty seats. */
+function cargoHtml(c: Unit): string {
+  const seats = (c.passengers ?? []).map(
+    (p) => `<span class="seat" title="${UNITS[p.kind].name}"><img src="${icon(p.kind)}" alt=""/><b>${squadAlive(p)}</b></span>`
+  );
+  for (let i = seats.length; i < (UNITS[c.kind].capacity ?? 0); i++) seats.push(`<span class="seat empty"></span>`);
+  return `<div class="cargo">${seats.join("")}</div>`;
+}
+
 export const HELP_HTML = `
   <h3>Goal</h3><p>Destroy the enemy HQ. Protect yours.</p>
   <h3>Openers</h3><p>Every skirmish starts with a pick: <b>Blitz</b> (Fab Plant + 3 Stingers), <b>Industry</b> (Fab Plant, a third harvester, +200 scrap) or <b>Air Wing</b> (Airpad + 3 Wasps). The enemy picks one too.</p>
   <h3>Commander powers</h3><p>The ⚡ meter on the right fills slowly, and faster when you lose units. Spend it on <b>Barrage</b> (3 shells), <b>EMP</b> (freezes enemies for 4 s) or <b>Drop Pod</b> (3 units land where you can see): tap the button, then the map. At 6:00 the <b>Sky Hammer</b> comes online for both sides, an orbital strike every ${POWERS.hammer.cooldown / 60} minutes. Every strike shows a warning circle first: red ones are the enemy's, so move out!</p>
   <h3>Objectives</h3><p>📡 <b>Uplinks</b> sit in the contested middle of every map: park units in the ring to fill its bar (aircraft count half, harvesters not at all; with both sides inside it freezes). Holding one pays ${OBJECTIVES.uplink.income} scrap/s, lights up the fog around it and charges your ⚡ meter. 📦 <b>Supply drops</b> land in pairs from 1:30, every 75 s, announced 10 s ahead to both sides: the first unit to reach a crate takes it (scrap, Veterans, Field Repair, ⚡ charge, or a rare free Lancer). Unclaimed crates burn out after 45 s.</p>
-  <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (Air Raid, Armour Column, Artillery, Mixed; a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
+  <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (four of Air Raid, Armour Column, Artillery, Mixed and Bot Swarm, then a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
   <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00, win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
   <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost (a Last Stand wave's only 5%) for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. With a mouse, Shift+click adds a unit to the selection or takes it out. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
-  <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases. Long-press any build button for details.</p>
-  <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything.</p>
+  <h3>Infantry</h3><p>You start every battle with a <b>Trooper Squad</b> by your HQ. The <b>Assembly Bay</b> trains more: <b>Troopers</b> (cheap rifles that hit air too), <b>Rocket Squads</b> (kill Titans and Hornets) and, with a Tech Lab, <b>Sniper Teams</b> (delete other infantry, and stay hidden in woods unless they fire or you come within ${INF.concealRadius} tiles). A squad is one unit of several robots: they fall as it takes damage, and it shoots weaker with each one lost. Squads walk through woods and rough ground at full speed, take half damage in woods and capture Uplinks twice as fast, but Titans crush them.</p>
+  <h3>Condor</h3><p>The Airpad's dropship carries two squads over water, rock and anything else. Select squads and tap the Condor (or select the Condor and tap a squad) to load them; then <b>long-press</b> the map to fly there and drop them, or tap <b>⇣ Unload</b> (key U) to drop them where it is. Shot down over land, its squads bail out hurt; over water or rock they go down with it.</p>
+  <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases and squads · Rocket Squads beat Titans · Snipers beat infantry. Long-press any build button for details.</p>
+  <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them.</p>
   <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>`;
 

@@ -106,11 +106,13 @@ function goalListHtml(op: OpDef, live?: OpStatus): string {
 function rulesNote(op: OpDef): string {
   const bits: string[] = [];
   const bans = op.rules?.playerBans;
-  if (bans?.units?.length && bans.buildings?.length && bans.units.length > 8) bits.push("⛔ No production");
+  if (bans?.units?.length === Object.keys(UNITS).length && bans.buildings?.length) bits.push("⛔ No production");
   else {
     if (bans?.buildings?.length) bits.push(`⛔ No ${bans.buildings.map((k) => `${BUILDINGS[k].name}s`).join(", ")}`);
-    const ground = bans?.units?.length === GROUND_COMBAT.length && GROUND_COMBAT.every((k) => bans.units!.includes(k));
-    if (bans?.units?.length) bits.push(ground ? "⛔ No ground units" : `⛔ No ${bans.units.map((k) => `${UNITS[k].name}s`).join(", ")}`);
+    // every ground combat kind reads "ground units"; anything else banned (the Condor) is named
+    const ground = !!bans?.units && GROUND_COMBAT.every((k) => bans.units!.includes(k));
+    const named = (bans?.units ?? []).filter((k) => !ground || !GROUND_COMBAT.includes(k)).map((k) => `${UNITS[k].name}s`);
+    if (bans?.units?.length) bits.push(`⛔ No ${[...(ground ? ["ground units"] : []), ...named].join(", ")}`);
   }
   if (op.rules?.playerIncome === 0) bits.push("❄ No income");
   if (op.rules?.calldowns === false) bits.push("⚡ No calldowns");

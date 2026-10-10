@@ -18,7 +18,8 @@ export type SfxName =
   | "inbound"
   | "deny" | "squad"
   | "siren" | "emp" | "pod" | "hammer" | "charge" | "uplink"
-  | "capture" | "uplinkLost" | "drop" | "crate";
+  | "capture" | "uplinkLost" | "drop" | "crate"
+  | "rifle" | "snipe" | "crush" | "clank" | "thrust";
 
 export type AudioChannel = "sfx" | "music" | "voice";
 
@@ -282,11 +283,12 @@ const GAP: Partial<Record<SfxName, number>> = {
   kill: 0.08, lost: 0.08, coin: 0.1, inbound: 2,
   deny: 0.25, squad: 0.1,
   siren: 1.6, emp: 0.25, pod: 0.3, hammer: 0.6, charge: 1, uplink: 0.2,
-  capture: 0.8, uplinkLost: 0.8, drop: 2, crate: 0.3
+  capture: 0.8, uplinkLost: 0.8, drop: 2, crate: 0.3,
+  rifle: 0.06, snipe: 0.12, crush: 0.15, clank: 0.07, thrust: 0.3
 };
 
 /** Weapon and impact sounds: these thin out at faster game speeds (setTempo). */
-const BATTLE = new Set<SfxName>(["cannon", "heavy", "mg", "flak", "rocket", "missile", "laser", "shell", "bomb", "explosion", "bigExplosion", "heal"]);
+const BATTLE = new Set<SfxName>(["cannon", "heavy", "mg", "flak", "rocket", "missile", "laser", "shell", "bomb", "explosion", "bigExplosion", "heal", "rifle", "snipe", "crush", "clank"]);
 
 /** Short feedback cues that may use the reserved voices above the battle cap. */
 const PRIORITY = new Set<SfxName>(["kill", "lost", "coin", "alert", "inbound"]);
@@ -329,6 +331,39 @@ function tone(
 }
 
 const RECIPES: Record<SfxName, Recipe> = {
+  // a Trooper volley: a ragged crackle of light rifle shots
+  rifle: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.03, "bandpass", 2800, 0.3);
+    noiseBurst(c, o, t + 0.045, n, 0.025, "bandpass", 3300, 0.22);
+    noiseBurst(c, o, t + 0.1, n, 0.03, "bandpass", 2500, 0.18);
+    return 0.14;
+  },
+  // the rail rifle: a hard crack and a falling electric zing
+  snipe: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.05, "highpass", 3000, 0.6);
+    tone(c, o, t, "sine", 3400, 900, 0.2, 0.09);
+    tone(c, o, t, "sawtooth", 150, 60, 0.12, 0.16);
+    return 0.22;
+  },
+  // a Titan grinding robots under its tracks: crunch and scrape
+  crush: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.18, "lowpass", 900, 0.6, 200);
+    noiseBurst(c, o, t + 0.03, n, 0.08, "bandpass", 2400, 0.3);
+    tone(c, o, t, "square", 220, 90, 0.1, 0.05);
+    return 0.2;
+  },
+  // a robot hits the ground
+  clank: (c, o, t, n) => {
+    tone(c, o, t, "triangle", 900, 640, 0.08, 0.08);
+    noiseBurst(c, o, t, n, 0.04, "highpass", 3000, 0.16);
+    return 0.1;
+  },
+  // a dropship's lift fans gusting as squads drop or climb aboard
+  thrust: (c, o, t, n) => {
+    noiseBurst(c, o, t, n, 0.35, "bandpass", 400, 0.35, 1400);
+    tone(c, o, t, "sine", 120, 80, 0.3, 0.14);
+    return 0.38;
+  },
   cannon: (c, o, t, n) => {
     noiseBurst(c, o, t, n, 0.12, "lowpass", 2200, 0.5, 300);
     tone(c, o, t, "sine", 160, 50, 0.12, 0.5);

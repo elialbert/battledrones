@@ -186,9 +186,11 @@ export class Chronicle {
     for (const u of w.units.values()) {
       if (u.kind === "harvester") harvesters[u.faction]++;
       else army[u.faction] += (UNITS[u.kind].cost * Math.max(0, u.hp)) / UNITS[u.kind].hp;
+      // squads riding in a Condor still count toward the army
+      for (const p of u.passengers ?? []) army[p.faction] += (UNITS[p.kind].cost * Math.max(0, p.hp)) / UNITS[p.kind].hp;
     }
     for (const b of w.buildings.values()) {
-      if (b.kind !== "fab-plant" && b.kind !== "airpad") continue;
+      if (b.kind !== "fab-plant" && b.kind !== "airpad" && b.kind !== "assembly-bay") continue;
       const fc = this.factories[b.faction];
       fc.total++;
       if (b.queue.length === 0 && w.factions[b.faction].scrap >= 150) fc.idleRich++;
@@ -214,11 +216,13 @@ export class Chronicle {
   /** The best unit per side by kills, fallen or alive. */
   mvp(): Record<Faction, HeroRec | null> {
     const best: Record<Faction, HeroRec | null> = { ...this.fallen };
-    for (const u of this.w.units.values()) {
-      if (u.kills <= 0) continue;
-      const rec: HeroRec = { id: u.id, faction: u.faction, kind: u.kind, kills: u.kills, rank: u.rank, alive: true, diedAt: null };
-      if (betterHero(rec, best[u.faction])) best[u.faction] = rec;
-    }
+    // (squads riding in a Condor are off the field, but very much alive)
+    for (const u of this.w.units.values())
+      for (const x of u.passengers?.length ? [u, ...u.passengers] : [u]) {
+        if (x.kills <= 0) continue;
+        const rec: HeroRec = { id: x.id, faction: x.faction, kind: x.kind, kills: x.kills, rank: x.rank, alive: true, diedAt: null };
+        if (betterHero(rec, best[x.faction])) best[x.faction] = rec;
+      }
     return best;
   }
 }
@@ -518,8 +522,13 @@ export function pickTip(i: TipInput): string {
     });
 
   const titans = n(them, "titan");
-  if (titans >= 4 && n(me, "lancer", "wasp", "hornet") <= 2)
-    tips.push({ score: 75, text: `They built ${titans} Titans. Lancers and Wasps burn through heavy armour.` });
+  if (titans >= 4 && n(me, "lancer", "wasp", "hornet", "rocket-squad") <= 2)
+    tips.push({ score: 75, text: `They built ${titans} Titans. Rocket Squads, Lancers and Wasps burn through heavy armour.` });
+
+  // robot infantry: splash and Snipers are the answer (Titans only scratch them, unless they roll over them)
+  const squads = n(them, "trooper", "rocket-squad", "sniper");
+  if (squads >= 8 && n(me, "mortar", "hornet", "sniper", "turret") <= 1)
+    tips.push({ score: 72, text: `They fielded ${squads} infantry squads. Mortars, Hornets and Sniper Teams tear through robot infantry.` });
 
   const harvLost = i.deaths.filter((d) => d.faction === me && d.unitKind === "harvester").length;
   if (harvLost >= 5)
@@ -560,7 +569,7 @@ export function pickTip(i: TipInput): string {
 
   const tech = i.firstBuilt[me]["tech-lab"];
   if (i.duration > 420 && (tech === undefined || tech > 360))
-    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Titans, Lancers, Mortars and Hornets." });
+    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Titans, Lancers, Mortars, Hornets and Sniper Teams." });
 
   if (i.won)
     tips.push({

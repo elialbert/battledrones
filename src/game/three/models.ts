@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { BuildingKind, Faction, UnitKind } from "../../sim/types";
 import { ModelBuilder, type Vec3 } from "./builder";
+import { botStatic, botHeight, J, squadStatic, type BotKind } from "./infantry";
 import { modelMat } from "./materials";
 
 /**
@@ -30,6 +31,8 @@ export const WHITE = 0xd6dbe1;
 export const HAZ = 0xe0b23a;
 export const HAZ_D = 0x2b2a28;
 const GREEN = 0x5dff8a;
+/** Amber-tinted cockpit glass (lit a little from inside). */
+const GLASS = 0xcf7f2a;
 const EXHAUST = 0xffa040;
 
 interface Team {
@@ -61,6 +64,12 @@ export interface ModelDef {
   rotors: Rotor[];
   /** Harvester's scrap load (shown when full). */
   cargo?: THREE.BufferGeometry;
+  /**
+   * Condor's rear ramp: hinged at `hinge`, closed pointing up; it opens by
+   * turning +x (down and back) to `open` rad. `tip` is its lip in ramp space
+   * (where squads step off and climb aboard).
+   */
+  ramp?: { geo: THREE.BufferGeometry; hinge: Vec3; open: number; tip: Vec3 };
   /** Model height, for labels and bars. */
   height: number;
 }
@@ -405,8 +414,120 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
     }
     const rg = rotorGeo(0.07);
     return { hull: b.build(), mount: [0, 0, 0], muzzle: [0, -0.06, 0], rotors: at.map((p) => ({ geo: rg, at: p, axis: "y", speed: 36 })), height: 0.15 };
+  },
+
+  // robot infantry: the map draws each squad as an animated rig (infantry.ts); this is the squad at ease
+  trooper: (t) => squadModel("trooper", t),
+  "rocket-squad": (t) => squadModel("rocket-squad", t),
+  sniper: (t) => squadModel("sniper", t),
+
+  condor: (t) => {
+    // a ducted-fan dropship: an armoured nose under an amber canopy, an open-roofed troop bay
+    // amidships (you can see who's riding), lift fans on short wing pylons, and a tail boom out to
+    // a V-tail over the rear ramp
+    const b = partB();
+    const B = CONDOR_BAY;
+    // half-widths of the hull down its length: widest at the wing roots, tapering to nose and tail
+    const W0 = 0.212;
+    const W1 = 0.216;
+    const W2 = 0.2;
+    const W3 = 0.17;
+    // the nose: armour tapering to a blunt point, a team chevron on top, a sensor ball under the chin
+    b.fuselage([[-0.75, 0.024, -0.088, -0.116], [-0.712, 0.07, -0.052, -0.152], [-0.64, 0.124, -0.024, -0.182], [-0.54, 0.166, -0.006, -0.196], [-0.43, 0.196, 0.006, -0.2], [B.z0 + 0.01, W0, 0.012, -0.2]], [0, 0, 0], GM, { chamfer: 0.035, belly: 0.06 });
+    for (const sx of [-1, 1])
+      b.prism([[0, -0.072], [sx * 0.062, 0.0], [sx * 0.062, 0.03], [0, -0.04]], 0.008, [0, -0.03, -0.645], t.main, { rot: [-0.3, 0, 0] });
+    b.sphere(0.03, [0, -0.19, -0.56], GM_D, { w: 6, h: 4 });
+    light(b, [0, -0.1, -0.75], 0.022);
+    // the canopy: amber-tinted glass on a dark sill, a reflection along its brow, faired in behind
+    b.fuselage([[-0.6, 0.06, -0.012, -0.03], [-0.55, 0.112, 0.012, -0.02], [-0.45, 0.13, 0.026, -0.01], [-0.36, 0.13, 0.03, -0.005]], [0, 0, 0], GM_D, { chamfer: 0.03 });
+    b.fuselage([[-0.585, 0.035, -0.006, -0.03], [-0.54, 0.092, 0.036, -0.015], [-0.46, 0.114, 0.064, 0.0], [-0.37, 0.116, 0.072, 0.005]], [0, 0, 0], GLASS, { chamfer: 0.05, glow: 0.3, edge: 1.15 });
+    b.fuselage([[-0.52, 0.013, 0.048, 0.034], [-0.46, 0.013, 0.067, 0.052], [-0.385, 0.013, 0.075, 0.06]], [-0.034, 0, 0], 0xffd9a0, { chamfer: 0.005, glow: 0.5 });
+    b.fuselage([[-0.375, 0.12, 0.074, 0.0], [B.z0 + 0.01, 0.11, 0.04, 0.0]], [0, 0, 0], GM, { chamfer: 0.04, edge: 1.35 });
+    // the bay: a tub under an open roof — dark deck with aisle lamps, benches down both walls, team gunwales
+    b.fuselage([[B.z0 - 0.01, W0, B.floor, -0.2], [-0.12, W1, B.floor, -0.2], [B.z1, W2, B.floor, -0.194], [B.ramp - 0.05, W3, B.floor, -0.175], [B.ramp, B.rampW / 2 + 0.012, B.floor, -0.15]], [0, 0, 0], GM, { chamfer: 0.035, belly: 0.05 });
+    const zr = (B.z0 + B.ramp) / 2;
+    const zc = (B.z0 + B.z1) / 2;
+    b.box(B.w, 0.012, B.ramp - B.z0, [0, B.floor + 0.004, zr], 0x25282c);
+    for (let z = B.z0 + 0.05; z < B.ramp - 0.03; z += 0.075) b.box(0.012, 0.004, 0.035, [0, B.floor + 0.012, z], AMBER, { glow: 0.8 });
+    const iw = B.w / 2;
+    for (const sx of [-1, 1]) {
+      // walls straight inside (narrowing under the hump to the ramp), following the hull outside
+      const wall: [number, number][] = [[iw, B.z0], [W0, B.z0], [W1, -0.12], [W2, B.z1], [W3, B.ramp - 0.05], [B.rampW / 2 + 0.012, B.ramp], [B.rampW / 2, B.ramp], [iw, B.z1 - 0.02]];
+      b.prism(wall.map(([x, z]) => [sx * x, z]), B.wall - B.floor, [0, B.floor, 0], GM);
+      const rim: [number, number][] = [[iw - 0.002, B.z0], [W0 + 0.003, B.z0], [W1 + 0.003, -0.12], [W2 + 0.002, B.z1 + 0.012], [iw - 0.002, B.z1 + 0.012]];
+      b.prism(rim.map(([x, z]) => [sx * x, z]), 0.014, [0, B.wall - 0.002, 0], t.main);
+      b.box(0.034, B.bench - B.floor, B.z1 - B.z0 - 0.02, [sx * (iw - 0.017), (B.bench + B.floor) / 2, zc], GM_L);
+      for (const z of [B.z0 + 0.05, zc, B.z1 - 0.04]) light(b, [sx * (iw - 0.004), B.wall - 0.02, z], 0.014);
+    }
+    // the hump over the ramp sweeping up into the tail boom, a team spine stripe along both, a beacon
+    b.fuselage([[B.z1, W2 + 0.002, 0.034, B.wall - 0.004], [B.z1 + 0.08, 0.172, 0.06, -0.002], [B.ramp + 0.012, B.rampW / 2 + 0.006, 0.07, 0.014]], [0, 0, 0], GM, { chamfer: 0.03, edge: 1.35 });
+    b.fuselage([[B.ramp, 0.1, 0.07, 0.022], [0.5, 0.058, 0.074, 0.036], [0.64, 0.034, 0.077, 0.05]], [0, 0, 0], GM, { chamfer: 0.02 });
+    b.fuselage([[B.z1 + 0.03, 0.038, 0.048, 0.03], [B.z1 + 0.08, 0.038, 0.064, 0.05], [B.ramp + 0.012, 0.03, 0.074, 0.06], [0.5, 0.021, 0.078, 0.064], [0.6, 0.014, 0.08, 0.066]], [0, 0, 0], t.main, { chamfer: 0.008, edge: 1.4 });
+    light(b, [0, 0.08, B.ramp - 0.03], 0.018);
+    // exhausts either side of the boom's root
+    for (const sx of [-1, 1]) {
+      b.tube(0.022, 0.05, 8, [sx * 0.085, 0.04, B.ramp + 0.01], GM_D);
+      b.cyl(0.016, 0.016, 0.004, 8, [sx * 0.085, 0.04, B.ramp + 0.036], EXHAUST, { rot: [Math.PI / 2, 0, 0], glow: 0.9 });
+    }
+    // the V-tail: swept team fins, lamps at their tips
+    for (const sx of [-1, 1]) {
+      b.prism([[0, 0.51], [0.11, 0.6], [0.11, 0.65], [0, 0.645]], 0.012, [sx * 0.022, 0.07, 0], t.main, { rot: [0, 0, Math.PI / 2 - sx * 0.65] });
+      light(b, [sx * (0.022 + 0.11 * Math.sin(0.65)), 0.07 + 0.11 * Math.cos(0.65), 0.628], 0.018);
+    }
+    // short wings out to the lift fans: team panels on top
+    const fans: Vec3[] = [];
+    const fz = -0.08;
+    for (const sx of [-1, 1]) {
+      b.prism([[sx * (W1 - 0.01), fz - 0.1], [sx * 0.32, fz - 0.065], [sx * 0.32, fz + 0.07], [sx * (W1 - 0.01), fz + 0.1]], 0.034, [0, -0.085, 0], GM);
+      b.prism([[sx * (W1 + 0.005), fz - 0.08], [sx * 0.31, fz - 0.052], [sx * 0.31, fz + 0.055], [sx * (W1 + 0.005), fz + 0.08]], 0.008, [0, -0.052, 0], t.main);
+      const x = sx * 0.45;
+      b.drum(0.158, 0.148, 0.08, 16, [x, -0.07, fz], GM, { bevel: 0.016 });
+      b.cyl(0.124, 0.124, 0.006, 16, [x, -0.028, fz], GM_L);
+      b.torus(0.142, 0.024, [x, -0.026, fz], t.main, { rot: [Math.PI / 2, 0, 0], seg: 20 });
+      b.torus(0.05, 0.009, [x, -0.024, fz], AMBER, { rot: [Math.PI / 2, 0, 0], seg: 10, glow: 0.9 });
+      b.cyl(0.03, 0.034, 0.03, 8, [x, -0.016, fz], GM_D);
+      b.box(0.26, 0.01, 0.016, [x, -0.022, fz], GM_D);
+      light(b, [x + sx * 0.162, -0.06, fz], 0.024);
+      fans.push([x, -0.008, fz]);
+    }
+    // landing struts
+    for (const [x, z] of [[0, -0.52], [0.15, 0.1], [-0.15, 0.1]] as [number, number][]) {
+      b.box(0.016, 0.07, 0.016, [x, -0.225, z], GM_D);
+      b.box(0.04, 0.012, 0.06, [x, -0.262, z], GM_D);
+    }
+    const hull = b.build();
+    // the ramp, hinged at the deck's rear edge: closed it stands up under the hump (hazard chevrons
+    // outside); dropped, its tread faces up between hazard-striped rails, lamps at its lip
+    const L = B.wall + 0.02 - B.floor;
+    const rw = B.rampW;
+    const r = partB();
+    r.box(rw - 0.004, L, 0.02, [0, L / 2, 0], GM);
+    for (let i = 0; i < 3; i++) r.box(0.035, L * 0.86, 0.006, [-0.066 + i * 0.066, L / 2, 0.012], i % 2 ? HAZ_D : HAZ);
+    for (let i = 0; i < 4; i++) r.box(rw - 0.08, 0.006, 0.006, [0, 0.02 + i * 0.026, -0.012], GM_L);
+    for (let i = 0; i < 4; i++) r.pair(0.026, L / 4, 0.006, [rw / 2 - 0.02, (i + 0.5) * (L / 4), -0.012], i % 2 ? HAZ_D : HAZ);
+    light(r, [rw / 2 - 0.02, L - 0.008, -0.01], 0.02);
+    light(r, [-rw / 2 + 0.02, L - 0.008, -0.01], 0.02);
+    const rg = rotorGeo(0.128);
+    return {
+      hull, mount: [0, 0, 0], muzzle: [0, -0.1, 0], height: 0.2,
+      rotors: fans.map((p, i) => ({ geo: rg, at: p, axis: "y" as const, speed: i ? -34 : 34 })),
+      ramp: { geo: r.build(), hinge: [0, B.floor, B.ramp], open: 1.85, tip: [0, L, 0] }
+    };
   }
 };
+
+/**
+ * The Condor's troop bay, in model space: deck and bench-top heights, the
+ * gunwales' top, the benches' x, the bay's inner width, the front and rear of
+ * its open roof (z), and the ramp's hinge under the tail and its width.
+ */
+export const CONDOR_BAY = { floor: -0.1, bench: -0.064, wall: 0.0, benchX: 0.136, w: 0.34, z0: -0.31, z1: 0.17, ramp: 0.34, rampW: 0.27 };
+
+function squadModel(kind: BotKind, t: Team): ModelDef {
+  const f: Faction = t === TEAMS.red ? "red" : "blue";
+  const h = botHeight(kind);
+  return { hull: squadStatic(kind, f), mount: [0, 0, 0], muzzle: [0, h * 0.75, -0.3], rotors: [], height: h };
+}
 
 // ---------------------------------------------------------- buildings ---
 
@@ -614,6 +735,80 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
     h.tube(0.012, 0.3, 4, [0, 0.62, -0.2], GM_D, { rot: [0.38, 0, 0] });
     h.sphere(0.03, [0, 0.676, -0.343], AMBER, { glow: 1, w: 6, h: 4 });
     return { hull, turret: h.build(), mount: [0, 0.2, 0], muzzle: [0, 0.5, 0], rotors: [], height: 0.95 };
+  },
+
+  "assembly-bay": (t) => {
+    // a robot works: an open assembly floor under a team gantry, a half-built robot on its cradle
+    // (welding arms at it), finished robots charging in lit alcoves along the parts hall behind
+    const f: Faction = t === TEAMS.red ? "red" : "blue";
+    const b = siteB();
+    b.block(1.92, 0.12, 1.92, [0, 0.06, 0], GM_D, { taper: 0.03, bevel: 0.03 });
+    b.box(1.7, 0.02, 1.0, [0, 0.125, 0.3], 0x3a3e44);
+    // the parts hall along the north side
+    b.block(1.78, 0.6, 0.5, [0, 0.42, -0.66], GM, { bevel: 0.04 });
+    b.block(1.82, 0.05, 0.56, [0, 0.745, -0.66], GM_L, { bevel: 0.02 });
+    b.block(1.66, 0.03, 0.16, [0, 0.78, -0.72], t.main, { bevel: 0.012, edge: 1.4 });
+    for (const x of [-0.55, 0, 0.55]) b.block(0.22, 0.05, 0.14, [x, 0.79, -0.52], GM_D, { bevel: 0.015 });
+    b.pairBlock(0.03, 0.3, 0.5, [0.895, 0.42, -0.66], t.main, { bevel: 0.01 });
+    // charging alcoves: amber-lit recesses, a finished trooper on each pad, facing out
+    const bot = botStatic("trooper", f);
+    for (const i of [-1, 0, 1]) {
+      const x = i * 0.5;
+      b.box(0.34, 0.5, 0.03, [x, 0.4, -0.4], 0x17191c);
+      b.box(0.26, 0.03, 0.02, [x, 0.62, -0.385], AMBER, { glow: 1 });
+      b.pair(0.03, 0.52, 0.05, [0.185, 0.4, -0.39], t.main);
+      b.block(0.32, 0.03, 0.16, [x, 0.14, -0.31], GM_L, { bevel: 0.01 });
+      b.torus(0.09, 0.012, [x, 0.158, -0.31], AMBER, { rot: [Math.PI / 2, 0, 0], seg: 12, glow: 0.8 });
+      b.addBuilt(bot, [x, 0.155, -0.31], { rot: [0, Math.PI + i * 0.12, 0], scale: [1.1, 1.1, 1.1] });
+    }
+    // the line: a belt running east-west, hazard-edged, with spare legs and an arm riding it
+    b.box(1.66, 0.05, 0.3, [0, 0.15, 0.2], 0x1c1e21);
+    for (let i = 0; i < 12; i++) {
+      const x = -0.77 + i * 0.14;
+      b.box(0.07, 0.054, 0.025, [x, 0.152, 0.04], i % 2 ? HAZ_D : HAZ);
+      b.box(0.07, 0.054, 0.025, [x, 0.152, 0.36], i % 2 ? HAZ : HAZ_D);
+    }
+    for (const x of [-0.6, -0.36, 0.38, 0.62]) b.box(0.012, 0.004, 0.26, [x, 0.177, 0.2], GM);
+    const legsGeo = botStatic("trooper", f, [J.thighL, J.shinL]);
+    b.addBuilt(legsGeo, [0.5, 0.31, 0.2], { rot: [Math.PI / 2, 0.3, 0], scale: [1.3, 1.3, 1.3] });
+    b.addBuilt(legsGeo, [0.68, 0.31, 0.16], { rot: [Math.PI / 2, -0.2, 0], scale: [1.3, 1.3, 1.3] });
+    const armGeo = botStatic("trooper", f, [J.armR]);
+    b.addBuilt(armGeo, [-0.42, 0.62, 0.22], { rot: [0, 0, Math.PI / 2], scale: [1.3, 1.3, 1.3] });
+    // the cradle and its half-built robot: torso, head and one arm, legs not on yet
+    b.drum(0.17, 0.13, 0.12, 8, [0, 0.235, 0.2], GM_L, { bevel: 0.02 });
+    b.pair(0.03, 0.2, 0.05, [0.14, 0.38, 0.2], GM_D);
+    const half = botStatic("trooper", f, [J.hips, J.torso, J.head, J.armL]);
+    b.addBuilt(half, [0, 0.3 - 0.145 * 1.42 * 1.8, 0.2], { rot: [0, Math.PI - 0.35, 0], scale: [1.8, 1.8, 1.8] });
+    // the gantry over it: team beam with hazard underside, two welding arms reaching down
+    b.pairBlock(0.08, 0.86, 0.08, [0.7, 0.55, 0.2], GM_D, { bevel: 0.015 });
+    b.block(1.5, 0.08, 0.11, [0, 1.0, 0.2], t.main, { bevel: 0.015, edge: 1.4 });
+    for (let i = 0; i < 8; i++) b.box(0.1, 0.012, 0.115, [-0.63 + i * 0.18, 0.955, 0.2], i % 2 ? HAZ_D : HAZ);
+    for (const sx of [-1, 1]) {
+      b.drum(0.05, 0.045, 0.06, 8, [sx * 0.3, 0.93, 0.2], GM_L, { bevel: 0.01 });
+      b.box(0.04, 0.3, 0.04, [sx * 0.26, 0.79, 0.2], GM, { rot: [0, 0, sx * 0.35] });
+      b.box(0.034, 0.22, 0.034, [sx * 0.17, 0.6, 0.2], GM_D, { rot: [0, 0, -sx * 0.7] });
+      b.cone(0.022, 0.05, 6, [sx * 0.1, 0.53, 0.2], GM_D, { rot: [0, 0, -sx * 2.2] });
+      b.sphere(0.02, [sx * 0.08, 0.515, 0.2], AMBER, { glow: 1, w: 6, h: 4 });
+    }
+    // the roll-out pad on the apron, where finished squads step off: a team ring, amber lamps, a painted arrow
+    b.cyl(0.3, 0.32, 0.03, 16, [-0.3, 0.14, 0.66], GM_L);
+    b.torus(0.26, 0.026, [-0.3, 0.158, 0.66], t.main, { rot: [Math.PI / 2, 0, 0], seg: 18 });
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      light(b, [-0.3 + Math.cos(a) * 0.3, 0.16, 0.66 + Math.sin(a) * 0.3], 0.03);
+    }
+    b.prism([[-0.3, 0.8], [-0.4, 0.64], [-0.34, 0.64], [-0.34, 0.52], [-0.26, 0.52], [-0.26, 0.64], [-0.2, 0.64]], 0.01, [0, 0.155, 0], HAZ);
+    // a parts bin in the south-east corner, a mast and beacon in the south-west
+    b.block(0.32, 0.16, 0.24, [0.66, 0.2, 0.74], GM, { bevel: 0.02 });
+    b.box(0.28, 0.02, 0.2, [0.66, 0.285, 0.74], 0x121315);
+    for (const [x, z] of [[0.6, 0.7], [0.72, 0.78], [0.66, 0.74]] as [number, number][]) b.box(0.06, 0.04, 0.05, [x, 0.3, z], GM_L, { rot: [0.3, x * 4, 0.2] });
+    b.cyl(0.02, 0.035, 0.7, 6, [-0.82, 0.47, 0.82], GM_D);
+    b.cyl(0.04, 0.04, 0.05, 6, [-0.82, 0.8, 0.82], t.main);
+    b.sphere(0.045, [-0.82, 0.86, 0.82], AMBER, { glow: 1, w: 6, h: 4 });
+    for (let i = 0; i < 7; i++) b.box(0.16, 0.03, 0.03, [-0.54 + i * 0.18, 0.135, 0.93], i % 2 ? HAZ_D : HAZ);
+    light(b, [0.88, 0.15, 0.88], 0.05);
+    light(b, [-0.88, 0.15, -0.88], 0.05);
+    return { hull: b.build(), mount: [0, 0, 0], muzzle: [0, 0.6, 0.2], rotors: [], height: 1.1 };
   }
 };
 
@@ -793,6 +988,8 @@ export interface ModelInstance {
   turret: THREE.Object3D | null;
   rotors: { obj: THREE.Object3D; axis: "y" | "z"; speed: number }[];
   cargo: THREE.Mesh | null;
+  /** The Condor's ramp (pivoting at its hinge), else null. */
+  ramp: THREE.Object3D | null;
   def: ModelDef;
 }
 
@@ -830,8 +1027,13 @@ export function podDef(f: Faction, open = false): ModelDef {
 /** Longest side of each unit in tiles (as the painted sprites were sized), before the 3D readability bump. */
 const UNIT_SIZE: Record<UnitKind, number> = {
   harvester: 1.15, scout: 0.85, stinger: 0.95, "flak-crawler": 1.0, mortar: 1.15, titan: 1.45,
-  lancer: 1.05, wasp: 1.0, raptor: 1.15, hornet: 1.5, mender: 0.85
+  lancer: 1.05, wasp: 1.0, raptor: 1.15, hornet: 1.5, mender: 0.85,
+  // (a squad's formation spans about its radius × 2: the robots are modelled at map scale, see unitScale)
+  trooper: 0.8, "rocket-squad": 0.8, sniper: 0.7,
+  condor: 1.5
 };
+/** Robot infantry is built at map scale (tiles): formations sized to the squad's radius. */
+const MAP_SCALE = new Set<UnitKind>(["trooper", "rocket-squad", "sniper"]);
 /** Units read a touch bigger than their footprint in 3D, as in any RTS. */
 const UNIT_BUMP = 1.12;
 const scales = new Map<UnitKind, number>();
@@ -839,6 +1041,7 @@ const scales = new Map<UnitKind, number>();
 /** Uniform scale that brings a unit model to its intended size on the map. */
 export function unitScale(kind: UnitKind): number {
   let s = scales.get(kind);
+  if (s === undefined && MAP_SCALE.has(kind)) scales.set(kind, (s = 1));
   if (s === undefined) {
     const d = unitDef(kind, "blue");
     const box = d.hull.boundingBox!.clone();
@@ -900,5 +1103,12 @@ export function instance(d: ModelDef, shadows = true): ModelInstance {
     cargo.visible = false;
     body.add(cargo);
   }
-  return { root, body, turret, rotors, cargo, def: d };
+  let ramp: THREE.Object3D | null = null;
+  if (d.ramp) {
+    ramp = new THREE.Group();
+    ramp.position.set(...d.ramp.hinge);
+    ramp.add(modelMesh(d.ramp.geo, shadows));
+    body.add(ramp);
+  }
+  return { root, body, turret, rotors, cargo, ramp, def: d };
 }

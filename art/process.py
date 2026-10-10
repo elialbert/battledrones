@@ -4,6 +4,7 @@
 Usage:
     python3 art/process.py            # everything (takes ~1-2 min)
     python3 art/process.py --no-preview
+    python3 art/process.py --icons-only     # only public/assets/icons/*.webp (no atlas/ui)
 
 Needs Python 3.10+, Pillow (>= 10.1), numpy, scipy (pip install scipy).
 Deterministic: same raws -> byte-identical output.
@@ -18,6 +19,9 @@ Inputs  (art/raw/*.webp, RGBA, blue team colours, everything "facing north"):
     sheets     rubble (2x2), decals (3x2), scrap (3x2), crystal (3x2),
                explosion (4x2 animation, row-major)
     menu       keyart-portrait, keyart-landscape, icon
+    portraits  trooper, rocket-squad, sniper (squads: several robots in one image),
+               condor, assembly-bay -- HUD icons only, no atlas frames (the 3D game
+               builds every model in code and no longer loads the atlas)
     (tex-* and doodads-* are handled elsewhere)
 
 Outputs:
@@ -117,6 +121,9 @@ BUILDING_SIZES = {
 SINGLE_BUILDINGS = ["hq", "fab-plant", "airpad", "tech-lab", "depot"]
 HEAD_BUILDINGS = ["turret", "sam-site", "radar"]
 BUILDING_INSET = 6  # content fits (size*128 - 6) px, centred in the size*128 frame
+# Added after the move to 3D: they only get a HUD portrait (all parts of the raw
+# composited, like any single-image unit), never atlas frames.
+PORTRAIT_ONLY = ["trooper", "rocket-squad", "sniper", "condor", "assembly-bay"]
 # Map objectives (neutral, drawn by the engine with the owner's ring): longest side in tiles.
 OBJECTIVE_SIZES = {"uplink": 2.25, "supply-crate": 0.85}
 
@@ -530,6 +537,12 @@ class Builder:
         self.add("obj/crate", resample(crate, s, *geo))
         self.icon_src["supply-crate"] = [(crate, None, None)]
 
+    # ---- HUD portraits without atlas frames
+    def portraits(self) -> None:
+        for k in PORTRAIT_ONLY:
+            (part,) = split_parts(k, "single")
+            self.icon_src[k] = [(part, None, None)]
+
     # ---- neutral sheets
     def sheets(self) -> None:
         for i, p in enumerate(split_parts("rubble", ("grid", 2, 2), soft=6)):
@@ -897,6 +910,7 @@ def dump_meta(meta: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--no-preview", action="store_true")
+    ap.add_argument("--icons-only", action="store_true", help="write only the HUD icons")
     args = ap.parse_args()
 
     b = Builder()
@@ -906,6 +920,11 @@ def main() -> None:
     b.buildings()
     print("objectives")
     b.objectives()
+    print("portraits")
+    b.portraits()
+    if args.icons_only:
+        print(f"{len(write_icons(b))} icons")
+        return
     print("sheets")
     b.sheets()
 

@@ -1,9 +1,9 @@
 // Standalone vehicles page (vehicles.html): every unit with its stats, read
 // from balance.ts so the page never drifts from the game, plus hand-written
-// notes on what makes each one special.
-import { DAMAGE_VS, UNITS, shotDamage } from "./sim/balance";
+// notes on what makes each one special, and the damage-type table.
+import { DAMAGE_VS, INFANTRY, TERRAIN, UNITS, shotDamage } from "./sim/balance";
 import { COUNTERS } from "./game/advisor";
-import type { ArmorClass, UnitKind } from "./sim/types";
+import { Terrain, type ArmorClass, type DamageType, type UnitKind } from "./sim/types";
 
 const FEATURES: Record<UnitKind, string[]> = {
   harvester: [
@@ -61,16 +61,38 @@ const FEATURES: Record<UnitKind, string[]> = {
     "Repair drone: a beam that heals one damaged friendly unit or building in range at a time.",
     "Keeps an army in the fight longer; the AI uses them as army escorts.",
     "Unarmed and lightly armoured — Raptors and Flak pick them off."
+  ],
+  trooper: [
+    `Five rifle bots fighting as one squad: one HP pool, and a robot falls each time it loses a fifth of it — the squad's firepower falls with them.`,
+    "The cheapest unit that can shoot aircraft, at half effect. Every side starts the match with one squad.",
+    `Walks through woods and rough ground at full speed, and takes only ${Math.round(INFANTRY.woodsCover * 100)}% damage in woods (vehicles: ${Math.round(TERRAIN[Terrain.Forest].cover * 100)}%).`,
+    `Captures Uplinks ${INFANTRY.captureWeight}× as fast as a vehicle and picks up supply crates. Leaves no wreck.`
+  ],
+  "rocket-squad": [
+    `Three bots with shoulder-fired rockets: cannon damage that hits heavy armour ${DAMAGE_VS.cannon.heavy}× — the cheap answer to Titans.`,
+    `Also fires at aircraft (${UNITS["rocket-squad"].airMult}×), so Hornets and Wasps pay for low passes.`,
+    "Weak against other infantry: Troopers and Snipers cut it down."
+  ],
+  sniper: [
+    `Two marksmen with rail-rifles: precision damage, ${Math.round(shotDamage(UNITS.sniper))} per shot and ${DAMAGE_VS.precision.infantry}× against infantry — one shot drops about three Trooper robots.`,
+    `Hidden in woods: enemies only see it within ${INFANTRY.concealRadius} tiles, until ${INFANTRY.concealAfterShot} s after it fires.`,
+    "Next to useless against armour and buildings, and slow to fire: keep vehicles away from it."
+  ],
+  condor: [
+    `Dropship: carries ${UNITS.condor.capacity} infantry squads over water, rock and anything else in the way. Unarmed.`,
+    `Select squads and tap the Condor to load them (1 s each, once they reach it); long-press the map to fly there and drop them (it hovers ${INFANTRY.unloadHover} s), or tap Unload.`,
+    `Shot down over land, its squads bail out with at most ${Math.round(INFANTRY.bailoutHp * 100)}% HP; over water or rock they are lost with it.`
   ]
 };
 
 const GROUPS: { title: string; kinds: UnitKind[] }[] = [
   { title: "Built at the HQ", kinds: ["harvester"] },
   { title: "Fab Plant — ground vehicles", kinds: ["stinger", "flak-crawler", "mortar", "titan", "lancer"] },
-  { title: "Airpad — flying drones", kinds: ["scout", "wasp", "raptor", "hornet", "mender"] }
+  { title: "Assembly Bay — robot infantry", kinds: ["trooper", "rocket-squad", "sniper"] },
+  { title: "Airpad — flying drones", kinds: ["scout", "wasp", "raptor", "hornet", "mender", "condor"] }
 ];
 
-const BUILT_AT: Record<string, string> = { hq: "HQ", "fab-plant": "Fab Plant", airpad: "Airpad" };
+const BUILT_AT: Record<string, string> = { hq: "HQ", "fab-plant": "Fab Plant", airpad: "Airpad", "assembly-bay": "Assembly Bay" };
 const TARGETS = { ground: "Ground", air: "Air", both: "Ground + air", none: "Unarmed" };
 
 type Threat = UnitKind | "turret" | "sam-site";
@@ -94,7 +116,7 @@ function weaponLine(kind: UnitKind): string {
   if (u.targets === "none") return "<b>No weapon</b>";
   const strong = (Object.entries(DAMAGE_VS[u.dmgType!]) as [ArmorClass, number][])
     .filter(([a, m]) => a !== "structure" ? m > 1 : m >= 1.3)
-    .map(([a, m]) => `${a === "structure" ? "buildings" : `${a} armour`} ×${m}`);
+    .map(([a, m]) => `${a === "structure" ? "buildings" : a === "infantry" ? "infantry" : `${a} armour`} ×${m}`);
   const bits = [
     `<b>${u.dmgType}</b> damage`,
     `${fmt(shotDamage(u))} per shot every ${u.shotInterval ?? 0.5}s`,
@@ -111,8 +133,9 @@ function card(kind: UnitKind): string {
   const beats = (COUNTERS[kind] ?? []) as Threat[];
   const fears = counteredBy(kind);
   const tags = [
-    `<span class="tag">${u.hover ? "Hover" : u.domain === "air" ? "Air" : "Ground"}</span>`,
-    `<span class="tag">${u.armor} armour</span>`,
+    `<span class="tag">${u.hover ? "Hover" : u.squad ? "Infantry" : u.domain === "air" ? "Air" : "Ground"}</span>`,
+    `<span class="tag">${u.armor === "infantry" ? `squad of ${u.squad}` : `${u.armor} armour`}</span>`,
+    u.capacity ? `<span class="tag">Carries ${u.capacity} squads</span>` : "",
     `<span class="tag">${BUILT_AT[u.builtAt]}</span>`,
     u.requires ? `<span class="tag tech">⚗ Needs Tech Lab</span>` : ""
   ].join("");
@@ -155,3 +178,18 @@ document.getElementById("nav")!.innerHTML = GROUPS.flatMap((g) => g.kinds)
 document.getElementById("units")!.innerHTML = GROUPS.map(
   (g) => `<h2 class="group">${g.title}</h2><div class="grid">${g.kinds.map(card).join("")}</div>`
 ).join("");
+
+// the damage table: every damage type against every armour class, straight from DAMAGE_VS
+const ARMOR_NAME: Record<ArmorClass, string> = {
+  light: "Light", medium: "Medium", heavy: "Heavy", structure: "Buildings", infantry: "Infantry"
+};
+const armors = Object.keys(ARMOR_NAME) as ArmorClass[];
+const users = (t: DamageType): string =>
+  (Object.keys(UNITS) as UnitKind[]).filter((k) => UNITS[k].dmgType === t).map((k) => UNITS[k].name).join(", ");
+const cell = (m: number): string => `<td class="${m >= 1.2 ? "hi" : m <= 0.7 ? "lo" : ""}">×${m}</td>`;
+document.getElementById("damage")!.innerHTML = `<table class="dmg">
+  <thead><tr><th>Damage</th>${armors.map((a) => `<th>${ARMOR_NAME[a]}</th>`).join("")}</tr></thead>
+  <tbody>${(Object.keys(DAMAGE_VS) as DamageType[])
+    .map((t) => `<tr><th>${t}<small>${users(t)}</small></th>${armors.map((a) => cell(DAMAGE_VS[t][a])).join("")}</tr>`)
+    .join("")}</tbody>
+</table>`;

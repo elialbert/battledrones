@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
 import { CRATE_NAMES } from "../../sim/objectives";
-import type { Crate, CrateReward, Faction, FxEvent, Uplink, World } from "../../sim/types";
+import type { Crate, CrateReward, Faction, FxEvent, Unit, Uplink, World } from "../../sim/types";
 import { buildingCenter, hqOf } from "../../sim/world";
 import { announce } from "../announce";
 import { sfx, type SfxName } from "../audio";
@@ -25,6 +25,8 @@ export interface ObjectiveRendererOpts {
   spectator: boolean;
   /** Is the tile position visible to the local player (or fog off)? */
   visibleAt(x: number, y: number): boolean;
+  /** May the local player see this unit (its tile in sight, and not a Sniper Team hidden in the woods)? */
+  seesUnit(u: Unit): boolean;
   /** Volume for a sound at tile point (x, y). */
   earshot(x: number, y: number): number;
   /** Tap-to-jump warning toast, a plain toast, a minimap ping, a one-time tip. */
@@ -358,7 +360,7 @@ export class ObjectiveRenderer {
     if (this.opts.visibleAt(ev.x, ev.y)) this.floatLabel(x, y, label, color, mine || this.opts.spectator ? 20 : 15);
     for (const id of ev.unitIds) {
       const u = this.world.units.get(id);
-      if (u && this.opts.visibleAt(u.x, u.y)) this.fx.pulse(u.x, u.y, ev.reward === "repair" ? 0x7ef29b : GOLD, 0.9);
+      if (u && this.opts.seesUnit(u)) this.fx.pulse(u.x, u.y, ev.reward === "repair" ? 0x7ef29b : GOLD, 0.9);
     }
     if (this.opts.spectator) return;
     const what = ev.scrap > 0 && ev.reward !== "scrap" ? `${CRATE_NAMES[ev.reward]} (+${Math.round(ev.scrap)} scrap)` : CRATE_NAMES[ev.reward];

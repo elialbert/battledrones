@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { SALVAGE, TICK_RATE, UNITS } from "../../sim/balance";
+import { isInfantry } from "../../sim/infantry";
 import { incomeOf } from "../../sim/rules";
 import type { Faction, FxEvent, UnitKind, World, Wreck } from "../../sim/types";
 import { announce } from "../announce";
@@ -134,7 +135,8 @@ export class WreckRenderer {
 
   /** Feed every sim fx event through here (before the entity views sync). */
   onFx(ev: FxEvent): void {
-    if (ev.type === "death" && ev.unitKind && ev.unitKind !== "harvester") {
+    // (robot infantry leaves no wreck: its robots topple and sink away, render/entities.ts)
+    if (ev.type === "death" && ev.unitKind && ev.unitKind !== "harvester" && !isInfantry(ev.unitKind)) {
       this.deaths.set(ev.id, { pose: this.opts.pose(ev.id), ev });
     } else if (ev.type === "salvage") {
       this.collected.add(ev.wreckId);

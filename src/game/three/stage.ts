@@ -2,7 +2,9 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import type { Biome } from "../../sim/types";
 import { CameraRig } from "./camera";
-import { setFogLook, type FogLook } from "./materials";
+import { GroundGfx } from "./ground-gfx";
+import { SquadRig } from "./infantry";
+import { discMat, glowMat, modelMat, setFogLook, type FogLook } from "./materials";
 import { ScreenLayer } from "./screen";
 
 /**
@@ -46,6 +48,54 @@ const LOOKS: Record<Biome, Look> = {
     fog: { shroud: 0x141012, wisp: 0x302727, memory: [1.1, 0.94, 0.86], cloud: [1, 1, 1] }
   }
 };
+
+/**
+ * One of each look that may first turn up mid-battle, for precompile: a squad
+ * of robots (a skinned mesh, and its shadow), tracers and beams (additive and
+ * blended glow), a light pool (glow disc), a placement ghost, and marks on
+ * the ground of each kind (selection and combat rings, calldown reticles) —
+ * at (x, y), far under the map, drawn even there (no culling, the marks all
+ * but clear) but hidden by the ground. Drawn, not just compiled: a driver
+ * may set up the rest of what a draw needs the first time it's made.
+ */
+function standIns(rig: CameraRig, x: number, y: number): { group: THREE.Group; dispose: () => void } {
+  const group = new THREE.Group();
+  const robots = new SquadRig("trooper", "blue");
+  robots.root.position.set(x, -20, y);
+  const quad = new THREE.PlaneGeometry(0.5, 0.5);
+  if (!standMats) {
+    const blended = glowMat(0xffffff);
+    blended.blending = THREE.NormalBlending;
+    standMats = [glowMat(0xffffff), blended, discMat(0xffffff), modelMat("ghostOk")];
+  }
+  group.add(robots.root);
+  for (const m of standMats) {
+    const mesh = new THREE.Mesh(quad, m);
+    mesh.position.set(x, -20, y);
+    group.add(mesh);
+  }
+  const marks = [{ fog: true }, {}, { onTop: true }].map((o) => new GroundGfx(rig, () => -20, o));
+  for (const g of marks) {
+    g.lineStyle(2, 0xffffff, 0.004).strokeCircle(x, y, 0.3);
+    g.fillStyle(0xffffff, 0.004).fillCircle(x, y, 0.1);
+    g.flush();
+    group.add(g.mesh);
+  }
+  group.traverse((o) => (o.frustumCulled = false));
+  return {
+    group,
+    dispose: () => {
+      robots.dispose();
+      quad.dispose();
+      for (const g of marks) g.dispose();
+    }
+  };
+}
+/**
+ * The stand-ins' materials, kept: a shader program goes when the last material
+ * using it does, and the effects make and drop theirs (a beam's, say) as they go.
+ */
+let standMats: THREE.Material[] | null = null;
 
 /** Is this WebGL context rasterising on the CPU (SwiftShader, llvmpipe…)? */
 function isSoftwareGl(r: THREE.WebGLRenderer): boolean {
@@ -161,9 +211,22 @@ export class Stage {
     this.screen.resize(w, h, this.dpr);
   }
 
-  /** Compile every shader the scene needs now (during loading), not mid-battle. */
+  /**
+   * Compile every shader the battle will need now (during loading), not
+   * mid-battle: the scene as it is, plus stand-ins for the looks that only
+   * turn up later (standIns), drawn once out of sight under the map so their
+   * shadow passes compile too. Then every program is put to use: a driver
+   * may only finish linking one when it is first used, and a mark drawn on
+   * the ground for the first time (say) would stall the frame it appears.
+   */
   precompile(): void {
+    const stand = standIns(this.rig, this.rig.x, this.rig.y);
+    this.scene.add(stand.group);
     this.renderer.compile(this.scene, this.rig.camera);
+    this.render();
+    this.scene.remove(stand.group);
+    stand.dispose();
+    for (const p of this.renderer.info.programs ?? []) p.getUniforms();
   }
 
   /**

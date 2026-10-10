@@ -10,6 +10,19 @@ import { AIR_H, type P3, type View } from "../three/view";
 
 type ShotEvent = Extract<FxEvent, { type: "shot" }>;
 
+/**
+ * What the weapon fx need from the robot squads on show (EntityRenderer
+ * provides it): a squad's volley leaves every standing robot's own muzzle.
+ */
+export interface SquadFire {
+  /** Robots of unit `id` taking part in this volley (rig indices), or null if it isn't a squad on show. */
+  shooters(id: number, fx: WeaponFx): number[] | null;
+  /** Robot `i` of squad `id` fires now: it kicks, and this is its muzzle (null if it has gone down). */
+  fire(id: number, i: number): P3 | null;
+  /** Did a squad on show just die at (x, y)? (Its robots topple: no vehicle fireball.) */
+  diedAt(x: number, y: number): boolean;
+}
+
 /** A purely visual projectile (tracer, rocket, missile) flying for `dur` ms. */
 interface Flier {
   obj: THREE.Object3D;
@@ -38,6 +51,11 @@ const TRAIL_STEP = 0.15;
 const SMOKE: EmitCfg = {
   tex: TEX.puff, tex2: TEX.puff2, life: [1000, 1800], speed: [0.06, 0.3], up: [0.35, 0.75], size: [0.42, 0.56], grow: [2.2, 3],
   alpha: [0.72, 0], tints: [0x47433f, 0x3a3734, 0x524d47], end: 0x8f8a83, drag: 0.6, spin: 0.5, rot: 0.4, wind: WIND, fadeIn: 0.1, easeOut: true
+};
+/** The rail rifle's ionised wake, glowing a moment along the shot's line. */
+const RAIL_WAKE: EmitCfg = {
+  tex: TEX.glow, additive: true, life: [260, 420], speed: [0, 0.05], up: [0.02, 0.08], size: [0.1, 0.14], grow: [1.6, 2.2],
+  alpha: [0.55, 0], tints: [0xffe9b8, 0xfff4d8], end: 0xff9a3a
 };
 /** Grey smoke off a damaged building's roof. */
 const DAMAGE_SMOKE: EmitCfg = {
@@ -142,6 +160,8 @@ function shell(): THREE.BufferGeometry {
 }
 
 export class Fx {
+  /** Robot squads on show (set by the entity renderer). */
+  squads: SquadFire | null = null;
   private fliers: Flier[] = [];
   private shells = new Map<number, THREE.Mesh>();
   private rubbles: THREE.Object3D[] = [];
@@ -190,6 +210,11 @@ export class Fx {
   shot(ev: ShotEvent, from: P3, to: P3, faction: Faction): void {
     const fx: WeaponFx = ev.fx;
     const flash = (scale: number, tint = 0xffd27a) => this.muzzle(from, scale, tint);
+    const squad = this.squads?.shooters(ev.sourceId, fx);
+    if (squad) {
+      this.volley(ev, squad, from, to);
+      return;
+    }
     switch (fx) {
       case "cannon":
         flash(0.5);
@@ -250,7 +275,92 @@ export class Fx {
       case "bomb":
         this.sound("bomb", from.x, from.y, 0.6);
         break;
+      case "rifle":
+        flash(0.24);
+        this.tracer(from, to, 0.45);
+        this.sound("rifle", from.x, from.y, 0.55);
+        break;
+      case "snipe":
+        this.rail(from, to);
+        break;
     }
+  }
+
+  /**
+   * A robot squad's volley: each standing robot fires from its own muzzle a
+   * beat apart (it kicks as its shot leaves) — a crackle of rifle tracers,
+   * a ripple of shoulder rockets with backblast, or one rail-rifle streak.
+   */
+  private volley(ev: ShotEvent, robots: number[], from: P3, to: P3): void {
+    const id = ev.sourceId;
+    const spread = ev.fx === "snipe" ? 0 : ev.fx === "rockets" ? 0.18 : 0.3;
+    robots.forEach((i, k) => {
+      const delay = ev.fx === "rockets" ? k * 120 + Math.random() * 40 : ev.fx === "rifle" ? k * 30 + Math.random() * 70 : 0;
+      const go = () => {
+        const m = this.squads?.fire(id, i) ?? (k === 0 ? from : null);
+        if (!m) return;
+        const t = { x: to.x + (Math.random() - 0.5) * spread, y: to.y + (Math.random() - 0.5) * spread, h: to.h + (Math.random() - 0.4) * spread * 0.5 };
+        if (ev.fx === "rifle") {
+          this.muzzle(m, 0.2, 0xffd27a);
+          this.tracer(m, t, 0.42, k < 2 ? () => this.emit({ ...SPARKS, size: [0.12, 0.18] }, t, 2) : undefined);
+          if (k === 0) this.sound("rifle", m.x, m.y, 0.55);
+        } else if (ev.fx === "rockets") {
+          // the launcher's backblast puffs out behind the robot
+          const dx = t.x - m.x;
+          const dy = t.y - m.y;
+          const d = Math.hypot(dx, dy) || 1;
+          this.emit({ ...GUNSMOKE, size: [0.12, 0.17] }, { x: m.x - (dx / d) * 0.24, y: m.y - (dy / d) * 0.24, h: m.h }, 2);
+          this.flash(m, 0.3, 0xffc070, 0.75);
+          this.missile(m, t, 280, false, () => this.impact(t, 0.42, ev.air));
+          this.sound("rocket", m.x, m.y, 0.55);
+        } else this.rail(m, t);
+      };
+      if (delay > 0) this.v.tweens.after(delay, go);
+      else go();
+    });
+  }
+
+  /** The Sniper's rail shot: one instant, white-hot streak, a glowing wake along it and a crack. */
+  private rail(from: P3, to: P3): void {
+    this.beam(from, to, 0xffc65a, 3.2, 300);
+    this.muzzle(from, 0.36, 0xfff0c8);
+    this.flash(to, 0.45, 0xffe2a0);
+    this.emit(SPARKS, to, 5);
+    const n = Math.max(2, Math.round(Math.hypot(to.x - from.x, to.y - from.y) * 1.6));
+    for (let i = 1; i < n; i++) {
+      const k = i / n;
+      this.emit(RAIL_WAKE, { x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k, h: from.h + (to.h - from.h) * k }, 1);
+    }
+    this.sound("snipe", from.x, from.y, 0.8);
+  }
+
+  /** A robot goes down: a spray of sparks and a clank where it lands. */
+  robotDown(p: P3): void {
+    this.emit({ ...SPARKS, size: [0.13, 0.2], speed: [0.6, 2.2], up: [0.6, 1.8] }, p, 6);
+    this.emit({ ...DEBRIS, size: [0.07, 0.11], speed: [0.4, 1.4], up: [1, 2] }, p, 2);
+    this.flash(p, 0.32, 0xffd27a, 0.7);
+    this.sound("clank", p.x, p.y, 0.5);
+  }
+
+  /** A Titan grinds through a squad: sparks and scrap kicked out from under its tracks. */
+  crush(x: number, y: number): void {
+    const p = { x, y, h: this.v.terrain.surfaceAt(x, y) + 0.08 };
+    this.emit({ ...SPARKS, speed: [0.8, 2.6], up: [0.4, 1.6] }, p, 7);
+    this.emit({ ...DEBRIS, size: [0.08, 0.13], speed: [0.8, 2], up: [1.2, 2.4] }, p, 3);
+    this.kick(x, y, 1);
+    this.sound("crush", x, y, 0.75);
+  }
+
+  /** A dropship's downwash where squads climb aboard or jump down: dust blown out along the ground. */
+  wash(x: number, y: number, n = 3): void {
+    for (let i = 0; i < n; i++) this.kick(x + (Math.random() - 0.5) * 0.5, y + (Math.random() - 0.5) * 0.5, 1);
+    this.sound("thrust", x, y, 0.5);
+  }
+
+  /** A robot lands from a drop: a thruster blip and a puff of dust. */
+  landing(p: P3): void {
+    this.flash({ x: p.x, y: p.y, h: p.h + 0.04 }, 0.28, 0xffb347, 0.7);
+    this.dust(p.x, p.y);
   }
 
   /** A quick additive bloom. */
@@ -457,6 +567,10 @@ export class Fx {
       this.v.tweens.after(250, () => this.plume(at.x, at.y, at.h + 0.3, 0.8 + size * 0.25, 3 + Math.round(size * 2)));
       // camera shake is decided by render/juice-view.ts (on-screen deaths only)
       this.sound("bigExplosion", at.x, at.y);
+    } else if (ev.kind === "unit" && !ev.air && this.squads?.diedAt(ev.x, ev.y)) {
+      // a robot squad wiped out: its last robots topple in sparks (render/entities.ts), no fireball
+      this.emit({ ...SPARKS, speed: [0.8, 2.6] }, { ...at, h: at.h + 0.1 }, 6);
+      this.flash(at, 0.5, 0xffd27a, 0.6);
     } else if (ev.kind === "unit") {
       // small hulls pop smaller; Titans and Hornets keep their big fireball. A ground
       // unit's wreck appears where it died: the blast erupts out of it, not hidden inside it

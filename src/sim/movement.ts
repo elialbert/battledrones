@@ -1,12 +1,13 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
+import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
-import { inBounds, moveClassOf, passable, terrainSpeed, type MoveClass } from "./world";
+import { inBounds, moveClassOf, passable, terrainMult, terrainSpeed, type MoveClass } from "./world";
 
 const ARRIVE_DIST = 0.25;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
 /** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
-const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed)));
+const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed, t.footSpeed)));
 
 /**
  * Arrival radius at a final destination, growing with the crowd already
@@ -24,9 +25,7 @@ function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
 
 /** Per-step cost multiplier of entering a tile (slow terrain costs more). */
 function stepCost(w: World, idx: number, mc: MoveClass): number {
-  const info = TERRAIN[w.terrain[idx] as Terrain];
-  const s = mc === "hover" ? info.hoverSpeed : info.speed;
-  return 1 / (s || 1);
+  return 1 / (terrainMult(TERRAIN[w.terrain[idx] as Terrain], mc) || 1);
 }
 
 /**
@@ -251,8 +250,28 @@ export function approachPoint(
   };
 }
 
-/** Per-tick movement for move / attack-move orders (combat may pause it). */
-export function tickMovement(w: World, pausedIds: Set<number>): void {
+/**
+ * Where each ground vehicle stands. sim.ts takes this at the start of a tick,
+ * before harvesting, combat or movement move anything, so separation can tell
+ * a vehicle that drove this tick from a parked one.
+ */
+export function vehicleSpots(w: World): Map<number, { x: number; y: number }> {
+  const out = new Map<number, { x: number; y: number }>();
+  for (const u of w.units.values())
+    if (UNITS[u.kind].domain === "ground" && !isInfantry(u.kind)) out.set(u.id, { x: u.x, y: u.y });
+  return out;
+}
+
+/**
+ * Per-tick movement for move / attack-move orders (combat may pause it),
+ * then separation, then crushing: a Titan that drove this tick rolls over
+ * the enemy squads under it (infantry.ts). `spots` is vehicleSpots from the
+ * start of the tick (squads only step aside for a vehicle that drove).
+ */
+export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number, { x: number; y: number }> = new Map()): void {
+  /** Where each crusher stood before it moved (to tell who actually drove). */
+  const crushers: { u: Unit; x: number; y: number }[] = [];
+  for (const u of w.units.values()) if (crushes(u.kind)) crushers.push({ u, x: u.x, y: u.y });
   for (const u of w.units.values()) {
     const o = u.order;
     if (pausedIds.has(u.id)) continue;
@@ -275,23 +294,42 @@ export function tickMovement(w: World, pausedIds: Set<number>): void {
       }
     }
   }
-  separate(w);
+  const moved = crushers.filter((c) => c.u.x !== c.x || c.u.y !== c.y).map((c) => c.u);
+  const driving = new Set<number>();
+  for (const [id, p] of spots) {
+    const u = w.units.get(id);
+    if (u && (u.x !== p.x || u.y !== p.y)) driving.add(id);
+  }
+  separate(w, driving);
+  if (moved.length > 0) tickCrush(w, moved);
 }
 
 const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS).map((k, i) => [k, i]));
 
-/** Gentle separation so same-domain units don't stack. */
-function separate(w: World): void {
+/**
+ * Gentle separation so same-domain units don't stack. Robot infantry give
+ * way: a squad and a FRIENDLY vehicle that drove this tick (`driving`) part
+ * by moving only the squad (it steps aside), and a squad and an ENEMY
+ * vehicle don't part at all (tanks roll through squads — and Titans crush
+ * them). Squads among themselves, vehicles among themselves, and a squad
+ * and a PARKED friendly vehicle share the push as usual (a squad walking up
+ * to one shoulders it aside, as a second vehicle would — else it would be
+ * pinned there, short of its goal, for good).
+ */
+function separate(w: World, driving: Set<number>): void {
   const units = [...w.units.values()];
   for (let i = 0; i < units.length; i++) {
     const a = units[i]!;
     const da = UNITS[a.kind].domain;
+    const ia = isInfantry(a.kind);
     for (let j = i + 1; j < units.length; j++) {
       const b = units[j]!;
       if (UNITS[b.kind].domain !== da) continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) continue;
+      const ib = isInfantry(b.kind);
+      if (ia !== ib && a.faction !== b.faction) continue; // enemy vehicle and squad: drive through
       const d = Math.hypot(dx, dy);
       const minD = Math.max(0.7, UNITS[a.kind].radius + UNITS[b.kind].radius);
       if (d >= minD) continue;
@@ -314,15 +352,44 @@ function separate(w: World): void {
         ux = dx / d;
         uy = dy / d;
       }
+      if (ia !== ib && driving.has(ia ? b.id : a.id)) {
+        // a squad steps aside for a friendly vehicle on the move: it takes the whole push
+        const [veh, squad, sx, sy] = ia ? [b, a, -ux, -uy] : [a, b, ux, uy];
+        const s = stepAside(veh, sx, sy);
+        nudge(w, squad, s.x * push * 2, s.y * push * 2);
+        continue;
+      }
       nudge(w, a, -ux * push, -uy * push);
       nudge(w, b, ux * push, uy * push);
     }
   }
 }
 
+/**
+ * Which way a squad in a vehicle's way gives ground: straight away from it,
+ * or — when it stands in front — sideways off the vehicle's line of travel,
+ * to whichever side it is already on (dead ahead: the vehicle's right, which
+ * turns with the vehicle, so mirror-image pairs part as mirror images).
+ * (dx, dy) is the unit vector from the vehicle to the squad.
+ */
+function stepAside(v: Unit, dx: number, dy: number): { x: number; y: number } {
+  const fx = Math.sin(v.facing);
+  const fy = -Math.cos(v.facing);
+  if (dx * fx + dy * fy <= 0) return { x: dx, y: dy }; // beside or behind it: just back off
+  const rx = -fy; // the vehicle's right hand
+  const ry = fx;
+  const side = dx * rx + dy * ry;
+  const s = side < -1e-6 ? -1 : 1;
+  return { x: rx * s, y: ry * s };
+}
+
+/** Ground units keep this far (tiles) inside the map's edge (their models stand around the centre). */
+const EDGE = 0.4;
+
 function nudge(w: World, u: Unit, dx: number, dy: number): void {
-  const nx = Math.min(w.width - 0.05, Math.max(0.05, u.x + dx));
-  const ny = Math.min(w.height - 0.05, Math.max(0.05, u.y + dy));
+  const m = UNITS[u.kind].domain === "air" ? 0.05 : EDGE;
+  const nx = Math.min(w.width - m, Math.max(m, u.x + dx));
+  const ny = Math.min(w.height - m, Math.max(m, u.y + dy));
   if (passable(w, Math.floor(nx), Math.floor(ny), moveClassOf(u.kind))) {
     u.x = nx;
     u.y = ny;

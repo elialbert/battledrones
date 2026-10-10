@@ -71,7 +71,15 @@ export interface MutatorDef {
   conflicts?: MutatorId[];
 }
 
-export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer"];
+/** Ground combat units: the tanks, and the robot infantry squads. */
+export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer", "trooper", "rocket-squad", "sniper"];
+
+/**
+ * What "no ground combat" bans (Air War, Sky Pirates): GROUND_COMBAT, and the
+ * Condor — the starting Trooper Squad is kept to guard home, and a dropship
+ * would fly it into the fight.
+ */
+export const NO_GROUND_COMBAT: UnitKind[] = [...GROUND_COMBAT, "condor"];
 
 export const MUTATORS: Record<MutatorId, MutatorDef> = {
   blitz: {
@@ -107,13 +115,15 @@ export const MUTATORS: Record<MutatorId, MutatorDef> = {
     name: "Air War",
     icon: "✈️",
     // SAM sites go too: measured, aircraft-only armies never crack a SAM line (every
-    // AI-vs-AI Air War drew at 25:00); turrets and the HQ gun still shoot back
-    desc: "No ground combat units, Fab Plants or SAM sites: dogfights decide it",
-    bansUnits: GROUND_COMBAT,
-    bansBuildings: ["fab-plant", "sam-site"],
+    // AI-vs-AI Air War drew at 25:00); turrets and the HQ gun still shoot back.
+    // Infantry and their Assembly Bay are ground combat too (the starting squad stays home,
+    // so no Condor either: NO_GROUND_COMBAT)
+    desc: "No ground combat units, Condors, Fab Plants, Assembly Bays or SAM sites: dogfights decide it",
+    bansUnits: NO_GROUND_COMBAT,
+    bansBuildings: ["fab-plant", "assembly-bay", "sam-site"],
     apply: (r) => {
-      r.bannedUnits.push(...GROUND_COMBAT);
-      r.bannedBuildings.push("fab-plant", "sam-site");
+      r.bannedUnits.push(...NO_GROUND_COMBAT);
+      r.bannedBuildings.push("fab-plant", "assembly-bay", "sam-site");
     }
   },
   veterans: {

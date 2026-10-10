@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAiState, tickAi } from "../src/sim/ai/commander";
-import { TICK_RATE } from "../src/sim/balance";
+import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
@@ -54,6 +54,17 @@ describe("unit chirp-voices", () => {
     expect(f("titan")).toBeLessThan(f("stinger"));
     expect(f("hornet")).toBeLessThan(f("wasp"));
     expect(f("mender")).toBeGreaterThan(f("harvester"));
+  });
+
+  it("every unit kind has a voice; troopers chirp high, rocket crews gruff, snipers low and calm", () => {
+    for (const k of Object.keys(UNITS) as UnitKind[]) expect(VOICES[k], k).toBeDefined();
+    const f = (k: UnitKind) => chirpPlan(k, "select", 1).syllables[0]!.from;
+    expect(f("trooper")).toBeGreaterThan(f("rocket-squad"));
+    expect(f("rocket-squad")).toBeGreaterThan(f("sniper"));
+    expect(VOICES["rocket-squad"].fm).toBeDefined(); // a growl
+    expect(VOICES.sniper.syl).toBeGreaterThan(VOICES.trooper.syl * 2); // unhurried
+    expect(VOICES.condor.fm!.depth).toBeGreaterThan(0.1); // the rotor chop
+    expect(f("condor")).toBeLessThan(f("trooper"));
   });
 
   it("jitters pitch by unit id, deterministically, within ±6%", () => {
@@ -416,6 +427,47 @@ describe("battle callouts", () => {
     r.w.winner = "red";
     r.at(50);
     expect(r.radio.at(-1)!.text).toBe("Red wins the battle");
+  });
+
+  it("Condor drops: ours is flavour, the enemy's a warning where we see it; shot down says what happened", () => {
+    let visible = false;
+    const r = rig({ onScreen: () => visible });
+    const drop = (faction: Faction, carrierId: number, unitIds: number[], bailout = false, x = 20, y = 20): FxEvent => ({
+      type: "disembark", faction, carrierId, unitIds, x, y, bailout
+    });
+    const embark = (faction: Faction, carrierId: number, unitId: number): FxEvent => ({
+      type: "embark", faction, carrierId, unitId, x: 20, y: 20
+    });
+    r.at(1, embark("blue", 50, 51), embark("blue", 50, 52));
+    r.at(10, drop("blue", 50, [51, 52]));
+    expect(r.radio.at(-1)).toMatchObject({ key: "troops-deployed", priority: 3, caption: true });
+    visible = true;
+    r.at(12, drop("blue", 50, [51])); // (cooldown)
+    expect(r.keys()).toEqual(["troops-deployed"]);
+    // the enemy lands troops where we can't see: nothing; where we can: a warning
+    r.at(20, drop("red", 60, [61], false, 40, 40));
+    expect(r.keys()).toEqual(["troops-deployed"]);
+    spawnUnit(r.w, "stinger", "blue", 40, 41);
+    tickFog(r.w);
+    r.at(21, drop("red", 60, [61], false, 40, 40));
+    expect(r.radio.at(-1)).toMatchObject({ key: "enemy-drop", text: "Enemy troops landing!", priority: 1, tone: "bad" });
+    // our Condor shot down over land: its squads bail out
+    r.at(30, embark("blue", 70, 71));
+    r.at(40, death({ faction: "blue", id: 70, unitKind: "condor", value: 200 }), drop("blue", 70, [71], true));
+    expect(r.radio.at(-1)).toMatchObject({ key: "condor-down", text: "Condor down! Troops bailing out", priority: 1 });
+    // …over water: lost with it — one line, not "Squad lost" on top
+    r.at(60, embark("blue", 80, 81), embark("blue", 80, 82));
+    r.at(80,
+      death({ faction: "blue", id: 80, unitKind: "condor", value: 200 }),
+      death({ faction: "blue", id: 81, unitKind: "trooper", value: 100 }),
+      death({ faction: "blue", id: 82, unitKind: "trooper", value: 100 })
+    );
+    expect(r.radio.at(-1)).toMatchObject({ key: "condor-down", text: "Condor down with 2 squads aboard" });
+    expect(r.keys().filter((k) => k === "squad-lost")).toEqual([]);
+    // an empty Condor going down is just a unit lost
+    const before = r.radio.length;
+    r.at(120, death({ faction: "blue", id: 90, unitKind: "condor", value: 200 }));
+    expect(r.radio.length).toBe(before);
   });
 
   it("answers the HUD's no-scrap cue, sparingly", () => {

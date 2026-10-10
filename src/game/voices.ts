@@ -60,7 +60,7 @@ export interface VoiceSpec {
   gain: number;
 }
 
-/** One voice per unit class: heavy hulls growl low, drones buzz, the Mender rings. */
+/** One voice per unit class: heavy hulls growl low, drones buzz, the Mender rings, troopers chatter. */
 export const VOICES: Record<UnitKind, VoiceSpec> = {
   harvester: { f0: 260, wave: "triangle", formants: [620, 1400], q: 5, syl: 110, dry: 0.7, gain: 0.82 },
   scout: { f0: 560, wave: "triangle", formants: [1500, 3000], q: 6, syl: 55, dry: 0.55, gain: 1.0 },
@@ -72,7 +72,13 @@ export const VOICES: Record<UnitKind, VoiceSpec> = {
   wasp: { f0: 220, wave: "sawtooth", formants: [1200, 2600], q: 8, syl: 50, dry: 0.1, fm: { hz: 60, depth: 0.25 }, gain: 1.33 },
   raptor: { f0: 360, wave: "sawtooth", formants: [1100, 2500], q: 7, syl: 60, dry: 0.15, gain: 0.93 },
   hornet: { f0: 110, wave: "sawtooth", formants: [600, 1150], q: 6, syl: 125, dry: 0.1, fm: { hz: 38, depth: 0.12 }, gain: 1.18 },
-  mender: { f0: 660, wave: "sine", formants: [1300, 2600], q: 4, syl: 120, dry: 0.9, partial: 2.76, bell: true, gain: 0.95 }
+  mender: { f0: 660, wave: "sine", formants: [1300, 2600], q: 4, syl: 120, dry: 0.9, partial: 2.76, bell: true, gain: 0.95 },
+  // robot infantry: troopers chirp high in a chorus (a partial a hair sharp beats against the pitch), rocket
+  // crews bark gruff and buzzy, sniper pairs murmur low and calm; the Condor drones like an engine under rotors
+  trooper: { f0: 430, wave: "square", formants: [950, 2200], q: 6, syl: 55, dry: 0.3, partial: 1.012, gain: 0.85 },
+  "rocket-squad": { f0: 175, wave: "sawtooth", formants: [620, 1250], q: 6, syl: 85, dry: 0.12, fm: { hz: 27, depth: 0.05 }, gain: 1.15 },
+  sniper: { f0: 135, wave: "triangle", formants: [520, 1050], q: 4, syl: 135, dry: 0.65, gain: 1.15 },
+  condor: { f0: 92, wave: "sawtooth", formants: [430, 900], q: 5, syl: 120, dry: 0.12, fm: { hz: 44, depth: 0.16 }, gain: 1.15 }
 };
 
 /** A syllable: a pitch glide `from` → `to` Hz with formants scaled by `vowel`. */
@@ -299,8 +305,12 @@ export class UnitVoices {
     this.group("select", units);
   }
 
-  /** The player's order went out: the selected units acknowledge. */
-  order(kind: "move" | "attack" | "harvest" | "rally" | "place", selected: ReadonlySet<number>, world: World): void {
+  /** The player's order went out: the selected units acknowledge (boarding and drops answer like a move). */
+  order(
+    kind: "move" | "attack" | "harvest" | "rally" | "place" | "board" | "drop",
+    selected: ReadonlySet<number>,
+    world: World
+  ): void {
     if (kind === "rally" || kind === "place") return;
     const units: Unit[] = [];
     for (const id of selected) {
@@ -310,7 +320,7 @@ export class UnitVoices {
     this.group(kind === "attack" ? "attack" : "move", units);
   }
 
-  /** This tick's sim events: units rolling off the line (or out of a Drop Pod), promotions, deaths in view. */
+  /** This tick's sim events: units rolling off the line (or out of a Drop Pod or a Condor), promotions, deaths in view. */
   events(list: readonly FxEvent[], h: VoiceHooks): void {
     if (!this.answers(h)) return;
     for (const ev of list) {
@@ -324,15 +334,23 @@ export class UnitVoices {
         if (ev.faction === h.player && ev.unitKind && h.inView(ev.x, ev.y)) this.say(ev.unitKind, "death", ev.id);
       } else if (ev.type === "calldownImpact" && ev.power === "droppod" && ev.faction === h.player) {
         // our Drop Pod's crew steps out and reports in, like a fresh unit off the line
-        const crew: Unit[] = [];
-        for (const id of ev.unitIds) {
-          const u = h.world.units.get(id);
-          if (u) crew.push(u);
-        }
-        const g = groupVoices(crew);
-        if (g) this.say(g.lead.kind, "ready", g.lead.id, g.echo);
+        this.reportIn(ev.unitIds, h.world);
+      } else if (ev.type === "disembark" && !ev.bailout && ev.faction === h.player) {
+        // so do squads a Condor just put down
+        this.reportIn(ev.unitIds, h.world);
       }
     }
+  }
+
+  /** Units that just arrived together say "ready" as one group. */
+  private reportIn(ids: readonly number[], world: World): void {
+    const crew: Unit[] = [];
+    for (const id of ids) {
+      const u = world.units.get(id);
+      if (u) crew.push(u);
+    }
+    const g = groupVoices(crew);
+    if (g) this.say(g.lead.kind, "ready", g.lead.id, g.echo);
   }
 
   // ------------------------------------------------------------ synthesis --

@@ -2,9 +2,10 @@ import { BUILDINGS, TICK_RATE, UNITS } from "./balance";
 import { createAiState, type AiState, type Difficulty, type Strategy, type StrategyName } from "./ai/commander";
 import { nearestReachableResource } from "./economy";
 import { setupSurvival, wavesSurvived, type SurvivalOptions } from "./modes/survival";
-import { GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
+import { NO_GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
 import type { BuildingKind, Faction, UnitKind, World } from "./types";
-import { buildingCenter, hqOf, inBounds, passable, spawnBuilding, spawnUnit } from "./world";
+import { carrierOf } from "./transport";
+import { buildingCenter, hqOf, inBounds, moveClassOf, passable, spawnBuilding, spawnUnit } from "./world";
 
 /**
  * Ops: a short campaign of handcrafted scenarios on the existing maps, each
@@ -160,7 +161,8 @@ export const OPS: OpDef[] = [
     tip: "Stingers and Turrets shred Rush's light tanks. Build a Fab Plant early and send reinforcements up the road to the bridge.",
     map: "riverlands",
     // bigger waves than a stock Rush: it masses ~1,200 scrap of tanks before each push
-    ai: { strategy: "rush", difficulty: "hard", tweak: { assaultValue: 2200 } },
+    // (and the four harvesters this op was tuned against: skirmish Rush now keeps five)
+    ai: { strategy: "rush", difficulty: "hard", tweak: { assaultValue: 2200, harvesters: 4 } },
     focus: { x: 21, y: 34 },
     setup(w, o) {
       o.building("blue", "depot", 20, 31);
@@ -213,7 +215,7 @@ export const OPS: OpDef[] = [
     icon: "🎯",
     tagline: "A strike group, no factories, 3:00",
     brief:
-      "No base, no reinforcements: two Titans, three Stingers, two Hornets, two Raptors and a Mender. Red's HQ sits behind two SAM sites, three turrets, Flak and a fighter screen. Take it down within 3:00.",
+      "No base, no reinforcements: two Titans, three Stingers, two Hornets, two Raptors and a Mender, with a Trooper Squad guarding the HQ. Red's HQ sits behind two SAM sites, three turrets, Flak and a fighter screen. Take it down within 3:00.",
     tip: "Move as one group — whatever arrives alone dies alone. Stingers kill the Flak, Raptors the fighters, Hornets flatten SAM sites; then everything on the HQ.",
     map: "proving-grounds",
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
@@ -276,13 +278,14 @@ export const OPS: OpDef[] = [
     icon: "🏴‍☠️",
     tagline: "Air only: sink their HQ before 7:00",
     brief:
-      "Fab Plants are off-limits: this is an air raid. Red is digging in behind SAM sites you haven't seen yet, and every Wasp you show it teaches it to build more Flak. Scout first, then sink their HQ before 7:00.",
+      "Fab Plants and the Condor are off-limits: this is an air raid. Red is digging in behind SAM sites you haven't seen yet, and every Wasp you show it teaches it to build more Flak. Scout first, then sink their HQ before 7:00.",
     tip: "A Scout finds the SAM sites. Raptors beat their fighters, Hornets flatten SAMs and the HQ. Don't feed bombers into anti-air one at a time.",
     map: "ashlands",
     // a commander that digs in (never attacks) on half income: the clock is the enemy
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
-    // (ground units are banned too, so a Drop Pod lands Wasps and a Raptor: it stays an air raid)
-    rules: { playerBans: { units: GROUND_COMBAT, buildings: ["fab-plant"] }, enemyIncome: 0.5 },
+    // (ground units are banned too, so a Drop Pod lands Wasps and a Raptor: it stays an air raid;
+    // the starting Trooper Squad stays home — no Condor to fly it — and no more infantry can be raised)
+    rules: { playerBans: { units: NO_GROUND_COMBAT, buildings: ["fab-plant", "assembly-bay"] }, enemyIncome: 0.5 },
     scrap: 800,
     setup(_w, o) {
       o.building("blue", "airpad", 9, 54);
@@ -307,7 +310,8 @@ export const OPS: OpDef[] = [
       "Glass Cannons and Rapid Fab for both sides: every weapon hits twice as hard and everything builds in half the time. Red's Rush commander loves it. Destroy their HQ within 6:00.",
     tip: "Fights end in seconds: never trade one at a time. Turrets hit twice as hard too — a couple buy you time to mass an army.",
     map: "dune-sea",
-    ai: { strategy: "rush", difficulty: "normal" },
+    // (the four harvesters this op was tuned against: skirmish Rush now keeps five)
+    ai: { strategy: "rush", difficulty: "normal", tweak: { harvesters: 4 } },
     rules: { mutators: ["glass", "rapidfab"] },
     goals: [{ type: "destroyHq" }, { type: "within", secs: 360 }],
     stars: [
@@ -384,7 +388,7 @@ function spreadSpot(w: World, kind: UnitKind, x: number, y: number, i: number): 
   const bx = x + ((i % 3) - 1) * 0.9;
   const by = y + Math.floor(i / 3) * 0.9;
   if (UNITS[kind].domain === "air") return { x: bx, y: by };
-  const mc = UNITS[kind].hover ? "hover" : "ground";
+  const mc = moveClassOf(kind);
   for (let r = 0; r <= 3; r++)
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
@@ -464,16 +468,16 @@ const fmtNum = (n: number): string => Math.floor(n).toLocaleString("en-US");
 const kindName = (k: UnitKind | BuildingKind): string => (k in UNITS ? UNITS[k as UnitKind].name : BUILDINGS[k as BuildingKind].name);
 const plural = (k: UnitKind | BuildingKind, n: number): string => (n === 1 ? kindName(k) : `${kindName(k)}s`);
 
-/** Living members of a protect goal's group, and how many there were. */
+/** Living members of a protect goal's group, and how many there were (squads aboard a Condor count). */
 function protectCount(w: World, st: OpsState, g: Extract<Goal, { type: "protect" }>): { alive: number; total: number } {
   if (g.tag) {
     const ids = st.tags[g.tag] ?? [];
-    const alive = ids.filter((id) => w.units.has(id) || w.buildings.has(id)).length;
+    const alive = ids.filter((id) => w.units.has(id) || w.buildings.has(id) || carrierOf(w, id)).length;
     return { alive, total: ids.length };
   }
   let alive = 0;
   if (g.kind)
-    for (const e of [...w.units.values(), ...w.buildings.values()])
+    for (const e of [...w.units.values(), ...w.buildings.values(), ...[...w.units.values()].flatMap((u) => u.passengers ?? [])])
       if (e.faction === st.player && e.kind === g.kind) alive++;
   return { alive, total: Math.max(alive, g.min) };
 }

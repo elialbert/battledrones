@@ -1,7 +1,9 @@
 import * as THREE from "three";
-import { BUILDINGS, ECONOMY, UNITS } from "../../sim/balance";
-import type { Building, BuildingKind, Faction, Unit, World } from "../../sim/types";
-import { eliteUniform, setVariant, type Variant } from "../three/materials";
+import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../../sim/balance";
+import { isInfantry, squadAlive } from "../../sim/infantry";
+import type { Building, BuildingKind, Faction, FxEvent, Unit, UnitKind, WeaponFx, World } from "../../sim/types";
+import { baySeats, RIDER_SCALE, SquadRig, type BotKind, type Footprint } from "../three/infantry";
+import { discMat, eliteUniform, setVariant, type Variant } from "../three/materials";
 import { buildingDef, instance, unitDef, unitScale, type ModelDef, type ModelInstance } from "../three/models";
 import { AIR_H, HOVER_H, type P3, type View } from "../three/view";
 import { Ease } from "../three/tween";
@@ -35,6 +37,29 @@ interface UnitView {
   /** Model height (bars and labels sit above it). */
   top: number;
   scale: number;
+  /** Robot infantry: the squad's rig (its root is m.root and m.body). */
+  squad: SquadRig | null;
+  /** The Condor's bay, ramp and hover. */
+  condor: CondorView | null;
+  /** Sim position at the last sync (a squad's death blast is matched against it). */
+  sx: number;
+  sy: number;
+}
+
+interface CondorView {
+  /** Riders' group in the body, undoing the model scale (tiles). */
+  bay: THREE.Group;
+  /** A seated rig per squad aboard, by unit id, and the bench it sits on. */
+  riders: Map<number, { rig: SquadRig; side: number }>;
+  /** Ramp open 0–1; come down to the drop height 0–1; next downwash puff (ms). */
+  ramp: number;
+  low: number;
+  washT: number;
+  /** It just dropped its squads (or took one aboard): it holds low with the ramp down while they jump clear (ms). */
+  hold: number;
+  /** The bay lights spilling out of the open ramp onto the ground (a child of the root). */
+  pool: THREE.Mesh;
+  poolMat: THREE.MeshBasicMaterial;
 }
 
 interface BuildingView {
@@ -75,6 +100,29 @@ function angleDelta(a: number, b: number): number {
 }
 
 const tmp = new THREE.Vector3();
+const tmp2 = new THREE.Vector3();
+/** The Condor's ramp light on the ground (a soft disc). */
+const poolGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+
+/** A vehicle's hull half-length and half-width on the ground (tiles, its model's bounds), plus a robot's girth. */
+const hulls = new Map<UnitKind, [number, number]>();
+function hullHalf(kind: UnitKind): [number, number] {
+  let h = hulls.get(kind);
+  if (!h) {
+    const b = unitDef(kind, "blue").hull.boundingBox!;
+    const s = unitScale(kind);
+    h = [Math.max(-b.min.z, b.max.z) * s + 0.06, Math.max(-b.min.x, b.max.x) * s + 0.07];
+    hulls.set(kind, h);
+  }
+  return h;
+}
+/**
+ * A Condor hovering to drop or pick up sits this high over the ground (it
+ * flies at AIR_H): its belly clears the robots standing under it.
+ */
+const CONDOR_LOW = 0.78;
+/** An enemy Condor's bay, as we're shown it. */
+const NO_RIDERS: readonly Unit[] = [];
 /** A smoke puff's source point, refilled per puff (Fx reads it at once). */
 const puffAt: P3 = { x: 0, y: 0, h: 0 };
 
@@ -155,6 +203,13 @@ function topsOf(geo: THREE.BufferGeometry, ox: number, oy: number, oz: number): 
  * spin, aircraft that bank into turns and bob at altitude, buildings that
  * rise out of the ground when placed and smoke when hurt. Hits flash the
  * model white (warm for buildings), elites shimmer gold.
+ *
+ * Robot infantry squads are rigs of walking robots (three/infantry.ts): they
+ * march, raise their weapons to fire, lose a robot (it topples in sparks)
+ * each time the squad's HP crosses a step, and leave no wreck — the last
+ * ones fall where they stood; robots step aside out of vehicles' hulls. The
+ * Condor comes down and drops its ramp to load or drop squads, with its
+ * riders seated in the open bay; they step off the ramp and climb aboard by it.
  */
 export class EntityRenderer {
   private views = new Map<number, View3>();
@@ -164,6 +219,19 @@ export class EntityRenderer {
   /** Ids synced this frame, and the chevron record ranked() hands out: reused, no per-frame garbage. */
   private seen = new Set<number>();
   private rankRec = { x: 0, y: 0, h: 0, rank: 0, pop: 1 };
+  /** Squads that climbed into a Condor (unit → carrier) or were dropped out of one, since the last sync. */
+  private boarded = new Map<number, number>();
+  private dropped = new Map<number, { carrierId: number; x: number; y: number; bailout: boolean }>();
+  /** Condors with a squad coming aboard close by (they come down and open up). */
+  private boarders = new Set<number>();
+  /** Squads off the field still on show: robots toppling (wiped out) or hopping aboard. */
+  private leaving: { rig: SquadRig; alive: number }[] = [];
+  private snipeTurn = 0;
+  /** Vehicle footprints near the squad being updated (reused). */
+  private avoid: Footprint[] = [];
+  /** Squads on show this frame, x, y pairs: the trees thin over them (reused). */
+  private inWoods: number[] = [];
+  private groundFn = (x: number, z: number) => this.v.terrain.groundAt(x, z);
   readonly group = new THREE.Group();
 
   constructor(
@@ -174,9 +242,24 @@ export class EntityRenderer {
     private visibleAt: (x: number, y: number) => boolean,
     /** Should this enemy building be drawn (seen now or remembered)? */
     private buildingShown: (b: Building) => boolean,
-    private isFriendly: (f: string) => boolean
+    private isFriendly: (f: string) => boolean,
+    /**
+     * Should this enemy unit be drawn? Default: its tile is visible. (A Sniper
+     * Team hidden in woods isn't, though its tile is: wire the sim's unitSeenBy.)
+     */
+    private unitShown: ((u: Unit) => boolean) | null = null
   ) {
     v.scene.add(this.group);
+    fx.squads = {
+      shooters: (id, wfx) => this.shooters(id, wfx),
+      fire: (id, i) => this.squadFire(id, i),
+      diedAt: (x, y) => this.squadDiedAt(x, y)
+    };
+  }
+
+  /** Decide which enemy units are drawn (see the constructor's `unitShown`); null restores the tile check. */
+  setUnitShown(fn: ((u: Unit) => boolean) | null): void {
+    this.unitShown = fn;
   }
 
   markSold(id: number): void {
@@ -214,10 +297,20 @@ export class EntityRenderer {
     return v?.kind === "building" && v.visible && v.seen ? v.hp : null;
   }
 
-  /** Where a shot leaves the shooter's barrel. */
+  /**
+   * Where a shot leaves the shooter's barrel; null if it isn't on show (out of
+   * sight, or a Sniper Team hidden in the woods) — its model is where it was
+   * last drawn, not where it is: the shot leaves the sim's position instead.
+   */
   muzzle(id: number): P3 | null {
     const v = this.views.get(id);
-    if (!v) return null;
+    if (!v || !v.visible) return null;
+    if (v.kind === "unit" && v.squad) {
+      const up = v.squad.standing();
+      if (!up.length) return null;
+      v.squad.muzzle(up[0]!, tmp);
+      return { x: tmp.x, y: tmp.z, h: tmp.y };
+    }
     const m = v.m;
     m.root.updateMatrixWorld(true);
     tmp.set(...m.def.muzzle);
@@ -232,6 +325,8 @@ export class EntityRenderer {
     if (!v) return;
     v.recoil = 1;
     if (v.kind === "unit" && v.m.turret) v.aim = angle;
+    // (a squad's formation wheels round to its new facing in updateSquad: snapped, every robot would jump)
+    else if (v.kind === "unit" && v.squad) return;
     else if (v.kind === "unit") v.face = v.aim = angle;
     else v.face = angle;
   }
@@ -252,6 +347,50 @@ export class EntityRenderer {
     // (a remembered building out of sight keeps its last-seen look)
     if (!v.seen || !this.flashes.hit(id, now, JUICE.buildingFlashMs, JUICE.buildingFlashGapMs)) return;
     v.warmUntil = now + JUICE.buildingFlashMs;
+  }
+
+  /**
+   * Feed every sim fx event through here (before the views sync): squads
+   * boarding and dropping out of Condors, Titans crushing robots.
+   */
+  onFx(ev: FxEvent): void {
+    switch (ev.type) {
+      case "embark":
+        this.boarded.set(ev.unitId, ev.carrierId);
+        if (this.visibleAt(ev.x, ev.y)) this.fx.wash(ev.x, ev.y, 2);
+        break;
+      case "disembark":
+        for (const id of ev.unitIds) this.dropped.set(id, { carrierId: ev.carrierId, x: ev.x, y: ev.y, bailout: ev.bailout });
+        if (this.visibleAt(ev.x, ev.y)) this.fx.wash(ev.x, ev.y, ev.bailout ? 2 : 5);
+        break;
+      case "crush":
+        if (this.visibleAt(ev.x, ev.y)) this.fx.crush(ev.x, ev.y);
+        break;
+    }
+  }
+
+  /** Robots of squad `id` firing a volley: every one standing (a Sniper Team takes turns). */
+  private shooters(id: number, wfx: WeaponFx): number[] | null {
+    const v = this.views.get(id);
+    if (!v || v.kind !== "unit" || !v.squad || !v.visible) return null;
+    const up = v.squad.standing();
+    if (!up.length) return null;
+    return wfx === "snipe" ? [up[this.snipeTurn++ % up.length]!] : up;
+  }
+
+  private squadFire(id: number, i: number): P3 | null {
+    const v = this.views.get(id);
+    if (!v || v.kind !== "unit" || !v.squad) return null;
+    const p = v.squad.fire(i, tmp);
+    return p ? { x: p.x, y: p.z, h: p.y } : null;
+  }
+
+  /** A squad on show just left the field near (x, y) without boarding anything: it died there. */
+  private squadDiedAt(x: number, y: number): boolean {
+    for (const [id, v] of this.views)
+      if (v.kind === "unit" && v.squad && v.visible && !this.world.units.has(id) && !this.boarded.has(id) && Math.hypot(v.sx - x, v.sy - y) < 0.6)
+        return true;
+    return false;
   }
 
   /** Units with ranks, for the chevrons the overlay draws (one record, refilled per unit: read it before the next). */
@@ -277,6 +416,13 @@ export class EntityRenderer {
     const seen = this.seen;
     seen.clear();
     const turnK = 1 - Math.pow(0.0005, dtMs / 1000); // fast but smooth turning
+    // Condors with squads walking up to board them come down to meet them
+    this.boarders.clear();
+    for (const u of w.units.values())
+      if (u.order.type === "board") {
+        const c = w.units.get(u.order.carrierId);
+        if (c && Math.hypot(c.x - u.x, c.y - u.y) < 2.5) this.boarders.add(c.id);
+      }
 
     for (const u of w.units.values()) {
       seen.add(u.id);
@@ -317,12 +463,87 @@ export class EntityRenderer {
           });
           for (let i = 0; i < 5; i++) this.fx.dust(v.cx + (Math.random() - 0.5) * v.size, v.cy + (Math.random() - 0.5) * v.size);
         } else this.group.remove(root);
-      } else this.group.remove(root);
+      } else if (v.squad && v.visible) this.leave(id, v);
+      else {
+        this.group.remove(root);
+        this.release(v);
+      }
       this.views.delete(id);
+    }
+    // the woods thin over squads on show (ours, and enemies we can see), so they aren't lost under the trees
+    const pts = this.inWoods;
+    let n = 0;
+    for (const v of this.views.values())
+      if (v.kind === "unit" && v.squad && v.visible) {
+        pts[n * 2] = v.gx;
+        pts[n * 2 + 1] = v.gy;
+        n++;
+      }
+    const rig = this.v.rig;
+    this.v.terrain.thinCanopy(pts, n, 1 / Math.tan(rig.pitchFor(rig.zoom)), dtMs);
+    // squads off the field: the wiped-out toppling, the boarding hopping up into the bay
+    for (let i = this.leaving.length - 1; i >= 0; i--) {
+      const l = this.leaving[i]!;
+      l.rig.update({ dt: dtMs, speed: 0, aim: 0, pitch: 0, alive: l.alive });
+      if (l.rig.done) {
+        this.group.remove(l.rig.root);
+        l.rig.dispose();
+        this.leaving.splice(i, 1);
+      }
+    }
+    this.boarded.clear();
+    this.dropped.clear();
+  }
+
+  /** A squad left the field: aboard a Condor (its robots hop up into the bay), or wiped out (the last fall). */
+  private leave(id: number, v: UnitView): void {
+    const rig = v.squad!;
+    const carrierId = this.boarded.get(id) ?? this.carrierOf(id);
+    const c = carrierId !== undefined ? this.views.get(carrierId) : undefined;
+    if (c?.kind === "unit") {
+      // (counted before they set off: robots hopping aboard aren't "standing", and must not fall)
+      const alive = rig.bots.filter((b) => b.up).length;
+      rig.root.updateMatrixWorld(true);
+      // (a Condor out of sight isn't drawn where it is: they hop up to where it's hovering)
+      const to = c.m.ramp && c.visible ? this.rampLip(c, tmp2) : tmp2.set(c.gx, this.v.terrain.groundAt(c.gx, c.gy) + CONDOR_LOW - 0.1, c.gy);
+      rig.board(rig.root.worldToLocal(to));
+      this.leaving.push({ rig, alive });
+    } else {
+      rig.fallAll();
+      this.leaving.push({ rig, alive: 0 });
     }
   }
 
+  /**
+   * Free a removed view's own GPU resources: a squad rig's bone texture, a
+   * Condor's light-pool material and its riders' rigs. (Models share their
+   * geometry and materials: nothing else is per view.)
+   */
+  private release(v: View3): void {
+    if (v.kind !== "unit") return;
+    v.squad?.dispose();
+    if (v.condor) {
+      v.condor.poolMat.dispose();
+      for (const r of v.condor.riders.values()) r.rig.dispose();
+      v.condor.riders.clear();
+    }
+  }
+
+  /** World point of a Condor's ramp lip (where squads step off and climb aboard), into `out`. */
+  private rampLip(c: UnitView, out: THREE.Vector3): THREE.Vector3 {
+    const r = c.m.ramp!;
+    r.updateWorldMatrix(true, false);
+    return r.localToWorld(out.set(...c.m.def.ramp!.tip));
+  }
+
+  /** The Condor carrying squad `id`, if any. */
+  private carrierOf(id: number): number | undefined {
+    for (const u of this.world.units.values()) if (u.passengers?.some((p) => p.id === id)) return u.id;
+    return undefined;
+  }
+
   private createUnit(u: Unit): UnitView {
+    if (isInfantry(u.kind)) return this.createSquad(u);
     const stats = UNITS[u.kind];
     const m = instance(unitDef(u.kind, u.faction));
     m.body.rotation.order = "YXZ";
@@ -334,13 +555,59 @@ export class EntityRenderer {
       face: u.facing, aim: u.aim, recoil: 0, lastFired: u.firedTick, phase: (u.id * 1.37) % (Math.PI * 2), dustT: 0,
       gx: u.x, gy: u.y, bh: 0, pitch: 0, roll: 0, bank: 0, visible: true, variant: "normal",
       // units that arrive ranked (Last Stand waves) don't pop their chevrons
-      rank: u.rank, chevronPop: 1, top: m.def.height * scale, scale
+      rank: u.rank, chevronPop: 1, top: m.def.height * scale, scale,
+      squad: null, condor: null, sx: u.x, sy: u.y
     };
+    if (m.ramp) {
+      const bay = new THREE.Group();
+      bay.scale.setScalar(1 / scale);
+      m.body.add(bay);
+      const poolMat = discMat(0xffb04a, 0);
+      const pool = new THREE.Mesh(poolGeo, poolMat);
+      pool.renderOrder = 3;
+      pool.visible = false;
+      m.root.add(pool);
+      v.condor = { bay, riders: new Map(), ramp: 0, low: 0, washT: 0, hold: 0, pool, poolMat };
+    }
     // units roll out of the factory with a quick pop-in
     if (this.world.tick > 1) {
       m.root.scale.setScalar(scale * 0.5);
       this.v.tweens.add({ dur: 320, ease: Ease.backOut, update: (k) => m.root.scale.setScalar(scale * (0.5 + 0.5 * k)) });
     }
+    this.views.set(u.id, v);
+    return v;
+  }
+
+  /** A robot squad: its rig stands in for a model instance (root and body are the rig's root). */
+  private createSquad(u: Unit): UnitView {
+    const rig = new SquadRig(u.kind as BotKind, u.faction, u.id, squadAlive(u));
+    rig.onImpact = (p, kind) => {
+      if (!this.visibleAt(p.x, p.z)) return;
+      const at = { x: p.x, y: p.z, h: p.y };
+      if (kind === "fall") this.fx.robotDown(at);
+      else this.fx.landing(at);
+    };
+    const def = unitDef(u.kind, u.faction);
+    const m: ModelInstance = { root: rig.root, body: rig.root, turret: null, rotors: [], cargo: null, ramp: null, def };
+    this.group.add(rig.root);
+    const v: UnitView = {
+      kind: "unit", m, air: false, hover: false,
+      face: u.facing, aim: u.facing, recoil: 0, lastFired: u.firedTick, phase: 0, dustT: 0,
+      gx: u.x, gy: u.y, bh: this.v.terrain.groundAt(u.x, u.y), pitch: 0, roll: 0, bank: 0, visible: true, variant: "normal",
+      rank: u.rank, chevronPop: 1, top: def.height, scale: 1, squad: rig, condor: null, sx: u.x, sy: u.y
+    };
+    rig.root.position.set(u.x, v.bh, u.y);
+    rig.root.rotation.set(0, -u.facing, 0);
+    const drop = this.dropped.get(u.id);
+    if (drop) {
+      // out of a Condor: the robots jump down off its ramp (bailing out of a falling one, from higher).
+      // (Only a Condor on show: one out of sight is drawn where it was last seen, or never placed at all.)
+      const c = this.views.get(drop.carrierId);
+      const lip = c?.kind === "unit" && c.m.ramp && c.visible ? c : null;
+      const from = lip ? this.rampLip(lip, tmp2) : tmp2.set(drop.x, v.bh + (drop.bailout ? 1.1 : 0.6), drop.y);
+      rig.root.updateMatrixWorld(true);
+      rig.dropFrom(rig.root.worldToLocal(from), drop.bailout ? 0.5 : 0.14, lip ? RIDER_SCALE : 1);
+    } else if (this.world.tick > 1) rig.popIn();
     this.views.set(u.id, v);
     return v;
   }
@@ -353,9 +620,15 @@ export class EntityRenderer {
 
   private updateUnit(u: Unit, v: UnitView, gx: number, gy: number, dtMs: number, turnK: number): void {
     const stats = UNITS[u.kind];
-    const visible = this.isFriendly(u.faction) || this.visibleAt(u.x, u.y);
+    const visible = this.isFriendly(u.faction) || (this.unitShown ? this.unitShown(u) : this.visibleAt(u.x, u.y));
     v.visible = visible;
     v.m.root.visible = visible;
+    v.sx = u.x;
+    v.sy = u.y;
+    if (v.squad) {
+      this.updateSquad(u, v, gx, gy, dtMs, turnK);
+      return;
+    }
     const moved = Math.hypot(gx - v.gx, gy - v.gy);
     v.gx = gx;
     v.gy = gy;
@@ -384,7 +657,10 @@ export class EntityRenderer {
     const body = v.m.body;
     if (v.air) {
       const bob = Math.sin(this.time / 380 + v.phase) * 0.06;
-      v.bh = t.surfaceAt(gx, gy) * 0.3 + AIR_H + bob;
+      const g = t.surfaceAt(gx, gy);
+      v.bh = g * 0.3 + AIR_H + bob;
+      // a Condor dropping or picking up squads comes down low over the ground
+      if (v.condor) v.bh += (g + CONDOR_LOW - (g * 0.3 + AIR_H)) * v.condor.low;
       // bank into turns, nose down when moving fast
       const turnRate = dtMs > 0 ? angleDelta(prevFace, v.face) / (dtMs / 1000) : 0;
       v.bank += (Math.max(-0.6, Math.min(0.6, -turnRate * 0.35)) - v.bank) * sk;
@@ -419,6 +695,7 @@ export class EntityRenderer {
     }
     for (const r of v.m.rotors) r.obj.rotation[r.axis] += (r.speed * dtMs) / 1000;
     if (v.m.cargo) v.m.cargo.visible = u.kind === "harvester" && u.cargo >= ECONOMY.harvesterCapacity / 2;
+    if (v.condor) this.updateCondor(u, v, v.condor, gx, gy, dtMs);
 
     // veterancy: a promotion pops the new chevron in
     if (u.rank > v.rank) {
@@ -438,6 +715,139 @@ export class EntityRenderer {
     }
     // hover tanks stir a faint spray over water
     if (v.hover && moved > 0.006 && t.heightAt(gx, gy) < -0.1 && Math.random() < 0.3) this.fx.dust(gx, gy);
+  }
+
+  /** A squad: it turns and marches (cadence from its ground speed), raises its weapons while fighting. */
+  private updateSquad(u: Unit, v: UnitView, gx: number, gy: number, dtMs: number, turnK: number): void {
+    const rig = v.squad!;
+    const moved = Math.hypot(gx - v.gx, gy - v.gy);
+    v.gx = gx;
+    v.gy = gy;
+    if (!v.visible) {
+      // out of sight its animations don't wait for us: first seen, it's simply standing there, as it is now
+      // (and with no sparks: a Sniper Team hidden in woods in our sight must not give itself away)
+      v.face = v.aim = u.facing;
+      v.bh = this.v.terrain.groundAt(gx, gy);
+      rig.root.position.set(gx, v.bh, gy);
+      rig.root.rotation.set(0, -v.face, 0);
+      rig.settle(squadAlive(u));
+      return;
+    }
+    const flashing = this.flashes.active(u.id, performance.now());
+    this.setVariant(v, flashing ? "flash" : u.rank >= 3 ? "elite" : "normal");
+    const prevFace = v.face;
+    v.face += angleDelta(v.face, u.facing) * turnK;
+    v.aim = v.face;
+    // (wheeling round on the spot is footwork too)
+    const sec = dtMs / 1000;
+    const speed = sec > 0 ? moved / sec + (Math.abs(angleDelta(prevFace, v.face)) / sec) * 0.12 : 0;
+    v.bh = this.v.terrain.groundAt(gx, gy);
+    rig.root.position.set(gx, v.bh, gy);
+    rig.root.rotation.set(0, -v.face, 0);
+    // weapons up while it is fighting (it shot within an interval or so); rifles point up at aircraft
+    const stats = UNITS[u.kind];
+    const fighting = this.world.tick - u.firedTick <= ((stats.shotInterval ?? 1) + 0.8) * TICK_RATE;
+    let pitch = 0;
+    if (fighting) {
+      const tid = u.order.type === "attack" ? u.order.targetId : u.autoTargetId;
+      const tg = tid !== null ? this.world.units.get(tid) : undefined;
+      if (tg && UNITS[tg.kind].domain === "air") pitch = Math.min(0.9, Math.atan2(AIR_H - 0.2, Math.max(0.6, Math.hypot(tg.x - u.x, tg.y - u.y))));
+    }
+    // vehicles rolling through (or parked on) the squad: its robots step out of their hulls
+    const avoid = this.avoid;
+    avoid.length = 0;
+    for (const o of this.world.units.values()) {
+      if (o === u || isInfantry(o.kind) || UNITS[o.kind].domain === "air") continue;
+      const ov = this.views.get(o.id);
+      const ox = ov?.kind === "unit" ? ov.gx : o.x;
+      const oy = ov?.kind === "unit" ? ov.gy : o.y;
+      if (Math.abs(ox - gx) > 1.6 || Math.abs(oy - gy) > 1.6) continue;
+      const [hl, hw] = hullHalf(o.kind);
+      const face = ov?.kind === "unit" ? ov.face : o.facing;
+      avoid.push({ x: ox, z: oy, fx: Math.sin(face), fz: -Math.cos(face), hl, hw });
+    }
+    rig.update({ dt: dtMs, speed, aim: fighting ? 1 : 0, pitch, alive: squadAlive(u), ground: this.groundFn, avoid });
+    if (u.rank > v.rank) {
+      v.rank = u.rank;
+      v.chevronPop = 0;
+      this.v.tweens.add({ dur: 450, ease: Ease.backOut, update: (k) => (v.chevronPop = k) });
+    }
+    v.rank = u.rank;
+  }
+
+  /**
+   * The Condor: down low with its ramp open while it hovers to drop its squads
+   * or squads walk up to board it (downwash kicking up the dust, the bay's
+   * light spilling out under the ramp), its riders sitting along the benches
+   * in the bay — on their feet facing the ramp as it opens for a drop.
+   */
+  private updateCondor(u: Unit, v: UnitView, c: CondorView, gx: number, gy: number, dtMs: number): void {
+    const k = dtMs / 1000;
+    const o = u.order;
+    let low = 0;
+    let open = 0;
+    if (o.type === "unload") {
+      const d = Math.hypot(o.x - u.x, o.y - u.y);
+      if (o.hover >= 0 || d < 1.4) low = 1;
+      if (o.hover >= 0 || d < 0.7) open = 1;
+    }
+    if (this.boarders.has(u.id)) low = open = 1;
+    for (const d of this.dropped.values()) if (d.carrierId === u.id && !d.bailout) c.hold = 850;
+    for (const carrier of this.boarded.values()) if (carrier === u.id) c.hold = Math.max(c.hold, 500);
+    if (c.hold > 0) {
+      c.hold -= dtMs;
+      low = open = 1;
+    }
+    c.low += (low - c.low) * (1 - Math.exp(-k * 2.2));
+    c.ramp += (open - c.ramp) * (1 - Math.exp(-k * (open > c.ramp ? 3.5 : 2)));
+    v.m.ramp!.rotation.x = c.ramp * v.m.def.ramp!.open;
+    // the bay lights spill out of the open ramp onto the ground under it
+    const glow = c.ramp * c.low;
+    c.pool.visible = glow > 0.02 && v.visible;
+    if (c.pool.visible) {
+      const lip = this.rampLip(v, tmp);
+      const s = v.scale;
+      c.pool.position.set((lip.x - gx) / s, (this.v.terrain.surfaceAt(lip.x, lip.z) + 0.04 - v.bh) / s, (lip.z - gy) / s);
+      c.pool.scale.setScalar(1.15 / s);
+      c.poolMat.opacity = glow * (0.5 + 0.06 * Math.sin(this.time / 90));
+    }
+    // downwash: dust blown out in a ring under the fans
+    if (c.low > 0.55 && dtMs > 0) {
+      c.washT -= dtMs;
+      if (c.washT <= 0) {
+        c.washT = 70 + Math.random() * 50;
+        const a = Math.random() * Math.PI * 2;
+        this.fx.kick(gx + Math.cos(a) * 0.55, gy + Math.sin(a) * 0.55, 1);
+        this.fx.kick(gx - Math.cos(a) * 0.55, gy - Math.sin(a) * 0.55, 1);
+      }
+    }
+    // riders: a seated rig per squad aboard (a squad that just climbed in takes its seat as it lands).
+    // Only in our own Condors (or watching with the fog off): the enemy's passengers are hidden, its bay
+    // shows empty — what, and how many, it carries is for us to find out the hard way.
+    const ps = (this.isFriendly(u.faction) && u.passengers) || NO_RIDERS;
+    for (const [id, r] of c.riders)
+      if (!ps.some((p) => p.id === id)) {
+        c.bay.remove(r.rig.root);
+        r.rig.dispose();
+        c.riders.delete(id);
+      }
+    ps.forEach((p, side) => {
+      let r = c.riders.get(p.id);
+      if (!r || r.side !== side) {
+        if (r) {
+          c.bay.remove(r.rig.root);
+          r.rig.dispose();
+        }
+        const rig = new SquadRig(p.kind as BotKind, p.faction, p.id, squadAlive(p));
+        rig.seat(baySeats(p.kind as BotKind, side, v.scale));
+        if (this.boarded.has(p.id)) rig.popIn(300);
+        c.bay.add(rig.root);
+        r = { rig, side };
+        c.riders.set(p.id, r);
+      }
+      // (on their feet, facing the ramp, as it opens to drop them)
+      r.rig.update({ dt: dtMs, speed: 0, aim: 0, pitch: 0, alive: squadAlive(p), ready: o.type === "unload" ? c.ramp : 0 });
+    });
   }
 
   private createBuilding(b: Building): BuildingView {
@@ -516,6 +926,10 @@ export class EntityRenderer {
 
   destroy(): void {
     this.v.scene.remove(this.group);
+    for (const v of this.views.values()) this.release(v);
+    for (const l of this.leaving) l.rig.dispose();
     this.views.clear();
+    this.leaving = [];
+    if (this.fx.squads) this.fx.squads = null;
   }
 }

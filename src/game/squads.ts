@@ -4,9 +4,13 @@
  *
  * A unit belongs to at most one squad (saving it into another moves it),
  * so each chip's count, health bar and "hurt" flash are unambiguous.
+ *
+ * Infantry aboard a Condor have left the field (src/sim/transport.ts) but
+ * are still members: the chip keeps counting them, and selecting the squad
+ * selects the Condor carrying them (the one thing you can order about).
  */
 import { UNITS } from "../sim/balance";
-import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
+import type { Faction, FxEvent, Unit, UnitKind, World } from "../sim/types";
 
 export const SQUAD = {
   slots: 3,
@@ -54,17 +58,52 @@ export class Squads {
     this.version++;
   }
 
-  /** Drop members that died. */
+  /** Drop members that died (members riding in a Condor stay). */
   prune(w: World): void {
+    let aboard: Map<number, Aboard> | null = null;
     for (let i = 0; i < this.slots.length; i++) {
       const s = this.slots[i]!;
-      if (s.some((id) => !w.units.has(id))) this.slots[i] = s.filter((id) => w.units.has(id));
+      if (!s.some((id) => !w.units.has(id))) continue;
+      aboard ??= aboardOf(w);
+      const keep = aboard;
+      this.slots[i] = s.filter((id) => w.units.has(id) || keep.has(id));
     }
   }
 
-  /** Living member ids of squad i. */
+  /**
+   * What selecting squad i selects: its members on the field, plus the
+   * Condor carrying any member aboard (each once).
+   */
   ids(i: number, w: World): number[] {
-    return (this.slots[i] ?? []).filter((id) => w.units.has(id));
+    const out: number[] = [];
+    let aboard: Map<number, Aboard> | null = null;
+    for (const id of this.slots[i] ?? []) {
+      // (a member Condor may already be in, for a member riding in it)
+      if (w.units.has(id)) {
+        if (!out.includes(id)) out.push(id);
+      } else {
+        aboard ??= aboardOf(w);
+        const c = aboard.get(id)?.carrier;
+        if (c && c.faction === this.faction && !out.includes(c.id)) out.push(c.id);
+      }
+    }
+    return out;
+  }
+
+  /** Living members of squad i, on the field or aboard a Condor. */
+  members(i: number, w: World): Unit[] {
+    const out: Unit[] = [];
+    let aboard: Map<number, Aboard> | null = null;
+    for (const id of this.slots[i] ?? []) {
+      const u = w.units.get(id);
+      if (u) out.push(u);
+      else {
+        aboard ??= aboardOf(w);
+        const p = aboard.get(id)?.unit;
+        if (p) out.push(p);
+      }
+    }
+    return out;
   }
 
   /** Squad index holding unit `id`, or -1. */
@@ -81,9 +120,7 @@ export class Squads {
     const counts = new Map<UnitKind, number>();
     let hp = 0;
     let max = 0;
-    for (const id of this.slots[i] ?? []) {
-      const u = w.units.get(id);
-      if (!u) continue;
+    for (const u of this.members(i, w)) {
       counts.set(u.kind, (counts.get(u.kind) ?? 0) + 1);
       hp += Math.max(0, u.hp);
       max += UNITS[u.kind].hp;
@@ -102,8 +139,8 @@ export class Squads {
   }
 
   /**
-   * Where the camera should go for squad i: the member nearest the
-   * centroid, so a squad split in two doesn't land on empty ground.
+   * Where the camera should go for squad i: the member (or carrying Condor)
+   * nearest the centroid, so a squad split in two doesn't land on empty ground.
    */
   focus(i: number, w: World): { x: number; y: number } | null {
     const us = this.ids(i, w).map((id) => w.units.get(id)!);
@@ -140,4 +177,19 @@ export class Squads {
   isHurt(i: number, now: number): boolean {
     return now < (this.hurtUntil[i] ?? -Infinity);
   }
+}
+
+interface Aboard {
+  unit: Unit;
+  carrier: Unit;
+}
+
+/** Every unit riding in a transport, by id (passengers are off the field: see src/sim/transport.ts). */
+function aboardOf(w: World): Map<number, Aboard> {
+  const out = new Map<number, Aboard>();
+  for (const c of w.units.values()) {
+    if (!c.passengers?.length) continue;
+    for (const p of c.passengers) out.set(p.id, { unit: p, carrier: c });
+  }
+  return out;
 }

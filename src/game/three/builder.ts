@@ -84,6 +84,47 @@ function loft(outline: [number, number][], rings: Ring[], shades: number[]): THR
   return g;
 }
 
+/** A fuselage cross-section: at `z`, half-width `w`, and its top and bottom heights. */
+export type Section = [z: number, w: number, top: number, bot: number];
+
+/**
+ * Loft chamfered box sections along Z (see ModelBuilder.fuselage): eight
+ * corners each, so its bands are the sides, the four chamfers, the top and
+ * the belly, shaded by `shades` in that order round from the right side.
+ */
+function zloft(sections: Section[], chamfer: number, belly: number, shades: number[]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const sh: number[] = [];
+  const ring = ([z, w, top, bot]: Section): Vec3[] => {
+    const c = Math.max(0, Math.min(chamfer, w * 0.45, (top - bot) * 0.45));
+    const d = Math.max(0, Math.min(belly, w * 0.45, (top - bot) * 0.45));
+    return [
+      [w, bot + d, z], [w, top - c, z], [w - c, top, z], [c - w, top, z],
+      [-w, top - c, z], [-w, bot + d, z], [d - w, bot, z], [w - d, bot, z]
+    ];
+  };
+  const tri = (a: Vec3, b: Vec3, c: Vec3, s: number) => {
+    pos.push(...a, ...b, ...c);
+    sh.push(s, s, s);
+  };
+  const rings = sections.map(ring);
+  for (let k = 0; k + 1 < rings.length; k++) {
+    const a = rings[k]!;
+    const b = rings[k + 1]!;
+    for (let i = 0; i < 8; i++) {
+      const j = (i + 1) % 8;
+      tri(a[i]!, a[j]!, b[j]!, shades[i]!);
+      tri(a[i]!, b[j]!, b[i]!, shades[i]!);
+    }
+  }
+  for (const r of [rings[0]!, rings[rings.length - 1]!]) for (let i = 1; i < 7; i++) tri(r[0]!, r[i]!, r[i + 1]!, 1);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("shade", new THREE.Float32BufferAttribute(sh, 1));
+  g.computeVertexNormals();
+  return g;
+}
+
 const SQUARE: [number, number][] = [[1, 1], [1, -1], [-1, -1], [-1, 1]];
 const polys = new Map<number, [number, number][]>();
 function polygon(seg: number): [number, number][] {
@@ -172,6 +213,27 @@ export class ModelBuilder {
     return this;
   }
 
+  /**
+   * Add a finished model part (another builder's output) as it is: moved,
+   * turned and scaled, its own colours and glow kept (no grade or occlusion
+   * applied again). `geo` is copied, not consumed.
+   */
+  addBuilt(geo: THREE.BufferGeometry, at: Vec3, o: PartOpts = {}): this {
+    const g = geo.clone();
+    for (const name of Object.keys(g.attributes))
+      if (name !== "position" && name !== "normal" && name !== "color" && name !== "glow") g.deleteAttribute(name);
+    g.applyMatrix4(
+      new THREE.Matrix4().compose(
+        new THREE.Vector3(...at),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...(o.rot ?? [0, 0, 0]))),
+        new THREE.Vector3(...(o.scale ?? [1, 1, 1]))
+      )
+    );
+    if (!g.attributes.normal) g.computeVertexNormals();
+    this.parts.push(g);
+    return this;
+  }
+
   box(w: number, h: number, d: number, at: Vec3, hex: number, o?: PartOpts): this {
     return this.add(new THREE.BoxGeometry(w, h, d), at, hex, o);
   }
@@ -206,6 +268,19 @@ export class ModelBuilder {
   drum(r: number, rTop: number, h: number, seg: number, at: Vec3, hex: number, o: BevelOpts = {}): this {
     const { rings, shades } = bevelRings(r, r, h, { ...o, taper: 1 - rTop / r, bevel: o.bevel ?? Math.min(rTop, h) * 0.25 }, true);
     return this.add(loft(polygon(seg), rings, shades), at, hex, o);
+  }
+
+  /**
+   * A faceted body lofted along Z through cross-sections (noses, fuselages,
+   * booms, canopies): each a box section with its corners cut by `chamfer`
+   * (shrinking to fit thin sections; `belly` cuts the bottom corners, by
+   * default as much), the top chamfers lightened into the edge highlight
+   * (`edge`) and the belly a shade darker; both ends capped.
+   */
+  fuselage(sections: Section[], at: Vec3, hex: number, o: PartOpts & { chamfer?: number; belly?: number; edge?: number } = {}): this {
+    const e = o.edge ?? 1.3;
+    const c = o.chamfer ?? 0.02;
+    return this.add(zloft(sections, c, o.belly ?? c, [1, e, 1, e, 1, 0.82, 0.7, 0.82]), at, hex, o);
   }
 
   /** A cylinder lying along -Z (barrels, pods, fuselages), centred at `at`. */

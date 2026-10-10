@@ -1,8 +1,19 @@
 import { BUILDINGS, COMBAT, TICK_RATE, UNITS } from "../balance";
-import { isVisible } from "../fog";
+import { isInfantry, unitSeenBy } from "../infantry";
 import { worldPick, worldRandom } from "../rand";
 import type { Building, Faction, Unit, UnitKind, World } from "../types";
-import { buildingCenter, dist, distToBuilding, hqOf, inBounds, passable, removeBuilding, spawnUnit } from "../world";
+import {
+  buildingCenter,
+  dist,
+  distToBuilding,
+  hqOf,
+  inBounds,
+  moveClassOf,
+  passable,
+  removeBuilding,
+  spawnUnit,
+  type MoveClass
+} from "../world";
 
 /**
  * Last Stand: a survival mode. The red side has no base or economy; a wave
@@ -14,7 +25,9 @@ import { buildingCenter, dist, distToBuilding, hqOf, inBounds, passable, removeB
  * rand.ts, and step() only calls into this module when World.survival is set.
  */
 
-export type WaveTheme = "air" | "armour" | "artillery" | "mixed" | "boss";
+export type WaveTheme = "air" | "armour" | "artillery" | "mixed" | "swarm" | "boss";
+/** The themes that rotate through the four regular slots of each block of five waves. */
+export type RegularTheme = Exclude<WaveTheme, "boss">;
 export type SurvivalDifficulty = "easy" | "normal" | "hard";
 
 export interface SurvivalOptions {
@@ -41,12 +54,26 @@ export const SURVIVAL = {
   budgetGrowth: 228,
   budgetExp: 1.4,
   budgetMult: { easy: 0.7, normal: 1, hard: 1.3 } as Record<SurvivalDifficulty, number>,
+  /**
+   * The regular themes. Each block of five waves plays four of them in a
+   * seeded order, then a boss; with five themes one sits each block out, in
+   * a seeded turn that benches every theme once per five blocks and never
+   * the one its boss grows out of (no Bomber Wing without an Air Raid first).
+   */
+  themes: ["air", "armour", "artillery", "mixed", "swarm"] as RegularTheme[],
   /** Boss waves get this much extra budget (on top of +1 veterancy rank). */
   bossBudget: 1.1,
   /** Live wave units at once (phone frame rate); the rest wait off-map. */
   maxLive: 30,
   /** Hard cap on units planned for one wave, and on the off-map queue. */
   maxWaveUnits: 36,
+  /**
+   * A Bot Swarm stops growing at the live cap (30 squads, from about wave 8
+   * on Normal): a wave bigger than the cap stands at its edge, waiting for
+   * the units the cap holds back, until the march timeout. Only the late
+   * waves of the other themes get that big; cheap squads would from wave 8.
+   */
+  swarmMaxUnits: 30,
   maxPending: 60,
   /** Ticks between two units of a wave entering the map. */
   spawnEvery: 2,
@@ -150,6 +177,7 @@ export const THEME_NAMES: Record<WaveTheme, string> = {
   armour: "Armour Column",
   artillery: "Artillery",
   mixed: "Mixed Assault",
+  swarm: "Bot Swarm",
   boss: "Boss"
 };
 
@@ -159,15 +187,22 @@ export const THEME_COUNTERS: Record<WaveTheme, string> = {
   armour: "Lancers, Titans, Wasps",
   artillery: "rush the guns with Stingers, Wasps",
   mixed: "a mixed army, Turrets",
+  swarm: "Mortars, Turrets, Hornets, Sniper Teams",
   boss: "everything you've got"
 };
 
 const BOSS_NAMES = ["Titan Spearhead", "Bomber Wing", "Elite Strike Force"];
+/** The regular theme each boss grows out of: the four waves before it always include one. */
+const BOSS_PREVIEW: RegularTheme[] = ["armour", "air", "mixed"];
 
-type Pool = { kind: UnitKind; weight: number; from?: number; maxShare?: number }[];
+type Pool = { kind: UnitKind; weight: number; from?: number; maxShare?: number; maxCount?: number }[];
 
-/** Weighted unit pools per theme; `from` = first wave a kind may appear in. */
-const POOLS: Record<Exclude<WaveTheme, "boss">, Pool> = {
+/**
+ * Weighted unit pools per theme; `from` = first wave a kind may appear in,
+ * `maxShare` = most of the budget it may take, `maxCount` = most of the
+ * wave's unit cap (for cheap themes that hit the cap long before the budget).
+ */
+const POOLS: Record<RegularTheme, Pool> = {
   air: [
     { kind: "wasp", weight: 5 },
     { kind: "hornet", weight: 2, from: 4 },
@@ -192,14 +227,42 @@ const POOLS: Record<Exclude<WaveTheme, "boss">, Pool> = {
     { kind: "mortar", weight: 1, from: 6 },
     { kind: "raptor", weight: 1, from: 7, maxShare: 0.2 },
     { kind: "mender", weight: 1, from: 8, maxShare: 0.15 }
+  ],
+  // robot infantry: rifle squads with anti-armour rockets, marksmen from wave 6
+  swarm: [
+    { kind: "trooper", weight: 5 },
+    { kind: "rocket-squad", weight: 2 },
+    { kind: "sniper", weight: 1, from: 6, maxShare: 0.15, maxCount: 0.15 }
   ]
 };
 
-/** Boss waves: a core of heavy hitters plus escorts, all one rank up. */
+/**
+ * Boss waves: a core of heavy hitters plus escorts, all one rank up. The
+ * ground bosses bring infantry along: Rocket Squads walk with the Titans,
+ * and the Elite Strike Force fields every arm.
+ */
 const BOSS_POOLS: { core: UnitKind; share: number; escorts: Pool }[] = [
-  { core: "titan", share: 0.55, escorts: [{ kind: "stinger", weight: 3 }, { kind: "lancer", weight: 2 }, { kind: "flak-crawler", weight: 1, maxShare: 0.15 }] },
+  {
+    core: "titan",
+    share: 0.55,
+    escorts: [
+      { kind: "stinger", weight: 3 },
+      { kind: "lancer", weight: 2 },
+      { kind: "flak-crawler", weight: 1, maxShare: 0.15 },
+      { kind: "rocket-squad", weight: 1, maxShare: 0.15 }
+    ]
+  },
   { core: "hornet", share: 0.55, escorts: [{ kind: "wasp", weight: 3 }, { kind: "raptor", weight: 2, maxShare: 0.3 }] },
-  { core: "lancer", share: 0.3, escorts: POOLS.mixed.concat([{ kind: "titan", weight: 2 }, { kind: "hornet", weight: 1 }]) }
+  {
+    core: "lancer",
+    share: 0.3,
+    escorts: POOLS.mixed.concat([
+      { kind: "titan", weight: 2 },
+      { kind: "hornet", weight: 1 },
+      { kind: "trooper", weight: 1, maxShare: 0.15 },
+      { kind: "rocket-squad", weight: 1, maxShare: 0.15 }
+    ])
+  }
 ];
 
 const COMPASS = [
@@ -319,21 +382,73 @@ function computeSites(w: World, hq: Building): SpawnSite[] {
 
 // ------------------------------------------------------------- planning ---
 
-/** The theme of wave n: a boss every 5th, the others a seeded shuffle. */
-export function waveTheme(w: World, n: number): WaveTheme {
-  if (n % 5 === 0) return "boss";
-  const block = Math.floor((n - 1) / 5);
-  const perm: WaveTheme[] = ["air", "armour", "artillery", "mixed"];
+/** Seeded Fisher–Yates shuffle (a copy). */
+function shuffled<T>(w: World, items: readonly T[], salt: string, ...keys: number[]): T[] {
+  const perm = [...items];
   for (let i = perm.length - 1; i > 0; i--) {
-    const j = worldPick(w, i + 1, "wave-theme", block, i);
+    const j = worldPick(w, i + 1, salt, ...keys, i);
     [perm[i], perm[j]] = [perm[j]!, perm[i]!];
   }
+  return perm;
+}
+
+/** Themes that can open a run: ground waves the starting army can fight. */
+const OPENERS: ReadonlySet<WaveTheme> = new Set(["armour", "mixed", "swarm"]);
+/**
+ * Themes the first block always plays: each needs its own answer (anti-air,
+ * anti-infantry), so the defender meets them while they are small.
+ */
+const FIRST_BLOCK: ReadonlySet<WaveTheme> = new Set(["air", "swarm"]);
+
+/**
+ * Which theme (index into SURVIVAL.themes) sits out each block of a cycle of
+ * `themes.length` blocks: every theme once per cycle, in a seeded order that
+ * never benches a theme in the block before a boss it previews (BOSS_PREVIEW),
+ * a FIRST_BLOCK theme in the first block, nor one theme twice running.
+ */
+function benchOrder(w: World, cycle: number): number[] {
+  const all = SURVIVAL.themes;
+  const L = all.length;
+  const prevLast = cycle > 0 ? benchOrder(w, cycle - 1)[L - 1] : -1;
+  const ok = (order: number[]) =>
+    order[0] !== prevLast &&
+    (cycle > 0 || !FIRST_BLOCK.has(all[order[0]!]!)) &&
+    order.every((t, i) => all[t] !== BOSS_PREVIEW[bossVariant(w, (cycle * L + i) * 5 + 5)]);
+  const idx = all.map((_, i) => i);
+  // a few seeded draws find one: each slot rules out at most three themes, and
+  // no theme is ruled out of more than three slots (bosses repeat at most twice in five)
+  for (let k = 0; k < 64; k++) {
+    const order = shuffled(w, idx, "wave-sitout", cycle, k);
+    if (ok(order)) return order;
+  }
+  return shuffled(w, idx, "wave-sitout", cycle, 0);
+}
+
+/**
+ * The four regular themes of block `block` (waves 5b+1 … 5b+4), in order.
+ * With more themes than slots, one sits the block out (benchOrder).
+ */
+function blockThemes(w: World, block: number): RegularTheme[] {
+  const all = SURVIVAL.themes;
+  let pool = [...all];
+  if (all.length > 4) {
+    const out = benchOrder(w, Math.floor(block / all.length))[block % all.length]!;
+    pool = pool.filter((_, i) => i !== out);
+  }
+  const perm = shuffled(w, pool, "wave-theme", block).slice(0, 4);
   if (block === 0) {
     // the opener is always a ground wave the starting army can fight
-    const i = perm.findIndex((t) => t === "armour" || t === "mixed");
-    [perm[0], perm[i]] = [perm[i]!, perm[0]!];
+    const i = perm.findIndex((t) => OPENERS.has(t));
+    if (i > 0) [perm[0], perm[i]] = [perm[i]!, perm[0]!];
   }
-  return perm[(n - 1) % 5]!;
+  return perm;
+}
+
+/** The theme of wave n: a boss every 5th, the others a seeded rotation (blockThemes). */
+export function waveTheme(w: World, n: number): WaveTheme {
+  if (n % 5 === 0) return "boss";
+  const perm = blockThemes(w, Math.floor((n - 1) / 5));
+  return perm[((n - 1) % 5) % perm.length]!;
 }
 
 /** Display name of wave n's theme (bosses have their own). */
@@ -389,17 +504,19 @@ export interface WavePlan {
   units: UnitKind[];
 }
 
-/** Fill `budget` from a weighted pool, deterministically. */
-function fill(w: World, n: number, pool: Pool, budget: number, units: UnitKind[], salt: string): number {
+/** Fill `budget` from a weighted pool, deterministically, up to `maxUnits` units in all. */
+function fill(w: World, n: number, pool: Pool, budget: number, units: UnitKind[], salt: string, maxUnits = SURVIVAL.maxWaveUnits): number {
   let left = budget;
   const spent = new Map<UnitKind, number>();
   for (const k of units) spent.set(k, (spent.get(k) ?? 0) + UNITS[k].cost);
-  for (let i = 0; units.length < SURVIVAL.maxWaveUnits; i++) {
+  const count = (k: UnitKind) => units.filter((u) => u === k).length;
+  for (let i = 0; units.length < maxUnits; i++) {
     const cands = pool.filter(
       (p) =>
         n >= (p.from ?? 1) &&
         UNITS[p.kind].cost <= left &&
-        (p.maxShare === undefined || (spent.get(p.kind) ?? 0) + UNITS[p.kind].cost <= p.maxShare * budget + 1)
+        (p.maxShare === undefined || (spent.get(p.kind) ?? 0) + UNITS[p.kind].cost <= p.maxShare * budget + 1) &&
+        (p.maxCount === undefined || count(p.kind) + 1 <= p.maxCount * maxUnits)
     );
     if (cands.length === 0) break;
     const total = cands.reduce((s, p) => s + p.weight, 0);
@@ -436,10 +553,12 @@ export function planWave(w: World, n: number, difficulty: SurvivalDifficulty = w
   } else {
     // artillery always brings at least one gun
     if (theme === "artillery") units.push("mortar");
-    fill(w, n, POOLS[theme], budget - (theme === "artillery" ? UNITS.mortar.cost : 0), units, `wave-${theme}`);
+    const cap = theme === "swarm" ? SURVIVAL.swarmMaxUnits : SURVIVAL.maxWaveUnits;
+    fill(w, n, POOLS[theme], budget - (theme === "artillery" ? UNITS.mortar.cost : 0), units, `wave-${theme}`, cap);
   }
-  // front-liners enter first, support last
-  const order = (k: UnitKind) => (UNITS[k].armor === "heavy" ? 0 : UNITS[k].targets === "ground" ? 1 : 2);
+  // front-liners enter first (rifle and rocket squads among them), support last (Sniper Teams too)
+  const order = (k: UnitKind) =>
+    UNITS[k].armor === "heavy" ? 0 : k !== "sniper" && (UNITS[k].targets === "ground" || isInfantry(k)) ? 1 : 2;
   units.sort((a, b) => order(a) - order(b));
   return { wave: n, theme, name: waveName(w, n), site: waveSite(w, n), budget, rank: waveRank(n), units };
 }
@@ -578,8 +697,8 @@ function marching(s: SurvivalState, u: Unit): March | null {
   return wave === undefined ? null : s.marches.find((m) => m.wave === wave) ?? null;
 }
 
-/** Small reachable formation area around a site (BFS, radius 3). */
-function formationSlots(w: World, site: SpawnSite): { x: number; y: number }[] {
+/** Small reachable formation area around a site (BFS, radius 3) for one movement class. */
+function formationSlots(w: World, site: SpawnSite, mc: MoveClass): { x: number; y: number }[] {
   const sx = Math.floor(site.x);
   const sy = Math.floor(site.y);
   const out: { x: number; y: number }[] = [];
@@ -593,7 +712,7 @@ function formationSlots(w: World, site: SpawnSite): { x: number; y: number }[] {
       const ny = cy + dy;
       if (!inBounds(w, nx, ny) || Math.abs(nx - sx) > 3 || Math.abs(ny - sy) > 3) continue;
       if (nx < 1 || ny < 1 || nx > w.width - 2 || ny > w.height - 2) continue;
-      if (seen.has(ny * w.width + nx) || !passable(w, nx, ny, "ground")) continue;
+      if (seen.has(ny * w.width + nx) || !passable(w, nx, ny, mc)) continue;
       seen.add(ny * w.width + nx);
       queue.push([nx, ny]);
     }
@@ -608,11 +727,13 @@ function spawnWaveUnit(w: World, s: SurvivalState, p: PendingSpawn): void {
   const jy = worldRandom(w, "spawn-jy", s.spawned) - 0.5;
   let x: number;
   let y: number;
-  if (UNITS[p.kind].domain === "air") {
+  const mc = moveClassOf(p.kind);
+  if (mc === "air") {
     x = site.ax + jx * 2;
     y = site.ay + jy * 2;
   } else {
-    const slots = formationSlots(w, site);
+    // squads form up on ground they can walk (sites are tank-reachable, and foot ⊇ tracks today)
+    const slots = formationSlots(w, site, mc === "foot" ? "foot" : "ground");
     const slot = slots[s.spawned % Math.max(1, slots.length)] ?? site;
     x = slot.x + jx * 0.5;
     y = slot.y + jy * 0.5;
@@ -646,7 +767,7 @@ interface Objective {
   mobile: boolean;
 }
 
-const PRODUCTION = new Set(["fab-plant", "airpad", "tech-lab", "depot"]);
+const PRODUCTION = new Set(["fab-plant", "airpad", "assembly-bay", "tech-lab", "depot"]);
 const DEFENCES = new Set(["turret", "sam-site"]);
 
 /** Nearest defender building matching `filter` to (x, y). */
@@ -682,7 +803,8 @@ function nearestHarvester(w: World, s: SurvivalState, x: number, y: number): Obj
 /**
  * Where a wave unit goes. The director knows where the base is (it's a
  * siege, not a scouting game). Air raids hunt harvesters, artillery shells
- * the defences, columns roll into the nearest structure, bosses go for the HQ.
+ * the defences, columns and bot swarms overrun the nearest structure,
+ * bosses go for the HQ.
  */
 function objective(w: World, s: SurvivalState, theme: WaveTheme, x: number, y: number): Objective | null {
   const any = () => nearestBuilding(w, s, x, y);
@@ -701,7 +823,8 @@ function objective(w: World, s: SurvivalState, theme: WaveTheme, x: number, y: n
       return nearestBuilding(w, s, x, y, (b) => PRODUCTION.has(b.kind)) ?? any();
     case "boss":
       return hq() ?? any();
-    default:
+    case "armour":
+    case "swarm":
       return any();
   }
 }
@@ -716,27 +839,76 @@ function orderWaveUnit(u: Unit, obj: Objective | null): void {
   else u.order = { type: "attackMove", x: obj.x, y: obj.y };
 }
 
-/** Idle wave units with nothing in reach pick the nearest thing to destroy. */
+/**
+ * What a wave Sniper Team should shoot: the nearest defender ground unit it
+ * can see within sight + 2 tiles, squads first (a rail-rifle barely
+ * scratches armour and does next to nothing to buildings).
+ */
+function sniperPrey(w: World, s: SurvivalState, u: Unit): Objective | null {
+  const reach = UNITS[u.kind].sight + 2;
+  let best: Objective | null = null;
+  let bestScore = Infinity;
+  for (const o of w.units.values()) {
+    if (o.faction !== s.defender || UNITS[o.kind].domain !== "ground") continue;
+    const d = dist(o.x, o.y, u.x, u.y);
+    if (d > reach || !unitSeenBy(w, u.faction, o)) continue;
+    const score = d - (isInfantry(o.kind) ? 4 : 0);
+    if (score < bestScore) {
+      bestScore = score;
+      best = { id: o.id, x: o.x, y: o.y, mobile: true };
+    }
+  }
+  return best;
+}
+
+/** Nearest ally a support unit should shadow (`ground`: walkers only), and how far it is. */
+function nearestBuddy(w: World, u: Unit, ground: boolean): { buddy: Unit | null; d: number } {
+  let buddy: Unit | null = null;
+  let bestD = Infinity;
+  for (const o of w.units.values()) {
+    if (o.faction !== u.faction || o.id === u.id || o.kind === "sniper") continue;
+    const ot = UNITS[o.kind].targets;
+    if (ot !== "ground" && ot !== "both") continue;
+    if (ground && UNITS[o.kind].domain !== "ground") continue;
+    const d = dist(o.x, o.y, u.x, u.y);
+    if (d < bestD) {
+      bestD = d;
+      buddy = o;
+    }
+  }
+  return { buddy, d: bestD };
+}
+
+/**
+ * Idle wave units with nothing in reach pick the nearest thing to destroy.
+ * Sniper Teams (once their wave is released) hunt units instead: they drop
+ * a building for any defender in sight, and otherwise hang back with the
+ * nearest squad or tank.
+ */
 function retask(w: World, s: SurvivalState): void {
   for (const u of w.units.values()) {
-    if (!isWaveUnit(s, u) || u.order.type !== "idle" || u.autoTargetId !== null || marching(s, u)) continue;
+    if (!isWaveUnit(s, u) || marching(s, u)) continue;
+    if (u.kind === "sniper") {
+      const busy = (id: number | null) => id !== null && w.units.has(id);
+      if (busy(u.order.type === "attack" ? u.order.targetId : null) || busy(u.autoTargetId)) continue;
+      const prey = sniperPrey(w, s, u);
+      if (prey) {
+        orderWaveUnit(u, prey);
+        continue;
+      }
+      if (u.order.type !== "idle" || u.autoTargetId !== null) continue;
+      const { buddy, d } = nearestBuddy(w, u, true);
+      if (buddy && d > 2.5) orderWaveUnit(u, { id: buddy.id, x: buddy.x, y: buddy.y, mobile: false });
+      else if (!buddy) orderWaveUnit(u, objective(w, s, "boss", u.x, u.y));
+      continue;
+    }
+    if (u.order.type !== "idle" || u.autoTargetId !== null) continue;
     const st = UNITS[u.kind];
     let obj: Objective | null;
     if (st.targets === "air" || st.targets === "none") {
       // escorts (flak, raptors, menders) shadow the nearest ground-attacking ally
-      let buddy: Unit | null = null;
-      let bestD = Infinity;
-      for (const o of w.units.values()) {
-        if (o.faction !== u.faction || o.id === u.id) continue;
-        const ot = UNITS[o.kind].targets;
-        if (ot !== "ground" && ot !== "both") continue;
-        const d = dist(o.x, o.y, u.x, u.y);
-        if (d < bestD) {
-          bestD = d;
-          buddy = o;
-        }
-      }
-      obj = buddy && bestD > 2.5 ? { id: buddy.id, x: buddy.x, y: buddy.y, mobile: false } : buddy ? null : objective(w, s, "boss", u.x, u.y);
+      const { buddy, d } = nearestBuddy(w, u, false);
+      obj = buddy && d > 2.5 ? { id: buddy.id, x: buddy.x, y: buddy.y, mobile: false } : buddy ? null : objective(w, s, "boss", u.x, u.y);
     } else {
       const h = nearestHarvester(w, s, u.x, u.y);
       const b = nearestBuilding(w, s, u.x, u.y);
@@ -833,7 +1005,7 @@ export function survivalHoldPoint(w: World, faction: Faction): { x: number; y: n
   let near: Unit | null = null;
   let bestD = Infinity;
   for (const u of w.units.values()) {
-    if (!isWaveUnit(s, u) || !isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))) continue;
+    if (!isWaveUnit(s, u) || !unitSeenBy(w, faction, u)) continue; // (a Sniper hidden in the woods is no engage point)
     let d = dist(u.x, u.y, c.x, c.y);
     for (const b of w.buildings.values())
       if (b.faction === faction) d = Math.min(d, distToBuilding(b, u.x, u.y));

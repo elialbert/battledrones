@@ -4,8 +4,9 @@ import { applyOpener, type OpenerId } from "./openers";
 import { Terrain, type Biome, type Faction, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 import { setupSurvival, type SurvivalOptions } from "./modes/survival";
-import { applyMutators, type MutatorId } from "./rules";
+import { applyMutators, applySpawnRank, type MutatorId } from "./rules";
 import { setupOp } from "./ops";
+import { dropPoint } from "./transport";
 
 /**
  * Skirmish maps. Every map is 2-player and point-symmetric (rotated 180°
@@ -352,7 +353,10 @@ export interface MatchOptions {
   objectives?: boolean;
 }
 
-/** Build a ready-to-play world for a map: terrain, HQs, starting harvesters. */
+/**
+ * Build a ready-to-play world for a map: terrain, HQs, a starting harvester
+ * and a starting Trooper Squad per side.
+ */
 export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   const def = mapById(id);
   const w = createWorld(def.size, def.size);
@@ -373,7 +377,16 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   // starting harvester just east of each HQ (mirrored: west of red's)
   spawnUnit(w, "harvester", "blue", hx + hs + 1.5, hy + 1.5);
   spawnUnit(w, "harvester", "red", rx - 1.5, ry + 1.5);
+  // every side also starts with a Trooper Squad, on the HQ's other flank
+  // (west of blue's, east of red's: the mirror image, snapped onto ground a
+  // squad can stand on in the side's own frame)
+  const squads = (["blue", "red"] as const).map((f) => {
+    const at = f === "blue" ? { x: hx - 1.5, y: hy + 1.5 } : { x: def.size - hx + 1.5, y: def.size - hy - 1.5 };
+    const p = dropPoint(w, f, at.x, at.y) ?? at;
+    return spawnUnit(w, "trooper", f, p.x, p.y);
+  });
   if (opts.mutators?.length) applyMutators(w, opts.mutators);
+  for (const u of squads) applySpawnRank(w, u); // (Veterans: it rolls out ranked like every combat unit)
   // openers and map objectives belong to the skirmish; Last Stand and Ops set up their own
   if (!opts.survival && !opts.op) {
     for (const f of ["blue", "red"] as const) {

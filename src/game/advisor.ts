@@ -4,7 +4,8 @@
  *
  * - EnemyIntel remembers which enemy units the player has actually SEEN
  *   (fog-respecting: only units standing on tiles the player sees right
- *   now), forgetting each one a minute after its last sighting.
+ *   now, and never a Sniper Team hidden in the woods), forgetting each one
+ *   a minute after its last sighting.
  * - counterAdvice turns that into "build this": a button glows with ⚔ when
  *   the kinds it counters have been seen at least twice and the player's
  *   own force of that kind doesn't already match them.
@@ -13,7 +14,7 @@
  */
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { unitBlocker } from "../sim/economy";
-import { isVisible } from "../sim/fog";
+import { unitSeenBy } from "../sim/infantry";
 import { bannedBy } from "../sim/rules";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 
@@ -40,18 +41,30 @@ type Threat = UnitKind | "turret" | "sam-site";
  * left out on purpose: seeing them shouldn't make anything glow.
  */
 export const COUNTERS: Partial<Record<UnitKind | BuildingKind, Threat[]>> = {
-  stinger: ["flak-crawler", "mortar", "lancer"],
-  "flak-crawler": ["wasp", "raptor", "hornet", "mender"],
-  mortar: ["turret", "sam-site"],
+  stinger: ["flak-crawler", "mortar", "lancer", "trooper", "sniper"],
+  "flak-crawler": ["wasp", "raptor", "hornet", "mender", "condor"],
+  mortar: ["turret", "sam-site", "trooper", "rocket-squad", "sniper"],
   titan: ["stinger", "flak-crawler", "mortar"],
   lancer: ["titan"],
   wasp: ["stinger", "mortar", "titan", "lancer"],
-  raptor: ["wasp", "hornet", "mender"],
-  hornet: ["titan", "mortar"],
-  "sam-site": ["hornet", "wasp"]
+  raptor: ["wasp", "hornet", "mender", "condor"],
+  hornet: ["titan", "mortar", "trooper", "rocket-squad", "sniper"],
+  // robot infantry (INFANTRY.md): Troopers out-trade the anti-armour Rocket Squads,
+  // Rocket Squads kill Titans and Hornets, Snipers delete other infantry
+  trooper: ["rocket-squad"],
+  "rocket-squad": ["titan", "hornet"],
+  sniper: ["trooper", "rocket-squad", "sniper"],
+  turret: ["trooper", "rocket-squad", "sniper"],
+  "sam-site": ["hornet", "wasp", "condor"]
 };
 
-const PLURAL: Partial<Record<Threat, string>> = { "sam-site": "SAM Sites", "flak-crawler": "Flak" };
+const PLURAL: Partial<Record<Threat, string>> = {
+  "sam-site": "SAM Sites",
+  "flak-crawler": "Flak",
+  trooper: "Trooper Squads",
+  "rocket-squad": "Rocket Squads",
+  sniper: "Sniper Teams"
+};
 export const plural = (k: Threat): string =>
   PLURAL[k] ?? `${k in UNITS ? UNITS[k as UnitKind].name : BUILDINGS[k as BuildingKind].name}s`;
 
@@ -71,7 +84,7 @@ export class EnemyIntel {
     this.nextScan = t + ADVISOR.scanS;
     for (const u of this.w.units.values()) {
       if (u.faction === this.faction || u.kind === "harvester" || u.kind === "scout") continue;
-      if (!isVisible(this.w, this.faction, Math.floor(u.x), Math.floor(u.y))) continue;
+      if (!unitSeenBy(this.w, this.faction, u)) continue;
       let m = this.seen.get(u.kind);
       if (!m) this.seen.set(u.kind, (m = new Map()));
       m.set(u.id, t);
@@ -125,7 +138,12 @@ export function counterAdvice(
 function ownValue(w: World, faction: Faction, kind: UnitKind | BuildingKind): number {
   let n = 0;
   if (kind in UNITS) {
-    for (const u of w.units.values()) if (u.faction === faction && u.kind === kind) n++;
+    // (squads riding in a Condor are off the field, but still ours)
+    for (const u of w.units.values())
+      if (u.faction === faction) {
+        if (u.kind === kind) n++;
+        for (const p of u.passengers ?? []) if (p.kind === kind) n++;
+      }
     for (const b of w.buildings.values())
       if (b.faction === faction) for (const q of b.queue) if (q.kind === kind) n++;
     return n * UNITS[kind as UnitKind].cost;
@@ -143,7 +161,10 @@ export function adviceNote(a: Advice): string | null {
 }
 
 /** Factory → tab: which build-bar tab an idle factory nudges. */
-export type FactoryTab = "ground" | "air";
+export type FactoryTab = "ground" | "infantry" | "air";
+
+/** The build-bar tab of each factory. */
+export const FACTORY_TAB: Partial<Record<BuildingKind, FactoryTab>> = { "fab-plant": "ground", "assembly-bay": "infantry", airpad: "air" };
 
 /** Notices factories sitting idle while their cheapest unit is affordable. */
 export class IdleWatch {
@@ -153,11 +174,12 @@ export class IdleWatch {
 
   /** Which tabs should show "idle" at sim time t. */
   update(t: number): Record<FactoryTab, boolean> {
-    const out: Record<FactoryTab, boolean> = { ground: false, air: false };
+    const out: Record<FactoryTab, boolean> = { ground: false, infantry: false, air: false };
     const scrap = this.w.factions[this.faction].scrap;
     const alive = new Set<number>();
     for (const b of this.w.buildings.values()) {
-      if (b.faction !== this.faction || (b.kind !== "fab-plant" && b.kind !== "airpad")) continue;
+      const tab = FACTORY_TAB[b.kind];
+      if (b.faction !== this.faction || !tab) continue;
       alive.add(b.id);
       if (b.queue.length > 0) {
         this.since.delete(b.id);
@@ -166,7 +188,7 @@ export class IdleWatch {
       if (!this.since.has(b.id)) this.since.set(b.id, t);
       if (t - this.since.get(b.id)! < ADVISOR.idleS) continue;
       const cheapest = cheapestUnit(this.w, this.faction, b.kind);
-      if (cheapest !== null && scrap >= cheapest) out[b.kind === "fab-plant" ? "ground" : "air"] = true;
+      if (cheapest !== null && scrap >= cheapest) out[tab] = true;
     }
     for (const id of this.since.keys()) if (!alive.has(id)) this.since.delete(id);
     return out;

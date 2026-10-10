@@ -5,7 +5,11 @@
 //                                                 taking its personality's opener, with Uplinks and
 //                                                 supply drops (--classic: neither; --no-objectives)
 //   npx vite-node tools/balance.ts passive        each strategy vs a passive foe
+// Any mode takes --tune '{"UNITS.trooper.hp":200}' to override exported balance numbers
+// (and AI personalities: "STRATEGIES.rush.assaultValue") for an A/B run.
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
+import { CONDOR_AI } from "../src/sim/ai/condor";
+import * as balance from "../src/sim/balance";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { MAPS, createMapWorld, mapById } from "../src/sim/maps";
 import { pickAiOpener } from "../src/sim/openers";
@@ -13,7 +17,9 @@ import { step } from "../src/sim/sim";
 import type { UnitKind, World } from "../src/sim/types";
 import { createWorld, spawnUnit } from "../src/sim/world";
 
-const COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer", "wasp", "raptor", "hornet"];
+const COMBAT: UnitKind[] = [
+  "stinger", "flak-crawler", "mortar", "titan", "lancer", "wasp", "raptor", "hornet", "trooper", "rocket-squad", "sniper"
+];
 const BUDGET = 1800;
 
 /** Army A (blue) vs army B (red), equal scrap, attack-moving into each other. */
@@ -90,7 +96,7 @@ function matches(): void {
   let crateScrap = 0;
   let captures = 0;
   let crates = 0;
-  const only = process.argv.slice(3).find((a) => !a.startsWith("--"));
+  const only = process.argv.slice(3).find((a, i, all) => !a.startsWith("--") && all[i - 1] !== "--tune");
   for (const map of MAPS.filter((m) => !only || m.id === only)) {
     for (let i = 0; i < names.length; i++)
       for (let j = 0; j < names.length; j++) {
@@ -147,6 +153,21 @@ function passive(): void {
       console.log(`${map.id.padEnd(16)} ${s.padEnd(10)} ${w.winner ?? "none"} @ ${(w.tick / 600).toFixed(1)}m`);
     }
 }
+
+function applyTune(json: string | undefined): void {
+  if (!json) return;
+  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI };
+  for (const [path, v] of Object.entries(JSON.parse(json) as Record<string, unknown>)) {
+    const parts = path.split(".");
+    let o = roots as Record<string, unknown>;
+    for (const p of parts.slice(0, -1)) o = o[p] as Record<string, unknown>;
+    const last = parts[parts.length - 1]!;
+    if (!o || !(last in o)) throw new Error(`no such tunable: ${path}`);
+    o[last] = v;
+  }
+}
+const tuneAt = process.argv.indexOf("--tune");
+applyTune(tuneAt >= 0 ? process.argv[tuneAt + 1] : undefined);
 
 const mode = process.argv[2] ?? "duels";
 if (mode === "duels") duels();

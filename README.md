@@ -25,12 +25,25 @@ installable as a PWA.
   telegraphed with a public warning circle: land yours, dodge theirs. The
   radio shouts "Incoming artillery!", the music swells on impact, and
   kill streaks, hero toasts and the after-action report name the strike.
-- **11 units** across a real counter web: Stinger light tanks, Flak
+- **15 units** across a real counter web: Stinger light tanks, Flak
   Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet
-  bombers, Mender repair drones and Harvesters.
-- **8 buildings** with a tech tree: HQ, Fab Plant, Airpad, Tech Lab,
-  forward Depots, Turrets, SAM Sites and Radar.
+  bombers, Mender repair drones, Harvesters, three kinds of robot infantry
+  squad (Troopers, Rocket Squads, Sniper Teams) and the Condor dropship.
+- **9 buildings** with a tech tree: HQ, Fab Plant, Airpad, Assembly Bay,
+  Tech Lab, forward Depots, Turrets, SAM Sites and Radar.
+- **Robot infantry**: every side starts with a Trooper Squad beside its HQ,
+  and an Assembly Bay trains more: Troopers (cheap rifles that hit air too),
+  Rocket Squads (Titan and Hornet killers) and, with a Tech Lab, Sniper
+  Teams that stay hidden in woods until they fire. A squad is one unit of
+  several robots that fall one by one as it takes damage, and it shoots
+  weaker with each loss. Squads cross woods and mud at full speed, take half
+  damage in woods and capture Uplinks twice as fast. Titans crush them.
+- **The Condor dropship** flies two squads over water, rock and anything
+  else. Select squads and tap the Condor to load them, then long-press the
+  map to fly there and drop them, or tap ⇣ Unload (key U). If it's shot
+  down over land its squads bail out hurt; over water or rock they go down
+  with it.
 - **5 maps in 4 biomes** — Riverlands, Dune Sea, Frostbite, Ashlands and
   the classic Proving Grounds — with terrain that matters: roads, mud,
   woods (cover), fords, bridges, water/lava that only hover and air units
@@ -40,9 +53,10 @@ installable as a PWA.
 - An AI commander with **6 personalities** (Balanced, Rush, Air Swarm,
   Boom, Skyforce, Ironclad) and **3 difficulties**, playing by the same
   rules and fog of war as you — it gathers real waves, fights for the
-  Uplinks and calls down strikes — or watch two AIs fight. Matches are
-  tuned for comebacks: the side ahead at 4:00 now wins 78% of AI-vs-AI
-  games, not 90%.
+  Uplinks, answers your infantry, flies Condor drops at your harvesters and
+  calls down strikes — or watch two AIs fight. Matches are tuned for
+  comebacks: the side ahead at 4:00 now wins 70% of AI-vs-AI games, not
+  90%, and a decided AI-vs-AI game runs a median of about 10½ minutes.
 - **Veteran heroes**: units that rank up earn callsigns ("★★ Viper ·
   Lancer · 9 kills"), promotions pop over the unit, elites shimmer gold, and
   you hear about it when a named unit falls; the AI pulls its wounded
@@ -52,9 +66,10 @@ installable as a PWA.
   first blood, the biggest battle and the turning point marked, your MVP
   unit, correct kill stats and one tip for next time.
 - **Last Stand** survival mode: hold your base against endless, announced
-  waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and a Boss
-  every fifth wave — from shifting map edges. Call waves early for bonus
-  scrap; your best per map and difficulty is saved.
+  waves — Air Raids, Armour Columns, Artillery, Mixed Assaults and robot
+  Bot Swarms, four of them in each block of five and then a Boss — from
+  shifting map edges. Call waves early for bonus scrap; your best per map
+  and difficulty is saved.
 - **A Commander career**: XP and ten ranks from Cadet to Marshal, 16
   medals (Lightning War, Comeback, Ace, Giant Slayer, Orbital, Scavenger,
   Steady Hands…) popping in on the end
@@ -73,7 +88,10 @@ installable as a PWA.
   royal-blue or crimson team panels, amber lights): turrets track their
   targets and kick on recoil, rotors spin, aircraft fly at altitude, bank
   into turns and cast shadows on the ground, tanks tilt over the terrain,
-  buildings rise out of the ground when placed and smoke when hurt. The
+  buildings rise out of the ground when placed and smoke when hurt. Robot
+  squads run with their feet planted (no sliding), raise their guns to
+  fire and topple one robot at a time; the Condor hovers low, drops its
+  ramp and lets its squads jump down from a troop bay you can see into. The
   landscape is a heightfield draped with each map's painted terrain — rock
   outcrops rise into mesas whose cliffs and crags are textured with the
   painted stone of their biome, rivers and lava cut real channels under
@@ -99,11 +117,11 @@ installable as a PWA.
   chime when your harvesters deliver.
 - **Voices and a radio announcer.** Every unit class answers in its own
   synthesized robot voice when selected, ordered, built or promoted. Titans
-  growl, Wasps buzz and Menders ring. A radio commander calls out what
-  matters: "Warning: our HQ is under attack", "Enemy aircraft detected",
-  "Squad lost", "Construction complete". Kill streaks get banners: First
-  blood, Double kill, Triple kill, Rampage, Titan down. Spectators get a
-  neutral caster.
+  growl, Wasps buzz, Menders ring and Troopers chatter. A radio commander
+  calls out what matters: "Warning: our HQ is under attack", "Enemy
+  aircraft detected", "Enemy troops landing!", "Squad lost", "Construction
+  complete". Kill streaks get banners: First blood, Double kill, Triple
+  kill, Rampage, Titan down. Spectators get a neutral caster.
 - **Battle awareness and game speed.** Pulsing arrows at the screen edge
   point at off-screen fights (red when you're hit, amber when you attack);
   tap one, or ⚡, to glide there. "Enemy drones inbound — Flak, Raptors or a
@@ -131,8 +149,10 @@ npm run build          # typecheck + production build into docs/
 npm run smoke          # headless Playwright test of the real touch flow (against docs/)
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives)
+                       # (any mode takes --tune '{"UNITS.trooper.hp":200}' for an A/B run)
 npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds] [--calldowns]
-                       # Last Stand: waves survived by an AI / scripted-player defender
+                       # Last Stand: waves survived by an AI / scripted-player defender, and scrap
+                       # lost per wave by theme and stage (--tune '{"themes":["swarm",…]}': one theme only)
 npx vite-node tools/ops.ts [op|all] [seeds]
                        # Ops: can the stand-in pilots clear each op, and with how many stars
 npx vite-node tools/beginner.ts [novice|beginner|decent] [easy|normal|hard] [seeds]
@@ -140,8 +160,10 @@ npx vite-node tools/beginner.ts [novice|beginner|decent] [easy|normal|hard] [see
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --shard 0/4   # pacing & snowball panel (shard across processes)
 npx vite-node tools/pacing.ts summary out*.jsonl                    # …the table in DESIGN.md "Balance & pacing"
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --mirror      # side fairness: each personality vs itself
+npx vite-node tools/pacing.ts run out.jsonl --with rush --tune '{…}' # one personality's pairings, A/B
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
                        # model gallery: npm run dev, then open /tools/models.html
+                       #   (?only=units|buildings|condor|condor-ring, ?anim=walk|idle|aim|fall for the robots)
                        # vehicles reference page: /vehicles.html (built into docs/ too)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
@@ -156,6 +178,7 @@ generation) — see **ART.md**:
 ```bash
 npm run art:generate   # call the OpenAI Images API for any missing raw art
 npm run art:process    # raw art → sprite atlas, icons, key art, PWA icons
+npm run art:process -- --icons-only   # just the HUD portraits
 npm run art:terrain    # paint every map's terrain from its grid (then refreshes the rock textures)
 npm run art:textures   # just the biome rock textures the 3D cliffs and crags use
 ```

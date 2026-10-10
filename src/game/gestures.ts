@@ -19,7 +19,12 @@ export interface GestureCallbacks {
   onDoubleTap(x: number, y: number): void;
   onBoxStart(x: number, y: number): void;
   onBoxMove(x: number, y: number): void;
-  onBoxEnd(x: number, y: number): void;
+  /**
+   * The box ended at (x, y). `released`: the finger (or button) lifted; false
+   * when the box was cut short — a second finger came down, or the pointer
+   * was cancelled (an OS gesture, a call) — which is never a deliberate end.
+   */
+  onBoxEnd(x: number, y: number, released: boolean): void;
   /** Screen-space camera pan delta. */
   onPan(dx: number, dy: number): void;
   /** A pan gesture ended (finger/button lifted) — for momentum. */
@@ -37,6 +42,17 @@ export const DOUBLE_TAP_SLOP_PX = 24;
 /** Finger distance must change this much before a pinch starts zooming —
  * otherwise two-finger pans wobble the zoom from natural finger jitter. */
 export const PINCH_ACTIVATE_PX = 16;
+
+/**
+ * Was this box (start and end corners) really a long-press released without
+ * dragging? The recognizer reports such a hold as a degenerate box
+ * (onBoxStart + onBoxEnd at about the same point); callers give it its own
+ * meaning — loaded Condors drop their squads there (GameScene) — but only
+ * when onBoxEnd says it was `released`.
+ */
+export function isHoldRelease(x0: number, y0: number, x1: number, y1: number): boolean {
+  return Math.hypot(x1 - x0, y1 - y0) <= TAP_SLOP_PX;
+}
 
 type Mode = "idle" | "pending" | "pan" | "box" | "multi" | "mousepan";
 
@@ -122,6 +138,8 @@ export class GestureRecognizer {
         break;
       case "box":
         this.cb.onBoxMove(p.x, p.y);
+        this.lastX = p.x;
+        this.lastY = p.y;
         break;
       case "multi": {
         const [a, b] = [...this.pointers.values()];
@@ -153,7 +171,7 @@ export class GestureRecognizer {
         // never promoted: tap if quick, degenerate box if it was a long hold
         if (now - this.downTime >= HOLD_DELAY_MS) {
           this.cb.onBoxStart(this.downX, this.downY);
-          this.cb.onBoxEnd(p.x, p.y);
+          this.cb.onBoxEnd(p.x, p.y, true);
         } else if (
           now - this.lastTapTime <= DOUBLE_TAP_MS &&
           Math.hypot(p.x - this.lastTapX, p.y - this.lastTapY) <= DOUBLE_TAP_SLOP_PX
@@ -170,7 +188,7 @@ export class GestureRecognizer {
         break;
       }
       case "box":
-        this.cb.onBoxEnd(p.x, p.y);
+        this.cb.onBoxEnd(p.x, p.y, true);
         this.mode = "idle";
         break;
       case "pan":
@@ -192,7 +210,7 @@ export class GestureRecognizer {
 
   cancel(p: GesturePointer): void {
     this.pointers.delete(p.id);
-    if (this.mode === "box") this.cb.onBoxEnd(this.lastX, this.lastY);
+    if (this.mode === "box") this.cb.onBoxEnd(this.lastX, this.lastY, false);
     this.mode = this.pointers.size >= 2 ? "multi" : "idle";
   }
 
@@ -223,7 +241,7 @@ export class GestureRecognizer {
   }
 
   private enterMulti(): void {
-    if (this.mode === "box") this.cb.onBoxEnd(this.lastX, this.lastY);
+    if (this.mode === "box") this.cb.onBoxEnd(this.lastX, this.lastY, false);
     this.mode = "multi";
     const [a, b] = [...this.pointers.values()];
     if (a && b) {

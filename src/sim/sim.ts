@@ -9,11 +9,12 @@ import {
 import { FOG } from "./balance";
 import { tickFog } from "./fog";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
-import { tickMovement } from "./movement";
+import { tickMovement, vehicleSpots } from "./movement";
 import { tickOps } from "./ops";
 import { tickObjectives } from "./objectives";
 import { applyCalldown, chargePowers, tickPowers } from "./powers";
 import { tickSalvage } from "./salvage";
+import { applyTransportCommand, tickTransport } from "./transport";
 import type { Command, World } from "./types";
 import { isResource, tileIndex } from "./world";
 
@@ -22,13 +23,15 @@ export function step(w: World, commands: Command[]): void {
   w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
   for (const c of commands) applyCommand(w, c);
+  const spots = vehicleSpots(w); // (before anything drives: squads step aside only for a vehicle on the move)
   tickConstruction(w);
   tickProduction(w);
   tickHarvest(w);
   tickTrickle(w);
   tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
-  tickMovement(w, engaged);
+  tickTransport(w); // squads board Condors, Condors fly drops (transport.ts)
+  tickMovement(w, engaged, spots); // (then separation, and Titans crushing squads)
   cleanupDeaths(w);
   tickSalvage(w);
   tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)
@@ -73,6 +76,7 @@ function applyCommand(w: World, c: Command): void {
       break;
     }
     case "stop":
+      // (also how a Condor's drop is called off: its unload order goes)
       for (const id of c.unitIds) {
         const u = w.units.get(id);
         if (!u || u.faction !== c.faction) continue;
@@ -80,6 +84,10 @@ function applyCommand(w: World, c: Command): void {
         u.path = null;
         u.autoTargetId = null;
       }
+      break;
+    case "board":
+    case "unload":
+      applyTransportCommand(w, c);
       break;
     case "callWave":
       callWaveEarly(w, c.faction);

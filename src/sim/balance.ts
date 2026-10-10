@@ -59,6 +59,14 @@ export interface UnitStats extends ArmedStats {
   turret?: boolean;
   /** Collision/visual radius in tiles. */
   radius: number;
+  /**
+   * Robot infantry: the number of robots the squad is drawn as. A squad is
+   * one sim unit with one HP pool; a robot falls each time HP crosses a 1/N
+   * step and DPS scales with the robots still standing (infantry.ts).
+   */
+  squad?: number;
+  /** Transport (Condor): infantry squads it can carry. */
+  capacity?: number;
 }
 
 export interface BuildingStats extends ArmedStats {
@@ -150,6 +158,36 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     cost: 150, hp: 180, speed: 3.2, sight: 6, domain: "air", armor: "light",
     targets: "none", dps: 0, range: 3, heal: 10,
     buildTime: 7, builtAt: "airpad", radius: 0.32
+  },
+  // ---- robot infantry (INFANTRY.md): one sim unit each, drawn as `squad` robots ----
+  // (tuned down from the spec's 225 HP / 18 DPS: cost for cost those beat Stingers by
+  // 0.48 in tools/balance.ts duels; Stingers are meant to handle infantry)
+  trooper: {
+    name: "Trooper Squad", role: "Cheap rifle bots. Hit ground and air. Take cover in woods.",
+    cost: 100, hp: 190, speed: 1.8, sight: 5, domain: "ground", armor: "infantry",
+    targets: "both", dps: 15, range: 3, shotInterval: 0.4, dmgType: "kinetic", fx: "rifle", airMult: 0.5,
+    buildTime: 6, builtAt: "assembly-bay", radius: 0.4, squad: 5
+  },
+  // (the spec's 180 HP and 0.8× vs air lost to Hornets by 0.59 cost for cost — their bombs
+  // splash whole clumps of squads; 210 HP and 1.5× vs air kill them, as the role says)
+  "rocket-squad": {
+    name: "Rocket Squad", role: "Anti-armour rockets. Kill Titans and Hornets. Weak vs infantry.",
+    cost: 175, hp: 210, speed: 1.6, sight: 6, domain: "ground", armor: "infantry",
+    targets: "both", dps: 26, range: 4, shotInterval: 1.5, dmgType: "cannon", fx: "rockets", airMult: 1.5,
+    buildTime: 9, builtAt: "assembly-bay", radius: 0.4, squad: 3
+  },
+  sniper: {
+    name: "Sniper Team", role: "Long-range marksmen. Delete infantry. Useless vs vehicles.",
+    cost: 200, hp: 120, speed: 1.7, sight: 8, domain: "ground", armor: "infantry",
+    // 50 per shot; precision ×3 vs infantry = 150 (about three Trooper robots)
+    targets: "ground", dps: 20, range: 7, shotInterval: 2.5, dmgType: "precision", fx: "snipe",
+    buildTime: 10, builtAt: "assembly-bay", requires: "tech-lab", radius: 0.35, squad: 2
+  },
+  condor: {
+    name: "Condor", role: "Dropship. Carries two infantry squads over anything. Unarmed.",
+    cost: 200, hp: 400, speed: 3.6, sight: 6, domain: "air", armor: "medium",
+    targets: "none", dps: 0, range: 0,
+    buildTime: 9, builtAt: "airpad", radius: 0.5, capacity: 2
   }
 };
 
@@ -171,8 +209,8 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
     targets: "none", dps: 0, range: 0
   },
   "tech-lab": {
-    name: "Tech Lab", role: "Unlocks Mortar, Titan, Lancer and Hornet.",
-    cost: 450, hp: 800, sight: 4, size: 2, buildTime: 20, requires: ["fab-plant", "airpad"],
+    name: "Tech Lab", role: "Unlocks Mortar, Titan, Lancer, Hornet and Sniper.",
+    cost: 450, hp: 800, sight: 4, size: 2, buildTime: 20, requires: ["fab-plant", "airpad", "assembly-bay"],
     targets: "none", dps: 0, range: 0
   },
   depot: {
@@ -194,17 +232,24 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
     name: "Radar", role: "Reveals a wide area through the fog.",
     cost: 200, hp: 450, sight: 13, size: 1, buildTime: 8,
     targets: "none", dps: 0, range: 0
+  },
+  "assembly-bay": {
+    name: "Assembly Bay", role: "Builds robot infantry.",
+    cost: 250, hp: 700, sight: 4, size: 2, buildTime: 15,
+    targets: "none", dps: 0, range: 0
   }
 };
 
 /** Damage multiplier by damage type (row) vs armor class (column). */
 export const DAMAGE_VS: Record<DamageType, Record<ArmorClass, number>> = {
-  kinetic: { light: 1.0, medium: 1.0, heavy: 0.6, structure: 0.65 },
-  cannon: { light: 0.8, medium: 1.0, heavy: 1.3, structure: 1.0 },
-  flak: { light: 1.25, medium: 1.0, heavy: 1.15, structure: 0.5 },
-  missile: { light: 1.15, medium: 1.0, heavy: 0.9, structure: 0.6 },
-  explosive: { light: 1.2, medium: 0.9, heavy: 0.85, structure: 1.35 },
-  laser: { light: 1.0, medium: 1.0, heavy: 1.55, structure: 0.8 }
+  kinetic: { light: 1.0, medium: 1.0, heavy: 0.6, structure: 0.65, infantry: 1.0 },
+  cannon: { light: 0.8, medium: 1.0, heavy: 1.3, structure: 1.0, infantry: 0.4 },
+  flak: { light: 1.25, medium: 1.0, heavy: 1.15, structure: 0.5, infantry: 1.25 },
+  missile: { light: 1.15, medium: 1.0, heavy: 0.9, structure: 0.6, infantry: 0.7 },
+  explosive: { light: 1.2, medium: 0.9, heavy: 0.85, structure: 1.35, infantry: 1.3 },
+  laser: { light: 1.0, medium: 1.0, heavy: 1.55, structure: 0.8, infantry: 0.7 },
+  // Sniper rail-rifles: deadly to robot infantry, next to useless against armour
+  precision: { light: 0.6, medium: 0.4, heavy: 0.25, structure: 0.15, infantry: 3.0 }
 };
 
 export interface TerrainInfo {
@@ -216,6 +261,8 @@ export interface TerrainInfo {
   /** Speed multiplier for tracked/wheeled and hover units. */
   speed: number;
   hoverSpeed: number;
+  /** Speed multiplier for robot infantry (0 = they can't enter: Water and Rock). */
+  footSpeed: number;
   /** Buildings may be placed here. */
   buildable: boolean;
   /** Damage multiplier for ground units standing here (cover). */
@@ -223,16 +270,16 @@ export interface TerrainInfo {
 }
 
 export const TERRAIN: Record<Terrain, TerrainInfo> = {
-  [Terrain.Ground]: { name: "Ground", ground: true, hover: true, speed: 1, hoverSpeed: 1, buildable: true, cover: 1 },
-  [Terrain.Rock]: { name: "Rock", ground: false, hover: false, speed: 0, hoverSpeed: 0, buildable: false, cover: 1 },
-  [Terrain.Scrap]: { name: "Scrap field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, buildable: false, cover: 1 },
-  [Terrain.Water]: { name: "Water", ground: false, hover: true, speed: 0, hoverSpeed: 1, buildable: false, cover: 1 },
-  [Terrain.Road]: { name: "Road", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, buildable: true, cover: 1 },
-  [Terrain.Rough]: { name: "Rough ground", ground: true, hover: true, speed: 0.6, hoverSpeed: 1, buildable: false, cover: 1 },
-  [Terrain.Forest]: { name: "Woods", ground: true, hover: true, speed: 0.55, hoverSpeed: 0.6, buildable: false, cover: 0.7 },
-  [Terrain.Crystal]: { name: "Crystal field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, buildable: false, cover: 1 },
-  [Terrain.Bridge]: { name: "Bridge", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, buildable: false, cover: 1 },
-  [Terrain.Shallows]: { name: "Shallows", ground: true, hover: true, speed: 0.5, hoverSpeed: 1, buildable: false, cover: 1 }
+  [Terrain.Ground]: { name: "Ground", ground: true, hover: true, speed: 1, hoverSpeed: 1, footSpeed: 1, buildable: true, cover: 1 },
+  [Terrain.Rock]: { name: "Rock", ground: false, hover: false, speed: 0, hoverSpeed: 0, footSpeed: 0, buildable: false, cover: 1 },
+  [Terrain.Scrap]: { name: "Scrap field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, footSpeed: 0.85, buildable: false, cover: 1 },
+  [Terrain.Water]: { name: "Water", ground: false, hover: true, speed: 0, hoverSpeed: 1, footSpeed: 0, buildable: false, cover: 1 },
+  [Terrain.Road]: { name: "Road", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, footSpeed: 1.35, buildable: true, cover: 1 },
+  [Terrain.Rough]: { name: "Rough ground", ground: true, hover: true, speed: 0.6, hoverSpeed: 1, footSpeed: 1, buildable: false, cover: 1 },
+  [Terrain.Forest]: { name: "Woods", ground: true, hover: true, speed: 0.55, hoverSpeed: 0.6, footSpeed: 1, buildable: false, cover: 0.7 },
+  [Terrain.Crystal]: { name: "Crystal field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, footSpeed: 0.85, buildable: false, cover: 1 },
+  [Terrain.Bridge]: { name: "Bridge", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, footSpeed: 1.35, buildable: false, cover: 1 },
+  [Terrain.Shallows]: { name: "Shallows", ground: true, hover: true, speed: 0.5, hoverSpeed: 1, footSpeed: 0.8, buildable: false, cover: 1 }
 };
 
 export const ECONOMY = {
@@ -274,6 +321,39 @@ export const COMBAT = {
   rankDamage: 0.15,
   /** HP/sec regenerated at rank 3 (fraction of max HP). */
   eliteRegen: 0.01
+};
+
+/**
+ * Robot infantry and the Condor dropship (INFANTRY.md; infantry.ts,
+ * transport.ts). Squads are single sim units drawn as several robots.
+ */
+export const INFANTRY = {
+  /** Damage multiplier for a squad standing in Woods (vehicles get TERRAIN cover 0.7). */
+  woodsCover: 0.5,
+  /** A Sniper Team in Woods is only seen by enemies this close (tiles)… */
+  concealRadius: 3,
+  /** …until this many seconds after it fires. */
+  concealAfterShot: 2,
+  /** HP/s a moving Titan deals to an enemy squad it rolls over. */
+  crushDps: 30,
+  /** A Titan crushes squads whose centre is within its radius + this (tiles). */
+  crushReach: 0.15,
+  /** Uplink capture weight of a squad (vehicles count 1, aircraft 0.5). */
+  captureWeight: 2,
+  /** Seconds a squad takes to climb aboard once it is within `boardRange` of the Condor. */
+  boardTime: 1,
+  /** Horizontal distance (tiles) between squad and Condor that counts as adjacent. */
+  boardRange: 1.2,
+  /** Seconds a Condor hovers over the drop point before the squads are down. */
+  unloadHover: 1.5,
+  /** How far (tiles) a drop may snap to find a tile infantry can stand on (past that: the nearest anywhere). */
+  dropSearch: 6,
+  /** Squads set down (dropped or bailed out) keep their centre this far (tiles) from ground they can't stand on and the map's edge: their robots stand around it. */
+  dropClear: 0.4,
+  /** After a drop the Condor backs off this far (tiles) the way it came, off its squads' heads. */
+  dropBackOff: 1.5,
+  /** A Condor shot down over walkable ground: passengers bail out with at most this share of their max HP. */
+  bailoutHp: 0.5
 };
 
 export const FOG = {

@@ -4,6 +4,7 @@ import { calldownBlocker, isStunned, powerStatus } from "../powers";
 import type { BuildingKind, Calldown, Command, Faction, PowerKind, Unit, World } from "../types";
 import { dist, hqOf, passable } from "../world";
 import type { AiMode, AiState, Difficulty } from "./commander";
+import { seenEnemies } from "./intel";
 
 /**
  * The commander's use of calldowns (powers.ts), and its reflex for getting
@@ -169,7 +170,7 @@ function podSite(w: World, faction: Faction, x: number, y: number): { x: number;
 }
 
 const value = (us: Unit[]) => us.reduce((v, u) => v + UNITS[u.kind].cost, 0);
-const PRODUCTION: BuildingKind[] = ["fab-plant", "airpad", "tech-lab"];
+const PRODUCTION: BuildingKind[] = ["fab-plant", "airpad", "assembly-bay", "tech-lab"];
 
 /**
  * One decision pass's calldowns: at most one meter power, plus the Sky
@@ -185,9 +186,7 @@ export function planCalldowns(w: World, faction: Faction, s: AiState, ctx: Calld
     return true;
   };
   const ready = (p: PowerKind) => powerStatus(w, faction, p).ready;
-  const visibleEnemies = [...w.units.values()].filter(
-    (u) => u.faction !== faction && isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))
-  );
+  const visibleEnemies = seenEnemies(w, faction); // (a Sniper Team hidden in the woods isn't aimed at)
   const armed = visibleEnemies.filter((u) => UNITS[u.kind].dps > 0 || UNITS[u.kind].heal);
 
   // --- Sky Hammer: a rich clump, else production, else the HQ -------------

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { BUILDINGS, ECONOMY, UNITS } from "../src/sim/balance";
 import { canPlaceBuilding } from "../src/sim/economy";
-import { tickFog } from "../src/sim/fog";
+import { isVisible, tickFog } from "../src/sim/fog";
 import { MAPS, createMapWorld } from "../src/sim/maps";
 import { placementBlocker, snapPlacement, suggestPlacement } from "../src/sim/placement";
-import { Terrain, type BuildingKind, type FxEvent, type World } from "../src/sim/types";
+import { Terrain, type BuildingKind, type FxEvent, type Unit, type World } from "../src/sim/types";
 import { buildingCenter, createWorld, hqOf, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 import { Controller } from "../src/game/controller";
 import { SQUAD, Squads } from "../src/game/squads";
@@ -186,6 +186,19 @@ describe("controller: touch placement", () => {
     spawnUnit(w, "stinger", "red", 13, 10);
     b.order = { type: "move", x: 20, y: 20 };
     expect(c.idleArmy()).toEqual([a.id]);
+  });
+
+  it("⚔ Select army and 💤 Idle leave out harvesters and the unarmed Condor", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const squad = spawnUnit(w, "trooper", "blue", 11, 10);
+    spawnUnit(w, "harvester", "blue", 12, 10);
+    spawnUnit(w, "condor", "blue", 13, 10);
+    spawnUnit(w, "stinger", "red", 14, 10);
+    c.selectArmy();
+    expect([...c.selectedUnits]).toEqual([tank.id, squad.id]);
+    expect(c.idleArmy()).toEqual([tank.id, squad.id]);
   });
 
   it("Shift+click adds a unit to the selection, or takes it out", () => {
@@ -374,6 +387,28 @@ describe("build advisor", () => {
     expect(adviceNote(counterAdvice(w, "blue", intel, "flak-crawler", 1))).toBe("Counters Wasps (seen ×2)");
   });
 
+  it("counts squads riding in Condors toward the answer", () => {
+    const w = scene();
+    const intel = new EnemyIntel(w, "blue");
+    spawnUnit(w, "titan", "red", 8, 9);
+    spawnUnit(w, "titan", "red", 9, 9);
+    tickFog(w);
+    intel.update(0);
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(true);
+    // enough Rocket Squads on the field answer the Titans…
+    const squads: Unit[] = [];
+    while (counterAdvice(w, "blue", intel, "rocket-squad", 0).active) squads.push(spawnUnit(w, "rocket-squad", "blue", 5, 12));
+    // …and still do once they're aboard Condors for a drop
+    for (let i = 0; i < squads.length; i += 2) {
+      const condor = spawnUnit(w, "condor", "blue", 6, 12);
+      for (const u of squads.slice(i, i + 2)) {
+        w.units.delete(u.id);
+        condor.passengers!.push(u);
+      }
+    }
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(false);
+  });
+
   it("never suggests an option the match rules ban (Air War: no Flak, no SAM Sites)", () => {
     const w = scene();
     applyMutators(w, ["airwar"]);
@@ -423,9 +458,9 @@ describe("build advisor", () => {
     const w = scene();
     const idle = new IdleWatch(w, "blue");
     w.factions.blue.scrap = 1000;
-    expect(idle.update(0)).toEqual({ ground: false, air: false });
-    expect(idle.update(ADVISOR.idleS - 0.1)).toEqual({ ground: false, air: false });
-    expect(idle.update(ADVISOR.idleS + 0.1)).toEqual({ ground: true, air: true });
+    expect(idle.update(0)).toEqual({ ground: false, infantry: false, air: false });
+    expect(idle.update(ADVISOR.idleS - 0.1)).toEqual({ ground: false, infantry: false, air: false });
+    expect(idle.update(ADVISOR.idleS + 0.1)).toEqual({ ground: true, infantry: false, air: true });
     // busy again: the clock restarts
     const pad = [...w.buildings.values()].find((b) => b.kind === "airpad")!;
     pad.queue.push({ kind: "wasp", remaining: 50 });
@@ -437,5 +472,223 @@ describe("build advisor", () => {
     w.factions.blue.scrap = UNITS.stinger.cost - 1;
     expect(idle.update(100).ground).toBe(false);
     expect(ECONOMY.maxQueue).toBeGreaterThan(0);
+  });
+
+  it("nudges an idle Assembly Bay on the Infantry tab (Troopers are cheap)", () => {
+    const w = scene();
+    spawnBuilding(w, "assembly-bay", "blue", 12, 4);
+    const idle = new IdleWatch(w, "blue");
+    w.factions.blue.scrap = UNITS.trooper.cost;
+    idle.update(0);
+    const now = idle.update(ADVISOR.idleS + 0.1);
+    expect(now.infantry).toBe(true);
+    expect(now.ground).toBe(false); // (a Stinger costs more than we have)
+  });
+
+  it("answers infantry with Mortars, Hornets, Stingers, a Turret and Snipers; Titans with Rocket Squads", () => {
+    const w = scene();
+    const intel = new EnemyIntel(w, "blue");
+    spawnUnit(w, "trooper", "red", 8, 9);
+    spawnUnit(w, "trooper", "red", 9, 9);
+    tickFog(w);
+    intel.update(0);
+    for (const k of ["mortar", "hornet", "stinger", "turret", "sniper"] as const)
+      expect(counterAdvice(w, "blue", intel, k, 0).active, k).toBe(true);
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(false);
+    expect(adviceNote(counterAdvice(w, "blue", intel, "sniper", 0))).toBe("Counters Trooper Squads (seen ×2)");
+    spawnUnit(w, "titan", "red", 8, 10);
+    spawnUnit(w, "titan", "red", 9, 10);
+    tickFog(w);
+    intel.update(1);
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 1).active).toBe(true);
+  });
+
+  it("never counts a Sniper Team hidden in the woods it can't see", () => {
+    const w = scene();
+    const intel = new EnemyIntel(w, "blue");
+    // in sight of a Scout of ours, in woods, beyond the concealment radius of anything of ours
+    spawnUnit(w, "scout", "blue", 10, 14);
+    setTerrain(w, 15, 11, Terrain.Forest);
+    const s = spawnUnit(w, "sniper", "red", 15.5, 11.5);
+    s.firedTick = -1000;
+    w.tick = 100;
+    tickFog(w);
+    expect(isVisible(w, "blue", 15, 11)).toBe(true);
+    intel.update(0);
+    expect(intel.count("sniper", 0)).toBe(0);
+    // it fires: the muzzle flash gives it away
+    s.firedTick = w.tick;
+    intel.update(1);
+    expect(intel.count("sniper", 1)).toBe(1);
+  });
+});
+
+describe("Condor: boarding and drops from taps", () => {
+  /** Blue Condor at (10, 10) with two Trooper Squads and a Rocket Squad near it, a Stinger alongside. */
+  function bay() {
+    const w = field();
+    const c = new Controller(w);
+    const condor = spawnUnit(w, "condor", "blue", 10, 10);
+    const t1 = spawnUnit(w, "trooper", "blue", 13, 10);
+    const t2 = spawnUnit(w, "trooper", "blue", 12, 10);
+    const rk = spawnUnit(w, "rocket-squad", "blue", 16, 10);
+    const tank = spawnUnit(w, "stinger", "blue", 12, 12);
+    return { w, c, condor, t1, t2, rk, tank };
+  }
+  /** Put squads straight into the Condor's hold (as the sim does on embark). */
+  const embark = (w: World, condor: Unit, ...us: Unit[]) => {
+    for (const u of us) {
+      w.units.delete(u.id);
+      condor.passengers!.push(u);
+    }
+  };
+
+  it("squads selected + tap an own Condor: they board it, nearest first, as many as it seats", () => {
+    const { w, c, condor, t1, t2, rk, tank } = bay();
+    c.selectUnits([t1.id, t2.id, rk.id, tank.id]);
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
+    expect(c.drainCommands()).toEqual([{ type: "board", faction: "blue", unitIds: [t2.id, t1.id], carrierId: condor.id }]);
+    expect(c.lastFeedback?.kind).toBe("board");
+    expect(c.tip).toMatch(/Room for 2/);
+    // the selection stays as it was until they climb in; then the Condor takes their place
+    expect(c.selectedUnits.size).toBe(4);
+    embark(w, condor, t1, t2);
+    c.prune();
+    expect([...c.selectedUnits]).toEqual([rk.id, tank.id, condor.id]);
+  });
+
+  it("a flying Condor stops to come and meet them; seats already promised count", () => {
+    const { c, condor, t1, t2, rk } = bay();
+    condor.order = { type: "move", x: 30, y: 30 };
+    rk.order = { type: "board", carrierId: condor.id, ticks: 0 }; // already on its way
+    c.selectUnits([t1.id, t2.id]);
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
+    expect(c.drainCommands()).toEqual([
+      { type: "board", faction: "blue", unitIds: [t2.id], carrierId: condor.id },
+      { type: "stop", faction: "blue", unitIds: [condor.id] }
+    ]);
+  });
+
+  it("Condor selected + tap an own squad: it boards the nearest selected Condor with a seat", () => {
+    const { w, c, condor, t1, t2 } = bay();
+    const far = spawnUnit(w, "condor", "blue", 30, 10);
+    c.selectUnits([far.id, condor.id]);
+    c.tapWorld(13, 10, { kind: "ownUnit", id: t1.id });
+    expect(c.drainCommands()).toEqual([{ type: "board", faction: "blue", unitIds: [t1.id], carrierId: condor.id }]);
+    expect([...c.selectedUnits]).toEqual([far.id, condor.id]); // still selected: tap the next squad
+    // that Condor full: the next squad goes to the other one
+    embark(w, condor, t2, spawnUnit(w, "sniper", "blue", 11, 11));
+    c.tapWorld(13, 10, { kind: "ownUnit", id: t1.id });
+    expect(c.drainCommands()).toEqual([{ type: "board", faction: "blue", unitIds: [t1.id], carrierId: far.id }]);
+  });
+
+  it("a full Condor is selected instead, with a note", () => {
+    const { w, c, condor, t1, t2, rk } = bay();
+    embark(w, condor, t2, rk);
+    c.selectUnits([t1.id]);
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
+    expect(c.drainCommands()).toEqual([]);
+    expect([...c.selectedUnits]).toEqual([condor.id]);
+    expect(c.tip).toMatch(/full/);
+    // …and with only full Condors selected, tapping a squad just selects it
+    c.tapWorld(13, 10, { kind: "ownUnit", id: t1.id });
+    expect(c.drainCommands()).toEqual([]);
+    expect([...c.selectedUnits]).toEqual([t1.id]);
+  });
+
+  it("ordinary selection taps are untouched: squad → squad, Condor alone → Condor, Shift toggles", () => {
+    const { c, condor, t1, t2, tank } = bay();
+    c.tapWorld(13, 10, { kind: "ownUnit", id: t1.id });
+    c.tapWorld(12, 10, { kind: "ownUnit", id: t2.id });
+    expect([...c.selectedUnits]).toEqual([t2.id]);
+    c.tapWorld(12, 12, { kind: "ownUnit", id: tank.id });
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
+    expect([...c.selectedUnits]).toEqual([condor.id]);
+    c.selectUnits([t1.id]);
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id }, true); // Shift: add it, don't board
+    expect([...c.selectedUnits]).toEqual([t1.id, condor.id]);
+    expect(c.drainCommands()).toEqual([]);
+  });
+
+  it("the Unload chip drops where the Condors are; a long-press flies them there and drops", () => {
+    const { w, c, condor, t1, t2, tank } = bay();
+    const empty = spawnUnit(w, "condor", "blue", 20, 20);
+    c.selectUnits([condor.id, empty.id, tank.id]);
+    expect(c.aboardSelected()).toBe(0);
+    expect(c.unloadSelected()).toBe(false);
+    expect(c.dropAt(25, 25)).toBe(false); // nothing aboard: the long-press is an ordinary box
+    embark(w, condor, t1, t2);
+    expect(c.aboardSelected()).toBe(2);
+    expect(c.unloadSelected()).toBe(true);
+    expect(c.drainCommands()).toEqual([{ type: "unload", faction: "blue", unitIds: [condor.id] }]);
+    expect(c.lastFeedback).toEqual({ kind: "drop", x: condor.x, y: condor.y });
+    expect(c.dropAt(25.5, 24.5)).toBe(true);
+    expect(c.drainCommands()).toEqual([
+      { type: "unload", faction: "blue", unitIds: [condor.id], x: 25.5, y: 24.5 },
+      // the rest of the selection goes along
+      { type: "attackMove", faction: "blue", unitIds: [empty.id, tank.id], x: 25.5, y: 24.5 }
+    ]);
+    expect(c.lastFeedback).toEqual({ kind: "drop", x: 25.5, y: 24.5 });
+    // an ordinary tap on the ground still just moves
+    c.tapWorld(30.5, 30.5, { kind: "ground" });
+    expect(c.drainCommands()).toEqual([{ type: "attackMove", faction: "blue", unitIds: [condor.id, empty.id, tank.id], x: 30.5, y: 30.5 }]);
+  });
+
+  it("an Assembly Bay takes a rally point like any factory", () => {
+    const { w, c } = bay();
+    const ab = spawnBuilding(w, "assembly-bay", "blue", 9, 4);
+    c.tapWorld(9.5, 4.5, { kind: "ownBuilding", id: ab.id });
+    expect(c.selectedBuilding).toBe(ab.id);
+    c.tapWorld(14.5, 8.5, { kind: "ground" });
+    expect(c.drainCommands()).toEqual([{ type: "rally", faction: "blue", buildingId: ab.id, x: 14.5, y: 8.5 }]);
+  });
+
+  it("spectators can't load or drop", () => {
+    const { w, c, condor, t1, t2 } = bay();
+    c.spectator = true;
+    c.selectUnits([t1.id]);
+    c.tapWorld(10, 10, { kind: "ownUnit", id: condor.id });
+    expect([...c.selectedUnits]).toEqual([condor.id]); // inspection only
+    embark(w, condor, t1, t2);
+    expect(c.unloadSelected()).toBe(false);
+    expect(c.dropAt(20, 20)).toBe(false);
+    expect(c.drainCommands()).toEqual([]);
+  });
+
+  it("squad chips keep members riding in a Condor; selecting the squad selects the Condor", () => {
+    const { w, c, condor, t1, t2, tank } = bay();
+    c.selectUnits([t1.id, t2.id, tank.id]);
+    c.assignSquad(0);
+    embark(w, condor, t1, t2);
+    c.prune(); // the selection swaps the passengers for their Condor…
+    expect([...c.selectedUnits]).toEqual([tank.id, condor.id]);
+    expect(c.squads.slots[0]).toEqual([t1.id, t2.id, tank.id]); // …the squad keeps them
+    const sum = c.squads.summary(0, w)!;
+    expect(sum.count).toBe(3);
+    expect(sum.kind).toBe("trooper");
+    expect(c.selectSquad(0)).toBe(2);
+    expect([...c.selectedUnits]).toEqual([condor.id, tank.id]);
+    expect(c.squads.matches(0, c.selectedUnits, w)).toBe(true);
+    expect(c.squads.focus(0, w)).not.toBeNull();
+    // dropped again: back on the field, back in the selection
+    condor.passengers = [];
+    w.units.set(t1.id, t1);
+    w.units.set(t2.id, t2);
+    expect(c.squads.ids(0, w)).toEqual([t1.id, t2.id, tank.id]);
+    // shot down over water with them aboard: gone from the squad
+    embark(w, condor, t1);
+    w.units.delete(condor.id);
+    c.prune();
+    expect(c.squads.slots[0]).toEqual([t2.id, tank.id]);
+  });
+
+  it("a squad saved with its Condor selects that Condor once when its riders are aboard", () => {
+    const { w, c, condor, t1 } = bay();
+    c.selectUnits([t1.id, condor.id]);
+    c.assignSquad(0);
+    embark(w, condor, t1);
+    expect(c.squads.ids(0, w)).toEqual([condor.id]);
+    expect(c.selectSquad(0)).toBe(1);
+    expect(c.squads.matches(0, c.selectedUnits, w)).toBe(true); // (the chip lights up)
   });
 });

@@ -65,28 +65,43 @@
       .weapon { font-size: 13px; color: var(--dim); }
       .weapon b { color: var(--text); font-weight: 600; }
       footer { margin-top: 40px; color: var(--dim); font-size: 13px; }
+      .dmgwrap { overflow-x: auto; }
+      table.dmg { border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; min-width: 520px; width: 100%; }
+      table.dmg th, table.dmg td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: center; }
+      table.dmg thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+      table.dmg tbody th { text-align: left; text-transform: capitalize; }
+      table.dmg tbody th small { display: block; font-weight: 400; color: var(--dim); font-size: 11px; text-transform: none; }
+      table.dmg td.hi { color: var(--green); font-weight: 700; }
+      table.dmg td.lo { color: var(--red); }
       @media (max-width: 480px) {
         .head img { width: 64px; height: 64px; }
         .matchups { grid-template-columns: 1fr; }
+        /* every armour column on screen at once, infantry included */
+        table.dmg { min-width: 0; font-size: 12px; }
+        table.dmg th, table.dmg td { padding: 6px 3px; }
+        table.dmg thead th { font-size: 9px; letter-spacing: 0.02em; }
+        table.dmg tbody th small { font-size: 10px; }
       }
     </style>
-    <script type="module" crossorigin src="./assets/vehicles-CGIzMI9K.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/advisor-Bh_qsbwR.js">
+    <script type="module" crossorigin src="./assets/vehicles-DRTe9G6O.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/advisor-CkJcjrFA.js">
   <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
   <body>
     <main>
       <header>
         <h1>Battle Drones — Vehicles</h1>
         <p>
-          Every unit you can field, what it does and what it's good against. Stats are read live from the
-          game's balance tables. <a href="./">Back to the game</a>
+          Every unit you can field — vehicles, robot infantry and aircraft — what it does and what it's good
+          against. Stats are read live from the game's balance tables. <a href="./">Back to the game</a>
         </p>
         <nav id="nav"></nav>
       </header>
       <div id="units"></div>
+      <h2 class="group">Damage vs armour</h2>
+      <div class="dmgwrap" id="damage"></div>
       <footer>
         Damage is per second against a matching armour class; ranks add +15% damage each and rank 3 self-repairs.
-        Ground units in woods take 30% less damage.
+        Ground units in woods take 30% less damage; infantry squads in woods take half.
       </footer>
     </main>
   </body>

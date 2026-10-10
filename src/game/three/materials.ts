@@ -177,12 +177,20 @@ const VARIANTS: Record<Variant, VariantSpec> = {
   ghostBad: { tint: 0xff9090, flash: 0.45, flashColor: 0xe25555, glow: 1, sheen: 0.5, sheenColor: 0xff9a8a, ghost: true }
 };
 
+// trees: a per-instance `canopy` (0–1) dissolves the tree above a stump of its trunk (tree space, see canopyMat)
+const CANOPY_VERT_DECL = `\nattribute float canopy;\nvarying float vCanopy;\nvarying float vTreeY;`;
+const CANOPY_VERT = `\nvCanopy = canopy;\nvTreeY = position.y;`;
+const CANOPY_FRAG_DECL = `\nvarying float vCanopy;\nvarying float vTreeY;`;
+const CANOPY_FRAG = `
+          diffuseColor.a *= 1.0 - vCanopy * smoothstep( 0.12, 0.2, vTreeY );
+          if ( diffuseColor.a < 0.02 ) discard;`;
+
 /** The elite shimmer's strength (animated by the entity renderer, 0.04–0.16). */
 export const eliteUniform = { value: 0.12 };
 /** …scaled up into the elite sheen's colour. */
 const ELITE_SHEEN = 6;
 
-function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMaterial {
+function modelMaterial(v: VariantSpec, elite: boolean, canopy = false): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({
     vertexColors: true,
     flatShading: true,
@@ -193,6 +201,8 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
     opacity: v.ghost ? 0.6 : 1,
     depthWrite: !v.ghost
   });
+  // (alpha to coverage: with MSAA the canopy fades in steps with no sorting; without, it's cut at half)
+  m.alphaToCoverage = canopy;
   const uniforms = {
     uTint: { value: new THREE.Color(v.tint) },
     uFlash: { value: v.flash },
@@ -205,24 +215,24 @@ function modelMaterial(v: VariantSpec, elite: boolean): THREE.MeshStandardMateri
     uSheenColor: { value: new THREE.Color(v.sheenColor ?? 0xffffff).multiplyScalar(elite ? ELITE_SHEEN : 1) }
   };
   return fogged(m, {
-    key: `model${v.ghost ? "g" : ""}`,
+    key: `model${v.ghost ? "g" : ""}${canopy ? "c" : ""}`,
     also: (s) => {
       Object.assign(s.uniforms, uniforms);
       s.vertexShader = s.vertexShader
-        .replace("#include <common>", "#include <common>\nattribute float glow;\nvarying float vGlow;")
-        .replace("#include <color_vertex>", "#include <color_vertex>\nvGlow = glow;");
+        .replace("#include <common>", `#include <common>\nattribute float glow;\nvarying float vGlow;${canopy ? CANOPY_VERT_DECL : ""}`)
+        .replace("#include <color_vertex>", `#include <color_vertex>\nvGlow = glow;${canopy ? CANOPY_VERT : ""}`);
       s.fragmentShader = s.fragmentShader
         .replace(
           "#include <common>",
           `#include <common>
-          varying float vGlow;
+          varying float vGlow;${canopy ? CANOPY_FRAG_DECL : ""}
           uniform vec3 uTint; uniform float uFlash; uniform vec3 uFlashColor; uniform float uGlowK; uniform float uBleach;
           uniform float uFlashLit; uniform float uDesat; uniform float uSheen; uniform vec3 uSheenColor;`
         )
         // lamps light themselves: less lit diffuse, more emission, so they stay saturated under tone mapping
         .replace(
           "#include <color_fragment>",
-          `#include <color_fragment>
+          `#include <color_fragment>${canopy ? CANOPY_FRAG : ""}
           diffuseColor.rgb = mix( diffuseColor.rgb, vec3( dot( diffuseColor.rgb, vec3( 0.3, 0.59, 0.11 ) ) ), uDesat ) * uTint;
           vec3 glowBase = diffuseColor.rgb;
           diffuseColor.rgb *= 1.0 - min( 1.0, vGlow * uGlowK ) * 0.8;`
@@ -256,6 +266,18 @@ export function modelMat(v: Variant = "normal"): THREE.MeshStandardMaterial {
     modelMats = out;
   }
   return modelMats[v];
+}
+
+let canopyMat_: THREE.MeshStandardMaterial | null = null;
+
+/**
+ * The trees' material: the plain model material, plus an instanced `canopy`
+ * attribute (0–1) that thins the tree away above a stump of its trunk — so
+ * robots in the woods aren't lost under it (terrain.ts thins the trees
+ * around squads on show).
+ */
+export function canopyMat(): THREE.MeshStandardMaterial {
+  return (canopyMat_ ??= modelMaterial(VARIANTS.normal, false, true));
 }
 
 /** Swap every swappable mesh under `root` to a material variant. */
