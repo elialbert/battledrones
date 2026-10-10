@@ -77,6 +77,8 @@ interface BiomeLook {
   deep: number;
   /** The open sea past the coastal shelf (Terrain.Deep); default: `deep` darkened. */
   abyss?: number;
+  /** The world past the map's edge is open sea (the skirt eases into `abyss`), not the biome's ground. */
+  farSea?: boolean;
   /** 0 water, 1 lava, 2 icy sea. */
   liquid: number;
   rock: number;
@@ -129,7 +131,7 @@ const LOOK: Record<Biome, BiomeLook> = {
   },
   // turquoise lagoons over coral sand, falling away past the reef into sapphire open sea
   tropical: {
-    shallow: 0x46e0d2, deep: 0x0b6f86, abyss: 0x062a48, liquid: 0, rock: 0xb4b0a2, bridge: 0x8a735a, steel: false,
+    shallow: 0x46e0d2, deep: 0x0b6f86, abyss: 0x062a48, farSea: true, liquid: 0, rock: 0xb4b0a2, bridge: 0x8a735a, steel: false,
     detail: [0.2, 2.8, 0.6],
     stone: { wall: 4.5, crag: 3.5, contrast: 1.4, lift: 1.2, foot: 0.5, rough: 0.85 }
   }
@@ -383,7 +385,7 @@ export class Terrain3D {
     const uniforms: GroundUniforms = {
       ...this.edge,
       uDetail: { value: new THREE.Vector3(...L.detail) },
-      uFarGround: { value: this.openGround(painted) }
+      uFarGround: { value: this.look.farSea ? new THREE.Color(this.look.abyss ?? this.look.deep) : this.openGround(painted) }
     };
     const walls = this.stone?.walls ?? null;
     const groundMat = <T extends THREE.Material>(m: T) =>

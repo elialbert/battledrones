@@ -284,6 +284,11 @@ export function patchLiquid(s: Shader, u: LiquidUniforms): void {
         // past the coastal shelf the open sea falls away into the abyss colour (rivers never get this deep)
         wc = mix( wc, uAbyss * ( 0.9 + 0.2 * n ), smoothstep( 0.5, 1.12, vDepth ) );
         alpha = mix( 0.2, 0.9, dk );
+        // the reef crest: surf breaking where the shelf drops into the open sea (only open sea gets this deep)
+        float crest = ( 1.0 - smoothstep( 0.0, 0.07, abs( vDepth - 0.58 ) ) ) * ( 0.55 + 0.45 * sin( uWT * 0.9 + n * 8.0 ) )
+          * smoothstep( 0.3, 0.62, n2 );
+        wc = mix( wc, vec3( 0.95, 0.99, 0.98 ), crest * 0.7 );
+        alpha = max( alpha, crest * 0.75 );
         float lap = 0.045 + 0.02 * sin( uWT * 1.4 + n * 10.0 );
         float foam = ( 1.0 - smoothstep( 0.0, lap, vDepth ) ) * ( 0.55 + 0.45 * n );
         float line = ( 1.0 - smoothstep( 0.0, 0.03, abs( vDepth - lap - 0.045 ) ) ) * smoothstep( 0.45, 0.65, n2 );
