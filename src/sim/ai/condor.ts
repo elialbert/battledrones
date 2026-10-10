@@ -2,7 +2,7 @@ import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
 import { nearestScrapTile } from "../economy";
 import { knownBuildings } from "../fog";
 import { isInfantry } from "../infantry";
-import { bannedBy } from "../rules";
+import { bannedBy, infantryArmy, rulesOf } from "../rules";
 import { dropPoint, isLoaded } from "../transport";
 import type { Command, Faction, Unit, World } from "../types";
 import { dist } from "../world";
@@ -22,8 +22,10 @@ import { AA_COVER, aaSources, aaStrengthAt, aaWeight, seenEnemies, type Sighting
  */
 
 export const CONDOR_AI = {
-  /** No drop boards before this (s): the opening settles first. */
+  /** No drop boards before this (s): the opening settles first… */
   from: 150,
+  /** …except under Airborne, whose Condor and squads wait at home from the start: the first drop may board this early (s). */
+  airborneFrom: 60,
   /** Seconds from one drop landing (or being called off) to the next boarding. */
   every: 45,
   /** A boarding not finished in this long (s) goes with whoever is aboard, or is called off. */
@@ -97,13 +99,16 @@ function memo(s: AiState): Memo {
 }
 
 /**
- * Does this commander fly Condor drops at all? Rush and Balanced do; never
- * on Easy, in Last Stand, under rules that ban infantry or the Condor, or
- * for a commander told never to raid (an op's dug-in defender).
+ * Does this commander fly Condor drops at all? Rush and Balanced do, and
+ * under Infantry War or Airborne every personality does (the Condor is the
+ * only raider, or there is one parked at home from the start); never on
+ * Easy, in Last Stand, under rules that ban infantry or the Condor, or for a
+ * commander told never to raid (an op's dug-in defender).
  */
 export function dropsCondors(w: World, faction: Faction, s: AiState): boolean {
   if (s.difficulty === "easy" || w.survival || !Number.isFinite(s.strategy.harassGroup)) return false;
-  if (s.strategy.name !== "rush" && s.strategy.name !== "balanced") return false;
+  const everyone = infantryArmy(w, faction) || rulesOf(w).startUnits.includes("condor");
+  if (s.strategy.name !== "rush" && s.strategy.name !== "balanced" && !everyone) return false;
   return bannedBy(w, "condor", faction) === null && bannedBy(w, "trooper", faction) === null;
 }
 
@@ -233,7 +238,8 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
         break;
       }
       goHome();
-      if (ctx.threatened || w.tick < CONDOR_AI.from * tps || w.tick - m.lastDrop < CONDOR_AI.every * tps) break;
+      const from = rulesOf(w).startUnits.includes("condor") ? CONDOR_AI.airborneFrom : CONDOR_AI.from;
+      if (ctx.threatened || w.tick < from * tps || w.tick - m.lastDrop < CONDOR_AI.every * tps) break;
       if (condor.order.type !== "idle") break;
       const picks = ctx.army
         .filter(

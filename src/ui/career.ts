@@ -1,7 +1,7 @@
 import { DIFFICULTY, STRATEGIES, type Difficulty } from "../sim/ai/commander";
 import { AWARDS, MEDALS, MEDAL_IDS, type MedalId } from "../sim/awards";
 import { MAPS } from "../sim/maps";
-import { MUTATORS, MUTATOR_IDS, bannedBy, rulesOf, type MutatorId } from "../sim/rules";
+import { MUTATORS, MUTATOR_IDS, bannedBy, rulesOf, toggleMutator, type MutatorId } from "../sim/rules";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { mapAssetBase } from "../game/assets";
@@ -215,11 +215,7 @@ export function showMutatorSheet(host: HTMLElement, onDone: () => void): void {
     });
   wrap.querySelectorAll<HTMLElement>(".mutchip").forEach((el) =>
     el.addEventListener("click", () => {
-      const id = el.dataset.id as MutatorId;
-      const set = new Set(gameMode.mutators);
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
-      gameMode.mutators = MUTATOR_IDS.filter((m) => set.has(m));
+      gameMode.mutators = toggleMutator(gameMode.mutators, el.dataset.id as MutatorId);
       sfx.play("click", 0.5);
       refresh();
       onDone();

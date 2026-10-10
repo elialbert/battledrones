@@ -11,7 +11,16 @@ import type { BuildingKind, Faction, Unit, UnitKind, World } from "./types";
  * sides: the AI obeys them through the same blockers and multipliers.
  */
 
-export type MutatorId = "blitz" | "goldrush" | "glass" | "rapidfab" | "airwar" | "veterans" | "clearskies";
+export type MutatorId =
+  | "blitz"
+  | "goldrush"
+  | "glass"
+  | "rapidfab"
+  | "airwar"
+  | "infantrywar"
+  | "airborne"
+  | "veterans"
+  | "clearskies";
 
 export interface Rules {
   /** Scrap each side starts with. */
@@ -31,6 +40,8 @@ export interface Rules {
   fogOff: boolean;
   /** Veterancy rank that produced combat units start at. */
   startRank: number;
+  /** Units each side starts with beside its HQ, on top of the classic harvester and Trooper Squad. */
+  startUnits: UnitKind[];
   /** The mutators these rules came from, in canonical order (display, career). */
   mutators: MutatorId[];
   /** Ops: bans for one side only (e.g. "air only" for the player), on top of the shared ones. */
@@ -55,6 +66,7 @@ export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({
   bannedBuildings: [],
   fogOff: false,
   startRank: 0,
+  startUnits: [],
   mutators: []
 });
 
@@ -80,6 +92,20 @@ export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "
  * would fly it into the fight.
  */
 export const NO_GROUND_COMBAT: UnitKind[] = [...GROUND_COMBAT, "condor"];
+
+/** Robot infantry: the squads an Assembly Bay builds. */
+export const INFANTRY_SQUADS: UnitKind[] = ["trooper", "rocket-squad", "sniper"];
+
+/**
+ * What Infantry War bans: every combat vehicle and combat aircraft. Harvesters,
+ * Scouts, Menders and the Condor stay (none of them fights).
+ */
+export const NO_VEHICLES: UnitKind[] = [
+  ...GROUND_COMBAT.filter((k) => !INFANTRY_SQUADS.includes(k)),
+  "wasp",
+  "raptor",
+  "hornet"
+];
 
 export const MUTATORS: Record<MutatorId, MutatorDef> = {
   blitz: {
@@ -120,10 +146,37 @@ export const MUTATORS: Record<MutatorId, MutatorDef> = {
     // so no Condor either: NO_GROUND_COMBAT)
     desc: "No ground combat units, Condors, Fab Plants, Assembly Bays or SAM sites: dogfights decide it",
     bansUnits: NO_GROUND_COMBAT,
+    conflicts: ["infantrywar", "airborne"],
     bansBuildings: ["fab-plant", "assembly-bay", "sam-site"],
     apply: (r) => {
       r.bannedUnits.push(...NO_GROUND_COMBAT);
       r.bannedBuildings.push("fab-plant", "assembly-bay", "sam-site");
+    }
+  },
+  infantrywar: {
+    id: "infantrywar",
+    name: "Infantry War",
+    icon: "🤖",
+    // the Airpad stays for Condors, Scouts and Menders; Turrets and SAM sites stay too
+    // (Rocket Squads crack them, and SAMs are the answer to Condor drops)
+    desc: "Robot infantry only: no combat vehicles, combat aircraft or Fab Plants",
+    bansUnits: NO_VEHICLES,
+    bansBuildings: ["fab-plant"],
+    conflicts: ["airwar"],
+    apply: (r) => {
+      r.bannedUnits.push(...NO_VEHICLES);
+      r.bannedBuildings.push("fab-plant");
+    }
+  },
+  airborne: {
+    id: "airborne",
+    name: "Airborne",
+    icon: "🪂",
+    // the classic start already has the Trooper Squad: this adds the other two and a ride
+    desc: "Both sides start with a Condor dropship and one of each infantry squad",
+    conflicts: ["airwar"],
+    apply: (r) => {
+      for (const k of ["condor", "rocket-squad", "sniper"] as const) if (!r.startUnits.includes(k)) r.startUnits.push(k);
     }
   },
   veterans: {
@@ -153,11 +206,23 @@ export function mutatorsCompatible(ids: readonly MutatorId[]): boolean {
   return true;
 }
 
-/** Rules for a set of mutators (deduplicated, unknown ids ignored). */
+/**
+ * The picker's toggle: `id` off if it is on, else on — switching off any
+ * mutator it can't run with (Air War and the infantry ones). Canonical order.
+ */
+export function toggleMutator(on: readonly MutatorId[], id: MutatorId): MutatorId[] {
+  const keep = on.includes(id) ? on.filter((m) => m !== id) : [...on.filter((m) => mutatorsCompatible([id, m])), id];
+  return MUTATOR_IDS.filter((m) => keep.includes(m));
+}
+
+/**
+ * Rules for a set of mutators (deduplicated, unknown ids ignored; of two that
+ * conflict, the first in canonical order wins and the other is left out).
+ */
 export function makeRules(ids: readonly MutatorId[]): Rules {
-  const r: Rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], mutators: [] };
+  const r: Rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], startUnits: [], mutators: [] };
   for (const id of MUTATOR_IDS)
-    if (ids.includes(id)) {
+    if (ids.includes(id) && !r.mutators.some((m) => MUTATORS[m].conflicts?.includes(id))) {
       MUTATORS[id].apply(r);
       r.mutators.push(id);
     }
@@ -207,11 +272,24 @@ export function applySpawnRank(w: World, u: Unit): void {
 }
 
 /**
+ * Is robot infantry this side's whole army? No Fab Plant and no combat
+ * aircraft, but an Assembly Bay (Infantry War, or an op's bans to match):
+ * the AI then builds Bays where its plan says Fab Plant (ai/commander.ts).
+ */
+export function infantryArmy(w: World, f: Faction): boolean {
+  return bannedBy(w, "fab-plant", f) !== null && bannedBy(w, "wasp", f) !== null && bannedBy(w, "assembly-bay", f) === null;
+}
+
+/**
  * Can an AI personality play its plan under these rules? (An air-only
- * commander needs an Airpad; tank and ground-raid plans need the Fab Plant.)
+ * commander needs an Airpad and aircraft to build there; a tank plan needs
+ * the Fab Plant; a ground-raid plan needs it too, or under Infantry War an
+ * Assembly Bay to field its early army instead. Measured: Ironclad, playing
+ * Infantry War from Bays, won 20% of 100 AI-vs-AI games; Rush 40%.)
  */
 export function strategyFits(s: Strategy, r: Readonly<Rules>): boolean {
-  if (s.airOnly && r.bannedBuildings.includes("airpad")) return false;
-  if ((s.heavy || s.groundRaids) && r.bannedBuildings.includes("fab-plant")) return false;
+  if (s.airOnly && (r.bannedBuildings.includes("airpad") || r.bannedUnits.includes("wasp"))) return false;
+  if (s.heavy && r.bannedBuildings.includes("fab-plant")) return false;
+  if (s.groundRaids && r.bannedBuildings.includes("fab-plant") && r.bannedBuildings.includes("assembly-bay")) return false;
   return true;
 }

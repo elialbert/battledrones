@@ -6,7 +6,7 @@ import { isInfantry } from "../infantry";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
-import { bannedBy } from "../rules";
+import { bannedBy, infantryArmy } from "../rules";
 import { planSalvage } from "./salvage";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
@@ -402,7 +402,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       kind = "scout";
       s.lastScoutTick = w.tick;
     }
-    else if (have("raptor") < wantRaptors) kind = "raptor";
+    else if (have("raptor") < wantRaptors && !unitBlocker(w, faction, "raptor")) kind = "raptor"; // (Infantry War: no fighters)
     else if (wantCondor(w, faction, s, have("condor"), count("trooper") + count("rocket-squad"))) kind = "condor";
     else if (have("mender") < Math.min(3, Math.floor(armySize / 6)) || (have("mender") < 1 && army.some(isWoundedVeteran)))
       kind = "mender";
@@ -415,17 +415,25 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
   // Rockets for armour (and Ironclad's Titan escorts), Snipers for enemy squads
-  // (never on Easy), and the personality's share of Troopers
+  // (never on Easy), and the personality's share of Troopers. Under Infantry
+  // War the Bays field the whole army: Rockets for the defences, more Snipers.
+  const infantryWar = infantryArmy(w, faction);
+  const infantryShare = infantryWar ? 1 : s.strategy.infantry ?? 0;
   const infantryValue = INFANTRY_KINDS.reduce((v, k) => v + have(k) * UNITS[k].cost, 0);
   for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
     if (bay.queue.length >= depth) continue;
     const r = rand(s);
-    const wantRockets = Math.max(Math.round(have("titan") * (s.strategy.escorts ?? 0)), Math.round(s.seenHeavy * 0.8));
-    const wantSnipers = s.difficulty === "easy" || !tech ? 0 : Math.min(3, Math.floor(s.seenInfantry / 3));
+    const wantRockets = Math.max(
+      Math.round(have("titan") * (s.strategy.escorts ?? 0)),
+      Math.round(s.seenHeavy * 0.8),
+      infantryWar ? Math.min(6, enemyDefenses) : 0
+    );
+    const wantSnipers =
+      s.difficulty === "easy" || !tech ? 0 : Math.min(infantryWar ? 5 : 3, Math.floor(s.seenInfantry / 3));
     let kind: UnitKind;
     if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
     else if (have("sniper") < wantSnipers) kind = "sniper";
-    else if (infantryValue < (s.strategy.infantry ?? 0) * Math.max(500, armyValue))
+    else if (infantryValue < infantryShare * Math.max(500, armyValue))
       kind = ownAA < Math.ceil(s.seenAir * 0.6) || r < 0.2 ? "rocket-squad" : "trooper";
     else continue;
     produce(bay, kind);
@@ -439,7 +447,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     }
 
   // --- expand production when scrap piles up despite full queues ---------
-  const producers = myBuildings.filter((b) => b.kind === "fab-plant" || b.kind === "airpad");
+  // (Infantry War: the Bays are the factories; the Airpad only makes Condors, Scouts and Menders)
+  const producers = myBuildings.filter((b) =>
+    infantryWar ? b.kind === "assembly-bay" : b.kind === "fab-plant" || b.kind === "airpad"
+  );
   if (
     f.scrap > 1000 &&
     !f.pending &&
@@ -594,7 +605,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     );
     const stagedValue = value(staged);
     // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
-    const launchAt = bannedBy(w, "fab-plant", faction) !== null ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
+    const airWar = bannedBy(w, "fab-plant", faction) !== null && !infantryWar;
+    const launchAt = airWar ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
 
     if (stagedValue >= launchAt) {
       const target = pickPriorityTarget(w, faction, seen, enemyHqPos);
@@ -799,7 +811,9 @@ function observeEnemy(s: AiState, seen: Unit[]): void {
 function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: AiState): BuildingKind | null {
   const have = new Map<BuildingKind, number>();
   for (const b of myBuildings) have.set(b.kind, (have.get(b.kind) ?? 0) + 1);
-  const order = [...s.strategy.buildOrder];
+  // Infantry War: an Assembly Bay wherever the plan says Fab Plant
+  const infantryWar = infantryArmy(w, faction);
+  const order = s.strategy.buildOrder.map((k): BuildingKind => (infantryWar && k === "fab-plant" ? "assembly-bay" : k));
   // Last Stand: static defences earn their keep against endless waves
   if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
@@ -812,7 +826,7 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   for (let i = 0; i < s.extraProduction; i++) {
     const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
-    order.push(air ? "airpad" : "fab-plant");
+    order.push(infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant");
   }
   const wanted = new Map<BuildingKind, number>();
   let depotsSkipped = 0;
