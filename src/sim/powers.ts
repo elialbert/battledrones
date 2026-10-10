@@ -235,9 +235,12 @@ function landEmp(w: World, c: Calldown): void {
   impact(w, c, c.x, c.y, ids.length);
 }
 
-/** Air stand-ins for pod crew a match rule bans (e.g. the Air War mutator). */
-const POD_SUBSTITUTE: Partial<Record<UnitKind, UnitKind>> = {
-  stinger: "wasp", lancer: "wasp", "flak-crawler": "raptor"
+/**
+ * Stand-ins for pod crew a match rule bans, first allowed one wins: aircraft
+ * under the Air War mutator, robot infantry under Infantry War.
+ */
+const POD_SUBSTITUTE: Partial<Record<UnitKind, UnitKind[]>> = {
+  stinger: ["wasp", "trooper"], lancer: ["wasp", "rocket-squad"], "flak-crawler": ["raptor", "rocket-squad"]
 };
 
 /**
@@ -251,8 +254,8 @@ export function podCrew(w: World, faction: Faction): UnitKind[] {
   for (const kind of base) {
     if (!bannedBy(w, kind, faction)) out.push(kind);
     else {
-      const alt = POD_SUBSTITUTE[kind];
-      if (alt && !bannedBy(w, alt, faction)) out.push(alt);
+      const alt = POD_SUBSTITUTE[kind]?.find((k) => !bannedBy(w, k, faction));
+      if (alt) out.push(alt);
     }
   }
   return out;

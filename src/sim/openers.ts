@@ -194,6 +194,27 @@ export function applyOpener(w: World, faction: Faction, id: OpenerId): AppliedOp
   return out;
 }
 
+/**
+ * Extra starting units (the Airborne mutator's Condor and squads), parked
+ * round the side's starting Trooper Squad at `near` (world coords) on the
+ * HQ's flank, facing the map centre: squads on the open tiles beside it, the
+ * Condor two tiles up the flank (toward the enemy's edge of the map) so it
+ * doesn't hide them. Searched in the side's own frame, where every HQ sits
+ * bottom left, so both sides get mirror-image setups.
+ */
+export function spawnStartUnits(w: World, faction: Faction, kinds: readonly UnitKind[], near: Pt): number[] {
+  const fr = frame(w, faction);
+  const at = fr.pt(near);
+  const centre = { x: w.width / 2, y: w.height / 2 };
+  const ids: number[] = [];
+  for (const kind of kinds) {
+    const target = UNITS[kind].domain === "air" ? { x: at.x, y: at.y - 2 } : at;
+    const p = freeSpot(w, fr, kind, target, at);
+    if (p) ids.push(spawnFacing(w, faction, kind, fr, p, centre).id);
+  }
+  return ids;
+}
+
 /** Where applyOpener would put a `kind` for this side right now (world tile), or null. */
 export function predictOpenerSite(w: World, faction: Faction, kind: BuildingKind): { tx: number; ty: number } | null {
   const hq = hqOf(w, faction);

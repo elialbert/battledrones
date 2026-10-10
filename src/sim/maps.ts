@@ -1,10 +1,10 @@
 import { BUILDINGS } from "./balance";
 import { setupObjectives } from "./objectives";
-import { applyOpener, type OpenerId } from "./openers";
+import { applyOpener, spawnStartUnits, type OpenerId } from "./openers";
 import { Terrain, type Biome, type Faction, type World } from "./types";
 import { createWorld, inBounds, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 import { setupSurvival, type SurvivalOptions } from "./modes/survival";
-import { applyMutators, applySpawnRank, type MutatorId } from "./rules";
+import { applyMutators, applySpawnRank, rulesOf, type MutatorId } from "./rules";
 import { setupOp } from "./ops";
 import { dropPoint } from "./transport";
 
@@ -387,6 +387,9 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   });
   if (opts.mutators?.length) applyMutators(w, opts.mutators);
   for (const u of squads) applySpawnRank(w, u); // (Veterans: it rolls out ranked like every combat unit)
+  // Airborne: a Condor and the other two squads, parked round the starting one
+  const extra = rulesOf(w).startUnits;
+  if (extra.length) for (const u of squads) spawnStartUnits(w, u.faction, extra, u);
   // openers and map objectives belong to the skirmish; Last Stand and Ops set up their own
   if (!opts.survival && !opts.op) {
     for (const f of ["blue", "red"] as const) {

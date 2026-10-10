@@ -177,8 +177,9 @@ ground a squad can stand on). `createMapWorld` places it, so every skirmish,
 Daily Op, opener and objectives match has it, and so do Ops (the player, and
 an AI side that starts with an HQ) and the Last Stand defender (the wave
 side's units are cleared as before). Air War keeps it but bans raising
-more infantry, and the Condor that could fly it into the fight; Veterans
-ranks it like every other combat unit. It is an early guard against the
+more infantry, and the Condor that could fly it into the fight; Airborne
+parks a Condor, a Rocket Squad and a Sniper Team round it (one of each
+squad); Veterans ranks it like every other combat unit. It is an early guard against the
 first raids — it hits air at half damage — and a cheap Uplink holder.
 Every match now has two more units than before, so the balance tools were
 re-run with it in (see *Infantry pass* under Balance & pacing).
@@ -717,7 +718,8 @@ minutes in a typical match. Numbers live in `POWERS` in `balance.ts`.
   finger, grey with ✕ where it can't go), tap the map to fire; an illegal
   tap explains why. Long-press for details (in the ticker's roomier tip
   line; the Drop Pod names the crew the match's rules really give, e.g.
-  "2 Wasps + a Raptor" under Air War). Reticles show on the minimap; the end
+  "2 Wasps + a Raptor" under Air War, "2 Trooper Squads + a Rocket Squad"
+  under Infantry War). Reticles show on the minimap; the end
   screen counts calldowns per side.
 - **Which modes have them:** skirmish, the Daily Op and Last Stand (the
   player's alone: the waves have no HQ, and the director copes — strikes kill
@@ -1510,13 +1512,31 @@ Reasons to come back between matches. Spectated games never count.
   per tick), ✈️ Air War (no ground combat units — robot infantry included,
   though each side keeps its starting Trooper Squad — Condors to fly that
   squad into the fight, Fab Plants, Assembly Bays or SAM sites; measured:
-  with SAMs every AI-vs-AI air war drew at 25:00), 🎖️ Veterans (combat
-  units roll out at rank 1, the starting squads too), ☀️ Clear Skies (no fog
-  for either side; a Sniper Team in woods still hides).
-  Skirmish only; both sides obey them (`unitBlocker`/`buildingBlocker` say
-  "Disabled: Air War", the HUD shows ⛔). The AI picks a personality whose
-  plan survives the rules (`strategyFits`: no Rush/Ironclad in Air War) and,
-  in Air War, plays the air-only plan with more bombers and one big wave.
+  with SAMs every AI-vs-AI air war drew at 25:00), 🤖 Infantry War (robot
+  infantry only: no combat vehicles, combat aircraft or Fab Plants; the
+  Airpad stays for Condors, Scouts and Menders, Turrets and SAM sites stay,
+  and Drop Pods carry 2 Trooper Squads + a Rocket Squad, 3 Rocket Squads
+  with a Tech Lab; no opener survives it, so both sides start the classic
+  way), 🪂 Airborne (a Condor, a Rocket Squad and a Sniper Team parked round
+  each side's starting Trooper Squad, mirror-fair: one of each squad and a
+  ride; `Rules.startUnits`, spawned by `createMapWorld`), 🎖️ Veterans
+  (combat units roll out at rank 1, the starting squads too), ☀️ Clear
+  Skies (no fog for either side; a Sniper Team in woods still hides).
+  Air War conflicts with both infantry mutators (it bans their units): the
+  picker switches the other off (`toggleMutator`), and `makeRules` keeps
+  the first of a conflicting pair. Skirmish only; both sides obey them
+  (`unitBlocker`/`buildingBlocker` say "Disabled: Air War", the HUD shows
+  ⛔). The AI picks a personality whose plan survives the rules
+  (`strategyFits`: no Rush/Ironclad in Air War; no Skyforce/Ironclad in
+  Infantry War, where Ironclad playing from Bays won 20% of 100 AI-vs-AI
+  games) and, in Air War, plays the air-only plan with more bombers and
+  one big wave. In Infantry War (`infantryArmy`) it builds an Assembly Bay
+  wherever its plan says Fab Plant (and for its extra production), keeps
+  its whole army in infantry, adds a Rocket Squad per enemy turret or SAM it
+  knows (up to 6) and up to 5 Snipers. Under Infantry War or Airborne every
+  Normal/Hard personality flies Condor drops (not just Rush and Balanced);
+  under Airborne the first may board at 1:00 (`CONDOR_AI.airborneFrom`),
+  while the starting squads still wait at home (the Sniper stays behind).
   Shown in an opening banner, the pause screen and the end screen.
 - **Daily Op** (`game/daily.ts`): the local date hashes into a map, an AI
   personality, Normal or Hard, two compatible mutators and the match seed —
@@ -1526,7 +1546,14 @@ Reasons to come back between matches. Spectated games never count.
 - AI-vs-AI sanity (50 matches each, 25:00 cap): classic 48/50 decisive,
   median 5.6 min; Blitz 47, Gold Rush 46, Glass Cannons 43, Rapid Fab 48
   (median 4.2), Veterans 46, Clear Skies 47; Air War 13/20. The next 21
-  Daily Ops all finished (median 4.7 min).
+  Daily Ops all finished (median 4.7 min). The infantry mutators, measured
+  later (Normal, no openers, every map pairing of the personalities that
+  fit): Infantry War 56/60 decisive over all five maps, median 16.2 min,
+  personalities 37–60% — infantry against Turrets and freshly built
+  defenders grinds, so it plays about 2.5× as long as a classic match on
+  the same harness (median 6.6 on Riverlands); Airborne 85/90 on Riverlands,
+  Ashlands and Frostbite, median 12.4 min (classic 59/60 on the first two,
+  median 8.6), personalities 37–70%.
 
 ### Ops (a short scenario campaign)
 

@@ -75,8 +75,10 @@ installable as a PWA.
   Steady Hands…) popping in on the end
   screen, three stars per map and difficulty, and a **Daily Op** — one seeded
   match a day, the same for everyone, with a win streak.
-- **Seven mutators** to twist a skirmish for both sides: Blitz, Gold Rush,
-  Glass Cannons, Rapid Fab, Air War, Veterans and Clear Skies.
+- **Nine mutators** to twist a skirmish for both sides: Blitz, Gold Rush,
+  Glass Cannons, Rapid Fab, Air War, Infantry War (robot infantry only),
+  Airborne (start with a Condor and one of each squad), Veterans and Clear
+  Skies.
 - **Ops**: a campaign of eight short missions with a twist and three stars
   each — hold the Riverlands bridge against a Rush, deliver 10,000 scrap under
   Air Swarm raids, decapitate a base with a fixed strike group, win on a

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
+import { CONDOR_AI, dropsCondors } from "../src/sim/ai/condor";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
 import { buildingBlocker, unitBlocker } from "../src/sim/economy";
 import { Vis, tickFog } from "../src/sim/fog";
@@ -11,12 +12,17 @@ import {
   applyMutators,
   bannedBy,
   incomeOf,
+  infantryArmy,
   isMutated,
   makeRules,
+  mutatorsCompatible,
   rulesOf,
   strategyFits,
+  toggleMutator,
   type MutatorId
 } from "../src/sim/rules";
+import { allowedOpener } from "../src/sim/openers";
+import { podCrew } from "../src/sim/powers";
 import { step } from "../src/sim/sim";
 import type { World } from "../src/sim/types";
 import { createWorld, hqOf, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -218,6 +224,141 @@ describe("the AI under mutators", () => {
       }
     }
     expect(air).toBeGreaterThan(0);
+    expect(w.winner).not.toBeNull();
+  }, 60_000);
+});
+
+describe("infantry mutators", () => {
+  const sideUnits = (w: World, f: "blue" | "red") => [...w.units.values()].filter((u) => u.faction === f);
+
+  it("Infantry War bans every combat vehicle, combat aircraft and the Fab Plant, and keeps the rest", () => {
+    const w = createMapWorld("riverlands", { mutators: ["infantrywar"] });
+    for (const f of ["blue", "red"] as const) {
+      expect(buildingBlocker(w, f, "fab-plant")).toBe("Disabled: Infantry War");
+      for (const k of ["stinger", "flak-crawler", "mortar", "titan", "lancer", "wasp", "raptor", "hornet"] as const)
+        expect(unitBlocker(w, f, k)).toBe("Disabled: Infantry War");
+      for (const k of ["harvester", "scout", "mender", "condor", "trooper", "rocket-squad", "sniper"] as const)
+        expect(bannedBy(w, k, f)).toBeNull();
+      for (const k of ["airpad", "assembly-bay", "tech-lab", "turret", "sam-site", "radar", "depot"] as const)
+        expect(bannedBy(w, k, f)).toBeNull();
+      expect(infantryArmy(w, f)).toBe(true);
+    }
+    expect(infantryArmy(createMapWorld("riverlands"), "blue")).toBe(false);
+    expect(infantryArmy(createMapWorld("riverlands", { mutators: ["airwar"] }), "blue")).toBe(false);
+    // no opener survives it (each needs a Fab Plant or Wasps): both sides start the classic way
+    expect(allowedOpener(w, "blue", "blitz")).toBeNull();
+  });
+
+  it("Infantry War's Drop Pods carry robot infantry", () => {
+    const w = createMapWorld("frostbite", { mutators: ["infantrywar"] });
+    expect(podCrew(w, "blue")).toEqual(["trooper", "trooper", "rocket-squad"]);
+    const hq = hqOf(w, "blue")!;
+    spawnBuilding(w, "tech-lab", "blue", hq.tx + 5, hq.ty - 3);
+    expect(podCrew(w, "blue")).toEqual(["rocket-squad", "rocket-squad", "rocket-squad"]);
+    // Air War keeps its aircraft stand-ins
+    expect(podCrew(createMapWorld("frostbite", { mutators: ["airwar"] }), "blue")).toEqual(["wasp", "wasp", "raptor"]);
+  });
+
+  it("Airborne: each side starts with a Condor and one squad of each kind, mirror-fair", () => {
+    for (const map of ["riverlands", "ashlands", "frostbite"]) {
+      const w = createMapWorld(map, { mutators: ["airborne"] });
+      for (const f of ["blue", "red"] as const) {
+        const kinds = sideUnits(w, f).map((u) => u.kind).sort();
+        expect(kinds).toEqual(["condor", "harvester", "rocket-squad", "sniper", "trooper"]);
+      }
+      // red's start is blue's turned 180°
+      for (const u of sideUnits(w, "blue")) {
+        const twin = sideUnits(w, "red").find((r) => r.kind === u.kind)!;
+        expect(twin.x).toBeCloseTo(w.width - u.x, 6);
+        expect(twin.y).toBeCloseTo(w.height - u.y, 6);
+      }
+      // parked by the HQ, clear of each other (and the Condor off the squads' tiles)
+      const hq = hqOf(w, "blue")!;
+      const blue = sideUnits(w, "blue");
+      for (const u of blue) expect(Math.hypot(u.x - hq.tx - 1.5, u.y - hq.ty - 1.5)).toBeLessThan(6);
+      for (const a of blue)
+        for (const b of blue) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(0.9);
+    }
+    // Veterans ranks every squad (the Condor carries no gun: it stays at rank 0)
+    const vet = createMapWorld("riverlands", { mutators: ["airborne", "veterans"] });
+    for (const u of sideUnits(vet, "blue")) expect(u.rank).toBe(u.kind === "trooper" || u.kind === "rocket-squad" || u.kind === "sniper" ? 1 : 0);
+    // and without it the classic start is untouched
+    expect(sideUnits(createMapWorld("riverlands"), "blue").map((u) => u.kind).sort()).toEqual(["harvester", "trooper"]);
+  });
+
+  it("Airborne's starting squads can board the starting Condor at once", () => {
+    const w = createMapWorld("riverlands", { mutators: ["airborne"] });
+    const condor = sideUnits(w, "blue").find((u) => u.kind === "condor")!;
+    const squads = sideUnits(w, "blue").filter((u) => u.kind === "trooper" || u.kind === "rocket-squad");
+    step(w, [{ type: "board", faction: "blue", unitIds: squads.map((u) => u.id), carrierId: condor.id }]);
+    run(w, 6 * TICK_RATE);
+    expect((condor.passengers ?? []).map((p) => p.kind).sort()).toEqual(["rocket-squad", "trooper"]);
+  });
+
+  it("Air War can't run with either infantry mutator: the picker switches the other off", () => {
+    expect(mutatorsCompatible(["airwar", "infantrywar"])).toBe(false);
+    expect(mutatorsCompatible(["airwar", "airborne"])).toBe(false);
+    expect(mutatorsCompatible(["infantrywar", "airborne", "veterans"])).toBe(true);
+    expect(toggleMutator(["glass", "airwar"], "infantrywar")).toEqual(["glass", "infantrywar"]);
+    expect(toggleMutator(["infantrywar", "airborne"], "airwar")).toEqual(["airwar"]);
+    expect(toggleMutator(["infantrywar", "airborne"], "airborne")).toEqual(["infantrywar"]);
+    expect(toggleMutator([], "veterans")).toEqual(["veterans"]);
+    // a conflicting set (say, an old save) keeps the first in canonical order
+    expect(makeRules(["airborne", "airwar"]).mutators).toEqual(["airwar"]);
+    expect(makeRules(["airborne", "airwar"]).startUnits).toEqual([]);
+  });
+
+  it("the AI plays Infantry War with every personality but the air-only and tank ones", () => {
+    const rules = makeRules(["infantrywar"]);
+    const fits = (Object.keys(STRATEGIES) as StrategyName[]).filter((n) => strategyFits(STRATEGIES[n], rules));
+    expect(fits).toEqual(["balanced", "rush", "airswarm", "boom"]);
+    // Airborne bans nothing: everyone fits
+    const airborne = makeRules(["airborne"]);
+    for (const n of Object.keys(STRATEGIES) as StrategyName[]) expect(strategyFits(STRATEGIES[n], airborne)).toBe(true);
+    // every commander flies Condor drops under Infantry War or Airborne (Rush and Balanced always do; Easy never)
+    const boom = createAiState("boom", "normal", 1);
+    expect(dropsCondors(createMapWorld("riverlands"), "red", boom)).toBe(false);
+    expect(dropsCondors(createMapWorld("riverlands", { mutators: ["infantrywar"] }), "red", boom)).toBe(true);
+    expect(dropsCondors(createMapWorld("riverlands", { mutators: ["airborne"] }), "red", boom)).toBe(true);
+    expect(dropsCondors(createMapWorld("riverlands", { mutators: ["airborne"] }), "red", createAiState("boom", "easy", 1))).toBe(false);
+  });
+
+  it("under Airborne the AI flies its starting squads out in its starting Condor from 1:00", () => {
+    const w = createMapWorld("riverlands", { mutators: ["airborne"] });
+    const red = createAiState("boom", "normal", 2); // (not a personality that drops in a classic match)
+    const condor = sideUnits(w, "red").find((u) => u.kind === "condor")!;
+    let boardedAt = -1;
+    for (let i = 0; i < 75 * TICK_RATE && boardedAt < 0; i++) {
+      step(w, tickAi(w, "red", red));
+      if ((condor.passengers?.length ?? 0) === 2) boardedAt = w.tick / TICK_RATE;
+    }
+    expect(boardedAt).toBeGreaterThanOrEqual(CONDOR_AI.airborneFrom);
+    expect(boardedAt).toBeLessThan(75);
+    expect(condor.passengers!.map((p) => p.kind).sort()).toEqual(["rocket-squad", "trooper"]); // the Sniper stays home
+  });
+
+  it("plays an Infantry War to a finish from Assembly Bays, never building a banned kind", () => {
+    const w = createMapWorld("frostbite", { seed: 11, mutators: ["infantrywar"] });
+    const a = createAiState("balanced", "normal", 1);
+    const b = createAiState("rush", "normal", 2);
+    const banned = new Set<string>([...rulesOf(w).bannedUnits, ...rulesOf(w).bannedBuildings]);
+    const bays = { blue: 0, red: 0 };
+    let squads = 0;
+    for (let i = 0; i < 25 * 60 * TICK_RATE && !w.winner; i++) {
+      step(w, [...tickAi(w, "blue", a), ...tickAi(w, "red", b)]);
+      if (i % 50 === 0) {
+        for (const u of w.units.values()) {
+          expect(banned.has(u.kind)).toBe(false);
+          if (u.kind === "trooper" || u.kind === "rocket-squad" || u.kind === "sniper") squads++;
+        }
+        for (const bd of w.buildings.values()) {
+          expect(banned.has(bd.kind)).toBe(false);
+          if (bd.kind === "assembly-bay") bays[bd.faction] = Math.max(bays[bd.faction], 1);
+        }
+      }
+    }
+    expect(bays).toEqual({ blue: 1, red: 1 });
+    expect(squads).toBeGreaterThan(0);
     expect(w.winner).not.toBeNull();
   }, 60_000);
 });
