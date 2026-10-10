@@ -45,7 +45,14 @@ Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings.
   *logic* stays in plain TS modules that don't import three.js, so the
   simulation is unit-testable headlessly.
 - **Build tooling:** Vite + `vite-plugin-pwa` (service worker, installable,
-  offline-capable after first play of each map).
+  offline-capable after first play of each map). The worker precaches each
+  build and serves the game from that cache, so a deploy lands in the
+  background: the page asks for a new build on launch, on coming back to the
+  foreground (at most once a minute) and every 30 minutes. The new worker
+  activates at once and takes over the open page, and the home screen then
+  shows a **"✨ New version ready · Update ↻"** pill whose button reloads into
+  it (`src/ui/update.ts`). A build that lands mid-match is never pushed on the
+  player: every Menu button reloads, so the next menu already runs it.
 - **Testing:** Vitest for the simulation (economy, pathfinding, combat,
   terrain, tech tree, AI, maps); a Playwright smoke test that drives the
   real touch input paths; a headless balance harness (`tools/balance.ts`).
