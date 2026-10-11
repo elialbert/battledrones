@@ -21,6 +21,9 @@ join. Where there is a real choice, the options are laid out with a
 | Reconnect | **Replay the command log** from tick 0 | Snapshot from the peer |
 | Desync | Detect with checksums and end the match as "no contest" (v1) | Resync from a host snapshot (v2) |
 | Career | A separate local Versus record; no XP, stars or medals | Count XP with a Versus medal |
+| Battle records | **Kept forever**: an R2 record plus a D1 index row, ~20 KB gzipped each; the invite link becomes the replay link | D1 only; each room's DO storage |
+| Old replays | **One archived build per sim hash** in R2 | Matching versions only; a Pages archive |
+| Agent battles | **5-second rounds** through six fog-limited tools, with a local arena runner first | Remote MCP seats in the Worker; real time |
 
 The phases are at the end. Phase 0 makes no visible change: it is the
 groundwork that every option needs (cross-engine determinism, a local side
@@ -45,7 +48,7 @@ that can be red, a rotated view).
 ## Non-goals (for now)
 
 Matchmaking with strangers, accounts, ranked play, more than two players,
-team games, spectators, playing across game versions, Ops, and co-op Last
+team games, playing across game versions, Ops, and co-op Last
 Stand. Co-op Last Stand is the natural next step, and the lockstep layer
 below would carry it unchanged.
 
@@ -217,7 +220,9 @@ fragment. A host playing an archived `/v9/` invites to `/v9/`.
 room creation is rate-limited, so guessing a code is impractical. A guessed
 code would only let a stranger take the guest seat of an open invite, which
 is annoying but harmless. If that ever matters, the host can approve the
-guest ("Cadet Bob wants to join · Accept").
+guest ("Cadet Bob wants to join · Accept"). Once a battle has been played,
+its code is never reused, because the same link then opens its replay (see
+*Battle archive and replays*).
 
 ## Network model
 
@@ -567,7 +572,7 @@ export class Room extends DurableObject<Env> {
   }
 
   async alarm() {
-    // an unjoined room after 30 min, a finished one after 10, an abandoned one after 2 h
+    // an unjoined room after 30 min, a finished one after 10 (its record is already archived), an abandoned one after 2 h
     await this.ctx.storage.deleteAll();
   }
 }
@@ -602,8 +607,9 @@ so a hibernated room wakes up where it was.
   we accept), or stall the game, which the away timer limits. Speed hacks
   can't work, because every tick needs both players' turns.
 - **Stored data**: room state, seat tokens, display names and the command
-  log. All of it is deleted when the room expires. No IPs beyond Cloudflare's
-  own logs.
+  log. When the room expires, its own copy is deleted and the seat tokens go
+  with it. The battle record moves to the archive (see *Battle archive and
+  replays*). No IPs beyond Cloudflare's own logs.
 
 ### Costs
 
@@ -705,6 +711,268 @@ Changes to existing code:
 mirror images. An option is to swap sides every rematch, so each player sees
 both starts. The server assigns sides, so this is one line either way.
 
+## Battle archive and replays
+
+**In short:** storing every battle forever is close to free. A battle's
+record is about 20 KB gzipped. The hard part is that a record replays
+faithfully only in a build with the **same sim code**, and the sim changes
+often: 37 of the last 132 commits touched `src/sim`. So the real work is
+keeping old builds playable, not storing the logs.
+
+### What a battle record holds
+
+```jsonc
+{
+  "v": 1,
+  "code": "K7QM2X",
+  "commit": "cddf6e2…", "sim": "3f9a…", "proto": 1,  // which build played it
+  "startedAt": "2026-10-11T18:02:11Z",
+  "map": "riverlands", "mutators": [], "seed": 1803442113,
+  "openers": { "blue": "blitz", "red": "air-wing" },
+  "players": { "blue": { "name": "Simon", "rank": "Captain" }, "red": { … } },
+  "delay": 3,
+  "turns": [[142, "blue", [/* Command… */]], …],     // non-empty turns only
+  "hashes": [/* every 100th tick, both sides */],
+  "end": { "tick": 7012, "winner": "blue", "reason": "hq" },
+  "recap": { /* the after-action numbers, see Logs for coding agents */ }
+}
+```
+
+Measured from AI-vs-AI matches (Node, normal difficulty, seed 4321, both
+matches still going at 10:00):
+
+| | Riverlands | Archipelago |
+|---|---|---|
+| Ticks | 6,000 | 6,000 |
+| Ticks with any command | 285 | 290 |
+| Turns as JSON | 144 KB | 181 KB |
+| **gzipped** | **18 KB** | **20 KB** |
+
+Human players will issue more, smaller orders than the AI's bursts. Still,
+expect tens of KB per battle, not hundreds.
+
+### Where it goes
+
+When a battle ends (an agreed `over`, a claim, a forfeit or a desync), the
+Room DO writes the record and its index row, and only then lets its alarm
+clear the room's own storage.
+
+| Option | |
+|---|---|
+| **R2 for the records, D1 for the index** (recommended) | Each record goes to R2 at `battles/K7QM2X.json.gz`. D1 gets one small row per battle (code, dates, map, mutators, players, winner, reason, length, commit, sim hash and the recap's headline numbers) for listing and SQL. D1's free plan caps each database at 500 MB, which is why the records themselves don't go there. |
+| D1 only | One binding instead of two. About 25,000 records fill a free 500 MB database, then you shard or move them. |
+| Each room's own DO storage | No new services, but nothing can list across rooms, so admins and agents couldn't browse. |
+
+Free-plan cost at 100 battles a day: R2 grows by about 2 MB a day, 0.7 GB a
+year, against 10 GB-month free with no egress fees. D1 writes 100 rows a day,
+against 100,000 a day allowed. R2 does 100 writes a day, against 1 million a
+month. It stays effectively free until there are thousands of battles a day
+([D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/),
+[R2 pricing](https://developers.cloudflare.com/r2/pricing/)).
+
+### Replaying from the original link
+
+The invite link becomes the battle's permanent address. `#vs=K7QM2X` opens
+on whatever state the room is in:
+
+- **waiting**: the Join sheet, as above;
+- **playing**: "Match in progress" (a live watch link is Phase 3);
+- **over**: **▶ Watch replay · Simon beat Bob in 11:42 · Riverlands**;
+- **deleted**: the normal menu, plus one line saying so.
+
+This means **codes are never reused.** The D1 index has the code as its
+primary key, and `POST /rooms` skips codes already taken. There are about
+10⁹ codes, against roughly 36,500 battles a year at 100 a day. A permanent
+replay link is an unlisted link, so `GET /rooms/:code` is rate-limited per IP
+(for example 60 an hour). At that density, finding one real battle by
+guessing takes about 27,000 tries per year's worth of battles, which is
+weeks per IP. If replays should be properly private, use 8-character codes
+(about 10¹²). Players should know battles are kept: the lobby says "Battles
+are saved: anyone with this link can watch the replay."
+
+**The viewer** is the existing AI-vs-AI spectator mode (fog off by default,
+up to 4× speed), fed by the record's turns instead of `tickAi`. It adds:
+
+- **Seeking.** Forward steps the sim with rendering off (a whole match in a
+  few seconds). Backward uses keyframes taken every 30 s as the replay
+  plays: `structuredClone(world)` handles the `Map`s and typed arrays.
+- **"Through Simon's eyes"**: set `PLAYER` to that side and turn fog on, and
+  the screen shows exactly what that player saw.
+- **The hash trail is checked as it plays.** If the replay drifts from the
+  battle, it says "⚠ This replay diverged at 4:12" rather than showing a
+  fiction.
+- The after-action report at the end, from `chronicle.ts`, as after a live
+  match.
+
+A replay watched in another browser needs the same cross-engine determinism
+as a live match. A battle between two Chrome phones has to replay
+identically in an admin's Safari, which Phase 0 provides.
+
+### Old versions
+
+| Option | How | Cost |
+|---|---|---|
+| **A. One archived build per sim hash** (recommended) | After building, the Pages workflow uploads `dist/` to R2 under `builds/<simhash>/`. The newest build with a given sim hash replaces the older one, so renderer fixes reach old replays. Files are stored once each by content hash, with a manifest per build mapping paths to hashes. The Worker serves `/b/<simhash>/<path>` from the manifest. When the current game opens a replay with a different sim hash, it redirects to `/b/<simhash>/#replay=K7QM2X`. | The three.js chunk (734 KB) and the map art (11 MB of the 16 MB build) rarely change, so they dedupe away. A new sim version adds about the main JS, CSS and HTML (~0.7 MB). At this month's rate of about 40 sim versions, that's ~30 MB a month in R2. About a day or two of pipeline and Worker work. |
+| B. Extend the Pages version archive | Publish `/battledrones/s/<simhash>/` the way `/vN/` tags are, with ZIP reuse. | Each full build is 16 MB, and Pages sites are meant to stay under 1 GB, so that's about 60 versions. Sharing the art between versions would bring back the repainted-map bug that the terrain revision hashes fixed. Not recommended. |
+| C. Matching versions only | Record everything permanently, but the browser only plays records with its own sim hash. Others say "This replay is from an older version of the game". | Free, and a good first step. At this repo's pace most replays would stop playing in the browser within days, but agents can still use every one (below). |
+| D. Record what the screen needs, not commands | Snapshots and events, mostly version-proof. | Megabytes per battle, plus a render format the renderer would have to keep reading forever. No. |
+
+### Admins
+
+- `/admin` on the Worker sits behind **Cloudflare Access** (Zero Trust login
+  by email one-time PIN, free for small teams). The Worker writes no login
+  code: it only verifies the `Cf-Access-Jwt-Assertion` header.
+- A list from D1 shows date, players, map, mutators, winner, reason, length
+  and version. Each row links to **▶ Watch** (the right archived build),
+  **⬇ Record** and **Delete**.
+- Filters by map, by version, and **desyncs only**. That last one makes the
+  archive a debugging tool: every desync arrives with the full log that
+  reproduces it.
+
+### Logs for coding agents
+
+There are two layers, one cheap and one thorough.
+
+1. **The recap row: SQL with no re-simulation.** At the end, each client
+   sends the numbers it already worked out for the after-action report:
+   openers, units built and lost by kind, scrap harvested and salvaged,
+   calldowns, Uplink time, the chronicle's first blood, biggest battle and
+   turning point. The DO stores them if both clients agree. That answers
+   questions like these:
+   - What is blue's win rate against red across all human battles? This
+     checks with real players the fairness that the symmetry tests assert.
+   - What is the win rate by opener, and by opener pairing?
+   - What is the median battle length per map, against the ~10-minute
+     pillar?
+   - How often is the Sky Hammer fired, and does the side that fires first
+     win?
+
+   Access is `GET /admin/battles.ndjson?since=…` with a Cloudflare Access
+   service token, or `wrangler d1 execute` directly.
+2. **Full re-simulation: `tools/battles.ts`.**
+   - `pull [--since]` downloads records into `battles/` (gitignored).
+   - `replay <record>` makes a temporary `git worktree` at the record's
+     commit and runs the replay headless there with vite-node. That works
+     for **any** record, archived build or not. It checks the hash trail and
+     writes per-minute stats: army value, scrap, income, unit mix, Uplinks
+     held. These are the numbers `tools/pacing.ts` reports for AI matches,
+     plus the chronicle's story (`chronicle.ts` is engine-free).
+   - `aggregate` builds tables like DESIGN.md's pacing panel, for human
+     battles.
+   - `branch <record> --at 4:00 --tune '{…}'` plays the battle to 4:00, then
+     hands both sides to the AI commander under a tweak. For example: would
+     this comeback still happen with Titans at 1,100 HP? This is the only
+     kind of what-if a log supports. Re-running the human orders under
+     different numbers diverges almost at once, because the orders name
+     unit ids that no longer exist, and the players would have reacted
+     differently anyway.
+
+None of this needs infrastructure beyond the archive, and the agents'
+compute is local.
+
+## Agent battles
+
+The goal: two models, say GPT-6 Sol and Claude Opus 5.5, play a skirmish
+through tools that show **only what their side could see**, and people
+watch it as a replay or live.
+
+Most of the pieces already exist. The AI commander plays "by the same rules
+and fog of war as you" through `ai/intel.ts` (`seenEnemies` applies fog and
+Sniper concealment) and `knownBuildings` (the fog's memory of enemy
+buildings). Placement already gives human-readable reasons and a suggested
+spot (`placementBlocker`, `suggestPlacement`). `tools/export-maps.ts --ascii`
+already draws the maps as text. The `Command` type is already the action
+space.
+
+### Timing
+
+A model takes from seconds to minutes to decide, and the game runs 10
+ticks a second.
+
+| Option | |
+|---|---|
+| **Rounds** (recommended for model vs model) | The game stops every 5 s of game time (50 ticks). Both agents observe, give orders and end their round. The sim then runs the next 50 ticks, with both sides' orders applied together at the first tick. How fast a model answers no longer matters, so one provider's latency can't decide the match. A round deadline (for example 90 s) stops a stuck agent stalling the game: it just gives no orders that round. |
+| Real time | The agent plays a live lockstep match, against a human for example, and gives orders as fast as it can. Between orders, units fight and harvest on their own (retaliation AI, harvesters). Slow models lose to fast ones. Fun later for "can you beat Claude?", with the same tools. |
+
+`wait(n)` skips quiet rounds, so real matches use fewer rounds than the
+maximum.
+
+### Tools
+
+Six tools, with descriptions written like documentation:
+
+| Tool | What it does |
+|---|---|
+| `briefing()` | Called once. Gives your side, the rules in brief, and a unit and building table generated from `balance.ts`: cost, HP, DPS, range, what it counters, and where it's built. Also the map as ASCII with a legend, your HQ, and the fact that the enemy HQ is yours rotated 180° (human players know that too). It's static, so it can go in the cached system prompt. |
+| `observe()` | Gives this round's state: time, scrap and income, the command meter and which calldowns are ready, the Sky Hammer, your units (id, kind, position, HP, order, rank, grouped by kind), your buildings and queues, the enemies you see now, the enemy buildings you remember, the Uplinks (owner, capture), announced supply drops and strike warnings (shown to both sides in the game too), and what happened since the last round: losses, kills, and alerts from the radio's callouts, filtered to your side. |
+| `look(x, y, r)` | A close-up ASCII patch of the terrain with the units on it. Visible units only. |
+| `orders([...])` | The sim's own command vocabulary, plus conveniences: unit selectors ("all idle army", "all stinger"), and `build(kind, near?)`, which places at the suggested spot. Each order comes back as `ok`, or with the reason it was refused, from the same rules the HUD uses ("Not enough scrap", "Needs a Tech Lab", "Too far from your buildings"). |
+| `end_round(notes, radio?)` | Submits the round. `notes` (up to 2 KB) is the agent's memory, handed back with the next observation. `radio` (up to 120 characters) is an optional line for spectators. |
+| `wait(rounds)` | Ends this round and skips the next n − 1. |
+
+Measured: a compact text version of `observe()` for one side of an AI-vs-AI
+match was about 400 characters at 1:00, 1,200–1,700 at 3:00 and
+1,500–1,900 at 6:00 (Riverlands and Archipelago). That's roughly 100–600
+tokens. The map's ASCII is 2.3k characters at 48×48, but 11.7k for the
+Archipelago's 108×108, so for that map show only the explored parts or a
+downsampled version.
+
+For the format, compact text with stable ids (about half the tokens) is
+recommended, with JSON (easier to parse reliably) as an option.
+
+**Fog is enforced by whoever runs the sim.** `observe` is built from
+`seenEnemies`, `knownBuildings` and `isExplored` for the agent's own side,
+and nothing else. It has to run somewhere the agent doesn't control.
+In lockstep every client holds the whole world, so a coding agent with a
+shell and a local client could simply read it. A test checks that every enemy
+in an observation passes `unitSeenBy` or is in `knownBuildings`.
+
+### Where it runs
+
+| Option | How | For | Against |
+|---|---|---|---|
+| **A. A local arena runner** (recommended first) | `tools/arena.ts --blue claude-opus-5-5 --red <openai-model> --map riverlands --seed 42`. Node runs the sim, calls each provider's API with the tools above (Anthropic tool use, OpenAI function calling) and steps the rounds. It writes a battle record, which plays in the browser like any replay. | No infrastructure, reproducible, and controlled: the same prompt, tools and deadline for both. API keys stay on your machine. It needs none of the multiplayer phases, only the replay viewer. | Nobody watches live, unless the runner also streams to a room (C). |
+| B. Remote MCP seats on the Worker | An "Agent battle" room. The Room DO runs the sim itself: it's pure TS and bundles into the Worker, and a round is 50 ticks, about 25 ms of CPU. Each seat is an MCP endpoint, `https://…/mcp/K7QM2X/<seat-token>`, built with Cloudflare's Agents SDK stateless `createMcpHandler` calling the Room DO over RPC. (The DO-backed `McpAgent` class is now deprecated.) Paste the two URLs into any two MCP clients, such as Claude Code, Codex or a chat app's connector, and share the watch link. | Any agent can play, with its own harness. People can watch live. Fog is enforced on the server by construction. | Less controlled: each client's prompt, context handling and patience differ, so it measures the harness as much as the model. The Worker's sim must match the sim hash of an archived build, so viewers can render it. |
+| C. Both | The runner from A drives B's rooms, so a controlled match can be watched live. | | |
+
+**Watching live:** spectators get a stream of resolved rounds, and the
+browser plays each one at 1× as it arrives. The action comes in 5-second
+bursts, with waits while the agents think. Watching the replay afterwards
+plays at normal pace. The `radio` lines appear in the replay's ticker and go
+through the announcer's voice, so the two commanders trash-talk over the
+radio.
+
+### Fairness
+
+- Both get the same briefing, tool descriptions, round length and
+  deadline, and no extra hints.
+- **Mirror pairs**: each seed is played twice, with the sides swapped. The
+  maps are fair by test, but this cancels leftover side bias and luck.
+- Several maps, best of N.
+- Every prompt, tool call and result is kept with the battle record. Matches
+  can be audited, and the models' reasoning studied.
+- Comparable model settings (a similar reasoning budget), recorded with the
+  match.
+
+### Cost
+
+An agent gets at most 120 rounds in a 10-minute match. If each round's
+context is kept short (the system prompt and briefing cached, then this
+round's observation, the notes and its tool calls), a round costs about
+5–10k input tokens, mostly cached, plus 0.5–2k output tokens. That's
+roughly **0.6–1.2M input and 60–240k output tokens per agent per match**.
+Multiply by each model's prices. If the harness instead keeps the whole
+conversation, the context grows every round and the total grows with the
+square of the round count, which is why the notes exist. Wall-clock time is
+120 rounds × 10–60 s, so 20 minutes to 2 hours a match.
+
+### Also a balance tool
+
+Agents against the built-in AI commander, or agents asked to find the
+strongest cheap strategy, give balance work something new. Models are good
+at finding degenerate tactics the scripted AI never tries. Their battle
+records go through the same `tools/battles.ts` pipeline.
+
 ## Testing
 
 - **Unit** (vitest, in `npm test`): protocol validators (fuzzed); the
@@ -731,6 +999,12 @@ both starts. The server assigns sides, so this is one line either way.
   `VITE_MULTIPLAYER_URL` and asserts that `dist/` has no `Challenge a
   friend`, no `#vs=` handling and no `workers.dev`. That is the "no
   indication" requirement as a test.
+- **Archive**: a record round-trips (write, then pull, then replay) to the
+  same final hash. `tools/battles.ts replay` passes on a record from an
+  older commit.
+- **Fog leaks**: for worlds sampled from AI matches, every enemy in an
+  agent observation is seen by that side or remembered by it, and nothing
+  else is.
 
 ## Phases
 
@@ -750,6 +1024,16 @@ both starts. The server assigns sides, so this is one line either way.
 3. **Polish**: rematch, names and ranks, the ping chip, announcer lines, the
    Versus record, adaptive D, and a "watch" link for a third person (the
    spectator view already exists).
+4. **The battle archive**: the record and index row at the end of every
+   battle; the replay from the original link (matching versions only to
+   start, option C); the replay viewer with seeking and "through X's eyes";
+   the admin list behind Access; `tools/battles.ts` pull, replay and
+   aggregate. Then the per-sim-hash build archive, so old replays keep
+   playing.
+5. **Agent battles**: `tools/arena.ts` with the six tools and rounds,
+   writing ordinary battle records; then remote MCP seats in the Worker. The
+   arena runner depends only on Phase 0 and the replay viewer, so it can
+   come before Phases 1–3 if it's the more fun thing to have first.
 
 ## Later
 
@@ -774,3 +1058,7 @@ both starts. The server assigns sides, so this is one line either way.
 5. A `workers.dev` URL, or a custom domain from day one?
 6. Are the Archipelago's bigger downloads (map art) acceptable for a versus
    invite on mobile data, or should invites suggest the smaller maps?
+7. Replays: should anyone with the link be able to watch them, or only admins?
+   And should the codes be 6 characters or 8?
+8. Agent battles: which matchups first, should the rounds be 5 s or
+   longer, and should there be a public table of results?
