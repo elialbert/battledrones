@@ -23,7 +23,6 @@ join. Where there is a real choice, the options are laid out with a
 | Career | A separate local Versus record; no XP, stars or medals | Count XP with a Versus medal |
 | Battle records | **Kept forever**: an R2 record plus a D1 index row, ~20 KB gzipped each; the invite link becomes the replay link | D1 only; each room's DO storage |
 | Old replays | **One archived build per sim hash** in R2 | Matching versions only; a Pages archive |
-| Agent battles | **5-second rounds** through six fog-limited tools, with a local arena runner first | Remote MCP seats in the Worker; real time |
 
 The phases are at the end. Phase 0 makes no visible change: it is the
 groundwork that every option needs (cross-engine determinism, and a local
@@ -51,6 +50,10 @@ Matchmaking with strangers, accounts, ranked play, more than two players,
 team games, playing across game versions, Ops, and co-op Last
 Stand. Co-op Last Stand is the natural next step, and the lockstep layer
 below would carry it unchanged.
+
+AI models playing each other are in **AGENT-BATTLES.md**. Those battles run
+in one process on one machine, so they need none of the Worker, WebSockets
+or lockstep below.
 
 ## What the code already gives us
 
@@ -808,6 +811,9 @@ matches still going at 10:00):
 Human players will issue more, smaller orders than the AI's bursts. Still,
 expect tens of KB per battle, not hundreds.
 
+Agent battles (AGENT-BATTLES.md) write records in nearly the same shape, so
+the two should share one format and one replay viewer.
+
 ### Where it goes
 
 When a battle ends (an agreed `over`, a claim, a forfeit or a desync), the
@@ -927,109 +933,6 @@ There are two layers, one cheap and one thorough.
 None of this needs infrastructure beyond the archive, and the agents'
 compute is local.
 
-## Agent battles
-
-The goal: two models, say GPT-6 Sol and Claude Opus 5.5, play a skirmish
-through tools that show **only what their side could see**, and people
-watch it as a replay or live.
-
-Most of the pieces already exist. The AI commander plays "by the same rules
-and fog of war as you" through `ai/intel.ts` (`seenEnemies` applies fog and
-Sniper concealment) and `knownBuildings` (the fog's memory of enemy
-buildings). Placement already gives human-readable reasons and a suggested
-spot (`placementBlocker`, `suggestPlacement`). `tools/export-maps.ts --ascii`
-already draws the maps as text. The `Command` type is already the action
-space.
-
-### Timing
-
-A model takes from seconds to minutes to decide, and the game runs 10
-ticks a second.
-
-| Option | |
-|---|---|
-| **Rounds** (recommended for model vs model) | The game stops every 5 s of game time (50 ticks). Both agents observe, give orders and end their round. The sim then runs the next 50 ticks, with both sides' orders applied together at the first tick. How fast a model answers no longer matters, so one provider's latency can't decide the match. A round deadline (for example 90 s) stops a stuck agent stalling the game: it just gives no orders that round. |
-| Real time | The agent plays a live lockstep match, against a human for example, and gives orders as fast as it can. Between orders, units fight and harvest on their own (retaliation AI, harvesters). Slow models lose to fast ones. Fun later for "can you beat Claude?", with the same tools. |
-
-`wait(n)` skips quiet rounds, so real matches use fewer rounds than the
-maximum.
-
-### Tools
-
-Six tools, with descriptions written like documentation:
-
-| Tool | What it does |
-|---|---|
-| `briefing()` | Called once. Gives your side, the rules in brief, and a unit and building table generated from `balance.ts`: cost, HP, DPS, range, what it counters, and where it's built. Also the map as ASCII with a legend, your HQ, and the fact that the enemy HQ is yours rotated 180° (human players know that too). It's static, so it can go in the cached system prompt. |
-| `observe()` | Gives this round's state: time, scrap and income, the command meter and which calldowns are ready, the Sky Hammer, your units (id, kind, position, HP, order, rank, grouped by kind), your buildings and queues, the enemies you see now, the enemy buildings you remember, the Uplinks (owner, capture), announced supply drops and strike warnings (shown to both sides in the game too), and what happened since the last round: losses, kills, and alerts from the radio's callouts, filtered to your side. |
-| `look(x, y, r)` | A close-up ASCII patch of the terrain with the units on it. Visible units only. |
-| `orders([...])` | The sim's own command vocabulary, plus conveniences: unit selectors ("all idle army", "all stinger"), and `build(kind, near?)`, which places at the suggested spot. Each order comes back as `ok`, or with the reason it was refused, from the same rules the HUD uses ("Not enough scrap", "Needs a Tech Lab", "Too far from your buildings"). |
-| `end_round(notes, radio?)` | Submits the round. `notes` (up to 2 KB) is the agent's memory, handed back with the next observation. `radio` (up to 120 characters) is an optional line for spectators. |
-| `wait(rounds)` | Ends this round and skips the next n − 1. |
-
-Measured: a compact text version of `observe()` for one side of an AI-vs-AI
-match was about 400 characters at 1:00, 1,200–1,700 at 3:00 and
-1,500–1,900 at 6:00 (Riverlands and Archipelago). That's roughly 100–600
-tokens. The map's ASCII is 2.3k characters at 48×48, but 11.7k for the
-Archipelago's 108×108, so for that map show only the explored parts or a
-downsampled version.
-
-For the format, compact text with stable ids (about half the tokens) is
-recommended, with JSON (easier to parse reliably) as an option.
-
-**Fog is enforced by whoever runs the sim.** `observe` is built from
-`seenEnemies`, `knownBuildings` and `isExplored` for the agent's own side,
-and nothing else. It has to run somewhere the agent doesn't control.
-In lockstep every client holds the whole world, so a coding agent with a
-shell and a local client could simply read it. A test checks that every enemy
-in an observation passes `unitSeenBy` or is in `knownBuildings`.
-
-### Where it runs
-
-| Option | How | For | Against |
-|---|---|---|---|
-| **A. A local arena runner** (recommended first) | `tools/arena.ts --blue claude-opus-5-5 --red <openai-model> --map riverlands --seed 42`. Node runs the sim, calls each provider's API with the tools above (Anthropic tool use, OpenAI function calling) and steps the rounds. It writes a battle record, which plays in the browser like any replay. | No infrastructure, reproducible, and controlled: the same prompt, tools and deadline for both. API keys stay on your machine. It needs none of the multiplayer phases, only the replay viewer. | Nobody watches live, unless the runner also streams to a room (C). |
-| B. Remote MCP seats on the Worker | An "Agent battle" room. The Room DO runs the sim itself: it's pure TS and bundles into the Worker, and a round is 50 ticks, about 25 ms of CPU. Each seat is an MCP endpoint, `https://…/mcp/K7QM2X/<seat-token>`, built with Cloudflare's Agents SDK stateless `createMcpHandler` calling the Room DO over RPC. (The DO-backed `McpAgent` class is now deprecated.) Paste the two URLs into any two MCP clients, such as Claude Code, Codex or a chat app's connector, and share the watch link. | Any agent can play, with its own harness. People can watch live. Fog is enforced on the server by construction. | Less controlled: each client's prompt, context handling and patience differ, so it measures the harness as much as the model. The Worker's sim must match the sim hash of an archived build, so viewers can render it. |
-| C. Both | The runner from A drives B's rooms, so a controlled match can be watched live. | | |
-
-**Watching live:** spectators get a stream of resolved rounds, and the
-browser plays each one at 1× as it arrives. The action comes in 5-second
-bursts, with waits while the agents think. Watching the replay afterwards
-plays at normal pace. The `radio` lines appear in the replay's ticker and go
-through the announcer's voice, so the two commanders trash-talk over the
-radio.
-
-### Fairness
-
-- Both get the same briefing, tool descriptions, round length and
-  deadline, and no extra hints.
-- **Mirror pairs**: each seed is played twice, with the sides swapped. The
-  maps are fair by test, but this cancels leftover side bias and luck.
-- Several maps, best of N.
-- Every prompt, tool call and result is kept with the battle record. Matches
-  can be audited, and the models' reasoning studied.
-- Comparable model settings (a similar reasoning budget), recorded with the
-  match.
-
-### Cost
-
-An agent gets at most 120 rounds in a 10-minute match. If each round's
-context is kept short (the system prompt and briefing cached, then this
-round's observation, the notes and its tool calls), a round costs about
-5–10k input tokens, mostly cached, plus 0.5–2k output tokens. That's
-roughly **0.6–1.2M input and 60–240k output tokens per agent per match**.
-Multiply by each model's prices. If the harness instead keeps the whole
-conversation, the context grows every round and the total grows with the
-square of the round count, which is why the notes exist. Wall-clock time is
-120 rounds × 10–60 s, so 20 minutes to 2 hours a match.
-
-### Also a balance tool
-
-Agents against the built-in AI commander, or agents asked to find the
-strongest cheap strategy, give balance work something new. Models are good
-at finding degenerate tactics the scripted AI never tries. Their battle
-records go through the same `tools/battles.ts` pipeline.
-
 ## Testing
 
 - **Unit** (vitest, in `npm test`): protocol validators (fuzzed); the
@@ -1059,18 +962,14 @@ records go through the same `tools/battles.ts` pipeline.
 - **Archive**: a record round-trips (write, then pull, then replay) to the
   same final hash. `tools/battles.ts replay` passes on a record from an
   older commit.
-- **Fog leaks**: for worlds sampled from AI matches, every enemy in an
-  agent observation is seen by that side or remembered by it, and nothing
-  else is.
 
 ## Phases
 
 0. **Groundwork, shipped dark** (no visible change): `fmath` plus the ban
    test plus the cross-engine replay in CI; `checksum.ts`; `PLAYER` as a
    live binding and the `"red"` audit; side-coloured minimap dots; the
-   `resign` command;
-   `setupVersusWorld`; the dev-only "play as red vs AI". Each of these is
-   useful and testable on its own.
+   `resign` command; `setupVersusWorld`; the dev-only "play as red vs AI".
+   Each of these is useful and testable on its own.
 1. **The happy path**: the Worker and Room; `POST`/preview/socket; the lobby,
    share link and Join sheet; loading sync; hidden opener picks; lockstep
    with a fixed D; the end and result; the version gate; the dark-build test;
@@ -1083,14 +982,12 @@ records go through the same `tools/battles.ts` pipeline.
    spectator view already exists).
 4. **The battle archive**: the record and index row at the end of every
    battle; the replay from the original link (matching versions only to
-   start, option C); the replay viewer with seeking and "through X's eyes";
+   start, option C); the replay viewer with seeking and "through X's eyes"
+   (the same viewer AGENT-BATTLES.md needs, so whichever comes first builds
+   it);
    the admin list behind Access; `tools/battles.ts` pull, replay and
    aggregate. Then the per-sim-hash build archive, so old replays keep
    playing.
-5. **Agent battles**: `tools/arena.ts` with the six tools and rounds,
-   writing ordinary battle records; then remote MCP seats in the Worker. The
-   arena runner depends only on Phase 0 and the replay viewer, so it can
-   come before Phases 1–3 if it's the more fun thing to have first.
 
 ## Later
 
@@ -1105,6 +1002,12 @@ records go through the same `tools/battles.ts` pipeline.
   relay.
 - **Rotating red's view 180°**, if playtests show the top-right start plays
   worse (see *View orientation*), and **friend/foe colours** as a setting.
+- **Online agent seats**: an AI model playing a person, or another model on
+  another machine, through the tools in AGENT-BATTLES.md served as remote MCP
+  seats. The Room DO would run the sim itself (it's pure TS and bundles into
+  the Worker; a 5-second round is about 25 ms of CPU), so fog is enforced on
+  the server. Cloudflare's Agents SDK has a stateless `createMcpHandler` for
+  this; its Durable Object-backed `McpAgent` class is now deprecated.
 
 ## Open questions
 
@@ -1120,5 +1023,3 @@ records go through the same `tools/battles.ts` pipeline.
    invite on mobile data, or should invites suggest the smaller maps?
 7. Replays: should anyone with the link be able to watch them, or only admins?
    And should the codes be 6 characters or 8?
-8. Agent battles: which matchups first, should the rounds be 5 s or
-   longer, and should there be a public table of results?
