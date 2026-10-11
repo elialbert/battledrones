@@ -51,14 +51,14 @@ and offers an Update button.
   water/lava that only hover and air units cross, open sea that only
   aircraft cross, and rich crystal fields. On a phone the map row fades and
   shows a chevron where more maps wait off screen.
-- **The Archipelago** (96×96, three times Riverlands): every 📡 Uplink sits
-  on an island only robot infantry flown in by Condor can take — aircraft,
-  the Condor and tanks count for nothing there — and an island Uplink pays
-  only while your troops stand on it, so aircraft earn their keep killing
-  garrisons. Two bridges join the HQs' landmasses, scrap is scarce, both
-  sides start with a Condor and a squad aboard, and a side that loses its
-  last Condor gets a free one flown in 45 s later. Tap an island with a
-  loaded Condor selected to drop its troops.
+- **The Archipelago** (108×108, nearly four times Riverlands): every 📡
+  Uplink sits on an island only robot infantry flown in by Condor can take
+  — aircraft, the Condor and tanks count for nothing there — and an island
+  Uplink pays only while your troops stand on it, so aircraft earn their
+  keep killing garrisons. Two bridges join the HQs' landmasses, scrap is
+  scarce, both sides start with a Condor and a squad aboard, and a side
+  that loses its last Condor gets a free one flown in 45 s later. Tap an
+  island with a loaded Condor selected to drop its troops.
 - Armor classes and damage types, dodgeable artillery shells and bombs,
   splash damage, veterancy, retaliation AI for idle units.
 - An AI commander with **6 personalities** (Balanced, Rush, Air Swarm,

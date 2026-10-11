@@ -80,7 +80,7 @@ chevron (`ui/hscroll.ts`).
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
-| Archipelago | 96² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
+| Archipelago | 108² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 
@@ -121,17 +121,28 @@ slower, 85% of it in A*).
 ### The Archipelago
 
 The map built to make robot infantry, the Condor and aircraft the heart of
-the game, and to make the fight about Uplinks. 96² (three times the area of
-Riverlands). The two HQs' landmasses are split by **open sea** along the
-diagonal, necked at **two bridges** near the middle (the only land route:
-a test cuts them and checks nothing crosses) and opening into gulfs in the
-two empty corners.
+the game, and to make the fight about Uplinks. 108² (nearly four times the
+area of Riverlands). The two HQs' landmasses are split by **open sea** along
+the diagonal, necked at **two bridges** near the middle (the only land route:
+a test cuts them and checks nothing crosses) and opening into a wide gulf in
+each empty corner: a bay round the corner whose shore swings out and in with
+broad headlands and coves, and which leaves the necks as they are.
 
 - **Seven island Uplinks**, every one on an island: each side's two home
-  isles off its own coasts (2.5 scrap/s), an outer isle deep in each gulf
+  isles off its own coasts (2.5 scrap/s), an outer isle out in each gulf
   (3.5) and the centre island in a lagoon between the bridges (5). Each
   island has at least 4 tiles of walkable ground round its relay (room for
   two drops, and to dodge a Barrage).
+- **Scattered, not packed**: a gulf's three isles each have their own shape
+  (a few overlapping lobes: the outer isle the biggest, long and ragged,
+  red's home isle rounder), sit at uneven distances from each other, and
+  have at least 4 tiles of open sea to the next island or a coast (a test
+  checks; it also checks no other speck of land breaks the surface). Reef
+  shoals and limestone sea stacks (rock: nothing stands on them) fill the
+  water between. The map grew from 96² to give the gulfs that room: the
+  middle (lagoon, necks, bridges, roads, the HQs and their distances to the
+  bridges) is the 96² layout moved to the new centre, and each HQ gained
+  open ground behind it.
 - **Infantry only** (`Uplink.infantryOnly`, `captureWeight` in
   `objectives.ts`): only robot squads count in an island relay's ring, to
   take it and to contest it. Aircraft, the Condor itself and vehicles count

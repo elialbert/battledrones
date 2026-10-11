@@ -70,6 +70,59 @@ describe("the island map", () => {
         }
       });
 
+      it("leaves open sea round every island: at least 4 tiles of it to the next island or a coast", () => {
+        // land with its shelf, 8-connected (a reef or sea stack on its own is scenery)
+        const W = w.width;
+        const blob = new Int32Array(W * w.height);
+        let n = 0;
+        for (let i = 0; i < blob.length; i++) {
+          if (blob[i] || w.terrain[i] === Terrain.Deep) continue;
+          blob[i] = ++n;
+          for (const open = [i]; open.length; ) {
+            const j = open.pop()!;
+            for (let dy = -1; dy <= 1; dy++)
+              for (let dx = -1; dx <= 1; dx++) {
+                const x = (j % W) + dx;
+                const y = Math.floor(j / W) + dy;
+                const k = y * W + x;
+                if (x < 0 || y < 0 || x >= W || y >= w.height || blob[k] || w.terrain[k] === Terrain.Deep) continue;
+                blob[k] = n;
+                open.push(k);
+              }
+          }
+        }
+        const at = (p: { x: number; y: number }) => blob[Math.floor(p.y) * W + Math.floor(p.x)]!;
+        const isles = w.objectives.uplinks.map(at);
+        const solid = new Set([at(b), ...isles]);
+        expect(new Set(isles).size).toBe(isles.length); // (each relay on its own island)
+        for (const isle of isles) {
+          let gap = Infinity;
+          for (let i = 0; i < blob.length; i++) {
+            if (blob[i] !== isle) continue;
+            for (let dy = -6; dy <= 6; dy++)
+              for (let dx = -6; dx <= 6; dx++) {
+                const x = (i % W) + dx;
+                const y = Math.floor(i / W) + dy;
+                const o = blob[y * W + x];
+                if (x >= 0 && y >= 0 && x < W && y < w.height && o !== isle && solid.has(o!)) gap = Math.min(gap, Math.hypot(dx, dy) - 1);
+              }
+          }
+          expect(gap).toBeGreaterThanOrEqual(4);
+        }
+      });
+
+      it("has no stray specks of land: all ground is the mainland or an Uplink's island", () => {
+        const foot = (p: { x: number; y: number }) => regionAt(w, Math.floor(p.x), Math.floor(p.y), "foot");
+        const known = new Set([foot(b), foot(r), ...w.objectives.uplinks.map(foot)]);
+        const stray: string[] = [];
+        for (let ty = 0; ty < w.height; ty++)
+          for (let tx = 0; tx < w.width; tx++) {
+            const reg = regionAt(w, tx, ty, "foot");
+            if (reg && !known.has(reg)) stray.push(`${tx},${ty}`);
+          }
+        expect(stray).toEqual([]);
+      });
+
       it("has no ford anywhere: every tile of sea is water or open sea", () => {
         for (let i = 0; i < w.width * w.height; i++) expect(w.terrain[i]).not.toBe(Terrain.Shallows);
       });
@@ -109,7 +162,7 @@ describe("the island map", () => {
 
 describe("island Uplinks", () => {
   const fresh = () => createMapWorld("archipelago", { objectives: true });
-  const centre = (w: World) => w.objectives.uplinks.find((l) => l.x === 48 && l.y === 48)!;
+  const centre = (w: World) => w.objectives.uplinks.find((l) => l.x === 54 && l.y === 54)!;
 
   it("count only robot infantry: aircraft, the Condor and hover tanks neither take nor freeze them", () => {
     const w = fresh();
@@ -158,7 +211,7 @@ describe("only a Condor reaches an island", () => {
   it("no Drop Pod lands on one, even with eyes on it", () => {
     const w = createMapWorld("archipelago", { mutators: ["clearskies"] });
     runTicks(w, 1); // (the fog's first pass)
-    expect(targetBlocker(w, "blue", "droppod", 48.5, 50.5)).toMatch(/islands/);
+    expect(targetBlocker(w, "blue", "droppod", 56.5, 54.5)).toMatch(/islands/);
     const b = besideHq(w, "blue");
     expect(targetBlocker(w, "blue", "droppod", b.x + 4, b.y - 8)).toBeNull();
   });
@@ -167,8 +220,8 @@ describe("only a Condor reaches an island", () => {
     const w = createMapWorld("archipelago");
     // an island Ground tile, with a friendly building in range of it in every other way
     let spot: { x: number; y: number } | null = null;
-    for (let y = 44; y < 52 && !spot; y++)
-      for (let x = 44; x < 52 && !spot; x++)
+    for (let y = 50; y < 58 && !spot; y++)
+      for (let x = 50; x < 58 && !spot; x++)
         if (terrainAt(w, x, y) === Terrain.Ground && terrainAt(w, x + 1, y) === Terrain.Ground) spot = { x, y };
     expect(spot).not.toBeNull();
     expect(onHomeLand(w, "blue", spot!.x, spot!.y)).toBe(false);
@@ -267,8 +320,8 @@ describe("island UX", () => {
     const c = new Controller(w);
     const [condor] = own(w, "blue", "condor");
     c.selectUnits([condor!.id]);
-    c.tapWorld(10.5, 24.5, { kind: "ground" }); // blue's home isle
-    expect(c.drainCommands()).toEqual([{ type: "unload", faction: "blue", unitIds: [condor!.id], x: 10.5, y: 24.5 }]);
+    c.tapWorld(7.5, 35.5, { kind: "ground" }); // blue's home isle
+    expect(c.drainCommands()).toEqual([{ type: "unload", faction: "blue", unitIds: [condor!.id], x: 7.5, y: 35.5 }]);
     expect(c.lastFeedback?.kind).toBe("drop");
   });
 
@@ -279,9 +332,9 @@ describe("island UX", () => {
     const b = besideHq(w, "blue");
     const tank = spawnUnit(w, "stinger", "blue", b.x, b.y);
     c.selectUnits([tank.id]);
-    c.tapWorld(48.5, 48.5, { kind: "ground" });
+    c.tapWorld(54.5, 54.5, { kind: "ground" });
     expect(c.tip).toMatch(/Condor/);
-    expect(c.onIsland(48, 48)).toBe(true);
+    expect(c.onIsland(54, 54)).toBe(true);
     expect(c.onIsland(Math.floor(b.x), Math.floor(b.y))).toBe(false);
   });
 
@@ -299,12 +352,12 @@ describe("island UX", () => {
 describe("fighting across the sea (review fixes)", () => {
   it("a shore squad ordered at a dropship it can't reach drops the order and fights what lands beside it", () => {
     const w = createMapWorld("archipelago");
-    const condor = spawnUnit(w, "condor", "red", 35.54, 30.5); // parked over open sea, just off blue's coast
-    const t = spawnUnit(w, "trooper", "blue", 40.5, 30.5);
+    const condor = spawnUnit(w, "condor", "red", 41.54, 36.5); // parked over open sea, just off the bridge
+    const t = spawnUnit(w, "trooper", "blue", 46.5, 36.5); // on the bridge
     step(w, [{ type: "attack", faction: "blue", unitIds: [t.id], targetId: condor.id }]);
     runTicks(w, 20 * TICK_RATE);
-    condor.x = 35.54;
-    condor.y = 30.5;
+    condor.x = 41.54;
+    condor.y = 36.5;
     expect(t.order.type).toBe("idle");
     const raider = spawnUnit(w, "trooper", "red", t.x + 1.8, t.y);
     runTicks(w, 8 * TICK_RATE);
@@ -313,7 +366,7 @@ describe("fighting across the sea (review fixes)", () => {
 
   it("a garrison isn't lured off its island relay by a Scout hovering offshore", () => {
     const w = createMapWorld("archipelago", { objectives: true });
-    const l = w.objectives.uplinks.find((u) => u.x === 48 && u.y === 48)!;
+    const l = w.objectives.uplinks.find((u) => u.x === 54 && u.y === 54)!;
     const g = spawnUnit(w, "trooper", "blue", l.x + 1.6, l.y);
     runTicks(w, 16 * TICK_RATE);
     expect(l.crewed).toBe(true);
@@ -333,8 +386,11 @@ describe("fighting across the sea (review fixes)", () => {
 
   it("separation never shoves a hover tank across a corner into water it can't leave", () => {
     const w = createMapWorld("archipelago");
-    const a = spawnUnit(w, "lancer", "blue", 58.92, 37.92);
-    const b = spawnUnit(w, "lancer", "blue", 58.6, 37.6);
+    // a one-tile pocket of water that touches the shore (tile 30,76) only at a corner
+    for (const [x, y] of [[31, 76], [30, 77], [32, 77], [31, 78]] as const) setTerrain(w, x, y, Terrain.Deep);
+    setTerrain(w, 31, 77, Terrain.Water);
+    const a = spawnUnit(w, "lancer", "blue", 30.92, 76.92);
+    const b = spawnUnit(w, "lancer", "blue", 30.6, 76.6);
     const ra = regionAt(w, Math.floor(a.x), Math.floor(a.y), "hover");
     const rb = regionAt(w, Math.floor(b.x), Math.floor(b.y), "hover");
     runTicks(w, 5);
@@ -354,9 +410,9 @@ describe("island taps (review fixes)", () => {
     const { w, c } = await setup();
     const b = besideHq(w, "blue");
     const tank = spawnUnit(w, "stinger", "blue", b.x, b.y);
-    const foe = spawnUnit(w, "trooper", "red", 48.5, 48.5);
+    const foe = spawnUnit(w, "trooper", "red", 54.5, 54.5);
     c.selectUnits([tank.id]);
-    c.tapWorld(48.5, 48.5, { kind: "enemy", id: foe.id, targetsAir: false });
+    c.tapWorld(54.5, 54.5, { kind: "enemy", id: foe.id, targetsAir: false });
     expect(c.drainCommands().some((k) => k.type === "attack")).toBe(false);
     expect(c.lastFeedback?.kind).not.toBe("attack");
     expect(c.tip).toMatch(/Condor/);
@@ -366,23 +422,23 @@ describe("island taps (review fixes)", () => {
     const { w, c } = await setup();
     const [condor] = own(w, "blue", "condor");
     const wasp = spawnUnit(w, "wasp", "blue", condor!.x + 1, condor!.y);
-    const foe = spawnUnit(w, "trooper", "red", 48.5, 48.5);
+    const foe = spawnUnit(w, "trooper", "red", 54.5, 54.5);
     c.selectUnits([condor!.id, wasp.id]);
-    c.tapWorld(48.5, 48.5, { kind: "enemy", id: foe.id, targetsAir: false });
+    c.tapWorld(54.5, 54.5, { kind: "enemy", id: foe.id, targetsAir: false });
     const cmds = c.drainCommands();
     expect(cmds).toContainEqual({ type: "attack", faction: "blue", unitIds: [wasp.id], targetId: foe.id });
-    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 48.5, y: 48.5 });
+    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 54.5, y: 54.5 });
   });
 
   it("tapping our own island garrison with a loaded Condor reinforces it instead of picking it up", async () => {
     const { w, c } = await setup();
     const [condor] = own(w, "blue", "condor");
-    const garrison = spawnUnit(w, "rocket-squad", "blue", 48.5, 48.5);
+    const garrison = spawnUnit(w, "rocket-squad", "blue", 54.5, 54.5);
     c.selectUnits([condor!.id]);
-    c.tapWorld(48.6, 48.4, { kind: "ownUnit", id: garrison.id });
+    c.tapWorld(54.6, 54.4, { kind: "ownUnit", id: garrison.id });
     const cmds = c.drainCommands();
     expect(cmds.some((k) => k.type === "board")).toBe(false);
-    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 48.5, y: 48.5 });
+    expect(cmds).toContainEqual({ type: "unload", faction: "blue", unitIds: [condor!.id], x: 54.5, y: 54.5 });
   });
 
   it("'tap the Condor, then the island' straight away keeps the squad boarding and drops it once aboard", async () => {
@@ -397,28 +453,28 @@ describe("island taps (review fixes)", () => {
     c.selectUnits([squad.id]);
     c.tapWorld(condor!.x, condor!.y, { kind: "ownUnit", id: condor!.id }); // board
     step(w, c.drainCommands());
-    c.tapWorld(48.5, 48.5, { kind: "ground" }); // the island, before it's aboard
+    c.tapWorld(54.5, 54.5, { kind: "ground" }); // the island, before it's aboard
     const now = c.drainCommands();
     expect(now.some((k) => k.type === "attackMove" || k.type === "move")).toBe(false);
     let sent = false;
     for (let i = 0; i < 20 * TICK_RATE && !sent; i++) {
       step(w, []);
       c.prune();
-      sent = c.drainCommands().some((k) => k.type === "unload" && k.x === 48.5);
+      sent = c.drainCommands().some((k) => k.type === "unload" && k.x === 54.5);
     }
     expect(sent).toBe(true);
   });
 
   it("no island tip for units that can get there: squads already on it, aircraft", async () => {
     const { w, c } = await setup();
-    const sq = spawnUnit(w, "trooper", "blue", 47.5, 47.5);
+    const sq = spawnUnit(w, "trooper", "blue", 53.5, 53.5);
     c.selectUnits([sq.id]);
-    c.tapWorld(49.5, 49.5, { kind: "ground" });
+    c.tapWorld(55.5, 55.5, { kind: "ground" });
     expect(c.tip).toBeNull();
     const b = besideHq(w, "blue");
     const wasp = spawnUnit(w, "wasp", "blue", b.x, b.y);
     c.selectUnits([wasp.id]);
-    c.tapWorld(10.5, 24.5, { kind: "ground" });
+    c.tapWorld(7.5, 35.5, { kind: "ground" });
     expect(c.tip).toBeNull();
   });
 });
