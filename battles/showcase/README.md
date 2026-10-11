@@ -18,8 +18,9 @@ npx vite-node tools/arena.ts stats battles/showcase/*.json --detail
 | `2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json` | GPT-6 Luna (Industry) | GPT-6 Luna (Industry) | blue wins at 4:31 | blue wins at 4:31 | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) |
 | `2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json` | GPT-6 Luna (Blitz) | GPT-6 Luna (Industry) | blue wins at 6:23 | blue wins at 7:52 | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) |
 | `2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json` | GPT-6 Luna (Industry) | GPT-6 Astra (Industry) | red wins at 4:45 | red wins at 7:50 | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) |
+| `2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json` | GPT-5.6 Sol (Air Wing) | GPT-6.1 Sol (Air Wing) | red wins at 11:45 | (played on this sim) | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) |
 
-They were played on the sim before `src/sim/fmath.ts` made it give the same
+The first three were played on the sim before `src/sim/fmath.ts` made it give the same
 results in every browser engine, and brought up to date with
 `npx vite-node tools/arena.ts upgrade battles/showcase/*.json`: the same
 commands, re-simulated. The models chose those commands against the old
@@ -29,5 +30,15 @@ played when it differs, and each record keeps it under `upgraded`.
 
 The first was played before unit ids were written `"#97"` in the order
 reference, so many of its orders were refused. The third was played with
-`-o reasoning_effort low` for both seats. The logs databases and tool
-transcripts that went with them stayed local (a few MB each).
+`-o reasoning_effort low` for both seats. The fourth, on the Archipelago, was
+played on the current sim at the default effort:
+
+```bash
+llm battledrones run --blue gpt-5.6-sol --red gpt-6.1-sol --map archipelago --seed 42
+```
+
+LLM 0.36 doesn't list `gpt-6.1-sol` yet, so it was added in LLM's
+`extra-openai-models.yaml` with the same settings as `gpt-6-sol` (`responses:
+true`, `reasoning: true`, `supports_tools: true`). The logs databases and tool
+transcripts that went with these records stayed local (a few MB each; 21 MB
+for the fourth).

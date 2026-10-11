@@ -924,7 +924,7 @@ Where the build differs from, or adds to, the text above:
 
 ## First battles
 
-(All three records were later brought up to the deterministic sim with
+(The first three records were later brought up to the deterministic sim with
 `tools/arena.ts upgrade`. The first still ends at 4:31, 0.2 s later; in the
 other two the same side wins, but the re-simulated final assault lands later:
 7:52 instead of 6:23, and 7:50 instead of 4:45. What follows describes the
@@ -989,6 +989,36 @@ smaller: 12,843 output tokens for Luna and 15,559 for Astra (983k and 690k
 input, ~90% cached). 58 of 501 orders were refused (11.6%, against 5% at the
 default effort). It replays exactly (28 hash checks). Lancer-heavy armies
 have now won all three model battles.
+
+**GPT-5.6 Sol vs GPT-6.1 Sol, Archipelago, seed 42** (default effort and
+budgets, on the deterministic sim). Both took Air Wing and raided each
+other's harvesters at once. Blue's Flak and SAM drove red's Wasps off; red
+turned to the islands and Hornets, and by 7:30 held all seven Uplinks. Blue
+built 8 harvesters to red's 3 (they mined about the same) and went for red's
+HQ by land, with a Drop Pod at the front. At 6:00 both fired the Sky
+Hammer in the same round: blue's on red's HQ, red's on blue's siege line.
+By blue's estimate red's HQ fell to 11%; red parked seven Menders on it and
+had it back to full health by 7:25 while its bombers counterattacked. Every
+reachable field was mined out by about 9:00, which left the Uplinks as
+income. Red built a forward Fab Plant and broke blue's base with a Mortar
+siege screened by Lancers and Rocket Squads, plus its third Sky Hammer.
+Blue parked its harvesters around its HQ as a shield ("Hold for the hammer")
+and lost the HQ at **11:45** (round 142), with its next Sky Hammer still
+about half a minute away. 18 calldowns in all: blue 5 EMPs, a Drop Pod
+and 2 Sky Hammers; red 5 Barrages, 2 EMPs and 3 Sky Hammers. Refusals were
+5.1% (blue) and 6.4% (red), many of them harvest orders on mined-out tiles
+late on. It replays exactly (70 hash checks). 143 rounds in 45 minutes.
+
+| | blue (GPT-5.6 Sol) | red (GPT-6.1 Sol) |
+|---|---|---|
+| input tokens (cached) | 2,298,719 (1,997,275) | 2,116,588 (1,872,865) |
+| output tokens | 146,531 | 65,876 |
+| tool calls | 229 | 183 |
+| cost at list prices | $4.94 | $1.33 |
+
+GPT-5.6 Sol wrote more than twice as many output tokens, and its turns took
+about twice as long. (LLM 0.36 doesn't list `gpt-6.1-sol` yet: it was
+added in `extra-openai-models.yaml` as a Responses model, like `gpt-6-sol`.)
 
 ## Later
 
