@@ -1,11 +1,12 @@
 /**
  * The battle viewer (AGENT-BATTLES.md "Watching"): plays a battle record
  * from tools/arena.ts in the game's own 3D view, as an AI-vs-AI spectator
- * match fed by the record instead of the AI. Dev builds only: main.ts loads
- * this module under `import.meta.env.DEV`, so none of it ships.
+ * match fed by the record instead of the AI. main.ts loads this module only
+ * when it's wanted, so it costs the menu nothing:
  *
- *   npm run dev, then /?replay=battles/<file>.json          (tools/arena.ts watch does this)
- *   /?replay=battles/<file>.json&follow                      a live battle: re-read every second
+ *   menu → 🎬 Watch a replay: paste a record, or pick its file (any build)
+ *   npm run dev, then /?replay=battles/<file>.json          (dev builds; tools/arena.ts watch does this)
+ *   /?replay=battles/<file>.json&follow                      (dev builds) a live battle: re-read every second
  *
  * It checks the world hash every 100 ticks as it plays, and says so if the
  * replay drifts from the battle; it keeps a copy of the world every 30 s so
@@ -14,9 +15,14 @@
  */
 import { setupWorld, worldHash, type BattleRecord, type RoundLog } from "../arena/record";
 import { TICK_RATE } from "../sim/balance";
+import { MAPS } from "../sim/maps";
 import type { Command, Faction, World } from "../sim/types";
 import { replayPanel, type ReplayPanel } from "../ui/replay";
 import type { GameScene, MatchFeed } from "./GameScene";
+
+declare const __SIM_HASH__: string | undefined;
+/** The sim this build plays (vite.config.ts; tools/arena/files.ts simHash), or null outside a Vite build. */
+export const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
 
 /** A keyframe every 30 s of game time. */
 const KEYFRAME_TICKS = 30 * TICK_RATE;
@@ -43,7 +49,7 @@ export class ReplayFeed implements MatchFeed {
   private fetchIn = 1000;
   private fetching = false;
 
-  constructor(record: BattleRecord, readonly url: string, readonly follow: boolean) {
+  constructor(record: BattleRecord, readonly url: string | null, readonly follow: boolean) {
     this.record = record;
     this.world = setupWorld(record);
     this.keyframes.set(0, structuredClone(this.world));
@@ -105,7 +111,7 @@ export class ReplayFeed implements MatchFeed {
 
   frame(deltaMs: number): void {
     this.panel?.update();
-    if (!this.follow || this.record.end) return;
+    if (!this.follow || !this.url || this.record.end) return;
     this.fetchIn -= deltaMs;
     if (this.fetchIn > 0 || this.fetching) return;
     this.fetchIn = 1000;
@@ -135,12 +141,33 @@ export class ReplayFeed implements MatchFeed {
   }
 }
 
+/** Was this record played by other sim code than this build's? (A replay may then drift: the hash check says so if it does.) */
+export const otherSim = (r: BattleRecord): boolean => !!r.sim && !!BUILD_SIM && r.sim !== BUILD_SIM;
+
+/** A battle record from its JSON, checked enough to play: throws a message a person can act on. */
+export function parseRecord(text: string): BattleRecord {
+  let r: BattleRecord;
+  try {
+    r = JSON.parse(text) as BattleRecord;
+  } catch {
+    throw new Error("That isn't JSON: paste the whole .json file a battle wrote to battles/");
+  }
+  if (!r || typeof r !== "object" || r.v !== 1 || !Array.isArray(r.turns) || !Array.isArray(r.hashes) || !r.seats)
+    throw new Error("That isn't a battle record (tools/arena.ts and llm battledrones write them to battles/)");
+  if (!MAPS.some((m) => m.id === r.map)) throw new Error(`This battle was played on "${r.map}", a map this version of the game doesn't have`);
+  if (!r.end && !r.tick) throw new Error("This battle hasn't been played past its first round yet");
+  return r;
+}
+
 async function fetchRecord(url: string): Promise<BattleRecord> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
-  const r = (await res.json()) as BattleRecord;
-  if (r.v !== 1) throw new Error(`${url}: not a battle record`);
-  return r;
+  return parseRecord(await res.text());
+}
+
+/** A pasted (or picked) record, ready for GameScene. */
+export function replayFromJson(text: string): ReplayFeed {
+  return new ReplayFeed(parseRecord(text), null, false);
 }
 
 /** Load `?replay=<path>` (relative to the dev server's root, or /@fs/…) into a feed for GameScene. */

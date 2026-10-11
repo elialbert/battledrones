@@ -15,6 +15,7 @@ uv tool install llm && llm keys set openai           # or OPENAI_API_KEY
 llm install -e llm-tools-battledrones
 llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
 npx vite-node tools/arena.ts watch battles/<file>.json   # the 3D viewer (npm run dev)
+# …or in any build of the game: menu → 🎬 Watch a replay, paste the record (or pick its file)
 llm logs -d battles/<file>.logs.db                       # how each model thought (or Datasette)
 ```
 
@@ -47,8 +48,9 @@ doesn't change: nothing here is in the production build.
 - **Reproducible.** Every battle is a small file that replays exactly.
 - **Useful for balance work.** Agents find strategies the scripted AI never
   tries.
-- **Invisible in the public game.** The runner is a dev tool, and the viewer
-  only exists in dev builds.
+- **Out of the way in the public game.** The runner is a dev tool. The
+  viewer loads only when a player asks to watch a replay (menu → 🎬 Watch a
+  replay); live viewing stays in dev builds.
 
 ## Non-goals (for now)
 
@@ -668,10 +670,12 @@ working without any build archive.
 ## Watching
 
 **The viewer** is the game's existing AI-vs-AI watch mode (the fog off by
-default, up to 4× speed), fed by the record instead of the AI. It only
-exists in dev builds: `npm run dev`, then `/?replay=battles/<file>.json`
-(Vite's dev server serves files from the project root). `tools/arena.ts
-watch` does this for you, in the right worktree. It adds:
+default, up to 4× speed), fed by the record instead of the AI. In any build,
+the public game included, the menu's **🎬 Watch a replay** opens a box to
+paste a record into (or pick its file). In dev builds,
+`/?replay=battles/<file>.json` loads one by URL (Vite's dev server serves
+files from the project root), and `tools/arena.ts watch` does that for you,
+in the right worktree. It adds:
 
 - **Seeking.** Forward steps the sim with rendering off (a whole match in a
   few seconds). Backward uses keyframes taken every 30 s as it plays:
@@ -749,11 +753,14 @@ limits.
 | `tools/arena/files.ts` | Record files, the sim hash, the commit |
 | `tools/arena-viewer-check.mjs` | The Playwright check: a record played in the dev viewer, hash trail checked in Chromium |
 | `llm-tools-battledrones/` | The LLM plugin: the `BattleDrones` toolbox and the `llm battledrones` command (Python), with its tests |
-| `src/game/replay.ts`, `src/ui/replay.ts` | The dev-only viewer and its panel, loaded only when `import.meta.env.DEV` |
+| `src/game/replay.ts`, `src/ui/replay.ts` | The viewer and its panel: a chunk of its own (10 KB, 4 KB gzipped) that loads only when a replay is chosen |
+| `src/ui/replay-picker.ts` | The menu's "Watch a replay" sheet: paste a record or pick its file |
 
-`src/arena` reads the sim and changes nothing in it. Only the dev-only viewer
-imports it in the browser, so it never reaches the production bundle (a test
-checks the imports; `vite build` was checked by hand to contain none of it).
+`src/arena` reads the sim and changes nothing in it. In the browser only the
+viewer imports it (`record.ts`), and nothing imports the viewer statically:
+`main.ts` loads it when a replay is chosen (a test checks the imports). Each
+build carries its sim hash (`__SIM_HASH__`, from `vite.config.ts`), and the
+viewer warns when a record was played by other sim code.
 `GameScene` gained a small generic hook, `MatchFeed`, that a fed match plays
 through instead of the AI commanders, and a fog side for the viewer's
 "through X's eyes".
@@ -859,6 +866,11 @@ Where the build differs from, or adds to, the text above:
   through 30 s keyframes), the fog switch, the notes panel, the divergence
   warning, the commanders' radio in the ticker and the announcer's voice, and
   follow mode. The HQ-kill cinematic isn't replayed after a seek.
+- **Replays in the public game.** The menu's "🎬 Watch a replay" takes a
+  pasted record (or its file), checks it (JSON, a v1 record, a map this
+  version has) and plays it. URL loading (`?replay=`) and follow mode (live
+  viewing) stay in dev builds. `tools/arena-viewer-check.mjs --paste --prod`
+  pastes a record into the production build and checks the hash trail.
 
 - **Not built**: the commentator toolbox (`BattleDronesReplay`,
   `serve-replay`), `series --parallel`, the whole-conversation context
@@ -924,6 +936,16 @@ Chromium (38 hash checks).
 frames are mirrored, and a `series` of mirror pairs is what would show a
 bias. Lancer-heavy armies won both games, which is the sort of thing the
 balance work could follow up.
+
+**GPT-6 Luna vs GPT-6 Astra, Riverlands, seed 42**, both at `-o
+reasoning_effort low`. Both took Industry. Luna (blue) led the first two
+minutes and took two Uplinks; Astra (red) built up 15 Lancers and 4 Mortars
+with Menders and broke Luna's base, destroying its HQ at **4:45** (round 58).
+At low effort the rounds were quicker (8 minutes in all) and output much
+smaller: 12,843 output tokens for Luna and 15,559 for Astra (983k and 690k
+input, ~90% cached). 58 of 501 orders were refused (11.6%, against 5% at the
+default effort). It replays exactly (28 hash checks). Lancer-heavy armies
+have now won all three model battles.
 
 ## Later
 

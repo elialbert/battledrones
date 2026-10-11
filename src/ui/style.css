@@ -4896,3 +4896,29 @@ button {
     height: 36px;
   }
 }
+
+/* the menu's "Watch a replay" sheet (ui/replay-picker.ts) */
+.replaysheet textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0c121c;
+  color: var(--text);
+  font: 12px/1.35 ui-monospace, monospace;
+}
+.replaysheet .replay-file {
+  display: block;
+  margin: 8px 0 0;
+  text-align: center;
+  cursor: pointer;
+}
+.replaysheet .replay-error {
+  color: #ff9c8c;
+}
+.replaysheet code {
+  font-size: 12px;
+}

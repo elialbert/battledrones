@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { MAP_ART } from "./src/game/map-art";
+import { simHash } from "./tools/arena/files";
 
 /**
  * Each map's terrain revision: a hash of its painted chunks (art/terrain.py
@@ -29,7 +30,11 @@ export default defineConfig({
   // Local builds are portable; Pages supplies an absolute base for each version.
   base: "./",
   server: { host: true },
-  define: { __TERRAIN_REVS__: JSON.stringify(terrainRevisions()) },
+  define: {
+    __TERRAIN_REVS__: JSON.stringify(terrainRevisions()),
+    // the sim this build plays: the battle viewer warns when a record was played by other code
+    __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url))))
+  },
   build: {
     target: "es2022",
     outDir: "dist",

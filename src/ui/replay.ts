@@ -7,7 +7,7 @@
  */
 import type { GameScene } from "../game/GameScene";
 import type { ReplayFeed } from "../game/replay";
-import { clock } from "../game/replay";
+import { BUILD_SIM, clock, otherSim } from "../game/replay";
 import type { Faction } from "../sim/types";
 
 export interface ReplayPanel {
@@ -55,6 +55,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     </div>
     <div class="rp-status" hidden></div>
     <div class="rp-warn" hidden></div>
+    <div class="rp-warn rp-sim"${otherSim(r) ? "" : " hidden"}>Recorded by other game code (sim ${esc(r.sim ?? "?")}, this game ${esc(BUILD_SIM ?? "?")}): if it drifts, this page says so. <code>tools/arena.ts watch</code> replays it with its own code.</div>
     <div class="rp-notes" hidden><div class="rp-side" data-side="blue"></div><div class="rp-side" data-side="red"></div></div>`;
   document.body.appendChild(root);
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;

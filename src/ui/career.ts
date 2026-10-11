@@ -182,7 +182,7 @@ export function mountMenuCareer(menu: HTMLElement, hooks: { playDaily(op: DailyO
   };
 }
 
-function openSheet(host: HTMLElement, cls: string, html: string): HTMLElement {
+export function openSheet(host: HTMLElement, cls: string, html: string): HTMLElement {
   host.querySelector(".sheet-wrap")?.remove();
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap";

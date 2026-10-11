@@ -332,21 +332,35 @@ describe("the loopback seat server", () => {
   });
 });
 
-describe("the battle viewer stays out of the production build", () => {
+describe("the battle viewer costs the game nothing until it's wanted", () => {
   // every module under src/, as text
   const sources = import.meta.glob("../src/**/*.ts", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
   const viewer = ["../src/game/replay.ts", "../src/ui/replay.ts"];
 
-  it("nothing outside the viewer imports it or the arena, except main.ts's dev-only dynamic import", () => {
+  it("nothing outside the viewer imports it or the arena statically: main.ts loads it on demand", () => {
     for (const [path, src] of Object.entries(sources)) {
       if (viewer.includes(path) || path.startsWith("../src/arena/")) continue;
       const imports = [...src.matchAll(/^import (?!type )[^;]*?from "([^"]+)"/gm)].map((m) => m[1]!);
-      for (const spec of imports) expect(/(^|\/)(replay|arena\/)/.test(spec), `${path} imports ${spec}`).toBe(false);
+      // (the menu's little picker sheet, ui/replay-picker.ts, is fine: it's the viewer and the arena that wait)
+      for (const spec of imports) expect(/(^|\/)replay$|(^|\/)arena\//.test(spec), `${path} imports ${spec}`).toBe(false);
     }
     const main = sources["../src/main.ts"]!;
-    const at = main.indexOf('import("./game/replay")');
-    expect(at).toBeGreaterThan(0);
-    // (inside the `if (import.meta.env.DEV && …)` block, which Vite turns into `if (false)` for production)
-    expect(main.lastIndexOf("if (import.meta.env.DEV", at)).toBeGreaterThan(main.lastIndexOf("\n}", at));
+    // the menu's "Watch a replay" (every build) and ?replay=<url> (dev builds) both load it dynamically
+    expect(main.match(/import\("\.\/game\/replay"\)/g)?.length).toBe(2);
+    // ?replay= and &follow are dev-only: inside `if (import.meta.env.DEV && …)`, which Vite turns into `if (false)` for production
+    expect(main).toMatch(/if \(import\.meta\.env\.DEV && new URLSearchParams\(location\.search\)\.has\("replay"\)\)/);
+  });
+});
+
+describe("a pasted battle record", () => {
+  it("is checked before it plays", async () => {
+    const { parseRecord } = await import("../src/game/replay");
+    const a = new Arena({ map: "frostbite", seed: 2, seats: { blue: parseSeat("ai:rush:easy"), red: parseSeat("ai:boom:easy") }, maxTicks: 600 });
+    a.advance();
+    const json = JSON.stringify(a.record);
+    expect(parseRecord(json).end).toEqual(a.record.end);
+    expect(() => parseRecord("{not json")).toThrow(/isn't JSON/);
+    expect(() => parseRecord('{"hello": 1}')).toThrow(/isn't a battle record/);
+    expect(() => parseRecord(json.replace('"map":"frostbite"', '"map":"atlantis"'))).toThrow(/"atlantis", a map this version of the game doesn't have/);
   });
 });
