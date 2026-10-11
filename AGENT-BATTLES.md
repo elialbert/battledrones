@@ -902,6 +902,29 @@ as `"#97"` in the reference and the system prompt, and a refusal that names
 the mistake ("unit lists take unit ids ("#97") or selectors ("army"); a tile
 [x, y] goes in "to""), brought refusals down to **5%** in the second battle.
 
+**GPT-6 Luna vs GPT-6 Luna, Dune Sea, seed 7**, after that fix. Blue took
+Blitz and red Industry, yet blue out-mined red nearly two to one (13,500
+scrap to 7,356 by 6:00) while its Stingers kept red's harvesters running.
+Both sides used calldowns (three EMPs each, the Sky Hammer once for blue and
+twice for red, a Barrage). Blue again massed Lancers, 15 of them, broke in
+and destroyed red's HQ at **6:23** (round 77) while red's notes described
+"a desperate retreat through the dunes" with one turret left. 30 of 587
+orders were refused (5.1%), all for game reasons: "Needs Airpad", "Not
+enough scrap", a field that had run dry. Every round of both battles ended
+with an `end_round`, inside the budgets. It replays exactly in Node and in
+Chromium (38 hash checks).
+
+| | blue | red |
+|---|---|---|
+| input tokens (cached) | 1,288,843 (1,143,685) | 1,306,857 (1,173,869) |
+| output tokens | 84,141 | 73,838 |
+| tool calls | 130 | 142 |
+
+78 rounds in 21 minutes. Two blue wins say nothing about the sides yet: the
+frames are mirrored, and a `series` of mirror pairs is what would show a
+bias. Lancer-heavy armies won both games, which is the sort of thing the
+balance work could follow up.
+
 ## Later
 
 - **Bot battles.** Instead of playing, each agent writes a commander: a
