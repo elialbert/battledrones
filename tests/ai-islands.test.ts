@@ -73,7 +73,7 @@ describe("AI airlift (island relays)", () => {
   it("on Easy it airlifts too, a little later, to neutral relays only", () => {
     const w = world();
     // the enemy holds the centre (crewed): Easy leaves it alone
-    const centre = relays(w).find((l) => l.x === 48 && l.y === 48)!;
+    const centre = relays(w).find((l) => l.x === 54 && l.y === 54)!;
     hold(w, "blue", centre);
     const s = createAiState("balanced", "easy", 3);
     const cmds = runRed(w, 150, s);
@@ -89,10 +89,10 @@ describe("AI airlift (island relays)", () => {
     const all = relays(w);
     // red holds every relay, crewed — but one garrison is wiped out
     const squads = all.map((l) => hold(w, "red", l));
-    const bare = all.find((l) => l.x === 86.1 && l.y === 72)!; // red's own home isle
+    const bare = all.find((l) => l.x === 101.5 && l.y === 73)!; // red's own home isle
     w.units.delete(squads[all.indexOf(bare)]!.id);
     // and another squad has wandered to its island's edge
-    const far = all.find((l) => l.x === 48 && l.y === 48)!;
+    const far = all.find((l) => l.x === 54 && l.y === 54)!;
     const stray = squads[all.indexOf(far)]!;
     stray.x = far.x + 3.6;
     stray.y = far.y;
@@ -109,8 +109,8 @@ describe("AI airlift (island relays)", () => {
     const w = world();
     const all = relays(w);
     // red holds every relay but one, crewed; its own home isle has three squads on it
-    const spareIsle = all.find((l) => l.x === 86.1 && l.y === 72)!;
-    const open = all.find((l) => l.x === 72 && l.y === 86.1)!; // blue's home isle, left neutral
+    const spareIsle = all.find((l) => l.x === 101.5 && l.y === 73)!;
+    const open = all.find((l) => l.x === 73 && l.y === 99.5)!; // blue's home isle, left neutral
     for (const l of all) if (l !== open) hold(w, "red", l);
     const spares = [hold(w, "red", spareIsle), hold(w, "red", spareIsle)];
     // its Condor is empty, and no squad waits at home
@@ -132,7 +132,7 @@ describe("AI airlift (island relays)", () => {
 
   it("intercepts an enemy Condor near its relays with Raptors (the threat response ignores unarmed dropships)", () => {
     const w = world();
-    const l = relays(w).find((r) => r.x === 86.1 && r.y === 72)!;
+    const l = relays(w).find((r) => r.x === 101.5 && r.y === 73)!;
     hold(w, "red", l);
     const hq = buildingCenter(hqOf(w, "red")!);
     const raptors = [0, 1].map((i) => spawnUnit(w, "raptor", "red", hq.x - 2 - i, hq.y + 3));
@@ -150,7 +150,7 @@ describe("AI airlift (island relays)", () => {
 
   it("strikes an enemy island garrison with its Wasps", () => {
     const w = world();
-    const l = relays(w).find((r) => r.x === 9.9 && r.y === 9.9)!;
+    const l = relays(w).find((r) => r.x === 18 && r.y === 18.5)!;
     const enemy = hold(w, "blue", l);
     const hq = buildingCenter(hqOf(w, "red")!);
     const wasps = [0, 1, 2].map((i) => spawnUnit(w, "wasp", "red", hq.x - 2 - i, hq.y + 3));
@@ -198,14 +198,14 @@ describe("AI airlift (island relays)", () => {
     const w = world();
     const hq = buildingCenter(hqOf(w, "red")!);
     // a red veteran deep in blue's land (over a bridge from home)
-    const vet = spawnUnit(w, "trooper", "red", 40.5, 62.5);
+    const vet = spawnUnit(w, "trooper", "red", 46.5, 68.5);
     vet.rank = 2;
     vet.hp = UNITS.trooper.hp * 0.2;
-    expect(regionAt(w, 40, 62, "foot")).toBe(regionAt(w, Math.floor(hq.x), Math.floor(hq.y) + 3, "foot"));
+    expect(regionAt(w, 46, 68, "foot")).toBe(regionAt(w, Math.floor(hq.x), Math.floor(hq.y) + 3, "foot"));
     // a Mender nearer home, but hovering over the lagoon
-    const mender = spawnUnit(w, "mender", "red", 58.5, 50.5);
-    expect(regionAt(w, 58, 50, "foot")).toBe(0);
-    const islander = hold(w, "red", relays(w).find((l) => l.x === 86.1 && l.y === 72)!);
+    const mender = spawnUnit(w, "mender", "red", 64.5, 56.5);
+    expect(regionAt(w, 64, 56, "foot")).toBe(0);
+    const islander = hold(w, "red", relays(w).find((l) => l.x === 101.5 && l.y === 73)!);
     islander.rank = 2;
     islander.hp = UNITS.trooper.hp * 0.2;
     const used = new Set<number>();
@@ -222,6 +222,7 @@ describe("AI airlift (island relays)", () => {
     const w = world();
     const ai = { blue: createAiState("ironclad", "normal", 7), red: createAiState("airswarm", "normal", 8) };
     const bad: string[] = [];
+    const held = new Set<Faction>();
     for (let i = 0; i < 7 * 60 * TICK_RATE && !w.winner; i++) {
       const cmds = [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)];
       for (const c of cmds) {
@@ -239,10 +240,11 @@ describe("AI airlift (island relays)", () => {
         }
       }
       step(w, cmds);
+      for (const l of relays(w)) if (l.owner) held.add(l.owner);
     }
     expect(bad).toEqual([]);
     // and both sides were out on the islands
-    for (const f of ["blue", "red"] as const) expect(relays(w).some((l) => l.owner === f) || w.winner === f).toBe(true);
+    expect([...held].sort()).toEqual(["blue", "red"]);
   }, 60000);
 
   it("AI vs AI on Archipelago: both sides take islands inside 2 minutes, relays change hands, and the match is decided", () => {

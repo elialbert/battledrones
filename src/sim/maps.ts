@@ -326,19 +326,19 @@ export const MAPS: MapDef[] = [
     id: "archipelago",
     name: "Archipelago",
     biome: "tropical",
-    size: 96,
+    size: 108,
     blurb: "Island Uplinks only troops can take: fly them in by Condor. Two bridges.",
-    hq: [8, 82],
+    hq: [14, 88],
     seed: 71,
     // island relays: infantry only, paid while crewed; the richer ones sit
     // farther from every shore (home islands lie off each side's own coast)
     uplinks: [
-      { at: [48, 48], infantryOnly: true, income: 5, charge: 0.04 }, // the centre island
-      { at: [9.9, 24], infantryOnly: true, income: 2.5, charge: 0.025 }, // blue's home isle in the NW gulf (red's in the SE)
-      { at: [24, 9.9], infantryOnly: true, income: 2.5, charge: 0.025 }, // red's home isle in the NW gulf (blue's in the SE)
-      { at: [9.9, 9.9], infantryOnly: true, income: 3.5, charge: 0.03 } // the outer isle, deep in the gulf
+      { at: [54, 54], infantryOnly: true, income: 5, charge: 0.04 }, // the centre island
+      { at: [6.5, 35], infantryOnly: true, income: 2.5, charge: 0.025 }, // blue's home isle in the NW gulf (red's in the SE)
+      { at: [35, 8.5], infantryOnly: true, income: 2.5, charge: 0.025 }, // red's home isle in the NW gulf (blue's in the SE)
+      { at: [18, 18.5], infantryOnly: true, income: 3.5, charge: 0.03 } // the outer isle, out in the gulf
     ],
-    dropSites: [[30, 50], [22, 64], [52, 76]], // bridge 1's landing, the inland flank, bridge 2's landing
+    dropSites: [[36, 56], [28, 70], [58, 82]], // bridge 1's landing, the inland flank, bridge 2's landing
     startUnits: ["condor"],
     squadAboard: true,
     lifeline: true,
@@ -351,16 +351,14 @@ export const MAPS: MapDef[] = [
       const S = p.w.width;
       const V = S * Math.SQRT2; // the long diagonal, NW corner (0) to SE corner (V)
       const deep = Terrain.Deep;
-      // the sea: a band along the NW–SE diagonal between the two coasts —
-      // a necked channel at the two bridges, a lagoon round the centre
-      // island, and open gulfs in the empty corners
+      // the sea: a channel along the NW–SE diagonal between the two coasts —
+      // necked at the two bridges, a lagoon round the centre island — opening
+      // into a wide gulf in each empty corner
       const halfWidth = (v: number): number => {
         const dv = Math.abs(v - V / 2);
         if (dv <= 4) return 14;
         if (dv <= 12) return 14 - ((dv - 4) / 8) * 5;
-        if (dv <= 24) return 9;
-        if (dv <= 36) return 9 + ((dv - 24) / 12) * 13;
-        return 22;
+        return 9;
       };
       for (let ty = 0; ty < S; ty++)
         for (let tx = 0; tx < S; tx++) {
@@ -371,44 +369,68 @@ export const MAPS: MapDef[] = [
           const dv = Math.abs(v - V / 2);
           // ragged coasts, kept straight where the bridges cross
           const calm = dv > 13 && dv < 21 ? 0.15 : 1;
-          const h = halfWidth(v) + (valueNoise(x * 0.18, y * 0.18, p.seed) - 0.5) * 4 * calm;
-          if (Math.abs(u) < h) p.set(tx, ty, deep);
-          else if (Math.abs(u) < h + 1.3) p.set(tx, ty, Terrain.Water, [G]); // a shelf of shallow water off every coast
+          const rag = (valueNoise(x * 0.18, y * 0.18, p.seed) - 0.5) * 4 * calm;
+          const h = halfWidth(v) + rag;
+          // the NW gulf (the Painter mirrors it into the SE): a bay 40 tiles
+          // round the corner, its shore swung in and out by broad headlands
+          // and coves, fading out short of the necks so they keep their shape
+          const gulf =
+            40 -
+            Math.hypot(x - 8, y - 8) +
+            (valueNoise(x * 0.06, y * 0.06, p.seed + 12) - 0.5) * 10 +
+            rag -
+            Math.max(0, 28 - dv) * 1.5;
+          if (Math.abs(u) < h || gulf > 0) p.set(tx, ty, deep);
+          else if (Math.abs(u) < h + 1.3 || gulf > -1.3) p.set(tx, ty, Terrain.Water, [G]); // a shelf of shallow water off every coast
         }
-      // the islands: a shelf of water, a walkable top at least 4 tiles round each relay
-      const island = (cx: number, cy: number, r: number) => {
-        p.blob(cx, cy, r + 1.4, Terrain.Water, 0.12, [deep]);
-        p.blob(cx, cy, r, G, 0.12, [deep, Terrain.Water]);
+      // the islands, each a few overlapping lobes (the first holds the relay):
+      // a shelf of water, a walkable top at least 4 tiles round each relay
+      const island = (lobes: [number, number, number][], wobble = 0.16) => {
+        for (const [cx, cy, r] of lobes) p.blob(cx, cy, r + 1.4, Terrain.Water, wobble, [deep]);
+        for (const [cx, cy, r] of lobes) p.blob(cx, cy, r, G, wobble, [deep, Terrain.Water]);
       };
-      island(48, 48, 5.2);
-      island(9.9, 24, 4.8);
-      island(24, 9.9, 4.8);
-      island(9.9, 9.9, 5);
-      // island cover: woods for squads to hold in, rocks to dodge round
-      p.blob(46.5, 50.5, 1.6, Terrain.Forest, 0.4, [G]);
-      p.blob(9, 11.5, 1.8, Terrain.Forest, 0.4, [G]);
-      p.blob(7.6, 23, 1.3, Terrain.Forest, 0.4, [G]);
-      p.blob(25.6, 8.2, 1.3, Terrain.Rough, 0.4, [G]);
-      p.blob(12.3, 7.8, 1.1, Terrain.Rough, 0.4, [G]);
+      island([[54, 54, 5.2]], 0.12); // the centre island
+      island([[18, 18.5, 5.2], [13.8, 14, 2.9], [22.2, 22.4, 2.2]]); // the outer isle: the biggest, long and ragged
+      island([[6.5, 35, 4.9], [3.8, 30.6, 2], [10.4, 37.6, 2.2]]); // blue's home isle
+      island([[35, 8.5, 5], [33.4, 13.4, 2.3]]); // red's home isle: rounder
+      // island cover: woods for squads to hold in, scree to dodge round
+      p.blob(52.5, 56.5, 1.6, Terrain.Forest, 0.4, [G]);
+      p.blob(13.6, 13.8, 2, Terrain.Forest, 0.4, [G]);
+      p.blob(22.4, 22.6, 1.2, Terrain.Rough, 0.4, [G]);
+      p.blob(10.6, 37.8, 1.5, Terrain.Forest, 0.4, [G]);
+      p.blob(37.6, 5.6, 1.4, Terrain.Forest, 0.4, [G]);
+      p.blob(33.2, 13.6, 1.2, Terrain.Rough, 0.3, [G]);
+      // and the scenery between them: reef shoals, and sea stacks no unit can stand on
+      const stack = (cx: number, cy: number, r: number) => {
+        p.blob(cx, cy, r + 1.2, Terrain.Water, 0.3, [deep]);
+        p.blob(cx, cy, r, Terrain.Rock, 0.3, [deep, Terrain.Water]);
+      };
+      p.blob(28.5, 29.5, 2.4, Terrain.Water, 0.4, [deep]);
+      p.blob(4.5, 4.5, 2, Terrain.Water, 0.4, [deep]);
+      stack(9.5, 2.8, 0.9);
+      stack(4, 11.5, 0.7);
+      stack(2.6, 20, 0.8);
+      stack(31, 35, 0.9);
       // the two bridges (one stroke: the Painter mirrors it), straight across the necks
-      p.stroke([[27.4, 44.6], [44.6, 27.4]], 2.4, Terrain.Bridge, 0, [deep, Terrain.Water]);
+      p.stroke([[33.4, 50.6], [50.6, 33.4]], 2.4, Terrain.Bridge, 0, [deep, Terrain.Water]);
       // roads from the HQ to both bridgeheads
-      p.stroke([[10, 82], [16, 72], [21, 60], [25, 50], [27.6, 44.4]], 2, Terrain.Road, 0, OPEN);
-      p.stroke([[12, 84], [24, 82], [36, 78], [46, 73], [51.6, 68.4]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[16, 88], [22, 78], [27, 66], [31, 56], [33.6, 50.4]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[18, 90], [30, 88], [42, 84], [52, 79], [57.6, 74.4]], 2, Terrain.Road, 0, OPEN);
       // the mainland: woods, rock outcrops and mud shaping the lanes
-      p.blob(30, 68, 3.2, Terrain.Forest, 0.45, OPEN);
-      p.blob(14, 50, 3, Terrain.Forest, 0.45, OPEN);
-      p.blob(40, 88, 2.8, Terrain.Forest, 0.45, OPEN);
-      p.blob(4, 40, 2.4, Terrain.Forest, 0.45, OPEN);
-      p.blob(62, 90, 2.4, Terrain.Forest, 0.45, OPEN);
-      p.blob(22, 74, 1.8, Terrain.Rock, 0.4, OPEN);
-      p.blob(36, 58, 2, Terrain.Rock, 0.35, OPEN);
-      p.blob(6, 60, 1.6, Terrain.Rock, 0.4, OPEN);
-      p.blob(50, 84, 1.7, Terrain.Rock, 0.4, OPEN);
-      p.scatter(16, 54, 34, 66, 4, 1.4, Terrain.Rough, [G]);
+      p.blob(36, 74, 3.2, Terrain.Forest, 0.45, OPEN);
+      p.blob(20, 56, 3, Terrain.Forest, 0.45, OPEN);
+      p.blob(46, 94, 2.8, Terrain.Forest, 0.45, OPEN);
+      p.blob(8, 56, 2.4, Terrain.Forest, 0.45, OPEN);
+      p.blob(6, 100, 2.6, Terrain.Forest, 0.45, OPEN);
+      p.blob(28, 80, 1.8, Terrain.Rock, 0.4, OPEN);
+      p.blob(42, 64, 2, Terrain.Rock, 0.35, OPEN);
+      p.blob(12, 66, 1.6, Terrain.Rock, 0.4, OPEN);
+      p.blob(56, 90, 1.7, Terrain.Rock, 0.4, OPEN);
+      p.blob(30, 102, 1.5, Terrain.Rock, 0.4, OPEN);
+      p.scatter(22, 60, 40, 72, 4, 1.4, Terrain.Rough, [G]);
       // resources are scarce: one home field and a crystal patch by bridge 1
-      p.rect(15, 85, 17, 87, Terrain.Scrap); // 9 tiles, 13,500 scrap
-      p.rect(23, 52, 24, 52, Terrain.Crystal); // 2 rich tiles out by the bridge
+      p.rect(21, 91, 23, 93, Terrain.Scrap); // 9 tiles, 13,500 scrap
+      p.rect(29, 58, 30, 58, Terrain.Crystal); // 2 rich tiles out by the bridge
     }
   }
 ];

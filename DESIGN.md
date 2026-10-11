@@ -80,7 +80,7 @@ chevron (`ui/hscroll.ts`).
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
-| Archipelago | 96² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
+| Archipelago | 108² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):
 
@@ -114,24 +114,35 @@ can never get within range of (`engageable`), so a garrison shelled from
 across the water doesn't freeze on a dead order while enemies land beside
 it. A* reuses its scratch arrays; a new building re-plans only the paths
 that cross or brush its footprint; a drop point out at sea is found by an
-expanding ring search. On the 96² Archipelago an AI-vs-AI match costs about
-what one on the 64² Ashlands does (a prototype before these fixes ran ~20×
-slower, 85% of it in A*).
+expanding ring search. On the 108² Archipelago an AI-vs-AI match costs
+about what one on the 64² Ashlands does (a prototype before these fixes ran
+~20× slower, 85% of it in A*).
 
 ### The Archipelago
 
 The map built to make robot infantry, the Condor and aircraft the heart of
-the game, and to make the fight about Uplinks. 96² (three times the area of
-Riverlands). The two HQs' landmasses are split by **open sea** along the
-diagonal, necked at **two bridges** near the middle (the only land route:
-a test cuts them and checks nothing crosses) and opening into gulfs in the
-two empty corners.
+the game, and to make the fight about Uplinks. 108² (nearly four times the
+area of Riverlands). The two HQs' landmasses are split by **open sea** along
+the diagonal, necked at **two bridges** near the middle (the only land route:
+a test cuts them and checks nothing crosses) and opening into a wide gulf in
+each empty corner: a bay round the corner whose shore swings out and in with
+broad headlands and coves, and which leaves the necks as they are.
 
 - **Seven island Uplinks**, every one on an island: each side's two home
-  isles off its own coasts (2.5 scrap/s), an outer isle deep in each gulf
+  isles off its own coasts (2.5 scrap/s), an outer isle out in each gulf
   (3.5) and the centre island in a lagoon between the bridges (5). Each
   island has at least 4 tiles of walkable ground round its relay (room for
   two drops, and to dodge a Barrage).
+- **Scattered, not packed**: a gulf's three isles each have their own shape
+  (a few overlapping lobes: the outer isle the biggest, long and ragged,
+  red's home isle rounder), sit at uneven distances from each other, and
+  have at least 4 tiles of open sea to the next island or a coast (a test
+  checks; it also checks no other speck of land breaks the surface). Reef
+  shoals and limestone sea stacks (rock: nothing stands on them) fill the
+  water between. The map grew from 96² to give the gulfs that room: the
+  middle (lagoon, necks, bridges, roads, the HQs and their distances to the
+  bridges) is the 96² layout moved to the new centre, and each HQ gained
+  open ground behind it.
 - **Infantry only** (`Uplink.infantryOnly`, `captureWeight` in
   `objectives.ts`): only robot squads count in an island relay's ring, to
   take it and to contest it. Aircraft, the Condor itself and vehicles count
@@ -197,20 +208,25 @@ two empty corners.
   reachability. Before it, the AI never took an island on purpose.
 - **Measured** (`tools/pacing.ts --maps archipelago`, all 30 pairings × 4
   seeds, Normal, 120 matches): both sides take an island in every match
-  (first capture median 0:32); 19.6 island captures per match, 11.2 of them
-  retakes, 32 relay flips; Condors drop 41.6 squads per match onto relays (5
-  elsewhere); 26% of unit deaths within 8 tiles of a relay. Value built:
-  infantry and Condors 44%, aircraft 45%, ground vehicles 12%. Personality
-  win rates 28–60% (Air Swarm 28, Ironclad 33, Balanced 53, Boom 58, Rush
-  60, Skyforce 60; about ±11 points at 20 games each). 4 of 120 drawn at 25
-  min; decided median **16:02** (p10 11:57, p90 18:33), longer than the
-  other maps: the side that holds the relays (about 80% of crewed
-  relay-time) starves the other, but an air-heavy army is slow to break
-  turrets and SAM sites. Raising relay income 50% took about a minute off
-  and swung the win rates, so the numbers stay as they are for now. Easy vs
-  Easy plays (about 9 squads airlifted a match, first capture median 1:04).
-  Cost: 358 ms per sim-minute against Ashlands' 382; the other maps' round
-  robins and the beginner harness are unchanged.
+  (first capture median 0:30); 20.9 island captures per match, 12.3 of them
+  retakes, 34.8 relay flips; Condors drop 45.1 squads per match onto relays
+  (5.7 elsewhere); 25% of unit deaths within 8 tiles of a relay. Value
+  built: infantry and Condors 46%, aircraft 43%, ground vehicles 12%.
+  Personality win rates 23–80% (Air Swarm 23, Balanced 35, Ironclad 45,
+  Boom 53, Rush 58, Skyforce 80; about ±8 points at 40 games each). 3 of
+  120 drawn at 25 min; decided median **16:03** (p10 12:21, p90 21:03),
+  longer than the other maps: the side that holds the relays (about 83% of
+  crewed relay-time) starves the other, but an air-heavy army is slow to
+  break turrets and SAM sites. The same panel on the old 96² layout, same
+  code: 4 draws, decided median 15:15 (p10 12:01, p90 18:49), 19.9
+  captures, win rates 28–73% (Skyforce 63, Rush 73): the wider gulfs add
+  under a minute, mostly to the longest games; Skyforce's rise is at the
+  edge of the noise. Raising relay income 50% (on the 96² layout) took
+  about a minute off and swung the win rates, so the numbers stay as they
+  are for now. Easy vs Easy plays (9.5 squads airlifted a match, first
+  capture median 1:03). Cost: about 5% more per sim-minute than the 96²
+  layout, measured side by side; the other maps' round robins and the
+  beginner harness are unchanged.
 
 ### Economy
 
