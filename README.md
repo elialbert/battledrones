@@ -183,6 +183,19 @@ node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
 
+Agent battles (**AGENT-BATTLES.md**): AI models play each other through
+tools that show only what their side can see, in 5-second rounds.
+
+```bash
+llm install -e llm-tools-battledrones   # the LLM plugin (llm: uv tool install llm)
+llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
+npm run arena run -- --blue scripted --red ai:rush:hard    # built-in seats, no model
+npm run arena serve -- --blue seat --red ai:balanced:easy  # seat URLs for any agent (HTTP or MCP)
+npm run arena replay battles/<file>.json                   # re-run a record, check its hash trail
+npm run arena watch battles/<file>.json                    # the dev-only 3D viewer (&follow: live)
+npm run arena stats -- battles/*.json --detail             # results by model, side, map, opener
+```
+
 GitHub Pages is published by `.github/workflows/pages.yml` on pushes to `main`, newly published releases (including prereleases), and manual runs. It builds the latest `main` at <https://simonw.github.io/battledrones/> and every `v`-prefixed version tag (`v1`, `v2`, …, or semver tags such as `v9.1.0`) at its own path, such as <https://simonw.github.io/battledrones/v1/>. Every deployment contains all versions, so updating the current game preserves the archive. Tags should remain fixed once published.
 
 Each historical build includes a downloadable ZIP, such as <https://simonw.github.io/battledrones/v3/v3.zip>. Later deployments first try to download and reuse that ZIP, checking its integrity and recorded tag, commit, URL path, and archive format. Missing, invalid, or outdated archives fall back to a build from the tag's own source and lockfile, then publish a new ZIP. The current game always builds from source. Set `PAGES_CACHE_URL=` to force all historical builds, or set it to another site root to test cache reuse locally.
@@ -206,6 +219,8 @@ npm run art:textures   # just the biome rock textures the 3D cliffs and crags us
   controls spec, architecture.
 - **`ART.md`** — how every image was generated and processed, and the
   asset contracts the engine relies on.
+- **`AGENT-BATTLES.md`** — AI models playing each other: the arena, its
+  tools, battle records, the LLM plugin and the viewer.
 
 ## Architecture
 
@@ -222,5 +237,9 @@ npm run art:textures   # just the biome rock textures the 3D cliffs and crags us
   audio (`audio.ts`).
 - `src/ui/` — DOM-overlay HUD and menu, with portrait/landscape layouts in
   CSS.
+- `src/arena/` — agent battles: each side's view of the world as text, its
+  orders, the round loop and battle records. Reads the sim and changes
+  nothing in it; only the dev-only battle viewer loads it in the browser.
+  `tools/arena.ts` runs it, `llm-tools-battledrones/` lets LLM's models play.
 - `art/` — the image-generation and processing pipeline; `tools/` — map
   export, balance harness, smoke test and screenshot tour.

@@ -3,17 +3,19 @@ import { MAPS, mapById } from "./sim/maps";
 import { sfx } from "./game/audio";
 import { music } from "./game/music";
 import { loadTerrainArt, mapAssetBase } from "./game/assets";
-import { GameScene } from "./game/GameScene";
+import { GameScene, type MatchFeed } from "./game/GameScene";
 import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
 import { mountMenuCareer, starsText } from "./ui/career";
 import { dailyOp, today, type DailyOp } from "./game/daily";
 import { opById, type OpDef } from "./sim/ops";
+import type { MutatorId } from "./sim/rules";
 import { mountMenuOps } from "./ui/ops";
 import { fullscreen } from "./ui/fullscreen";
 import { appUpdate, mountUpdatePill } from "./ui/update";
 import { scrollCue } from "./ui/hscroll";
+import { showReplayPicker } from "./ui/replay-picker";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -82,7 +84,7 @@ appUpdate.watch();
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
-async function startGame(): Promise<void> {
+async function startGame(feed?: MatchFeed): Promise<void> {
   const hud = document.getElementById("hud")!;
   const loading = document.createElement("div");
   loading.id = "loading";
@@ -98,7 +100,7 @@ async function startGame(): Promise<void> {
   if (bar) bar.style.width = "100%";
   // (let the full bar paint before the scene build blocks the main thread)
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-  const scene = new GameScene(document.getElementById("game")!, dpr(), art);
+  const scene = new GameScene(document.getElementById("game")!, dpr(), art, feed);
   window.addEventListener("resize", () => scene.resize());
   window.addEventListener("orientationchange", () => setTimeout(() => scene.resize(), 200));
 }
@@ -150,6 +152,7 @@ function showMenu(): void {
       <button class="cta big" id="play">▶ Play</button>
       <div class="row">
         <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
+        <button class="cta alt" id="play-replay">🎬 Watch a replay</button>
         <button class="cta alt" id="howto">? How to play</button>
       </div>
       <div class="help" id="helpbox" hidden>${HELP_HTML}</div>
@@ -295,7 +298,7 @@ function showMenu(): void {
   // one match per page: a second tap while the full-screen request is
   // pending (Android takes a moment) must not boot a second game
   let starting = false;
-  const begin = async (spectator: boolean, setup?: () => void) => {
+  const begin = async (spectator: boolean, setup?: () => void, feed?: MatchFeed) => {
     if (starting) return;
     starting = true;
     // a Last Stand on a map it isn't offered on plays the shown one (not saved: the pick stays)
@@ -308,7 +311,7 @@ function showMenu(): void {
     offMute();
     offUpdate();
     menu.remove();
-    void startGame();
+    void startGame(feed);
   };
   menu.querySelector("#play")!.addEventListener("click", () => {
     if (gameMode.mode !== "ops") return void begin(false);
@@ -317,6 +320,15 @@ function showMenu(): void {
     if (!ops.locked(op)) ops.openBrief(op);
   });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
+  // an agent battle's record, pasted or picked: the viewer loads only now (game/replay.ts)
+  menu.querySelector("#play-replay")!.addEventListener("click", () => {
+    sfx.play("click", 0.5);
+    showReplayPicker(menu, async (json) => {
+      const { replayFromJson } = await import("./game/replay");
+      const feed = replayFromJson(json);
+      await begin(true, () => watchSetup(feed), feed);
+    });
+  });
 
   // "Rematch" from the end screen skips straight back into a game
   let rematch = false;
@@ -340,6 +352,11 @@ function showMenu(): void {
   }
 }
 
+/** Point the next match at a battle replay's map and rules (not saved: the player's own picks stay). */
+function watchSetup(feed: { record: { map: string; mutators: MutatorId[] } }): void {
+  Object.assign(gameMode, { mapId: feed.record.map, spectator: true, mode: "skirmish", mutators: feed.record.mutators, daily: null, op: null });
+}
+
 /** Point the next match at an op (not saved: the op fixes map, enemy and rules). */
 function startOp(op: OpDef): void {
   // remember the pick (and the Ops tab) before the op's own map and difficulty take over
@@ -359,4 +376,17 @@ function startDaily(op: DailyOp): void {
   gameMode.mode = "skirmish";
 }
 
-showMenu();
+// The battle viewer for agent battles (AGENT-BATTLES.md "Watching"), dev builds only:
+// /?replay=battles/<file>.json[&follow]. Production builds drop all of it (import.meta.env.DEV is false there).
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("replay")) {
+  const q = new URLSearchParams(location.search);
+  void import("./game/replay")
+    .then((m) => m.loadReplay(q.get("replay")!, q.has("follow")))
+    .then((feed) => {
+      watchSetup(feed);
+      return startGame(feed);
+    })
+    .catch((e: unknown) => {
+      document.getElementById("hud")!.innerHTML = `<div class="screen"><p>Couldn't load the battle: ${String(e)}</p></div>`;
+    });
+} else showMenu();

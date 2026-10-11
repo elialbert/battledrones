@@ -6,3 +6,11 @@ dev-dist/
 *.log
 .DS_Store
 __pycache__/
+# battle records stay local, except the showcase ones (AGENT-BATTLES.md)
+battles/*
+!battles/showcase/
+.arena-builds/
+.venv/
+*.egg-info/
+.pytest_cache/
+llm-tools-battledrones/uv.lock

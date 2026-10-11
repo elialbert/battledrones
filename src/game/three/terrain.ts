@@ -943,6 +943,11 @@ export class Terrain3D {
 
   // -------------------------------------------------------- per frame --
 
+  /** Whose fog of war to draw (the dev battle viewer's "through red's eyes"). */
+  setFogSide(f: Faction): void {
+    this.player = f;
+  }
+
   update(dtMs: number, showFog: boolean): void {
     this.time += dtMs;
     const w = this.world;
