@@ -15,9 +15,9 @@ join. Where there is a real choice, the options are laid out with a
 | Who keeps the clock | **Clients**: one turn message per tick, and the Worker relays | A metronome in the Durable Object |
 | Invite link | `…/battledrones/#vs=K7QM2X` (fragment) | `?vs=` query; a path (no: Pages has no rewrites) |
 | Server | One **Durable Object per room** (WebSocket Hibernation API, SQLite storage) | PartyServer on top of DOs; WebRTC with the Worker only for signalling |
-| Sides | Host plays blue, guest plays red | Random sides; swap on rematch |
-| Colours | **Friend/foe**: you are always blue on your screen | Fixed faction colours |
-| Red's view | **Rotated 180°**, with the sun and the terrain paint turned to match | Rotate the camera only; no rotation |
+| Sides | Host plays blue (lower left), guest plays red (top right); **swap on every rematch** | Same sides every rematch; random sides |
+| Colours | **Fixed side colours**: blue is blue and red is red on both screens | Friend/foe (your own army always looks blue) |
+| Orientation | **The same for both**: north up, no rotation | Rotate red's view 180° (later, if playtests call for it) |
 | Reconnect | **Replay the command log** from tick 0 | Snapshot from the peer |
 | Desync | Detect with checksums and end the match as "no contest" (v1) | Resync from a host snapshot (v2) |
 | Career | A separate local Versus record; no XP, stars or medals | Count XP with a Versus medal |
@@ -26,8 +26,8 @@ join. Where there is a real choice, the options are laid out with a
 | Agent battles | **5-second rounds** through six fog-limited tools, with a local arena runner first | Remote MCP seats in the Worker; real time |
 
 The phases are at the end. Phase 0 makes no visible change: it is the
-groundwork that every option needs (cross-engine determinism, a local side
-that can be red, a rotated view).
+groundwork that every option needs (cross-engine determinism, and a local
+side that can be red).
 
 ## Goals
 
@@ -64,8 +64,9 @@ deterministic command-driven sim keeps the door open)"):
   plus commands (`infantry`, `objectives`, `openers`, `ops`).
 - **The sim never trusts the client about who owns a unit.**
   `applyCommand` skips any unit whose faction isn't the command's faction.
-- **The maps are point-symmetric, and red plays them rotated 180°.** Openers
-  are placed in each side's own frame (`frame(w, faction)` in `openers.ts`).
+- **The maps are point-symmetric**: red's half is blue's turned 180°, and
+  openers are placed in each side's own frame (`frame(w, faction)` in
+  `openers.ts`).
 - **A match is short and the traffic is tiny.** Measured headless on this
   repo (Node, AI vs AI, normal difficulty, objectives on):
 
@@ -151,8 +152,8 @@ How the published site gets the URL:
      (`navigator.share`, the native share sheet on phones) and **Copy link**
      (`navigator.clipboard`). The code is also shown big (`K7QM 2X`) so it
      can be read aloud.
-   - The map card, the mutators, "Waiting for opponent… invite expires in
-     29:41", and **Cancel**.
+   - The map card, the mutators, "You play 🔵 blue, from the lower left",
+     "Waiting for opponent… invite expires in 29:41", and **Cancel**.
 3. **Sharing usually backgrounds the game** (the share sheet opens
    Messages). iOS freezes the page and soon drops its WebSocket. The room
    lives on the server, not on the socket, so nothing is lost. When the page
@@ -167,7 +168,8 @@ How the published site gets the URL:
    `#vs=K7QM2X`. It strips the fragment with `history.replaceState`, keeps
    the code in `sessionStorage`, calls `GET /rooms/K7QM2X` (a preview that
    claims nothing) and shows a **Join sheet** in place of the menu: "⚔ Cadet
-   Simon challenges you · Riverlands · Blitz mutator", then **Join match**
+   Simon challenges you · Riverlands · Blitz mutator · You play 🔴 red, from
+   the top right", then **Join match**
    and **Not now** (which goes to the normal menu).
    - The tap on Join is also the user gesture that unlocks audio and full
      screen. Both need a tap, so the sheet costs nothing.
@@ -202,7 +204,8 @@ How the published site gets the URL:
    `over { winner, tick, checksum }`, and the server records the result if
    they agree. The finale and the after-action report play from your point of
    view. **Rematch** needs both players to tap it. It is a new seed in the
-   same room, back to the opener cards. **Menu** leaves the room.
+   same room with the sides swapped, back to the opener cards. **Menu**
+   leaves the room.
 
 ### The invite URL
 
@@ -437,8 +440,8 @@ bindings mean every importer reads the current value, so the ~125 existing
 uses don't change. Then go through the 31 `"red"` literals in `src/game` and
 `src/ui` and change each one that means "the enemy" to `ENEMY`
 (`other(PLAYER)`). These are in chronicle, awareness, callouts, the
-objectives renderer, calldown credit, models, `GameScene`, career and the
-report.
+objectives renderer, calldown credit, `GameScene`, career and the report.
+The ones in `three/models.ts` pick the red side's paint, and stay.
 
 A dev-only switch (`import.meta.env.DEV` and `?side=red`) plays **as red
 against a blue AI**. Every red-side bug can be found this way without a
@@ -446,34 +449,85 @@ network.
 
 ### Colours
 
-| Option | |
-|---|---|
-| **Friend/foe** (recommended) | Your side is royal blue and theirs is crimson, on both screens. The whole UI already assumes this: red edge arrows mean you're being hit, green and red rings, minimap dots, the "+100" pops, the announcer. The models and HUD map `faction → friend | foe` through `PLAYER`. |
-| Fixed faction colours | The guest's army is crimson on their own screen, and every red-means-danger cue reads backwards. Easier to talk about ("your red tanks"), but that's all. |
+**Recommended: fixed side colours.** The blue side's army is royal blue and
+the red side's is crimson, on both screens, whoever is looking. Two friends on
+a call can say "your red tanks", spectators and replays show exactly what the
+players saw, and screenshots from the two phones match.
+
+The game uses two kinds of colour, and each keeps its own rule:
+
+- **Team colours say which army.** They follow the side. The models' team
+  paint (`three/models.ts`), the combat rings and death pulses (`TEAM` in
+  `render/juice-view.ts`) and the minimap's Uplink pips already do. The
+  **minimap's unit dots** don't: they colour yours `#9fd0ff` and theirs
+  `#ffb0a0` (`ui/hud.ts`), so a red player's crimson army would show as blue
+  dots. They change to side colours, with your own dots a little brighter so
+  they're still easy to pick out. That is the only colour change.
+- **Signal colours say good or bad for you.** They stay relative to the local
+  player: health bars (yours green, then amber and red as they drop; theirs
+  red), edge arrows (red when you're hit, amber when you attack), enemy
+  strike warnings in red and yours in yellow, and the announcer. For the red
+  player, red then sometimes means "my army" and sometimes "danger". That's
+  the usual trade-off in RTS games with fixed colours, and the shapes and
+  positions of the cues carry the meaning.
+
+**The alternative: friend/foe colours**, where your own army always looks
+blue on your screen. Every signal colour then agrees with the team colours,
+but the two screens stop matching, players can't talk in colours, and
+replays have to pick one scheme. If every team colour goes through one
+`teamColour(faction)` helper, it can be added later as a setting.
 
 ### View orientation
 
-Red's base sits where blue's would be after a 180° rotation. Blue's camera
-looks north with the base framed at the bottom.
+**Recommended: the same view for both.** North is up on both screens. Blue's
+base is in the lower left and red's is in the top right, as the maps are
+already laid out. This is how StarCraft, Command & Conquer and Age of Empires
+work: players spawn top or bottom and the camera never turns. It needs no
+work beyond the local side above. `frameStart` already frames either side's
+HQ clear of the HUD, the edge arrows already point every way (south too, at
+fights behind the camera), and the lighting is the same for both.
 
-| Option | Result | Work |
-|---|---|---|
-| **a. Rotate red's view 180°** (recommended) | Red sees their base at the bottom, the same way blue does. | A `flip` flag on `CameraRig`: put the camera on the other side of the look-at point and negate `pan`. `project`/`unproject` go through the camera matrices, so picking, edge arrows, `viewQuad` and the placement ghost follow on their own. Draw the minimap rotated (`setTransform(-1, 0, 0, -1, w, h)`) and invert its taps. Then the lighting (next paragraph). |
-| b. Rotate the camera only | The same, but the light comes from the lower right on screen. The painted terrain bakes in a hillshade lit from the upper left (`art/terrain.py`), and lit from below, mesas can read as pits. | Just the rig and minimap part of (a). |
-| c. No rotation | Red's base is at the top and the enemy attacks downwards. Framing and HUD insets assume a base at the bottom. | None, but it feels second-class. |
+The known cost is a small asymmetry, so it's worth watching in playtests:
 
-**Lighting for (a), with no new art.** The maps are point-symmetric, so the
-tile at *p* is the same as the tile at *rot(p)*, and so are the heights
-derived from it. Under the rotated camera, red's terrain can **sample the
-painting with its UVs rotated 180°** (`uv → 1 − uv` per chunk, reading the
-mirrored chunk). Red's screen then shows exactly the image blue's does, still
-lit from the upper left. Turn the real-time sun 180° too, so unit and
-building shadows agree with it. The catch is decoration placed by a per-tile
-hash: trees, crags and doodads would no longer sit on their painted canopy and
-shadows. Fix that by hashing the canonical half (`hash(min(p, rot(p)))`, with
-the offset mirrored), which also makes the decoration itself symmetric. If
-that turns out ugly, a second painted set per map (`art:terrain --red`) is
-the fallback. Only red downloads it, but it doubles the art to maintain.
+- **The tilted camera shows more ground above the centre of the screen than
+  below it.** With the camera's pitch of 62° zoomed out to 47° zoomed in and
+  its 34° field of view, that's about 1.4× zoomed out and 1.8× zoomed in. The
+  difference in area is bigger still, because the top edge of the view is
+  wider. From blue's base, the deep part of the view looks towards the enemy.
+  From red's base, it looks out past the map edge, and attacks arrive through
+  the shallow bottom of the screen.
+- **On a phone held upright, the bottom of the screen is the build bar and
+  selection panel**, which is where red's attacks come in.
+
+Players pan anyway, and the edge arrows and the ⚡ jump button bring a fight
+to the centre of the screen. **Swapping sides on every rematch** (see
+*Results, career and rematch*) evens out what's left over a session.
+
+**If playtests show red plays worse: rotate red's view 180°**, so red sees
+their base at the bottom as blue does. The two screens then stop matching
+(blue's "top right" is red's "lower left"), and spectators and replays pick
+one orientation. The work:
+
+- **Camera and input.** A `flip` flag on `CameraRig`: put the camera on the
+  other side of the look-at point and negate `pan`. `project`/`unproject` go
+  through the camera matrices, so picking, edge arrows, `viewQuad` and the
+  placement ghost follow on their own. Draw the minimap rotated
+  (`setTransform(-1, 0, 0, -1, w, h)`) and invert its taps.
+- **Lighting, with no new art.** Rotating the camera alone isn't enough: the
+  painted terrain bakes in a hillshade lit from the upper left
+  (`art/terrain.py`), and lit from below, mesas can read as pits. The maps
+  are point-symmetric, so the tile at *p* is the same as the tile at
+  *rot(p)*, and so are the heights derived from it. Under the rotated camera,
+  red's terrain can **sample the painting with its UVs rotated 180°**
+  (`uv → 1 − uv` per chunk, reading the mirrored chunk). Red's screen then
+  shows exactly the image blue's does, still lit from the upper left. Turn
+  the real-time sun 180° too, so unit and building shadows agree with it.
+- **Decoration.** Trees, crags and doodads are placed by a per-tile hash, so
+  under the rotated paint they would no longer sit on their painted canopy
+  and shadows. Hash the canonical half instead (`hash(min(p, rot(p)))`, with
+  the offset mirrored), which also makes the decoration itself symmetric. If
+  that turns out ugly, a second painted set per map (`art:terrain --red`) is
+  the fallback. Only red downloads it, but it doubles the art to maintain.
 
 ## The Worker
 
@@ -707,9 +761,12 @@ Changes to existing code:
 | **A separate Versus record** (recommended) | A local "Versus 5–3" on the career sheet, plus the last opponent's name. No XP, stars or medals, because two friends could farm them. |
 | XP with a "Versus" medal | More reward, but it changes the meaning of ranks. Could be added later. |
 
-**Rematch** is the same sides by default, which is fair since the maps are
-mirror images. An option is to swap sides every rematch, so each player sees
-both starts. The server assigns sides, so this is one line either way.
+**Rematch swaps sides.** The host plays blue in the first match, red in the
+second, and so on, so each player gets both starts and the top-or-bottom
+difference (see *View orientation*) evens out over a session. The server
+assigns sides, so this is one line, and the opener cards say which side
+you're on this time ("You play 🔴 red, from the top right"). Keeping the same
+sides every time is the alternative.
 
 ## Battle archive and replays
 
@@ -1010,8 +1067,8 @@ records go through the same `tools/battles.ts` pipeline.
 
 0. **Groundwork, shipped dark** (no visible change): `fmath` plus the ban
    test plus the cross-engine replay in CI; `checksum.ts`; `PLAYER` as a
-   live binding and the `"red"` audit; friend/foe colours; the rotated view
-   for red with the matching sun and paint; the `resign` command;
+   live binding and the `"red"` audit; side-coloured minimap dots; the
+   `resign` command;
    `setupVersusWorld`; the dev-only "play as red vs AI". Each of these is
    useful and testable on its own.
 1. **The happy path**: the Worker and Room; `POST`/preview/socket; the lobby,
@@ -1046,10 +1103,13 @@ records go through the same `tools/battles.ts` pipeline.
   only maphack cure.
 - **WebRTC** data channels for lower latency, falling back to the WebSocket
   relay.
+- **Rotating red's view 180°**, if playtests show the top-right start plays
+  worse (see *View orientation*), and **friend/foe colours** as a setting.
 
 ## Open questions
 
-1. Sides: host always blue, random, or swap on rematch?
+1. Sides: should the host always start as blue, or should the first match's
+   sides be random? Rematches swap either way.
 2. Pausing: 2 × 60 s each, or none?
 3. Should versus results count towards the career (XP, a medal) or stay a
    separate record?
