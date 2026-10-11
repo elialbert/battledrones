@@ -7,7 +7,7 @@ import { unitSeenBy } from "../sim/infantry";
 import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
-import type { Building, FxEvent, Unit, World } from "../sim/types";
+import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
 import { buildingCenter, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
@@ -62,6 +62,28 @@ const DASH_RIM = [8, 2];
 const NO_DASH: number[] = [];
 
 /**
+ * A match played from outside instead of by the AI commanders: the dev-only
+ * battle viewer (src/game/replay.ts, AGENT-BATTLES.md "Watching") feeds a
+ * recorded agent battle through this. Spectator rules apply.
+ */
+export interface MatchFeed {
+  /** The world, set up as the fed match was. */
+  readonly world: World;
+  /** Who plays each side, for the spectator HUD. */
+  readonly labels: Record<Faction, string>;
+  /** This tick's commands, or null to hold here (a live battle not played this far yet). */
+  commands(tick: number): Command[] | null;
+  /** The scene is up: its controls, for the feed's own panel. */
+  attach(scene: GameScene): void;
+  /** After every step; `seeking` while skipping ahead with rendering off. */
+  afterTick(w: World, seeking: boolean): void;
+  /** Every frame. */
+  frame(deltaMs: number): void;
+  /** The latest saved copy of the world at or before `tick`, to rewind to (null: none). */
+  keyframe(tick: number): World | null;
+}
+
+/**
  * The battle: the deterministic sim at a fixed 10 Hz, interpolated into a
  * three.js scene every animation frame, with touch/mouse/keyboard input,
  * the RTS camera, and every presenter (effects, audio, HUD, radio) fed
@@ -73,6 +95,8 @@ export class GameScene {
   /** Red's commander (null in Last Stand and survival ops: the waves have none). */
   private ai: AiState | null = null;
   private blueAi: AiState | null = null;
+  /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
+  private fogSide: Faction = PLAYER;
   /** Last Stand banners and spawn marker (null in skirmish). */
   private survival: SurvivalPresenter | null = null;
   /** Veteran promotions/deaths, the match record, and the HQ-kill cinematic. */
@@ -133,9 +157,9 @@ export class GameScene {
   /** Cached visible-ground box for earshot (refreshed each frame). */
   private viewBox = { x0: 0, y0: 0, x1: 1, y1: 1 };
 
-  constructor(parent: HTMLElement, readonly dpr: number, art: TerrainArt | null) {
+  constructor(parent: HTMLElement, readonly dpr: number, art: TerrainArt | null, private feed: MatchFeed | null = null) {
     document.getElementById("loading")?.remove();
-    this.world = createMapWorld(gameMode.mapId, matchOptions());
+    this.world = feed ? feed.world : createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
 
     // ---- the 3D view
@@ -167,17 +191,17 @@ export class GameScene {
     // spectating pits two Normal commanders against each other
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
-    this.ai = this.world.survival ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+    this.ai = this.world.survival || feed ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
     if (gameMode.spectator) {
-      this.blueAi = createAiState(aiStrategy("normal"), "normal", aiSeed(2));
+      this.blueAi = feed ? null : createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
     // quick-start openers: spectated AIs take theirs at once; the player picks first
     // (skirmish and the Daily Op only: Last Stand and Ops set up their own starts)
     const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
-    if (this.world.survival || this.world.ops) {
-      /* no opener cards */
+    if (this.world.survival || this.world.ops || feed) {
+      /* no opener cards (a fed match was dealt its own) */
     } else if (this.blueAi && this.ai) {
       // (match rules may ban a pick, e.g. no Fab Plants under Air War: take an allowed one)
       openers.blue = allowedOpener(this.world, "blue", pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue")) ?? undefined;
@@ -196,7 +220,7 @@ export class GameScene {
       this.fx,
       (x, y) => this.tileVisible(x, y),
       (b) => this.buildingShown(b),
-      (f) => f === PLAYER || !this.ctrl.showFog,
+      (f) => f === this.fogSide || !this.ctrl.showFog,
       // (a Sniper Team hidden in the woods isn't drawn, though its tile is in sight)
       (u) => this.unitVisible(u)
     );
@@ -307,7 +331,9 @@ export class GameScene {
       targetChip: () => this.powerUi?.chip() ?? null,
       calldowns: () => this.powerFx.rings(),
       minimapOverlay: (ctx, k) => this.objFx.minimap(ctx, k),
-      strategies: this.blueAi
+      strategies: feed
+        ? feed.labels
+        : this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
             red: !this.ai ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
@@ -394,9 +420,69 @@ export class GameScene {
         canPlaceBuilding(this.world, PLAYER, this.ctrl.placing ?? "fab-plant", tx, ty)
     };
 
+    feed?.attach(this);
     this.stage.precompile();
     this.lastFrame = performance.now();
     this.raf = requestAnimationFrame(this.frame);
+  }
+
+  // ------------------------------------------------- fed matches (viewer) --
+
+  /** Show the whole battlefield (null), or the fog of war as `side` saw it. */
+  setFog(side: Faction | null): void {
+    this.ctrl.showFog = side !== null;
+    if (side) {
+      this.fogSide = side;
+      this.terrain.setFogSide(side);
+    }
+  }
+
+  /** Whose eyes the view is looking through (null: the fog is off). */
+  fogShown(): Faction | null {
+    return this.ctrl.showFog ? this.fogSide : null;
+  }
+
+  /** The tick the fed match has reached. */
+  get tick(): number {
+    return this.world.tick;
+  }
+
+  /**
+   * Jump a fed match to `tick`: back to the latest keyframe before it, then
+   * forward with rendering (and sound) off, as fast as the sim goes.
+   */
+  seek(tick: number): void {
+    const feed = this.feed;
+    if (!feed) return;
+    const target = Math.max(0, Math.floor(tick));
+    if (target < this.world.tick) {
+      const kf = feed.keyframe(target);
+      if (!kf) return;
+      Object.assign(this.world, structuredClone(kf));
+      this.finale = null;
+      this.ended = false;
+    }
+    while (this.world.tick < target && !this.world.winner) {
+      const cmds = feed.commands(this.world.tick);
+      if (!cmds) break;
+      step(this.world, cmds);
+      for (const ev of this.world.fx) this.chronicle.onFx(ev);
+      this.chronicle.tick();
+      feed.afterTick(this.world, true);
+    }
+    this.world.fx = [];
+    this.simSeconds = this.world.tick / TICK_RATE;
+    this.snapshotPrev();
+  }
+
+  /** A commander's radio line: in the ticker, read out by the announcer. */
+  commanderRadio(side: Faction, text: string): void {
+    this.radio.push({ key: `commander-${side}`, text: `${side === "blue" ? "Blue" : "Red"}: ${text}`, priority: 1, tone: "info", caption: true });
+  }
+
+  /** A line in the alert ticker. */
+  alert(msg: string): void {
+    this.hud.alert(msg, this.world.width / 2, this.world.height / 2);
   }
 
   /** The window changed size or orientation. */
@@ -515,15 +601,19 @@ export class GameScene {
       for (let i = 0; i < plan.ticks; i++) {
         // decided mid-frame: the winning tick's events were handled once, don't replay them
         if (this.world.winner) break;
+        const fed = this.feed ? this.feed.commands(this.world.tick) : null;
+        if (this.feed && !fed) break; // (a live battle: the next round isn't played yet)
         this.snapshotPrev();
         const blue = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
         const red = this.ai ? tickAi(this.world, "red", this.ai) : []; // (Last Stand: the waves have no commander)
-        step(this.world, [...blue, ...red]);
+        step(this.world, fed ?? [...blue, ...red]);
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
+        this.feed?.afterTick(this.world, false);
       }
     }
     this.ctrl.prune();
+    this.feed?.frame(delta);
     const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
     this.finale?.update(delta);
     const slow = this.finale?.timeScale ?? 1;
@@ -774,7 +864,7 @@ export class GameScene {
 
   private tileVisible(x: number, y: number): boolean {
     if (!this.ctrl.showFog) return true; // debug: reveal everything
-    return isVisible(this.world, PLAYER, Math.floor(x), Math.floor(y));
+    return isVisible(this.world, this.fogSide, Math.floor(x), Math.floor(y));
   }
 
   /**
@@ -782,13 +872,13 @@ export class GameScene {
    * is in sight and it isn't a Sniper Team hidden in the woods (unitSeenBy).
    */
   private unitVisible(u: Unit): boolean {
-    if (u.faction === PLAYER || !this.ctrl.showFog) return true;
-    return unitSeenBy(this.world, PLAYER, u);
+    if (u.faction === this.fogSide || !this.ctrl.showFog) return true;
+    return unitSeenBy(this.world, this.fogSide, u);
   }
 
   private buildingShown(b: Building): boolean {
     if (!this.ctrl.showFog) return true;
-    if (this.world.fog[PLAYER].known.has(b.id)) return true;
+    if (b.faction === this.fogSide || this.world.fog[this.fogSide].known.has(b.id)) return true;
     const c = buildingCenter(b);
     return this.tileVisible(c.x, c.y);
   }
@@ -808,7 +898,7 @@ export class GameScene {
     // (the death event right after the explosion says whose it was)
     for (const e of this.world.fx)
       if (e.type === "death" && e.buildingKind !== null && e.x === x && e.y === y) {
-        if (e.faction === PLAYER) return true;
+        if (e.faction === this.fogSide) return true;
         break;
       }
     const x0 = x - size / 2;

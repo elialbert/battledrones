@@ -1,0 +1,552 @@
+/**
+ * Orders → Commands (AGENT-BATTLES.md "Orders"). An agent writes the sim's
+ * own command vocabulary without the faction (and in its own frame), plus a
+ * few shortcuts: unit selectors ("idle army", "all stinger", "army near
+ * 30,25"), "build" with or without a spot, "produce" at whichever building
+ * makes the unit. Each order comes back "ok" or with the reason it was
+ * refused, in the HUD's words (buildingBlocker, unitBlocker,
+ * placementBlocker, calldownBlocker).
+ *
+ * Orders are checked against a staged copy of the world — the state the
+ * side saw this round with its own earlier orders already applied — so a
+ * second "produce" sees the scrap the first one spent. The commands that
+ * come out carry the side's faction and true map coordinates; the arena
+ * applies them at the first tick of the next stretch of play.
+ */
+import { BUILDINGS, ECONOMY, UNITS } from "../sim/balance";
+import {
+  applyEconomyCommand,
+  buildingBlocker,
+  canPlaceBuilding,
+  nearestReachableResource,
+  unitBlocker
+} from "../sim/economy";
+import { unitSeenBy, isInfantry, isTransport } from "../sim/infantry";
+import { OPENER_IDS, isOpenerId, openerBlocked, type OpenerId } from "../sim/openers";
+import { placementBlocker } from "../sim/placement";
+import { POWER_KINDS, applyCalldown, calldownBlocker } from "../sim/powers";
+import { freeSeats, isLoaded } from "../sim/transport";
+import type { Building, BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
+import { buildingCenter, distToBuilding, hqOf, inBounds, isResource, tileIndex } from "../sim/world";
+import { enemyOf, frameOf, type Frame } from "./frame";
+
+export const UNIT_KINDS = Object.keys(UNITS) as UnitKind[];
+export const BUILDING_KINDS = Object.keys(BUILDINGS) as BuildingKind[];
+
+/** Units that fight (not harvesters, not the unarmed Condor and Scout). */
+export const isArmy = (k: UnitKind): boolean => k !== "harvester" && k !== "condor" && k !== "scout";
+
+/** A building the side wants placed when its construction is ready (world top-left, or a spot to pick). */
+export interface BuildIntent {
+  kind: BuildingKind;
+  at: [number, number] | null;
+}
+
+export interface OrderBatch {
+  commands: Command[];
+  /** One line per order: "1. ok: …" or "1. refused: …". */
+  results: string[];
+  opener?: OpenerId;
+  /** Set when a "build" started a building (or moved where a pending one goes). */
+  build?: BuildIntent;
+  /** Set when the building under construction was cancelled. */
+  cancelBuild?: boolean;
+}
+
+class Refused extends Error {}
+const refuse = (why: string): never => {
+  throw new Refused(why);
+};
+
+/** Accept "attack_move", "attackMove", "attack-move"… */
+const norm = (k: string) => k.toLowerCase().replace(/[-_\s]/g, "");
+
+const VERBS = ["opener", "attackmove", "move", "attack", "stop", "harvest", "produce", "cancel", "build", "sell", "rally", "calldown", "board", "unload"] as const;
+type Verb = (typeof VERBS)[number];
+
+/** The kind named by a word ("stingers", "Flak Crawler", "flak"). */
+export function unitKindOf(s: string): UnitKind | null {
+  const n = norm(s);
+  for (const k of UNIT_KINDS) if (norm(k) === n || norm(k) + "s" === n || norm(UNITS[k].name) === n || norm(UNITS[k].name) + "s" === n) return k;
+  if (n === "flak" || n === "flaks") return "flak-crawler";
+  if (n === "rocket" || n === "rockets") return "rocket-squad";
+  return null;
+}
+
+export function buildingKindOf(s: string): BuildingKind | null {
+  const n = norm(s);
+  for (const k of BUILDING_KINDS) if (norm(k) === n || norm(k) + "s" === n || norm(BUILDINGS[k].name) === n) return k;
+  if (n === "sam") return "sam-site";
+  if (n === "fab" || n === "factory") return "fab-plant";
+  return null;
+}
+
+const an = (s: string) => `${/^[aeiou]/.test(s) ? "an" : "a"} ${s}`;
+const plural = (n: number, s: string) => `${n} ${s}${n === 1 ? "" : "s"}`;
+
+/** "stinger ×3, wasp" for a set of units. */
+function describe(units: Unit[]): string {
+  const m = new Map<UnitKind, number>();
+  for (const u of units) m.set(u.kind, (m.get(u.kind) ?? 0) + 1);
+  return [...m].map(([k, n]) => (n > 1 ? `${k} ×${n}` : k)).join(", ");
+}
+
+/**
+ * Parse and check a list of orders for `side` against `staged` (mutated: its
+ * economy and unit orders advance as each order is accepted).
+ */
+export function parseOrders(staged: World, side: Faction, orders: unknown, phase: "opener" | "play"): OrderBatch {
+  const fr = frameOf(staged, side);
+  const out: OrderBatch = { commands: [], results: [] };
+  let list: unknown[];
+  if (typeof orders === "string") {
+    try {
+      list = JSON.parse(orders) as unknown[];
+    } catch {
+      out.results.push(`refused: orders must be a JSON list of order objects, got ${JSON.stringify(orders).slice(0, 80)}`);
+      return out;
+    }
+  } else list = orders as unknown[];
+  if (!Array.isArray(list)) list = [list];
+  list.forEach((raw, i) => {
+    const n = i + 1;
+    try {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) refuse(`expected an object like {"move": [12], "to": [30, 25]}`);
+      const o = Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([k, v]) => [norm(k), v]));
+      const verb = VERBS.find((v) => v in o) as Verb | undefined;
+      if (!verb) refuse(`unknown order ${JSON.stringify(raw).slice(0, 80)}: use one of move, attack_move, attack, stop, harvest, produce, cancel, build, sell, rally, calldown, board, unload`);
+      if (phase === "opener" && verb !== "opener") refuse(`the battle hasn't started: pick an opener first with {"opener": "blitz" | "industry" | "airwing"}`);
+      const msg = one(staged, fr, side, verb!, o, out);
+      out.results.push(`${n}. ok: ${msg}`);
+    } catch (e) {
+      if (!(e instanceof Refused)) throw e;
+      out.results.push(`${n}. refused: ${e.message}`);
+    }
+  });
+  if (list.length === 0) out.results.push("(no orders given)");
+  return out;
+}
+
+function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, unknown>, out: OrderBatch): string {
+  const faction = side;
+  switch (verb) {
+    case "opener": {
+      if (out.opener) refuse(`you already picked ${out.opener}`);
+      const id = String(o.opener).toLowerCase().replace(/[^a-z]/g, "");
+      if (!isOpenerId(id)) refuse(`no opener "${o.opener}": pick one of ${OPENER_IDS.join(", ")}`);
+      const why = openerBlocked(w, side, id as OpenerId);
+      if (why) refuse(why);
+      out.opener = id as OpenerId;
+      return `opener ${id}`;
+    }
+    case "move":
+    case "attackmove": {
+      const units = selectUnits(w, fr, side, verb === "move" ? o.move : o.attackmove);
+      const p = point(w, fr, side, o.to ?? o.at, "to");
+      const type = verb === "move" ? "move" : "attackMove";
+      const unitIds = units.map((u) => u.id);
+      out.commands.push({ type, faction, unitIds, x: p.x, y: p.y });
+      for (const u of units) u.order = { type, x: p.x, y: p.y };
+      return `${describe(units)} ${verb === "move" ? "move" : "attack-move"} to ${fr.tile(p.x, p.y).join(",")}`;
+    }
+    case "attack": {
+      const units = selectUnits(w, fr, side, o.attack);
+      const targetId = idOf(o.target ?? o.at);
+      if (targetId === null) refuse(`attack needs a "target": an enemy id`);
+      const target = enemyTarget(w, side, targetId!);
+      const domain = target.domain;
+      const able = units.filter((u) => canHit(u.kind, domain));
+      const skipped = units.filter((u) => !canHit(u.kind, domain));
+      if (able.length === 0) refuse(`none of ${describe(units)} can hit a ${domain === "air" ? "flying" : "ground"} target like ${target.label}`);
+      out.commands.push({ type: "attack", faction, unitIds: able.map((u) => u.id), targetId: targetId! });
+      for (const u of able) u.order = { type: "attack", targetId: targetId! };
+      return `${describe(able)} attack ${target.label}${skipped.length ? ` (skipped ${describe(skipped)}: can't hit it)` : ""}`;
+    }
+    case "stop": {
+      const units = selectUnits(w, fr, side, o.stop);
+      out.commands.push({ type: "stop", faction, unitIds: units.map((u) => u.id) });
+      for (const u of units) u.order = { type: "idle" };
+      return `${describe(units)} stop`;
+    }
+    case "harvest": {
+      const units = selectUnits(w, fr, side, o.harvest).filter((u) => u.kind === "harvester");
+      if (units.length === 0) refuse("only harvesters harvest");
+      let tile: [number, number];
+      if (o.at !== undefined) {
+        const p = point(w, fr, side, o.at, "at");
+        tile = [Math.floor(p.x), Math.floor(p.y)];
+        if (!isResource(w, tileIndex(w, tile[0], tile[1]))) refuse(`${fr.tile(p.x, p.y).join(",")} is not a scrap or crystal tile with anything left`);
+      } else {
+        const f = nearestReachableResource(w, units[0]!.x, units[0]!.y, side);
+        if (!f) refuse("no field left that a harvester can reach");
+        tile = [f!.x, f!.y];
+      }
+      out.commands.push({ type: "harvest", faction, unitIds: units.map((u) => u.id), x: tile[0] + 0.5, y: tile[1] + 0.5 });
+      for (const u of units) u.order = { type: "harvest", fieldX: tile[0], fieldY: tile[1], phase: "toField" };
+      return `${plural(units.length, "harvester")} harvest at ${fr.tile(tile[0] + 0.5, tile[1] + 0.5).join(",")}`;
+    }
+    case "produce": {
+      const kind = unitKindOf(String(o.produce));
+      if (!kind) refuse(`no unit "${o.produce}": one of ${UNIT_KINDS.join(", ")}`);
+      const count = Math.max(1, Math.min(ECONOMY.maxQueue * 4, Math.floor(Number(o.count ?? 1)) || 1));
+      const why = unitBlocker(w, side, kind!);
+      if (why) refuse(why);
+      const st = UNITS[kind!];
+      let at: Building[];
+      if (o.at !== undefined) {
+        const b = ownBuilding(w, side, o.at);
+        if (b.kind !== st.builtAt) refuse(`${kind} is built at a ${st.builtAt}, not at ${b.kind} #${b.id}`);
+        at = [b];
+      } else at = [...w.buildings.values()].filter((b) => b.faction === side && b.kind === st.builtAt);
+      const queued: number[] = [];
+      let stop = "";
+      for (let i = 0; i < count; i++) {
+        const f = w.factions[side];
+        if (f.scrap < st.cost) {
+          stop = `Not enough scrap (have ${Math.floor(f.scrap)}, need ${st.cost})`;
+          break;
+        }
+        // the building with the shortest queue (ties: the one listed first in your frame)
+        const open = at.filter((b) => b.queue.length < ECONOMY.maxQueue).sort((a, b) => a.queue.length - b.queue.length || pos(fr, a) - pos(fr, b));
+        const b = open[0];
+        if (!b) {
+          stop = `Queue full (${ECONOMY.maxQueue} per building)`;
+          break;
+        }
+        applyEconomyCommand(w, { type: "produce", faction, buildingId: b.id, unit: kind! });
+        queued.push(b.id);
+      }
+      if (queued.length === 0) refuse(stop);
+      const where = [...new Set(queued)].map((id) => `${w.buildings.get(id)!.kind} #${id}`).join(", ");
+      for (const id of queued) out.commands.push({ type: "produce", faction, buildingId: id, unit: kind! });
+      return `queued ${queued.length} ${kind} at ${where} (-${queued.length * st.cost} scrap)${queued.length < count ? `; ${count - queued.length} not queued: ${stop}` : ""}`;
+    }
+    case "cancel": {
+      const what = String(o.cancel);
+      const f = w.factions[side];
+      const bk = buildingKindOf(what);
+      if (["building", "construction", "build"].includes(what.toLowerCase()) || (bk && o.at === undefined && f.pending?.kind === bk)) {
+        if (!f.pending) refuse("nothing is under construction");
+        const kind = f.pending!.kind;
+        applyEconomyCommand(w, { type: "cancelBuilding", faction });
+        out.commands.push({ type: "cancelBuilding", faction });
+        out.cancelBuild = true;
+        return `cancelled the ${kind} (+${BUILDINGS[kind].cost} scrap)`;
+      }
+      const kind = unitKindOf(what);
+      if (!kind) refuse(`cancel what? a unit kind (with "at": building id) or "building"`);
+      const b = o.at !== undefined ? ownBuilding(w, side, o.at) : [...w.buildings.values()].filter((x) => x.faction === side && x.queue.some((q) => q.kind === kind)).sort((a, c) => pos(fr, a) - pos(fr, c))[0];
+      if (!b || !b.queue.some((q) => q.kind === kind)) refuse(`no ${kind} queued${b ? ` at ${b.kind} #${b.id}` : ""}`);
+      applyEconomyCommand(w, { type: "cancelProduce", faction, buildingId: b!.id, unit: kind! });
+      out.commands.push({ type: "cancelProduce", faction, buildingId: b!.id, unit: kind! });
+      return `cancelled ${an(kind!)} at ${b!.kind} #${b!.id} (+${UNITS[kind!].cost} scrap)`;
+    }
+    case "build": {
+      const kind = buildingKindOf(String(o.build));
+      if (!kind) refuse(`no building "${o.build}": one of ${BUILDING_KINDS.filter((k) => k !== "hq").join(", ")}`);
+      const f = w.factions[side];
+      let at: [number, number] | null = null;
+      if (o.at !== undefined) {
+        const xy = coords(o.at);
+        if (!xy) refuse(`"at" must be [x, y]: the building's top-left tile`);
+        at = fr.worldTopLeft(kind!, xy![0], xy![1]);
+        const why = placementBlocker(w, side, kind!, at[0], at[1]);
+        // (a unit standing there may move off before it's ready: placing then decides)
+        if (why && why !== "Unit in the way") refuse(`can't put ${an(kind!)} at ${xy![0]},${xy![1]}: ${why}`);
+      }
+      if (f.pending) {
+        if (f.pending.kind === kind && at) {
+          out.build = { kind: kind!, at };
+          return `the ${kind} under construction will go at ${fr.topLeft(kind!, at[0], at[1]).join(",")}`;
+        }
+        refuse(`already building ${an(f.pending.kind)} (${f.pending.ready ? "ready, being placed" : `${Math.ceil(f.pending.remaining / 10)}s left`}): one building at a time`);
+      }
+      const why = buildingBlocker(w, side, kind!);
+      if (why) refuse(why);
+      if (f.scrap < BUILDINGS[kind!].cost) refuse(`Not enough scrap (have ${Math.floor(f.scrap)}, need ${BUILDINGS[kind!].cost})`);
+      applyEconomyCommand(w, { type: "startBuilding", faction, building: kind! });
+      out.commands.push({ type: "startBuilding", faction, building: kind! });
+      out.build = { kind: kind!, at };
+      return `started building ${an(kind!)} (-${BUILDINGS[kind!].cost} scrap, ready in ${BUILDINGS[kind!].buildTime}s)${at ? `, to go at ${fr.topLeft(kind!, at[0], at[1]).join(",")}` : ", placed automatically when ready"}`;
+    }
+    case "sell": {
+      const b = ownBuilding(w, side, o.sell);
+      if (b.kind === "hq") refuse("you can't sell your HQ");
+      const before = w.factions[side].scrap;
+      applyEconomyCommand(w, { type: "sell", faction, buildingId: b.id });
+      out.commands.push({ type: "sell", faction, buildingId: b.id });
+      return `sold ${b.kind} #${b.id} (+${Math.round(w.factions[side].scrap - before)} scrap)`;
+    }
+    case "rally": {
+      const b = ownBuilding(w, side, o.rally);
+      const p = point(w, fr, side, o.to ?? o.at, "to");
+      applyEconomyCommand(w, { type: "rally", faction, buildingId: b.id, x: p.x, y: p.y });
+      out.commands.push({ type: "rally", faction, buildingId: b.id, x: p.x, y: p.y });
+      return `${b.kind} #${b.id} rallies to ${fr.tile(p.x, p.y).join(",")}`;
+    }
+    case "calldown": {
+      const power = String(o.calldown).toLowerCase().replace(/[^a-z]/g, "").replace("skyhammer", "hammer") as PowerKind;
+      if (!POWER_KINDS.includes(power)) refuse(`no calldown "${o.calldown}": one of ${POWER_KINDS.join(", ")}`);
+      const p = point(w, fr, side, o.at ?? o.to, "at");
+      const why = calldownBlocker(w, side, power, p.x, p.y);
+      if (why) refuse(why);
+      applyCalldown(w, { type: "calldown", faction, power, x: p.x, y: p.y });
+      out.commands.push({ type: "calldown", faction, power, x: p.x, y: p.y });
+      return `${power} called on ${fr.tile(p.x, p.y).join(",")}`;
+    }
+    case "board": {
+      const squads = selectUnits(w, fr, side, o.board).filter((u) => isInfantry(u.kind));
+      if (squads.length === 0) refuse("only infantry squads (trooper, rocket-squad, sniper) can board");
+      const id = idOf(o.condor ?? o.into ?? o.carrier);
+      const c = id === null ? undefined : w.units.get(id);
+      if (!c || c.faction !== side || !isTransport(c.kind)) refuse(`board needs "condor": the id of one of your Condors`);
+      const seats = freeSeats(c!);
+      if (seats <= 0) refuse(`Condor #${c!.id} is full: unload it first`);
+      const going = squads.slice(0, seats);
+      out.commands.push({ type: "board", faction, unitIds: going.map((u) => u.id), carrierId: c!.id });
+      for (const u of going) u.order = { type: "board", carrierId: c!.id, ticks: 0 };
+      return `${describe(going)} board Condor #${c!.id}${going.length < squads.length ? ` (only ${seats} seat${seats > 1 ? "s" : ""} free)` : ""}`;
+    }
+    case "unload": {
+      const condors = selectUnits(w, fr, side, o.unload).filter((u) => isTransport(u.kind));
+      if (condors.length === 0) refuse("only Condors unload");
+      const loaded = condors.filter((c) => isLoaded(c));
+      if (loaded.length === 0) refuse(`${describe(condors)} carrying nobody`);
+      const p = o.at !== undefined || o.to !== undefined ? point(w, fr, side, o.at ?? o.to, "at") : null;
+      out.commands.push(p ? { type: "unload", faction, unitIds: loaded.map((u) => u.id), x: p.x, y: p.y } : { type: "unload", faction, unitIds: loaded.map((u) => u.id) });
+      return `${plural(loaded.length, "Condor")} drop their squads ${p ? `at ${fr.tile(p.x, p.y).join(",")}` : "where they are"}`;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- helpers ---
+
+const pos = (fr: Frame, b: Building) => {
+  const [x, y] = fr.topLeft(b.kind, b.tx, b.ty);
+  return y * 4096 + x;
+};
+
+function canHit(kind: UnitKind, domain: "ground" | "air"): boolean {
+  const t = UNITS[kind].targets;
+  return UNITS[kind].dps > 0 && (t === "both" || t === domain);
+}
+
+/** An id from 23, "23" or "#23". */
+function idOf(v: unknown): number | null {
+  if (typeof v === "number" && Number.isInteger(v)) return v;
+  if (typeof v === "string" && /^#?\d+$/.test(v.trim())) return Number(v.trim().replace("#", ""));
+  return null;
+}
+
+/** [x, y] from [12, 34], "12,34", {x, y}. */
+function coords(v: unknown): [number, number] | null {
+  if (Array.isArray(v) && v.length >= 2 && v.every((n) => typeof n === "number" || (typeof n === "string" && n.trim() !== "" && !isNaN(Number(n)))))
+    return [Number(v[0]), Number(v[1])];
+  if (typeof v === "string") {
+    const m = /^\s*\[?\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*\]?\s*$/.exec(v);
+    if (m) return [Number(m[1]), Number(m[2])];
+  }
+  if (v && typeof v === "object" && "x" in v && "y" in v) return [Number((v as { x: unknown }).x), Number((v as { y: unknown }).y)];
+  return null;
+}
+
+/** A target point (world coordinates) from own-frame [x, y], "enemy-hq" or "#id". */
+function point(w: World, fr: Frame, side: Faction, v: unknown, key: string): { x: number; y: number } {
+  if (v === undefined) refuse(`needs "${key}": [x, y]`);
+  if (typeof v === "string" && /enemy.?hq/i.test(v)) {
+    // public knowledge: the enemy HQ is the mirror image of yours
+    const hq = hqOf(w, side);
+    if (!hq) refuse("you have no HQ to mirror");
+    const c = buildingCenter(hq!);
+    return { x: w.width - c.x, y: w.height - c.y };
+  }
+  const id = typeof v === "string" && v.trim().startsWith("#") ? idOf(v) : null;
+  if (id !== null) {
+    const u = w.units.get(id);
+    if (u && (u.faction === side || unitSeenBy(w, side, u))) return { x: u.x, y: u.y };
+    const b = w.buildings.get(id);
+    if (b && b.faction === side) return buildingCenter(b);
+    const kb = w.fog[side].known.get(id);
+    if (kb) {
+      const s = BUILDINGS[kb.kind].size;
+      return { x: kb.tx + s / 2, y: kb.ty + s / 2 };
+    }
+    refuse(`#${id} is not a unit or building you can see`);
+  }
+  const xy = coords(v);
+  if (!xy || !xy.every(Number.isFinite)) refuse(`"${key}" must be [x, y], got ${JSON.stringify(v)}`);
+  const [x, y] = xy!;
+  if (x < 0 || y < 0 || x >= w.width || y >= w.height) refuse(`${x},${y} is off the map (0-${w.width - 1}, 0-${w.height - 1})`);
+  return fr.center(x, y);
+}
+
+function ownBuilding(w: World, side: Faction, v: unknown): Building {
+  const id = idOf(v);
+  const b = id === null ? undefined : w.buildings.get(id);
+  if (!b || b.faction !== side) refuse(`${JSON.stringify(v)} is not one of your buildings`);
+  return b!;
+}
+
+/** An enemy the side may target: a unit it sees now, or a building it remembers. */
+function enemyTarget(w: World, side: Faction, id: number): { domain: "ground" | "air"; label: string } {
+  const u = w.units.get(id);
+  if (u && u.faction === enemyOf(side)) {
+    if (!unitSeenBy(w, side, u)) refuse(`enemy #${id} is not in sight`);
+    return { domain: UNITS[u.kind].domain, label: `${u.kind} #${id}` };
+  }
+  const kb = w.fog[side].known.get(id);
+  if (kb) return { domain: "ground", label: `${kb.kind} #${id}` };
+  if (u || w.buildings.get(id)?.faction === side) refuse(`#${id} is one of yours`);
+  return refuse(`#${id} is not an enemy you can see or remember`);
+}
+
+/**
+ * Units from a list of ids and selector strings: "army", "all", "idle army",
+ * "stinger"/"all stingers", "idle wasp", "army near 30,25" (6 tiles) or
+ * "stinger near 30,25 r4".
+ */
+export function selectUnits(w: World, fr: Frame, side: Faction, spec: unknown): Unit[] {
+  if (spec === undefined || spec === null) refuse("which units? give ids or a selector like \"army\"");
+  const items = Array.isArray(spec) ? spec : [spec];
+  const picked = new Map<number, Unit>();
+  for (const item of items) {
+    const id = idOf(item);
+    if (id !== null) {
+      const u = w.units.get(id);
+      if (!u || u.faction !== side) refuse(notAUnit(w, side, id, items));
+      picked.set(id, u!);
+      continue;
+    }
+    if (typeof item !== "string") refuse(`can't read unit ${JSON.stringify(item)}`);
+    for (const u of selector(w, fr, side, item as string)) picked.set(u.id, u);
+  }
+  if (picked.size === 0) refuse(`no units match ${JSON.stringify(spec)}`);
+  return [...picked.values()];
+}
+
+/** Why `id` in a unit list isn't one of the side's units, and what was probably meant. */
+function notAUnit(w: World, side: Faction, id: number, items: unknown[]): string {
+  const aboard = [...w.units.values()].find((c) => c.faction === side && c.passengers?.some((p) => p.id === id));
+  if (aboard) return `#${id} is aboard Condor #${aboard.id}: unload it first`;
+  if (w.buildings.get(id)?.faction === side) return `#${id} is one of your buildings, not a unit`;
+  const u = w.units.get(id);
+  if (u && unitSeenBy(w, side, u)) return `#${id} is an enemy ${u.kind}: give your own units, and the enemy as the "target" of an attack`;
+  // [28, 38]: a tile where unit ids belong
+  const looksLikeTile = items.length === 2 && items.every((v) => typeof v === "number" && v >= 0 && v < Math.max(w.width, w.height));
+  if (looksLikeTile) return `#${id} is not one of your units: unit lists take unit ids ("#97") or selectors ("army"); a tile [x, y] goes in "to"`;
+  return `#${id} is not one of your units (destroyed, or never yours): use the ids in this round's observation`;
+}
+
+function selector(w: World, fr: Frame, side: Faction, s: string): Unit[] {
+  let text = s.trim().toLowerCase();
+  let near: { x: number; y: number; r: number } | null = null;
+  const m = /\s*(?:near|at|around)\s+(-?\d+)\s*[, ]\s*(-?\d+)(?:\s*(?:r|radius)\s*(\d+))?\s*$/.exec(text);
+  if (m) {
+    near = { x: Number(m[1]) + 0.5, y: Number(m[2]) + 0.5, r: m[3] ? Number(m[3]) : 6 };
+    text = text.slice(0, m.index).trim();
+  }
+  const idle = /\bidle\b/.test(text);
+  text = text.replace(/\bidle\b/, "").replace(/\ball\b/, "").replace(/\bmy\b/, "").replace(/\bunits?\b/, "").trim();
+  let match: (k: UnitKind) => boolean;
+  if (text === "" || text === "everything") match = () => true;
+  else if (text === "army" || text === "combat") match = isArmy;
+  else if (text === "infantry" || text === "squads") match = (k) => isInfantry(k);
+  else if (text === "air" || text === "aircraft") match = (k) => UNITS[k].domain === "air" && isArmy(k);
+  else if (text === "ground" || text === "tanks" || text === "vehicles") match = (k) => UNITS[k].domain === "ground" && isArmy(k) && !isInfantry(k);
+  else {
+    const k = unitKindOf(text);
+    if (!k) refuse(`can't read selector "${s}": try "army", "all", "idle army", "stinger", "army near 30,25"`);
+    match = (x) => x === k;
+  }
+  const out: Unit[] = [];
+  for (const u of w.units.values()) {
+    if (u.faction !== side || !match(u.kind)) continue;
+    if (idle && u.order.type !== "idle") continue;
+    if (near) {
+      const p = fr.pt(u.x, u.y);
+      if (Math.hypot(p.x - near.x, p.y - near.y) > near.r) continue;
+    }
+    out.push(u);
+  }
+  return out;
+}
+
+// -------------------------------------------------------------- placement ---
+
+/** Would this footprint leave no free tile along any side (walling in)? (ai/commander.ts tooCramped) */
+function tooCramped(w: World, tx: number, ty: number, size: number): boolean {
+  let free = 0;
+  for (let i = -1; i <= size; i++)
+    for (const [x, y] of [
+      [tx + i, ty - 1],
+      [tx + i, ty + size],
+      [tx - 1, ty + i],
+      [tx + size, ty + i]
+    ] as [number, number][]) {
+      if (!inBounds(w, x, y)) continue;
+      if (w.occupancy[y * w.width + x] === 0) free++;
+    }
+  return free < (size + 2) * 2;
+}
+
+/**
+ * Where to put a building nobody chose a spot for (world top-left), the way
+ * the built-in commander picks: production by the HQ, defences and radar
+ * toward the enemy, a depot by the nearest field no drop-off serves. Found
+ * in the side's own frame, so mirror-image bases get mirror-image spots.
+ * `near` (world point) overrides the anchor.
+ */
+export function suggestSpot(w: World, side: Faction, kind: BuildingKind, near?: { x: number; y: number }): [number, number] | null {
+  const fr = frameOf(w, side);
+  const hq = hqOf(w, side);
+  const size = BUILDINGS[kind].size;
+  const own = [...w.buildings.values()].filter((b) => b.faction === side);
+  if (own.length === 0) return null;
+  const framed = (p: { x: number; y: number }) => fr.pt(p.x, p.y);
+  const home = framed(buildingCenter(hq ?? own[0]!));
+  const toward = (d: number) => {
+    const cx = w.width / 2;
+    const cy = w.height / 2;
+    const len = Math.max(1, Math.hypot(cx - home.x, cy - home.y));
+    return { x: home.x + ((cx - home.x) / len) * d, y: home.y + ((cy - home.y) / len) * d };
+  };
+  let anchor = near ? fr.pt(near.x, near.y) : home;
+  if (!near) {
+    if (kind === "turret" || kind === "sam-site") anchor = toward(5);
+    else if (kind === "radar") anchor = toward(4);
+    else if (kind === "depot") {
+      // the nearest field (own frame scan order) that no drop-off already serves
+      let best: { x: number; y: number } | null = null;
+      let bestD = Infinity;
+      const drops = own.filter((b) => BUILDINGS[b.kind].dropOff);
+      for (let fy = 0; fy < w.height; fy++)
+        for (let fx = 0; fx < w.width; fx++) {
+          const [tx, ty] = fr.worldTile(fx, fy);
+          if (!isResource(w, ty * w.width + tx)) continue;
+          if (drops.some((b) => distToBuilding(b, tx + 0.5, ty + 0.5) < 7)) continue;
+          const d = Math.hypot(fx + 0.5 - home.x, fy + 0.5 - home.y);
+          if (d < bestD) [best, bestD] = [{ x: fx + 0.5, y: fy + 0.5 }, d];
+        }
+      if (best) anchor = best;
+    }
+  }
+  let spot: [number, number] | null = null;
+  let bestScore = Infinity;
+  const r = ECONOMY.buildRadius + size;
+  for (const b of own) {
+    const c = framed(buildingCenter(b));
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++) {
+        const fx = Math.round(c.x + dx - size / 2);
+        const fy = Math.round(c.y + dy - size / 2);
+        const score = Math.hypot(fx + size / 2 - anchor.x, fy + size / 2 - anchor.y);
+        if (score >= bestScore) continue;
+        const [tx, ty] = fr.worldTopLeft(kind, fx, fy);
+        if (!canPlaceBuilding(w, side, kind, tx, ty)) continue;
+        if (size > 1 && tooCramped(w, tx, ty, size)) continue;
+        spot = [tx, ty];
+        bestScore = score;
+      }
+  }
+  return spot;
+}

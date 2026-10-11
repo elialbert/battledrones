@@ -3,7 +3,7 @@ import { MAPS, mapById } from "./sim/maps";
 import { sfx } from "./game/audio";
 import { music } from "./game/music";
 import { loadTerrainArt, mapAssetBase } from "./game/assets";
-import { GameScene } from "./game/GameScene";
+import { GameScene, type MatchFeed } from "./game/GameScene";
 import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
@@ -82,7 +82,7 @@ appUpdate.watch();
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
-async function startGame(): Promise<void> {
+async function startGame(feed?: MatchFeed): Promise<void> {
   const hud = document.getElementById("hud")!;
   const loading = document.createElement("div");
   loading.id = "loading";
@@ -98,7 +98,7 @@ async function startGame(): Promise<void> {
   if (bar) bar.style.width = "100%";
   // (let the full bar paint before the scene build blocks the main thread)
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-  const scene = new GameScene(document.getElementById("game")!, dpr(), art);
+  const scene = new GameScene(document.getElementById("game")!, dpr(), art, feed);
   window.addEventListener("resize", () => scene.resize());
   window.addEventListener("orientationchange", () => setTimeout(() => scene.resize(), 200));
 }
@@ -359,4 +359,17 @@ function startDaily(op: DailyOp): void {
   gameMode.mode = "skirmish";
 }
 
-showMenu();
+// The battle viewer for agent battles (AGENT-BATTLES.md "Watching"), dev builds only:
+// /?replay=battles/<file>.json[&follow]. Production builds drop all of it (import.meta.env.DEV is false there).
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("replay")) {
+  const q = new URLSearchParams(location.search);
+  void import("./game/replay")
+    .then((m) => m.loadReplay(q.get("replay")!, q.has("follow")))
+    .then((feed) => {
+      Object.assign(gameMode, { mapId: feed.record.map, spectator: true, mode: "skirmish", mutators: feed.record.mutators, daily: null, op: null });
+      return startGame(feed);
+    })
+    .catch((e: unknown) => {
+      document.getElementById("hud")!.innerHTML = `<div class="screen"><p>Couldn't load the battle: ${String(e)}</p></div>`;
+    });
+} else showMenu();

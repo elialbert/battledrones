@@ -1,11 +1,22 @@
-# Agent Battles — design proposal
+# Agent Battles
 
 ## Status
 
-A proposal. None of it is built. Two AI models, say GPT-6 Sol and Claude
-Opus 5.5, play a Battle Drones skirmish against each other. Each one plays
-through a few tools that show **only what its side could see**, as a human
-player would through the fog of war.
+**Built**: phases 1 to 4 below, as proposed except where *As built* says
+otherwise. Two AI models, say GPT-6 Sol and Claude Opus 5.5, play a Battle
+Drones skirmish against each other. Each one plays through a few tools that
+show **only what its side could see**, as a human player would through the
+fog of war. The first battles were GPT-6 Luna against itself (*First
+battles*).
+
+```bash
+npm ci
+uv tool install llm && llm keys set openai           # or OPENAI_API_KEY
+llm install -e llm-tools-battledrones
+llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
+npx vite-node tools/arena.ts watch battles/<file>.json   # the 3D viewer (npm run dev)
+llm logs -d battles/<file>.logs.db                       # how each model thought (or Datasette)
+```
 
 **It all runs on one machine.** One Node process runs the game and both
 seats. It needs no server, no WebSockets and none of the online multiplayer
@@ -726,17 +737,26 @@ limits.
 
 | File | |
 |---|---|
-| `src/arena/observe.ts` | World and side → observation (text and structured). Pure, engine-free, tested |
-| `src/arena/orders.ts` | Orders → `Command[]` with per-order results, and the frame conversion |
-| `src/arena/record.ts` | The record format, world hashing, reading and writing |
-| `tools/arena.ts` | The CLI: `run`, `series`, `serve`, `replay`, `stats`, `watch` |
-| `tools/arena/seats/*.ts` | `http` (the loopback seats LLM and MCP use), `mcp`, `ai`, `scripted`; `anthropic` and `openai` only as the fallback to LLM |
-| `llm-tools-battledrones/` | The LLM plugin: the `BattleDrones` toolbox and the `llm battledrones` command (Python) |
+| `src/arena/frame.ts` | Each side's own frame: world ↔ own coordinates for points, tiles and footprints |
+| `src/arena/observe.ts` | World and side → observation (structured, then text), `look`, the briefing, the ASCII map. Pure, engine-free, tested |
+| `src/arena/events.ts` | "Since your last turn": losses, kills, builds and the announcer's alerts for one side, through the game's filters; what makes a `wait` end early |
+| `src/arena/orders.ts` | Orders → `Command[]` with per-order results, selectors, the frame conversion, where an unplaced building goes |
+| `src/arena/match.ts` | The arena: rounds, seats (agent and built-in AI), openers, waits, auto-placement, the record |
+| `src/arena/record.ts` | The record format, world hashing, setting a recorded match up, replaying it |
+| `src/arena/scripted.ts` | Scripted seats (fixed orders per round, for tests) |
+| `tools/arena.ts` | The CLI: `run`, `serve`, `series`, `replay`, `stats`, `watch` |
+| `tools/arena/server.ts` | The loopback seats: HTTP for LLM, MCP for coding agents, control calls for the driver |
+| `tools/arena/files.ts` | Record files, the sim hash, the commit |
+| `tools/arena-viewer-check.mjs` | The Playwright check: a record played in the dev viewer, hash trail checked in Chromium |
+| `llm-tools-battledrones/` | The LLM plugin: the `BattleDrones` toolbox and the `llm battledrones` command (Python), with its tests |
 | `src/game/replay.ts`, `src/ui/replay.ts` | The dev-only viewer and its panel, loaded only when `import.meta.env.DEV` |
 
 `src/arena` reads the sim and changes nothing in it. Only the dev-only viewer
-imports it, so it never reaches the production bundle. Provider adapters live
-under `tools/`.
+imports it in the browser, so it never reaches the production bundle (a test
+checks the imports; `vite build` was checked by hand to contain none of it).
+`GameScene` gained a small generic hook, `MatchFeed`, that a fed match plays
+through instead of the AI commanders, and a fog side for the viewer's
+"through X's eyes".
 
 ## Testing
 
@@ -763,6 +783,8 @@ under `tools/`.
 
 ## Phases
 
+All four are built.
+
 1. **A headless arena with no model**: `observe`, `orders`, the record,
    rounds, frames, scripted and built-in AI seats, and the tests above.
 2. **Models**: the `serve` mode and the LLM plugin (the toolbox first, so
@@ -774,6 +796,111 @@ under `tools/`.
    "through X's eyes", the radio and notes panel, follow mode for live
    matches, and `watch` with worktrees for old records.
 4. **Coding-agent seats**: the loopback MCP server, tools only.
+
+## As built
+
+Where the build differs from, or adds to, the text above:
+
+- **Model seats run through LLM only.** `tools/arena.ts run` and `series`
+  play built-in AI and scripted seats in-process; a model seat is played by
+  `llm battledrones run` (which starts `tools/arena.ts serve` itself) or by
+  any agent connected to a `serve` seat. The runner's own `fetch` adapters
+  for Anthropic and OpenAI were not built: LLM covers them.
+- **Seats on the command line**: `ai:<personality>:<difficulty>`,
+  `scripted` or `scripted:<file.json>`, and for `serve` `seat` or
+  `seat:<name>` (an outside agent; the name labels the record).
+- **The opener round.** Round 0 deals the cards: `orders([{"opener":
+  "blitz"}])`, then `end_round`. A seat that doesn't pick gets Industry.
+- **Buildings.** `build` starts construction (one at a time, paid up front,
+  the C&C rule) and the arena places it the tick it's ready: at `"at"`, or
+  where the built-in commander would put it (production by the HQ, defences
+  toward the enemy, a depot by a field no drop-off serves), searched in the
+  side's own frame. If the chosen spot is blocked by then, it goes to the
+  nearest legal one and the agent hears why.
+- **Ids in orders** are written `"#97"`, as the observation shows them. The
+  first battle's reference wrote `{"move": [12, 34], …}`, and the models put
+  tile coordinates in unit lists (*First battles*).
+- **The seat protocol** adds `POST /seat/<token>/status` and `/sync` (block
+  until my turn opens) for drivers, `end_round` and `wait` take `wait: false`
+  (submit and return at once), and the control URL serves the state and the
+  record, and takes each seat's model id, settings and token use.
+- **MCP** is a small hand-written Streamable HTTP endpoint on the same
+  server (`initialize`, `tools/list`, `tools/call`, `ping`) rather than the
+  MCP TypeScript SDK, so no new dependency. The official MCP Python SDK's
+  client (mcp 2.2.0) played a seat to the end through it. `end_round` blocks
+  there until the next turn, as in the two-terminal mode.
+- **Battle records** also keep `tick` (how far a live battle has been
+  played), `income` (the built-in AI's difficulty handicap: `tickAi` writes
+  it into the world every tick, so without it a replay of an Easy or Hard AI
+  drifts at once), `log` (each side's orders in its own frame, the results,
+  notes, radio and token use, round by round), `maxTicks` and `created`.
+  The tool transcript is `battles/<id>.tools.jsonl`.
+- **Fog.** A unit chasing an enemy that slipped back into the fog shows
+  `attack (target out of sight)`: printing the target's id named a unit the
+  side can't see (the fog-leak test caught it). A visible enemy building's
+  health is shown, as a player would see its health bar.
+- **The plugin** hides `briefing` from arena seats (it is in the system
+  prompt, and models kept calling it anyway, at ~4k tokens a time), logs
+  `end_round` itself (a paused call never reaches `after_call`), counts the
+  tool-call budget in `before_call` (`end_round` and `wait` are free), and
+  starts the arena in its own process group (stopping `npx` alone left the
+  server running).
+- **LLM 0.36**, beyond the notes above: `log_to_db` writes LLM's new
+  content-addressed tables (`threads`, `turns`, `messages`, `parts`…), not
+  the legacy `responses` table, so read the logs with `llm logs -d` (`--tool
+  BattleDrones_orders` filters by tool) or Datasette. `AsyncResponse` has
+  `log_to_db` itself. A `chain_limit` overrun raises `ValueError("Chain limit
+  of N exceeded.")` after the last response is yielded, before its tool calls
+  run.
+- **The viewer's "through X's eyes"** switches a fog side in `GameScene`
+  (its visibility checks and the terrain's fog texture) instead of making
+  `PLAYER` mutable: many systems take `PLAYER` when they are built, so a live
+  binding wouldn't reach them. The viewer has a seek bar, ±30 s jumps (back
+  through 30 s keyframes), the fog switch, the notes panel, the divergence
+  warning, the commanders' radio in the ticker and the announcer's voice, and
+  follow mode. The HQ-kill cinematic isn't replayed after a seek.
+
+- **Not built**: the commentator toolbox (`BattleDronesReplay`,
+  `serve-replay`), `series --parallel`, the whole-conversation context
+  option for `llm battledrones` (two-terminal play and `llm chat` already
+  keep one long conversation), video export, and costs in money (`stats`
+  reports tokens per game).
+- **A coding agent as a seat**, tools only, with Claude Code for example
+  (not yet tried with Claude Code itself; the MCP endpoint was tested with
+  the MCP Python SDK): serve the battle, add the seat's MCP URL with
+  `claude mcp add --transport http battledrones <mcp-url>`, and start the
+  agent with only that server's tools allowed (`--allowedTools
+  "mcp__battledrones__*"`, the built-in tools disallowed) and a prompt like
+  "You are blue. Call briefing, then play rounds until the battle is over."
+
+## First battles
+
+**GPT-6 Luna vs GPT-6 Luna, Riverlands, seed 42** (default reasoning effort
+and budgets). Both took Industry, raced to a Tech Lab and fought over the
+centre Uplink. Blue massed Lancers and Mortars (14 and 9 by the end), called
+a Barrage on red's harvesters, broke into red's base while red pulled its
+harvesters back, and destroyed red's HQ at **4:31** (round 55). The record
+replays exactly in Node and in Chromium (27 hash checks).
+
+| | blue | red |
+|---|---|---|
+| input tokens (cached) | 1,195,444 (1,072,192) | 1,088,320 (987,720) |
+| output tokens | 71,910 | 58,632 |
+| tool calls | 130 | 122 |
+
+About 15–20 s per round for both seats together, 17 minutes in all. A
+round cost each seat about 20k input tokens (90% cached: the system prompt
+and briefing are much of it) and 1.0–1.3k output, in two or three model
+responses.
+
+The lesson: **38% of orders were refused**, nearly all "#N is not one of
+your units". The models put tile coordinates where unit ids go, such as
+`{"attack": [46, 10], "target": 194}` for "attack the stinger at 46,10", and
+blue's notes concluded that "attack requires own unit coordinate". The order
+reference's own `{"move": [12, 34], "to": [30, 25]}` invited it. Writing ids
+as `"#97"` in the reference and the system prompt, and a refusal that names
+the mistake ("unit lists take unit ids ("#97") or selectors ("army"); a tile
+[x, y] goes in "to""), brought refusals down to **5%** in the second battle.
 
 ## Later
 

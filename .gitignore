@@ -6,3 +6,9 @@ dev-dist/
 *.log
 .DS_Store
 __pycache__/
+battles/
+.arena-builds/
+.venv/
+*.egg-info/
+.pytest_cache/
+llm-tools-battledrones/uv.lock

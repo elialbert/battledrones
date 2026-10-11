@@ -1,0 +1,16 @@
+[project]
+name = "llm-tools-battledrones"
+version = "0.1"
+description = "Battle Drones agent battles for LLM: a toolbox that commands one side, and `llm battledrones` to pit models against each other"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["llm>=0.36"]
+
+[project.entry-points.llm]
+battledrones = "llm_tools_battledrones"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+py-modules = ["llm_tools_battledrones"]

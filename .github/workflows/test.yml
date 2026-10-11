@@ -22,3 +22,8 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+      - name: Test the LLM plugin (llm-tools-battledrones)
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -e "llm-tools-battledrones[test]"
+          .venv/bin/pytest -q llm-tools-battledrones
