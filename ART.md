@@ -140,13 +140,13 @@ plus `meta.json` and a 256 px `thumb.webp` (map picker and minimap). It:
   decorations sparsely (big ones only on unbuildable ground, never near an
   HQ), each with a soft drop shadow;
 - chooses the highest WebP quality that keeps each map near 1.5 MB (the
-  budget scales with area past 64×64 tiles: the 96-tile Archipelago's 25
-  chunks get ~3.4 MB and come out at ~3.0 MB, q78).
+  budget scales with area past 64×64 tiles: the 108-tile Archipelago's 36
+  chunks get ~4.3 MB and come out at ~3.7 MB, q78).
 
 `python3 art/terrain.py --debug` also writes a grid-overlay QA image.
 
-Painting a 96-tile map takes about 4 minutes and ~7 GB of RAM, so paint
-just the map you changed (`python3 art/terrain.py archipelago`).
+Painting the 108-tile Archipelago takes about 4 minutes and ~9 GB of RAM,
+so paint just the map you changed (`python3 art/terrain.py archipelago`).
 
 ### The tropical set and the open sea (Archipelago)
 
