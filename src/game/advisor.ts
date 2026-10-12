@@ -7,8 +7,9 @@
  *   now, and never a Sniper Team hidden in the woods), forgetting each one
  *   a minute after its last sighting.
  * - counterAdvice turns that into "build this": a button glows with ⚔ when
- *   the kinds it counters have been seen at least twice and the player's
- *   own force of that kind doesn't already match them.
+ *   the kinds it counters have been seen at least twice (one Goliath is
+ *   threat enough on its own) and the player's own force of that kind
+ *   doesn't already match them.
  * - IdleWatch nudges when a factory has sat idle while the player could
  *   afford something from it.
  */
@@ -25,6 +26,12 @@ export const ADVISOR = {
   scanS: 0.5,
   /** Distinct sightings needed before a counter lights up. */
   minSeen: 2,
+  /**
+   * A sighting of something this expensive counts as one more sighting per
+   * this much scrap (a lone Goliath, ~1,600, counts twice: it lights its
+   * counters on its own; nothing cheaper than this is weighted).
+   */
+  heavyValue: 800,
   /** A counter stays lit while your own force of it is worth less than this share of the threat. */
   coverShare: 0.75,
   /** A factory with an empty queue this long (sim s) earns an "idle" badge. */
@@ -45,14 +52,15 @@ export const COUNTERS: Partial<Record<UnitKind | BuildingKind, Threat[]>> = {
   "flak-crawler": ["wasp", "raptor", "hornet", "mender", "condor"],
   mortar: ["turret", "sam-site", "trooper", "rocket-squad", "sniper"],
   mastodon: ["stinger", "flak-crawler", "mortar"],
-  lancer: ["mastodon"],
-  wasp: ["stinger", "mortar", "mastodon", "lancer"],
+  lancer: ["mastodon", "goliath"],
+  wasp: ["stinger", "mortar", "mastodon", "lancer", "goliath"],
   raptor: ["wasp", "hornet", "mender", "condor"],
-  hornet: ["mastodon", "mortar", "trooper", "rocket-squad", "sniper"],
+  hornet: ["mastodon", "mortar", "trooper", "rocket-squad", "sniper", "goliath"],
   // robot infantry (INFANTRY.md): Troopers out-trade the anti-armour Rocket Squads,
-  // Rocket Squads kill Mastodons and Hornets, Snipers delete other infantry
+  // Rocket Squads kill Mastodons and Hornets, Snipers delete other infantry;
+  // the Goliath is tuned to fall to Rocket Squads, Wasps, Lancers and Hornets (GOLIATH.md)
   trooper: ["rocket-squad"],
-  "rocket-squad": ["mastodon", "hornet"],
+  "rocket-squad": ["mastodon", "hornet", "goliath"],
   sniper: ["trooper", "rocket-squad", "sniper"],
   turret: ["trooper", "rocket-squad", "sniper"],
   "sam-site": ["hornet", "wasp", "condor"]
@@ -69,6 +77,9 @@ export const plural = (k: Threat): string =>
   PLURAL[k] ?? `${k in UNITS ? UNITS[k as UnitKind].name : BUILDINGS[k as BuildingKind].name}s`;
 
 const threatCost = (k: Threat): number => (k in UNITS ? UNITS[k as UnitKind].cost : BUILDINGS[k as BuildingKind].cost);
+
+/** How many sightings one enemy of this kind is worth toward ADVISOR.minSeen (a Goliath: two). */
+export const sightingWeight = (k: Threat): number => Math.max(1, Math.floor(threatCost(k) / ADVISOR.heavyValue));
 
 /** Fog-respecting memory of the enemy units this faction has seen. */
 export class EnemyIntel {
@@ -128,7 +139,7 @@ export function counterAdvice(
     .map((k) => ({ kind: k, count: intel.count(k, t) }))
     .filter((x) => x.count > 0)
     .sort((a, b) => b.count - a.count);
-  const seen = threats.reduce((s, x) => s + x.count, 0);
+  const seen = threats.reduce((s, x) => s + x.count * sightingWeight(x.kind), 0);
   if (seen < ADVISOR.minSeen) return { threats, active: false };
   const threat = threats.reduce((s, x) => s + x.count * threatCost(x.kind), 0);
   return { threats, active: ownValue(w, faction, kind) < threat * ADVISOR.coverShare };
@@ -163,7 +174,10 @@ export function adviceNote(a: Advice): string | null {
 /** Factory → tab: which build-bar tab an idle factory nudges. */
 export type FactoryTab = "ground" | "infantry" | "air";
 
-/** The build-bar tab of each factory. */
+/**
+ * The build-bar tab of each factory. (No Gantry: it builds one Goliath at a
+ * time and sits idle between them by design, so it never earns an "idle".)
+ */
 export const FACTORY_TAB: Partial<Record<BuildingKind, FactoryTab>> = { "fab-plant": "ground", "assembly-bay": "infantry", airpad: "air" };
 
 /** Notices factories sitting idle while their cheapest unit is affordable. */
