@@ -78,7 +78,9 @@ export const VOICES: Record<UnitKind, VoiceSpec> = {
   trooper: { f0: 430, wave: "square", formants: [950, 2200], q: 6, syl: 55, dry: 0.3, partial: 1.012, gain: 0.85 },
   "rocket-squad": { f0: 175, wave: "sawtooth", formants: [620, 1250], q: 6, syl: 85, dry: 0.12, fm: { hz: 27, depth: 0.05 }, gain: 1.15 },
   sniper: { f0: 135, wave: "triangle", formants: [520, 1050], q: 4, syl: 135, dry: 0.65, gain: 1.15 },
-  condor: { f0: 92, wave: "sawtooth", formants: [430, 900], q: 5, syl: 120, dry: 0.12, fm: { hz: 44, depth: 0.16 }, gain: 1.15 }
+  condor: { f0: 92, wave: "sawtooth", formants: [430, 900], q: 5, syl: 120, dry: 0.12, fm: { hz: 44, depth: 0.16 }, gain: 1.15 },
+  // the Goliath: the deepest, slowest voice on the field, with a slow mechanical shudder
+  goliath: { f0: 58, wave: "sawtooth", formants: [380, 780], q: 6, syl: 165, dry: 0.08, fm: { hz: 22, depth: 0.06 }, gain: 1.3 }
 };
 
 /** A syllable: a pitch glide `from` → `to` Hz with formants scaled by `vowel`. */

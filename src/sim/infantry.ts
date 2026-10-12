@@ -44,7 +44,7 @@ export const isTransport = (kind: UnitKind): boolean => (UNITS[kind].capacity ??
  * whether it sees an enemy UNIT: targeting, the AI's eyes, the renderer.
  */
 export function unitSeenBy(w: World, faction: Faction, u: Unit): boolean {
-  if (u.faction === faction) return true;
+  if (u.faction === faction || UNITS[u.kind].alwaysVisible) return true; // (a Goliath can't hide)
   if (!isVisible(w, faction, Math.floor(u.x), Math.floor(u.y))) return false;
   return !concealedFrom(w, faction, u);
 }

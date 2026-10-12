@@ -1,4 +1,5 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
+import { canWalk, isLifted } from "./goliath";
 import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
 import { inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
@@ -297,6 +298,7 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
   for (const u of w.units.values()) {
     const o = u.order;
     if (pausedIds.has(u.id)) continue;
+    if (!canWalk(u)) continue; // a Goliath digging in, anchored, packing up or on a lift (its order waits)
     if (o.type === "move" || o.type === "attackMove") {
       if (moveUnitToward(w, u, o.x, o.y)) u.order = { type: "idle" };
     } else if (o.type === "attack") {
@@ -344,9 +346,14 @@ const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS)
  * and a PARKED friendly vehicle share the push as usual (a squad walking up
  * to one shoulders it aside, as a second vehicle would — else it would be
  * pinned there, short of its goal, for good).
+ *
+ * A Goliath is never pushed: whatever it meets takes the whole push (it
+ * shoulders tanks aside, and an anchored one stays dug in). Two Goliaths
+ * share it. A Goliath on a lift and its Condors are placed by the lift
+ * (lift.ts), so they sit separation out.
  */
 function separate(w: World, driving: Set<number>): void {
-  const units = [...w.units.values()];
+  const units = [...w.units.values()].filter((u) => u.order.type !== "lift" && !isLifted(u));
   for (let i = 0; i < units.length; i++) {
     const a = units[i]!;
     const da = UNITS[a.kind].domain;
@@ -356,7 +363,8 @@ function separate(w: World, driving: Set<number>): void {
       if (UNITS[b.kind].domain !== da) continue;
       const dx = b.x - a.x;
       const dy = b.y - a.y;
-      if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) continue;
+      const reach = Math.max(1.2, UNITS[a.kind].radius + UNITS[b.kind].radius);
+      if (Math.abs(dx) > reach || Math.abs(dy) > reach) continue;
       const ib = isInfantry(b.kind);
       if (ia !== ib && a.faction !== b.faction) continue; // enemy vehicle and squad: drive through
       const d = hypot(dx, dy);
@@ -380,6 +388,12 @@ function separate(w: World, driving: Set<number>): void {
       } else {
         ux = dx / d;
         uy = dy / d;
+      }
+      if (!!a.goliath !== !!b.goliath) {
+        // a Goliath stands its ground: the other takes the whole push
+        if (a.goliath) nudge(w, b, ux * push * 2, uy * push * 2);
+        else nudge(w, a, -ux * push * 2, -uy * push * 2);
+        continue;
       }
       if (ia !== ib && driving.has(ia ? b.id : a.id)) {
         // a squad steps aside for a friendly vehicle on the move: it takes the whole push
