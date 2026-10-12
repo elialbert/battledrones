@@ -9,7 +9,7 @@
 // the animation at that time (for screenshots); window.gallery.at(ms) moves it.
 //
 // ?only=condor lines up the dropship per faction: loaded and hovering low with its ramp down, loaded in
-// flight, empty — then a Titan, a Trooper Squad and a Hornet for scale (?cface=rad turns the Condors).
+// flight, empty — then a Mastodon, a Trooper Squad and a Hornet for scale (?cface=rad turns the Condors).
 // ?only=condor-ring shows it loaded at six headings, its ramp up and down by turns.
 // ?pitch=deg overrides the camera's pitch (8 for a side view).
 import * as THREE from "three";
@@ -72,8 +72,8 @@ facs.forEach((f, fi) => {
     condor(f, 0, 0.62, z, fi ? ["sniper", "trooper"] : ["trooper", "rocket-squad"], 1);
     condor(f, 2.4, 1.35, z, fi ? ["rocket-squad", "trooper"] : ["trooper", "sniper"], 0);
     condor(f, 4.8, 1.35, z, [], 0);
-    const ti = instance(unitDef("titan", f));
-    ti.root.scale.setScalar(unitScale("titan"));
+    const ti = instance(unitDef("mastodon", f));
+    ti.root.scale.setScalar(unitScale("mastodon"));
     ti.body.rotation.y = cface;
     ti.root.position.set(7.1, 0, z);
     stage.scene.add(ti.root);
@@ -135,7 +135,7 @@ if (!only?.startsWith("condor")) {
   const rub = modelMesh(rubbleGeometry(2, 1));
   rub.position.set(-6.5, 0, 5.5);
   stage.scene.add(rub);
-  const wreck = instance(unitDef("titan", "blue"));
+  const wreck = instance(unitDef("mastodon", "blue"));
   setVariant(wreck.root, "burnt");
   wreck.root.position.set(-6.5, 0, -1);
   stage.scene.add(wreck.root);

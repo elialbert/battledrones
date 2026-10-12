@@ -271,7 +271,7 @@ const EXTRA_LABELS: Record<string, string> = {
   dropsCaptured: "Supply drops taken",
   uplinkSeconds: "Uplink time (s)",
   aircraftKilled: "Aircraft downed",
-  titansKilled: "Titans destroyed",
+  mastodonsKilled: "Mastodons destroyed",
   killsByBuildings: "Kills by defences"
 };
 const humanize = (k: string) => {

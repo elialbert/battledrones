@@ -9,7 +9,7 @@ import type { Faction, FxEvent, UnitKind } from "../src/sim/types";
 import { buildingCenter, hqOf } from "../src/sim/world";
 
 const COMBAT = new Set<UnitKind>([
-  "stinger", "flak-crawler", "mortar", "titan", "lancer", "wasp", "raptor", "hornet", "mender", "trooper", "rocket-squad", "sniper"
+  "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "wasp", "raptor", "hornet", "mender", "trooper", "rocket-squad", "sniper"
 ]);
 const SIDES: Faction[] = ["blue", "red"];
 

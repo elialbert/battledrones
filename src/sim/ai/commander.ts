@@ -57,20 +57,20 @@ export interface Strategy {
   harassGroup: number;
   /** Air force first: the Fab Plant only makes anti-air and a small home guard. */
   airOnly?: boolean;
-  /** Lean on heavy tech ground units (titans, lancers, mortars). */
+  /** Lean on heavy tech ground units (mastodons, lancers, mortars). */
   heavy?: boolean;
   /** Early raids use stingers as well as wasps. */
   groundRaids?: boolean;
   /**
    * Share of the army's value it keeps in robot infantry once it has an
    * Assembly Bay (Troopers, with Rocket Squads against armour and air).
-   * Without it, the Bay only answers what it sees: Rockets for Titans,
+   * Without it, the Bay only answers what it sees: Rockets for Mastodons,
    * Snipers for enemy infantry.
    */
   infantry?: number;
-  /** Rocket Squads it keeps per Titan of its own, as escorts (Ironclad). */
+  /** Rocket Squads it keeps per Mastodon of its own, as escorts (Ironclad). */
   escorts?: number;
-  /** No Assembly Bay in its plans, but it builds one for Rocket Squads once it has seen heavy armour (Titans, Hornets). */
+  /** No Assembly Bay in its plans, but it builds one for Rocket Squads once it has seen heavy armour (Mastodons, Hornets). */
   bayVsArmour?: boolean;
 }
 
@@ -104,7 +104,7 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     groundRaids: true,
     infantry: 0.4
   },
-  /** Airpad first: relentless wasp raids, bombers later; Rocket Squads when Titans show up. */
+  /** Airpad first: relentless wasp raids, bombers later; Rocket Squads when Mastodons show up. */
   airswarm: {
     name: "airswarm",
     label: "Air Swarm",
@@ -116,7 +116,7 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
   },
   /**
    * Greedy economy: extra harvesters, a forward depot, a huge late push;
-   * Rocket Squads from an Assembly Bay once Titans show up.
+   * Rocket Squads from an Assembly Bay once Mastodons show up.
    * (The depot comes after a turret and the Tech Lab: with every side's
    * starting Trooper Squad on guard, a depot second won it 74–76% of
    * tools/pacing.ts games; 61% this way.)
@@ -132,7 +132,7 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
   },
   /**
    * Air force: wasps, raptors and hornets; the late Fab Plant only guards
-   * home, and Rocket Squads from an Assembly Bay join it once Titans show up.
+   * home, and Rocket Squads from an Assembly Bay join it once Mastodons show up.
    */
   skyforce: {
     name: "skyforce",
@@ -145,9 +145,9 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     bayVsArmour: true
   },
   /**
-   * Armoured column: rushes the Tech Lab (right after a turret) for Titans,
+   * Armoured column: rushes the Tech Lab (right after a turret) for Mastodons,
    * Lancers and Mortars, and an Assembly Bay for the Rocket Squads that
-   * escort the Titans. (Waves at 1400: at 1500 it won 72–76% of
+   * escort the Mastodons. (Waves at 1400: at 1500 it won 72–76% of
    * tools/pacing.ts games once infantry was in, at 1800 82%, at 1300 58%.)
    */
   ironclad: {
@@ -194,7 +194,7 @@ export interface AiState {
   /** Rolling estimate of enemy force composition, from what we've seen. */
   seenAir: number;
   seenGround: number;
-  /** Heavily armoured enemy ground units seen (titans, harvesters don't count). */
+  /** Heavily armoured enemy ground units seen (mastodons, harvesters don't count). */
   seenHeavy: number;
   /** Enemy anti-air seen recently, in Flak Crawlers (intel.ts aaWeight: a Trooper Squad is 0.2). */
   seenAA: number;
@@ -264,7 +264,7 @@ const GUARD_RADIUS = 5;
 const STAGE_RADIUS = 6;
 /** The army (the Condor is transport, not a combat unit: ai/condor.ts flies it). */
 const COMBAT_KINDS: UnitKind[] = [
-  "stinger", "flak-crawler", "mortar", "titan", "lancer", "wasp", "raptor", "hornet", "mender",
+  "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "wasp", "raptor", "hornet", "mender",
   "trooper", "rocket-squad", "sniper"
 ];
 
@@ -396,7 +396,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // floating scrap? keep queues two deep
   const depth = f.scrap > 700 ? 2 : 1;
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
-  // Rockets for armour (and Ironclad's Titan escorts), Snipers for enemy squads
+  // Rockets for armour (and Ironclad's Mastodon escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers. Under Infantry
   // War the Bays field the whole army: Rockets for the defences, more Snipers.
   // Island relays (ai/airlift.ts): squads are what holds them, so the Bays
@@ -420,7 +420,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       if (bay.queue.length >= depth || (liftOnly && liftWants <= 0)) continue;
       const r = rand(s);
       const wantRockets = Math.max(
-        Math.round(have("titan") * (s.strategy.escorts ?? 0)),
+        Math.round(have("mastodon") * (s.strategy.escorts ?? 0)),
         Math.round(s.seenHeavy * 0.8),
         infantryWar ? Math.min(6, enemyDefenses) : 0
       );
@@ -441,7 +441,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a capped share of the force, the rest goes to squads, Condors and the air that holds islands)
   const vehicleCap = airlifts ? AIRLIFT.vehicles * Math.max(1000, forceValue) : Infinity;
   const vehicleValue = airlifts
-    ? (["stinger", "flak-crawler", "mortar", "titan", "lancer"] as const).reduce((v, k) => v + have(k) * UNITS[k].cost, 0)
+    ? (["stinger", "flak-crawler", "mortar", "mastodon", "lancer"] as const).reduce((v, k) => v + have(k) * UNITS[k].cost, 0)
     : 0;
   const runFabs = () => {
     for (const fab of myBuildings.filter((b) => b.kind === "fab-plant")) {
@@ -460,7 +460,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
         kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
       else if (tech && s.seenHeavy >= 2 && r < 0.6) kind = "lancer"; // lasers burn through armour
-      else if (tech && (s.strategy.heavy ? r < 0.45 : r < 0.25)) kind = "titan";
+      else if (tech && (s.strategy.heavy ? r < 0.45 : r < 0.25)) kind = "mastodon";
       else if (tech && r < (s.strategy.heavy ? 0.8 : 0.5)) kind = "lancer";
       produce(fab, kind);
     }
@@ -894,7 +894,7 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
   if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
   for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
   for (let i = 0; i < s.extraTurrets; i++) order.splice(Math.min(order.length, 2 + i), 0, "turret");
-  // Titans (or Hornets) seen, or a Condor to fill (Airborne): an Assembly Bay, early in the queue
+  // Mastodons (or Hornets) seen, or a Condor to fill (Airborne): an Assembly Bay, early in the queue
   if (((s.strategy.bayVsArmour && s.seenHeavy >= 2) || flysGivenCondor(w, faction, s)) && !order.includes("assembly-bay"))
     order.splice(Math.min(order.length, 3), 0, "assembly-bay");
   // island relays (ai/airlift.ts): squads hold them, so the Assembly Bay comes

@@ -82,7 +82,7 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 ];
 
 const BUILDABLE: BuildingKind[] = ["fab-plant", "airpad", "assembly-bay", "tech-lab", "depot", "turret", "sam-site", "radar"];
-const GROUND: UnitKind[] = ["harvester", "stinger", "flak-crawler", "mortar", "titan", "lancer"];
+const GROUND: UnitKind[] = ["harvester", "stinger", "flak-crawler", "mortar", "mastodon", "lancer"];
 const INFANTRY: UnitKind[] = ["trooper", "rocket-squad", "sniper"];
 const AIR: UnitKind[] = ["scout", "wasp", "raptor", "hornet", "mender", "condor"];
 const UNIT_TABS: { tab: Tab; kinds: UnitKind[] }[] = [
@@ -98,17 +98,17 @@ const tabOf = (kind: UnitKind): Tab => UNIT_TABS.find((t) => t.kinds.includes(ki
 const MATCHUPS: Partial<Record<UnitKind | BuildingKind, { strong: string; weak: string }>> = {
   harvester: { strong: "—", weak: "Everything. Guard it." },
   scout: { strong: "Spotting through the fog", weak: "Flak, Raptors, SAMs" },
-  stinger: { strong: "Flak, Mortars, Lancers, Harvesters", weak: "Wasps, Titans, Hornets" },
+  stinger: { strong: "Flak, Mortars, Lancers, Harvesters", weak: "Wasps, Mastodons, Hornets" },
   "flak-crawler": { strong: "All aircraft", weak: "Any ground unit" },
   mortar: { strong: "Buildings, clumped armies", weak: "Stingers up close, aircraft" },
-  titan: { strong: "Stingers, Flak, Mortars", weak: "Rocket Squads, Lancers, Wasps" },
-  lancer: { strong: "Titans, Flak, Raptors; crosses water", weak: "Stinger swarms, Hornets" },
-  wasp: { strong: "Stingers, Titans, Mortars", weak: "Flak, Raptors, Lancers" },
+  mastodon: { strong: "Stingers, Flak, Mortars", weak: "Rocket Squads, Lancers, Wasps" },
+  lancer: { strong: "Mastodons, Flak, Raptors; crosses water", weak: "Stinger swarms, Hornets" },
+  wasp: { strong: "Stingers, Mastodons, Mortars", weak: "Flak, Raptors, Lancers" },
   raptor: { strong: "Wasps, Hornets, Scouts", weak: "Flak, Lancers, SAMs" },
-  hornet: { strong: "Bases, Titans, clumps", weak: "Flak, Raptors, SAMs" },
+  hornet: { strong: "Bases, Mastodons, clumps", weak: "Flak, Raptors, SAMs" },
   mender: { strong: "Keeps your army alive", weak: "Anything that shoots air" },
   trooper: { strong: "Rocket Squads, light raids; shoots air too", weak: "Snipers, Mortars, Hornets, Turrets" },
-  "rocket-squad": { strong: "Titans, Hornets, heavy armour", weak: "Troopers, Snipers, Mortars" },
+  "rocket-squad": { strong: "Mastodons, Hornets, heavy armour", weak: "Troopers, Snipers, Mortars" },
   sniper: { strong: "Infantry at long range; hides in woods", weak: "Stingers, Wasps, anything armoured" },
   condor: { strong: "Drops 2 squads anywhere, over water and rock", weak: "Flak, Raptors, SAMs" },
   turret: { strong: "Raids by ground or air, infantry", weak: "Mortars, Hornets" },
@@ -626,7 +626,7 @@ export function createHud(api: HudApi): Hud {
     } else if (stage === 3 && secs > 150) {
       // (one already stands: nothing left to teach)
       if (mine("tech-lab")) return advance(99);
-      msg = "Build a Tech Lab to unlock Titans, Lancers, Mortars, Hornets and Snipers.";
+      msg = "Build a Tech Lab to unlock Mastodons, Lancers, Mortars, Hornets and Snipers.";
       still = () => !mine("tech-lab");
       next = 99;
     }
@@ -1080,9 +1080,9 @@ export const HELP_HTML = `
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. With a mouse, Shift+click adds a unit to the selection or takes it out. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
-  <h3>Infantry</h3><p>You start every battle with a <b>Trooper Squad</b> by your HQ. The <b>Assembly Bay</b> trains more: <b>Troopers</b> (cheap rifles that hit air too), <b>Rocket Squads</b> (kill Titans and Hornets) and, with a Tech Lab, <b>Sniper Teams</b> (delete other infantry, and stay hidden in woods unless they fire or you come within ${INF.concealRadius} tiles). A squad is one unit of several robots: they fall as it takes damage, and it shoots weaker with each one lost. Squads walk through woods and rough ground at full speed, take half damage in woods and capture Uplinks twice as fast, but Titans crush them.</p>
+  <h3>Infantry</h3><p>You start every battle with a <b>Trooper Squad</b> by your HQ. The <b>Assembly Bay</b> trains more: <b>Troopers</b> (cheap rifles that hit air too), <b>Rocket Squads</b> (kill Mastodons and Hornets) and, with a Tech Lab, <b>Sniper Teams</b> (delete other infantry, and stay hidden in woods unless they fire or you come within ${INF.concealRadius} tiles). A squad is one unit of several robots: they fall as it takes damage, and it shoots weaker with each one lost. Squads walk through woods and rough ground at full speed, take half damage in woods and capture Uplinks twice as fast, but Mastodons crush them.</p>
   <h3>Condor</h3><p>The Airpad's dropship carries two squads over water, rock and anything else. Select squads and tap the Condor (or select the Condor and tap a squad) to load them; then <b>long-press</b> the map to fly there and drop them, or tap <b>⇣ Unload</b> (key U) to drop them where it is. Shot down over land, its squads bail out hurt; over water or rock they go down with it.</p>
-  <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Titans crush ground armies · Mortars and Hornets smash bases and squads · Rocket Squads beat Titans · Snipers beat infantry. Long-press any build button for details.</p>
+  <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Mastodons crush ground armies · Mortars and Hornets smash bases and squads · Rocket Squads beat Mastodons · Snipers beat infantry. Long-press any build button for details.</p>
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them.</p>
   <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>`;

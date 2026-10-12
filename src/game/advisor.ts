@@ -44,15 +44,15 @@ export const COUNTERS: Partial<Record<UnitKind | BuildingKind, Threat[]>> = {
   stinger: ["flak-crawler", "mortar", "lancer", "trooper", "sniper"],
   "flak-crawler": ["wasp", "raptor", "hornet", "mender", "condor"],
   mortar: ["turret", "sam-site", "trooper", "rocket-squad", "sniper"],
-  titan: ["stinger", "flak-crawler", "mortar"],
-  lancer: ["titan"],
-  wasp: ["stinger", "mortar", "titan", "lancer"],
+  mastodon: ["stinger", "flak-crawler", "mortar"],
+  lancer: ["mastodon"],
+  wasp: ["stinger", "mortar", "mastodon", "lancer"],
   raptor: ["wasp", "hornet", "mender", "condor"],
-  hornet: ["titan", "mortar", "trooper", "rocket-squad", "sniper"],
+  hornet: ["mastodon", "mortar", "trooper", "rocket-squad", "sniper"],
   // robot infantry (INFANTRY.md): Troopers out-trade the anti-armour Rocket Squads,
-  // Rocket Squads kill Titans and Hornets, Snipers delete other infantry
+  // Rocket Squads kill Mastodons and Hornets, Snipers delete other infantry
   trooper: ["rocket-squad"],
-  "rocket-squad": ["titan", "hornet"],
+  "rocket-squad": ["mastodon", "hornet"],
   sniper: ["trooper", "rocket-squad", "sniper"],
   turret: ["trooper", "rocket-squad", "sniper"],
   "sam-site": ["hornet", "wasp", "condor"]

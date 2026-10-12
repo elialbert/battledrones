@@ -345,7 +345,7 @@ const RECIPES: Record<SfxName, Recipe> = {
     tone(c, o, t, "sawtooth", 150, 60, 0.12, 0.16);
     return 0.22;
   },
-  // a Titan grinding robots under its tracks: crunch and scrape
+  // a Mastodon grinding robots under its tracks: crunch and scrape
   crush: (c, o, t, n) => {
     noiseBurst(c, o, t, n, 0.18, "lowpass", 900, 0.6, 200);
     noiseBurst(c, o, t + 0.03, n, 0.08, "bandpass", 2400, 0.3);

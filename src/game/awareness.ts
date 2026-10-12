@@ -391,15 +391,15 @@ export interface InboundWarning {
 
 /** What to call a raid led by `lead`, and what beats it (from the duel matrix, tools/balance.ts). */
 export function raidAdvice(domain: RaidDomain, lead: UnitKind): { what: string; advice: string } {
-  if (domain === "mixed") return { what: "strike force", advice: "Flak and Titans, or a Turret" };
+  if (domain === "mixed") return { what: "strike force", advice: "Flak and Mastodons, or a Turret" };
   if (domain === "air") {
     if (lead === "hornet") return { what: "bombers", advice: "Flak, Raptors or a SAM" };
     if (lead === "condor") return { what: "dropships", advice: "Flak, Raptors or a SAM" };
     return { what: "drones", advice: "Flak, Raptors or a Turret" };
   }
   switch (lead) {
-    case "titan":
-      return { what: "Titans", advice: "Rocket Squads, Lancers or Wasps" };
+    case "mastodon":
+      return { what: "Mastodons", advice: "Rocket Squads, Lancers or Wasps" };
     case "trooper":
       return { what: "troops", advice: "Mortars, Turrets or Snipers" };
     case "rocket-squad":
@@ -411,7 +411,7 @@ export function raidAdvice(domain: RaidDomain, lead: UnitKind): { what: string; 
     case "lancer":
       return { what: "Lancers", advice: "Stingers or Hornets" };
     default:
-      return { what: "tanks", advice: "Titans, Wasps or a Turret" };
+      return { what: "tanks", advice: "Mastodons, Wasps or a Turret" };
   }
 }
 

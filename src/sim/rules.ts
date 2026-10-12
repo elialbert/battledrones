@@ -93,7 +93,7 @@ export interface MutatorDef {
 }
 
 /** Ground combat units: the tanks, and the robot infantry squads. */
-export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "titan", "lancer", "trooper", "rocket-squad", "sniper"];
+export const GROUND_COMBAT: UnitKind[] = ["stinger", "flak-crawler", "mortar", "mastodon", "lancer", "trooper", "rocket-squad", "sniper"];
 
 /**
  * What "no ground combat" bans (Air War, Sky Pirates): GROUND_COMBAT, and the

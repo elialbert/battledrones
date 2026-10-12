@@ -367,7 +367,7 @@ export class BattleCallouts {
       if (s.pending) s.big = `${label} destroyed`; // rides along under the streak banner
       else if (t - this.lastBigKill >= CALLOUTS.bigKillCooldownS && t - this.lastKillBanner >= CALLOUTS.killBannerGapS) {
         this.lastBigKill = t;
-        // short on the banner ("TITAN DOWN" fits a phone), complete on the radio
+        // short on the banner ("MASTODON DOWN" fits a phone), complete on the radio
         const how = power ? ` by ${powerPhrase(power)}` : "";
         this.banner(
           h.spectator

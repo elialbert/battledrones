@@ -32,14 +32,14 @@ const FEATURES: Record<UnitKind, string[]> = {
     "Shells are real projectiles with splash, aimed where the target was — fast units can dodge them.",
     "Has a minimum range and light armour: anything that closes the distance tears it apart."
   ],
-  titan: [
+  mastodon: [
     "Super-heavy twin-cannon tank with by far the most HP of any unit.",
     "Its cannons hit heavy armour harder, and it crushes Stingers, Flak and Mortars.",
     "Slow and unable to shoot at air — Wasps and Lancers are its nightmare."
   ],
   lancer: [
     "Hover tank: crosses water and shallows and ignores rough ground, opening routes no tracked unit can take.",
-    "Its laser burns through heavy armour (1.55×), making it the Titan killer.",
+    "Its laser burns through heavy armour (1.55×), making it the Mastodon killer.",
     "The only tank that can also shoot aircraft, at reduced effect."
   ],
   wasp: [
@@ -69,7 +69,7 @@ const FEATURES: Record<UnitKind, string[]> = {
     `Captures Uplinks ${INFANTRY.captureWeight}× as fast as a vehicle and picks up supply crates. Leaves no wreck.`
   ],
   "rocket-squad": [
-    `Three bots with shoulder-fired rockets: cannon damage that hits heavy armour ${DAMAGE_VS.cannon.heavy}× — the cheap answer to Titans.`,
+    `Three bots with shoulder-fired rockets: cannon damage that hits heavy armour ${DAMAGE_VS.cannon.heavy}× — the cheap answer to Mastodons.`,
     `Also fires at aircraft (${UNITS["rocket-squad"].airMult}×), so Hornets and Wasps pay for low passes.`,
     "Weak against other infantry: Troopers and Snipers cut it down."
   ],
@@ -87,7 +87,7 @@ const FEATURES: Record<UnitKind, string[]> = {
 
 const GROUPS: { title: string; kinds: UnitKind[] }[] = [
   { title: "Built at the HQ", kinds: ["harvester"] },
-  { title: "Fab Plant — ground vehicles", kinds: ["stinger", "flak-crawler", "mortar", "titan", "lancer"] },
+  { title: "Fab Plant — ground vehicles", kinds: ["stinger", "flak-crawler", "mortar", "mastodon", "lancer"] },
   { title: "Assembly Bay — robot infantry", kinds: ["trooper", "rocket-squad", "sniper"] },
   { title: "Airpad — flying drones", kinds: ["scout", "wasp", "raptor", "hornet", "mender", "condor"] }
 ];

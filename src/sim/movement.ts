@@ -286,7 +286,7 @@ export function vehicleSpots(w: World): Map<number, { x: number; y: number }> {
 
 /**
  * Per-tick movement for move / attack-move orders (combat may pause it),
- * then separation, then crushing: a Titan that drove this tick rolls over
+ * then separation, then crushing: a Mastodon that drove this tick rolls over
  * the enemy squads under it (infantry.ts). `spots` is vehicleSpots from the
  * start of the tick (squads only step aside for a vehicle that drove).
  */
@@ -339,7 +339,7 @@ const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS)
  * Gentle separation so same-domain units don't stack. Robot infantry give
  * way: a squad and a FRIENDLY vehicle that drove this tick (`driving`) part
  * by moving only the squad (it steps aside), and a squad and an ENEMY
- * vehicle don't part at all (tanks roll through squads — and Titans crush
+ * vehicle don't part at all (tanks roll through squads — and Mastodons crush
  * them). Squads among themselves, vehicles among themselves, and a squad
  * and a PARKED friendly vehicle share the push as usual (a squad walking up
  * to one shoulders it aside, as a second vehicle would — else it would be

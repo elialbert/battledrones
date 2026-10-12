@@ -121,8 +121,8 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     splash: 1.1, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell",
     buildTime: 10, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
-  titan: {
-    name: "Titan", role: "Super-heavy tank. Crushes light armies. Can't hit air.",
+  mastodon: {
+    name: "Mastodon", role: "Super-heavy tank. Crushes light armies. Can't hit air.",
     cost: 475, hp: 1050, speed: 1.2, sight: 6, domain: "ground", armor: "heavy",
     targets: "ground", dps: 46, range: 4, shotInterval: 1.2, dmgType: "cannon", fx: "heavy-cannon",
     buildTime: 15, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.55
@@ -171,7 +171,7 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   // (the spec's 180 HP and 0.8× vs air lost to Hornets by 0.59 cost for cost — their bombs
   // splash whole clumps of squads; 210 HP and 1.5× vs air kill them, as the role says)
   "rocket-squad": {
-    name: "Rocket Squad", role: "Anti-armour rockets. Kill Titans and Hornets. Weak vs infantry.",
+    name: "Rocket Squad", role: "Anti-armour rockets. Kill Mastodons and Hornets. Weak vs infantry.",
     cost: 175, hp: 210, speed: 1.6, sight: 6, domain: "ground", armor: "infantry",
     targets: "both", dps: 26, range: 4, shotInterval: 1.5, dmgType: "cannon", fx: "rockets", airMult: 1.5,
     buildTime: 9, builtAt: "assembly-bay", radius: 0.4, squad: 3
@@ -209,7 +209,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
     targets: "none", dps: 0, range: 0
   },
   "tech-lab": {
-    name: "Tech Lab", role: "Unlocks Mortar, Titan, Lancer, Hornet and Sniper.",
+    name: "Tech Lab", role: "Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper.",
     cost: 450, hp: 800, sight: 4, size: 2, buildTime: 20, requires: ["fab-plant", "airpad", "assembly-bay"],
     targets: "none", dps: 0, range: 0
   },
@@ -355,9 +355,9 @@ export const INFANTRY = {
   concealRadius: 3,
   /** …until this many seconds after it fires. */
   concealAfterShot: 2,
-  /** HP/s a moving Titan deals to an enemy squad it rolls over. */
+  /** HP/s a moving Mastodon deals to an enemy squad it rolls over. */
   crushDps: 30,
-  /** A Titan crushes squads whose centre is within its radius + this (tiles). */
+  /** A Mastodon crushes squads whose centre is within its radius + this (tiles). */
   crushReach: 0.15,
   /** Uplink capture weight of a squad (vehicles count 1, aircraft 0.5). */
   captureWeight: 2,

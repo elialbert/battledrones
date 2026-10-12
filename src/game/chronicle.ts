@@ -291,7 +291,7 @@ export function biggestBattle(deaths: DeathRec[], window = 20, radius = 10, min 
     const lost = { blue: 0, red: 0 };
     for (const d of group) lost[d.faction]++;
     if (lost.blue === 0 || lost.red === 0) continue; // a massacre, not a battle
-    // more deaths wins; value breaks ties (a titan brawl over a scout cull)
+    // more deaths wins; value breaks ties (a mastodon brawl over a scout cull)
     const score = group.length * 10000 + group.reduce((v, d) => v + d.value, 0);
     if (score <= bestScore) continue;
     bestScore = score;
@@ -521,11 +521,11 @@ export function pickTip(i: TipInput): string {
       text: `The enemy fielded ${enemyAir} aircraft; you built ${myAA < 1 ? "almost no" : "barely any"} anti-air. Flak Crawlers, Raptors and SAM Sites shred them.`
     });
 
-  const titans = n(them, "titan");
-  if (titans >= 4 && n(me, "lancer", "wasp", "hornet", "rocket-squad") <= 2)
-    tips.push({ score: 75, text: `They built ${titans} Titans. Rocket Squads, Lancers and Wasps burn through heavy armour.` });
+  const mastodons = n(them, "mastodon");
+  if (mastodons >= 4 && n(me, "lancer", "wasp", "hornet", "rocket-squad") <= 2)
+    tips.push({ score: 75, text: `They built ${mastodons} Mastodons. Rocket Squads, Lancers and Wasps burn through heavy armour.` });
 
-  // robot infantry: splash and Snipers are the answer (Titans only scratch them, unless they roll over them)
+  // robot infantry: splash and Snipers are the answer (Mastodons only scratch them, unless they roll over them)
   const squads = n(them, "trooper", "rocket-squad", "sniper");
   if (squads >= 8 && n(me, "mortar", "hornet", "sniper", "turret") <= 1)
     tips.push({ score: 72, text: `They fielded ${squads} infantry squads. Mortars, Hornets and Sniper Teams tear through robot infantry.` });
@@ -569,7 +569,7 @@ export function pickTip(i: TipInput): string {
 
   const tech = i.firstBuilt[me]["tech-lab"];
   if (i.duration > 420 && (tech === undefined || tech > 360))
-    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Titans, Lancers, Mortars, Hornets and Sniper Teams." });
+    tips.push({ score: 40, text: "No Tech Lab by 6:00. It unlocks Mastodons, Lancers, Mortars, Hornets and Sniper Teams." });
 
   if (i.won)
     tips.push({

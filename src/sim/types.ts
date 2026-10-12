@@ -8,7 +8,7 @@ export type UnitKind =
   | "stinger"
   | "flak-crawler"
   | "mortar"
-  | "titan"
+  | "mastodon"
   | "lancer"
   | "wasp"
   | "raptor"
@@ -460,7 +460,7 @@ export type FxEvent =
       bailout: boolean;
     }
   | {
-      /** A Titan rolled over enemy squad `id` this tick (crushing, INFANTRY.crushDps). */
+      /** A Mastodon rolled over enemy squad `id` this tick (crushing, INFANTRY.crushDps). */
       type: "crush";
       faction: Faction;
       id: number;

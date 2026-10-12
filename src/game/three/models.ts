@@ -223,7 +223,7 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
     return { hull, turret: tu.build(), mount: [0, 0.33, 0.14], muzzle: tip, rotors: [], height: 0.6 };
   },
 
-  titan: (t) => {
+  mastodon: (t) => {
     const b = hullB();
     tracks(b, 0.37, 0.21, 0.21, 0.5, -0.27, t.main);
     tracks(b, 0.37, 0.21, 0.21, 0.5, 0.27, t.main);
@@ -1026,7 +1026,7 @@ export function podDef(f: Faction, open = false): ModelDef {
 
 /** Longest side of each unit in tiles (as the painted sprites were sized), before the 3D readability bump. */
 const UNIT_SIZE: Record<UnitKind, number> = {
-  harvester: 1.15, scout: 0.85, stinger: 0.95, "flak-crawler": 1.0, mortar: 1.15, titan: 1.45,
+  harvester: 1.15, scout: 0.85, stinger: 0.95, "flak-crawler": 1.0, mortar: 1.15, mastodon: 1.45,
   lancer: 1.05, wasp: 1.0, raptor: 1.15, hornet: 1.5, mender: 0.85,
   // (a squad's formation spans about its radius × 2: the robots are modelled at map scale, see unitScale)
   trooper: 0.8, "rocket-squad": 0.8, sniper: 0.7,

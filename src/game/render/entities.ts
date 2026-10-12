@@ -351,7 +351,7 @@ export class EntityRenderer {
 
   /**
    * Feed every sim fx event through here (before the views sync): squads
-   * boarding and dropping out of Condors, Titans crushing robots.
+   * boarding and dropping out of Condors, Mastodons crushing robots.
    */
   onFx(ev: FxEvent): void {
     switch (ev.type) {
@@ -689,7 +689,7 @@ export class EntityRenderer {
     if (v.m.turret) {
       const rel = v.aim - v.face;
       v.m.turret.rotation.y = -rel;
-      const kick = v.recoil * (u.kind === "titan" ? 0.08 : 0.05);
+      const kick = v.recoil * (u.kind === "mastodon" ? 0.08 : 0.05);
       const mount = v.m.def.mount;
       v.m.turret.position.set(mount[0] + Math.sin(-rel) * kick, mount[1], mount[2] + Math.cos(-rel) * kick);
     }

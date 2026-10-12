@@ -342,7 +342,7 @@ export class Fx {
     this.sound("clank", p.x, p.y, 0.5);
   }
 
-  /** A Titan grinds through a squad: sparks and scrap kicked out from under its tracks. */
+  /** A Mastodon grinds through a squad: sparks and scrap kicked out from under its tracks. */
   crush(x: number, y: number): void {
     const p = { x, y, h: this.v.terrain.surfaceAt(x, y) + 0.08 };
     this.emit({ ...SPARKS, speed: [0.8, 2.6], up: [0.4, 1.6] }, p, 7);
@@ -572,7 +572,7 @@ export class Fx {
       this.emit({ ...SPARKS, speed: [0.8, 2.6] }, { ...at, h: at.h + 0.1 }, 6);
       this.flash(at, 0.5, 0xffd27a, 0.6);
     } else if (ev.kind === "unit") {
-      // small hulls pop smaller; Titans and Hornets keep their big fireball. A ground
+      // small hulls pop smaller; Mastodons and Hornets keep their big fireball. A ground
       // unit's wreck appears where it died: the blast erupts out of it, not hidden inside it
       const c = ev.air ? at : { x: at.x, y: at.y, h: at.h + 0.22 };
       this.boom(c, ev.size >= 1 ? 0.8 + ev.size : 0.5 + ev.size * 0.85, ev.air, true, 0.9, 0.85);

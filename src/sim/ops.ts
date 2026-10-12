@@ -215,7 +215,7 @@ export const OPS: OpDef[] = [
     icon: "🎯",
     tagline: "A strike group, no factories, 3:00",
     brief:
-      "No base, no reinforcements: two Titans, three Stingers, two Hornets, two Raptors and a Mender, with a Trooper Squad guarding the HQ. Red's HQ sits behind two SAM sites, three turrets, Flak and a fighter screen. Take it down within 3:00.",
+      "No base, no reinforcements: two Mastodons, three Stingers, two Hornets, two Raptors and a Mender, with a Trooper Squad guarding the HQ. Red's HQ sits behind two SAM sites, three turrets, Flak and a fighter screen. Take it down within 3:00.",
     tip: "Move as one group — whatever arrives alone dies alone. Stingers kill the Flak, Raptors the fighters, Hornets flatten SAM sites; then everything on the HQ.",
     map: "proving-grounds",
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
@@ -225,7 +225,7 @@ export const OPS: OpDef[] = [
     scrap: 0,
     setup(w, o) {
       o.removeUnits("blue", "harvester");
-      o.units("blue", "titan", 2, 10, 36);
+      o.units("blue", "mastodon", 2, 10, 36);
       o.units("blue", "stinger", 3, 10, 37.8);
       o.units("blue", "hornet", 2, 10, 39.6);
       o.units("blue", "raptor", 2, 10, 41.4);
@@ -325,8 +325,8 @@ export const OPS: OpDef[] = [
     icon: "🛡",
     tagline: "Survive Ironclad on Hard for 6:00",
     brief:
-      "Ironclad on Hard: Titans, Lancers and Mortars rolling around the frozen sea, with a bigger economy than yours. You have a Fab Plant and a Tech Lab. Hold out for 6:00.",
-    tip: "Lancers burn through Titans and Wasps strike them from the air. Mortars outrange your Turrets — hunt them with Stingers.",
+      "Ironclad on Hard: Mastodons, Lancers and Mortars rolling around the frozen sea, with a bigger economy than yours. You have a Fab Plant and a Tech Lab. Hold out for 6:00.",
+    tip: "Lancers burn through Mastodons and Wasps strike them from the air. Mortars outrange your Turrets — hunt them with Stingers.",
     map: "frostbite",
     ai: { strategy: "ironclad", difficulty: "hard" },
     setup(_w, o) {
@@ -336,7 +336,7 @@ export const OPS: OpDef[] = [
     },
     goals: [{ type: "survive", secs: 360 }],
     stars: [
-      { type: "destroy", kind: "titan", count: 2 },
+      { type: "destroy", kind: "mastodon", count: 2 },
       { type: "maxLosses", n: 1, buildings: true }
     ]
   },

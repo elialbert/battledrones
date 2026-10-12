@@ -48,7 +48,7 @@ export const AWARDS = {
   tycoonRatio: 2,
   tycoonMin: 3000,
   aceKills: 9,
-  giantTitans: 3,
+  giantMastodons: 3,
   airKills: 30,
   wallKills: 30,
   exterminatorKills: 60,
@@ -78,7 +78,7 @@ export const MEDALS: Record<MedalId, MedalDef> = {
   flawless: { id: "flawless", name: "Flawless", icon: "💎", desc: "Win losing 5 units or fewer", mode: "skirmish" },
   tycoon: { id: "tycoon", name: "Tycoon", icon: "💰", desc: "Win having harvested twice the enemy's scrap", mode: "skirmish" },
   ace: { id: "ace", name: "Ace", icon: "🎖️", desc: "One unit scores 9 kills", mode: "skirmish" },
-  "giant-slayer": { id: "giant-slayer", name: "Giant Slayer", icon: "🗿", desc: "Destroy 3 enemy Titans", mode: "skirmish" },
+  "giant-slayer": { id: "giant-slayer", name: "Giant Slayer", icon: "🗿", desc: "Destroy 3 enemy Mastodons", mode: "skirmish" },
   "air-superiority": { id: "air-superiority", name: "Air Superiority", icon: "✈️", desc: "Shoot down 30 enemy aircraft", mode: "skirmish" },
   "iron-wall": { id: "iron-wall", name: "Iron Wall", icon: "🧱", desc: "Your defences destroy 30 enemy units", mode: "skirmish" },
   exterminator: { id: "exterminator", name: "Exterminator", icon: "☠️", desc: "Destroy 60 enemy units", mode: "skirmish" },
@@ -192,7 +192,7 @@ export function computeMedals(r: MatchRecap): MedalId[] {
     out.push("tycoon");
   // feats of arms count in defeat too: a consolation worth chasing
   if (r.bestUnitKills >= AWARDS.aceKills) out.push("ace");
-  if (killsWhere(r, (d) => d.unitKind === "titan") >= AWARDS.giantTitans) out.push("giant-slayer");
+  if (killsWhere(r, (d) => d.unitKind === "mastodon") >= AWARDS.giantMastodons) out.push("giant-slayer");
   if (killsWhere(r, (d) => UNITS[d.unitKind!].domain === "air") >= AWARDS.airKills) out.push("air-superiority");
   if (killsWhere(r, (d) => d.byBuilding) >= AWARDS.wallKills) out.push("iron-wall");
   if (me.unitsKilled >= AWARDS.exterminatorKills) out.push("exterminator");

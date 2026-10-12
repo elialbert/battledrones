@@ -1019,7 +1019,7 @@ export function botHeight(kind: BotKind): number {
 
 /**
  * Riders sit well under their size on the map: a dropship no bigger than a
- * Titan seats two whole squads down its benches (the map's robots are drawn
+ * Mastodon seats two whole squads down its benches (the map's robots are drawn
  * big for readability, see Spec.size).
  */
 export const RIDER_SCALE = 0.4;

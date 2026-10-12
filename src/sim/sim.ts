@@ -32,7 +32,7 @@ export function step(w: World, commands: Command[]): void {
   tickPowers(w); // calldowns land, stuns wear off (powers.ts)
   const engaged = tickCombat(w);
   tickTransport(w); // squads board Condors, Condors fly drops (transport.ts)
-  tickMovement(w, engaged, spots); // (then separation, and Titans crushing squads)
+  tickMovement(w, engaged, spots); // (then separation, and Mastodons crushing squads)
   cleanupDeaths(w);
   if (w.lifeline) tickLifeline(w); // a side left with no Condor gets a free one (lifeline.ts)
   tickSalvage(w);

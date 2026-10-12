@@ -56,7 +56,7 @@ const DEFENCES = (Object.keys(COUNTERS) as (UnitKind | BuildingKind)[]).filter((
 /** One-time tips offered when the selection calls for them (CommandUi.update). */
 const SELECTION_HINTS: [string, string][] = [
   ["squads", "Squads: hold 1, 2 or 3 to save the selected units. Tap it to select them, double-tap to fly there."],
-  ["infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Titans: they get crushed."],
+  ["infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Mastodons: they get crushed."],
   ["condor", "Condor: select squads, then tap the Condor to load them. Long-press the map (or tap an island) to fly there and drop them, or tap ⇣ Unload."]
 ];
 
