@@ -80,7 +80,7 @@ export interface Observation {
   strikes: { id: number; ours: boolean; power: string; x: number; y: number; radius: number; landsIn: number }[];
   powers: { name: string; cost: number; status: string }[];
   wrecks: { x: number; y: number; value: number; hot: boolean }[];
-  winner: Faction | null;
+  winner: Faction | "draw" | null;
 }
 
 const pct = (hp: number, max: number) => Math.max(1, Math.round((100 * hp) / max));
@@ -251,7 +251,7 @@ export function renderObservation(o: Observation, x: ObserveExtras): string {
     `ROUND ${x.round}/${x.lastRound}  T ${clock(o.tick)}  scrap ${o.scrap}  charge ${o.meter}/${POWERS.meterMax}` +
       (o.uplinks.length ? `  uplinks ${held}/${o.uplinks.length}` : "")
   );
-  if (o.winner) L.push(o.winner === o.side ? "THE BATTLE IS OVER: YOU WON." : "THE BATTLE IS OVER: YOU LOST.");
+  if (o.winner) L.push(o.winner === "draw" ? "THE BATTLE IS OVER: A DRAW." : o.winner === o.side ? "THE BATTLE IS OVER: YOU WON." : "THE BATTLE IS OVER: YOU LOST.");
   if (o.pending)
     L.push(
       o.pending.ready

@@ -87,7 +87,7 @@ Deterministic (same raws → byte-identical output). It:
    thresholded alpha (tiny satellites such as rotor discs are attached to
    the nearest part); rotates the Mender and Scout 180° (drawn facing south).
 2. Scales each unit so its longest side matches a per-unit size in tiles
-   (e.g. Scout 0.85, Titan 1.45, Hornet 1.5); turrets share their hull's
+   (e.g. Scout 0.85, Mastodon 1.45, Hornet 1.5); turrets share their hull's
    scale; buildings fill their footprint.
 3. Measures pivots: hull centre of mass; the empty **turret ring** on each
    hull by a gradient circle search + sub-pixel circle fit; the **turret
