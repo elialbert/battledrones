@@ -169,8 +169,12 @@ export const GOLIATH_AI = {
   depotMin: 3000,
   /** A SAM site only once this much enemy air has been seen (Flak-weighted ai/commander seenAir). */
   samAir: 2,
-  /** Seconds between outposts. */
+  /** Seconds between outposts… */
   outpostEvery: 20,
+  /** …and past the first at a site, only on this much income (scrap a minute): a dry economy builds an army first. */
+  outpostIncome: 600,
+  /** Sites keep this far (tiles) from an enemy Goliath (beyond its mortars' reach, 8). */
+  goliathGap: 11,
   /** Squads an anchored Goliath trains to stand by it (more at an island relay, more still with no HQ). */
   garrison: 2,
   relayGarrison: 3,
@@ -257,6 +261,8 @@ interface Plan {
   next: Phase;
   escorts: number[];
   harvesters: number[];
+  /** Outposts started at the site it holds now (each kind once a stay). */
+  outposts: BuildingKind[];
   /** Condors held for its lift, their HP at take-off, a flank waypoint. */
   carriers: number[];
   launchHp: number[];
@@ -679,9 +685,10 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   const taken: P[] = [];
   for (const [id, plan] of m.plans) if (id !== g.id && plan.site) taken.push(plan.site.field ?? plan.site.at);
   const caution = s.strategy.name === "boom" ? 1 : 0.6;
-  // Robot Love: nowhere near an enemy Goliath (a meeting is a draw)
-  const shy = !!rulesOf(w).robotLove;
-  const loveClear = (p: P) => !shy || !ctx.seen.some((e) => !!e.goliath && dist(e.x, e.y, p.x, p.y) < GOLIATH_AI.loveGap + 4);
+  // out of an enemy Goliath's reach (two dug in within mortar range of each other only shell
+  // each other's outposts), and under Robot Love well clear of one (a meeting is a draw)
+  const gap = rulesOf(w).robotLove ? Math.max(GOLIATH_AI.goliathGap, GOLIATH_AI.loveGap + 4) : GOLIATH_AI.goliathGap;
+  const clearOfThem = (p: P) => !ctx.seen.some((e) => !!e.goliath && dist(e.x, e.y, p.x, p.y) < gap);
   const exposure = (p: P) => Math.max(-1, Math.min(1, (dist(p.x, p.y, home.x, home.y) - dist(p.x, p.y, enemyHq.x, enemyHq.y)) / 20));
   const cands: (Site & { key: P })[] = [];
 
@@ -703,7 +710,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     // beside the field (about two tiles from its nearest tile), on our side of it
     const reach = Math.min(12, GOLIATH_AI.siteReach + Math.sqrt(tiles.length));
     const at = spotNear(w, faction, c, 0, reach, (p) => Math.abs(nearField(p) - 2) * 2 + dist(p.x, p.y, home.x, home.y) * 0.02);
-    if (!at || nearField(at) > 3.2 || underGuns(known, at) || !loveClear(at)) continue;
+    if (!at || nearField(at) > 3.2 || underGuns(known, at) || !clearOfThem(at)) continue;
     const lift = regionAt(w, Math.floor(at.x), Math.floor(at.y), "ground") !== gRegion;
     if (lift && !flyable(at)) continue;
     const d = dist(g.x, g.y, at.x, at.y);
@@ -721,7 +728,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       // an enemy Goliath already there: not a landing
       if (ctx.seen.some((e) => e.goliath && regionAt(w, Math.floor(e.x), Math.floor(e.y), "ground") === lr)) continue;
       const at = spotNear(w, faction, l, GOLIATH_AI.relayMin, GOLIATH_AI.relayMax, (p) => dist(p.x, p.y, l.x, l.y) + dist(p.x, p.y, home.x, home.y) * 0.02, lr);
-      if (!at || underGuns(known, at) || !loveClear(at) || !flyable(at)) continue;
+      if (!at || underGuns(known, at) || !clearOfThem(at) || !flyable(at)) continue;
       const enemyOwned = l.owner !== null && l.owner !== faction ? 1.3 : 1;
       const v = uplinkPay(l) * GOLIATH_AI.relayWorth * enemyOwned;
       const d = dist(g.x, g.y, at.x, at.y);
@@ -758,7 +765,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     const aim = { x: home.x + (enemyHq.x - home.x) * t, y: home.y + (enemyHq.y - home.y) * t };
     if (!avoided(aim)) {
       const at = spotNear(w, faction, aim, 0, 6, (p) => dist(p.x, p.y, aim.x, aim.y), gRegion);
-      if (at && !underGuns(known, at, GOLIATH_AI.defenceGap + 2) && loveClear(at) && !taken.some((p) => dist(p.x, p.y, at.x, at.y) < 6))
+      if (at && !underGuns(known, at, GOLIATH_AI.defenceGap + 2) && clearOfThem(at) && !taken.some((p) => dist(p.x, p.y, at.x, at.y) < 6))
         return { kind: "front", at, field: null, value: GOLIATH_AI.frontValue, score: GOLIATH_AI.frontValue / (dist(g.x, g.y, at.x, at.y) + 30), lift: false };
     }
   }
@@ -929,17 +936,21 @@ export function outpostWanted(w: World, faction: Faction, s: AiState, scrap: num
     const g = w.units.get(id);
     const site = plan.site;
     if (!g || !site || plan.phase !== "hold" || !isAnchored(g)) continue;
+    // (the first one goes up whatever; more only on an income, not out of the last of the bank)
+    if (plan.outposts.length > 0 && incomeRate(m) < GOLIATH_AI.outpostIncome) continue;
     const near = ownBuildingsNear(w, faction, g, GOLIATH_AI.post + 2);
     const list: BuildingKind[] =
       site.kind === "field" ? GOLIATH_AI.outposts[s.strategy.name] : site.kind === "relay" ? ["sam-site", "turret"] : ["turret", "sam-site"];
     for (const kind of list) {
-      if (near.some((b) => b.kind === kind)) continue;
+      // (each once a stay: one the enemy knocked down here isn't put straight back up under its guns)
+      if (near.some((b) => b.kind === kind) || plan.outposts.includes(kind)) continue;
       if (kind === "depot" && (!site.field || fieldLeft(w, site.field, 5) < GOLIATH_AI.depotMin)) continue;
       if (kind === "sam-site" && s.seenAir < GOLIATH_AI.samAir) continue;
       if (BUILDINGS[kind].cost > scrap || bannedBy(w, kind, faction)) break;
       if (!outpostSpotFor(w, faction, g, site, kind)) continue;
       m.outpost = { kind, goliathId: id };
       m.lastOutpost = w.tick;
+      plan.outposts.push(kind);
       return kind;
     }
   }
@@ -1046,13 +1057,14 @@ export function goliathBarracks(
 
 function newPlan(w: World): Plan {
   return {
-    phase: "muster", since: w.tick, site: null, next: "muster", escorts: [], harvesters: [], carriers: [], launchHp: [],
+    phase: "muster", since: w.tick, site: null, next: "muster", escorts: [], harvesters: [], outposts: [], carriers: [], launchHp: [],
     waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, noLift: -1e9, tries: 0, moved: -1e9, checked: w.tick
   };
 }
 
 function setPhase(w: World, plan: Plan, p: Phase): void {
   if (plan.phase !== p) plan.since = w.tick;
+  if (plan.phase !== p && (p === "dig" || p === "pack")) plan.outposts = []; // (a new stay, or the end of one)
   plan.phase = p;
   plan.tries = 0;
 }

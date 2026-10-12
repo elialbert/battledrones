@@ -1,4 +1,4 @@
-import { BUILDINGS, ECONOMY, OBJECTIVES, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { knownBuildings } from "../fog";
@@ -37,7 +37,6 @@ import {
   wantGantry,
   wantGoliath
 } from "./goliath";
-import { GOLIATH } from "../balance";
 import { distToFootprint, goliathsOf, hasGoliath, isAnchored, repairUrgency, trainableAt, unitCost } from "../goliath";
 import type {
   ArmorClass,
@@ -714,7 +713,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
     }
   }
-  // --- 1d. Goliaths: ours dig in, hold, move on, lift, walk with a wave; theirs are hunted (ai/goliath.ts)
+  // --- 1c. Goliaths: ours dig in, hold, move on, lift, walk with a wave; theirs are hunted (ai/goliath.ts)
   // (escorts and strikes already under way stay on task)
   for (const id of goliathHolds(w, s)) used.add(id);
   const staging = towardEnemy(w, hqC, 9, enemyHqPos);
@@ -726,7 +725,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
   for (const id of objectiveHolds(w, faction, s)) used.add(id);
 
-  // --- 1c. Condor drops on the enemy's harvesters (ai/condor.ts) ----------
+  // --- 1d. Condor drops on the enemy's harvesters (ai/condor.ts) ----------
   // (two cheap squads picked before the guard takes its share: the drop is a deliberate commitment)
   // (island relays: every Condor flies the airlift instead, ai/airlift.ts)
   // (never a Condor on, or held for, a Goliath's lift: ai/goliath.ts)
