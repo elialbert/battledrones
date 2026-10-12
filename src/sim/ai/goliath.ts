@@ -392,9 +392,11 @@ export function goliathFund(w: World, faction: Faction, s: AiState, ctx: FundCon
   m.income.push({ tick: w.tick, total });
   while (m.income.length > 2 && w.tick - m.income[0]!.tick > 60 * TICK_RATE) m.income.shift();
   const f = w.factions[faction];
+  // nothing to save for (no Gantry, or room for no more), or the army comes first (the base
+  // under attack, or too little army): nothing held back
   if (!ctx.gantry || !roomForGoliath(w, faction, s) || ctx.threatened || ctx.armyValue < GOLIATH_AI.armyFloor) {
     m.fund = Math.min(m.fund, f.scrap);
-    return ctx.gantry && !ctx.threatened && roomForGoliath(w, faction, s) ? Math.min(m.fund, f.scrap) : 0;
+    return 0;
   }
   m.fund = Math.min(goliathCost(w, faction), m.fund + gained * GOLIATH_AI.save[s.strategy.name], f.scrap);
   return m.fund;
@@ -696,7 +698,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   for (const cl of fieldClusters(w, faction, m)) {
     if (cl.value < GOLIATH_AI.siteMin) continue;
     const c = cl.c;
-    const ds = nearestDropSite(w, faction, c.x, c.y);
+    const ds = nearestDropSite(w, faction, c.x, c.y, "ground");
     if (ds && ds.id !== g.id && distToFootprint(ds.tx, ds.ty, ds.size, c.x, c.y) <= GOLIATH_AI.siteServed) continue;
     if (dist(c.x, c.y, enemyHq.x, enemyHq.y) < GOLIATH_AI.enemyHome) continue;
     if (known.some((kb) => { const k = kbCentre(kb); return dist(k.x, k.y, c.x, c.y) <= GOLIATH_AI.enemyNear; })) continue;
@@ -876,7 +878,7 @@ export function goliathHarvest(
       // moved on: back home, unless an outpost Depot by the field takes their scrap
       if (plan.harvesters.length > 0) {
         const field = site?.field;
-        const ds = field ? nearestDropSite(w, faction, field.x, field.y) : null;
+        const ds = field ? nearestDropSite(w, faction, field.x, field.y, "ground") : null;
         const served = !!field && !!ds && ds.id !== id && distToFootprint(ds.tx, ds.ty, ds.size, field.x, field.y) <= GOLIATH_AI.siteServed;
         const back = plan.harvesters.map((h) => w.units.get(h)).filter((h): h is Unit => !!h);
         const home = !served && back.length > 0 ? homeField() : null;
