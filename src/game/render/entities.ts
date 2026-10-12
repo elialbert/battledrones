@@ -245,6 +245,8 @@ export class EntityRenderer {
   private toppling: GoliathView[] = [];
   /** Robot Love: the two Goliaths in love and where they meet (they walk to meet once their views are up). */
   private lovers: { ids: readonly number[]; x: number; y: number } | null = null;
+  /** The world tick at the last sync (a replay seek back rewinds it). */
+  private lastTick = 0;
   /** Goliaths that just walked off a Gantry since the last sync (unit → its Gantry). */
   private rolledOut = new Map<number, number>();
   private host: GoliathHost;
@@ -493,6 +495,10 @@ export class EntityRenderer {
 
   sync(alpha: number, prev: Map<number, { x: number; y: number }>, dtMs: number): void {
     const w = this.world;
+    // (a replay seek back: what's gone just isn't there yet, and a love scene that hasn't happened is off)
+    const rewound = w.tick < this.lastTick;
+    this.lastTick = w.tick;
+    if (this.lovers && w.winner !== "draw") this.lovers = null;
     this.time += dtMs;
     this.alpha = alpha;
     eliteUniform.value = 0.1 + 0.06 * Math.sin(this.time / 260);
@@ -551,7 +557,7 @@ export class EntityRenderer {
           for (let i = 0; i < 5; i++) this.fx.dust(v.cx + (Math.random() - 0.5) * v.size, v.cy + (Math.random() - 0.5) * v.size);
         } else this.group.remove(root);
       } else if (v.squad && v.visible) this.leave(id, v);
-      else if (v.goliath) {
+      else if (v.goliath && !rewound) {
         // a Goliath topples, slams down and sinks away before it goes
         v.goliath.startFall();
         this.toppling.push(v.goliath);
@@ -755,6 +761,7 @@ export class EntityRenderer {
     if (v.goliath) {
       const g = v.goliath;
       const love = this.lovers;
+      if (!love && g.inLove) g.endLove();
       if (love && !g.inLove && love.ids.includes(u.id)) {
         const other = this.world.units.get(love.ids.find((id) => id !== u.id) ?? -1);
         if (other) g.love(love.x, love.y, other.x, other.y);

@@ -237,6 +237,7 @@ describe("Robot Love", () => {
     const a = spawnUnit(w, "goliath", "blue", 8, 10);
     const b = spawnUnit(w, "goliath", "red", 12, 10);
     sync(2);
+    w.winner = "draw"; // (the sim has stopped at the draw: GameScene.playFinale)
     r.love([a.id, b.id], 10, 10);
     sync(Math.round(4200 / FRAME));
     const va = views(r).get(a.id)!.goliath!;
@@ -261,5 +262,133 @@ describe("the finale's banner", () => {
     expect(finaleBanner({ ...at, spectator: true, cause: "goliath", winner: "blue" })).toMatchObject({ key: "hq-destroyed", text: "Red Goliath destroyed" });
     expect(finaleBanner({ ...at, spectator: true, cause: "hq", winner: "red" })).toMatchObject({ key: "hq-destroyed", text: "Blue HQ destroyed" });
     expect(finaleBanner({ ...at, cause: "love", winner: "draw" })).toMatchObject({ key: "draw", sub: "It's a draw", tone: "good" });
+  });
+});
+
+describe("final review regressions", () => {
+  const group = (r: EntityRenderer) => (r as unknown as { group: THREE.Group }).group;
+  /** The four lift cables (meshes tagged to draw clear of the fog, straight under the renderer's group). */
+  const cables = (r: EntityRenderer) => group(r).children.filter((o) => (o as THREE.Mesh).isMesh && o.userData.clear) as THREE.Mesh[];
+  /** Hook Condors a and b onto g, carrying. */
+  const carry = (g: Unit, a: Unit, b: Unit) => {
+    g.goliath!.lift = { carriers: [a.id, b.id], phase: "carrying", dest: null, setDown: false };
+    for (const c of [a, b]) c.order = { type: "lift", goliathId: g.id };
+  };
+
+  it("a replay seek back past Robot Love ends the love scene: the Goliaths follow the sim again", () => {
+    const { r, w, sync } = setup({ shown: () => true });
+    const a = spawnUnit(w, "goliath", "blue", 10, 10);
+    const b = spawnUnit(w, "goliath", "red", 14, 10);
+    sync(2);
+    w.winner = "draw";
+    r.love([a.id, b.id], 12, 10);
+    sync(120);
+    const va = views(r).get(a.id)!.goliath!;
+    expect(va.inLove).toBe(true);
+    // the seek: an earlier keyframe, before anyone met
+    w.winner = null;
+    w.tick = 20;
+    a.x = 5;
+    a.y = 30;
+    b.x = 50;
+    b.y = 30;
+    sync(2);
+    expect(va.inLove).toBe(false);
+    expect(va.gx).toBeCloseTo(5, 6);
+    expect(va.gy).toBeCloseTo(30, 6);
+    expect(views(r).get(b.id)!.goliath!.inLove).toBe(false);
+  });
+
+  it("a replay seek back to before a Goliath was built drops its view quietly (no topple)", () => {
+    const { r, w, sync, fx } = setup();
+    const g = spawnUnit(w, "goliath", "blue", 10, 10);
+    sync(2);
+    w.units.delete(g.id);
+    w.tick = 10;
+    sync();
+    expect(views(r).has(g.id)).toBe(false);
+    expect(toppling(r)).toHaveLength(0);
+    sync(Math.round(3000 / FRAME));
+    expect(fx.get("slam")).toBeUndefined();
+  });
+
+  it("an enemy lift in the fog: the cables rise to where its hidden Condors fly, drawn clear of the fog", () => {
+    const { r, w, sync } = setup({ shown: (u) => u.kind === "goliath" || u.x < 20 });
+    const g = spawnUnit(w, "goliath", "red", 40, 40);
+    const a = spawnUnit(w, "condor", "red", 39.5, 40);
+    const b = spawnUnit(w, "condor", "red", 40.5, 40);
+    sync(2);
+    carry(g, a, b);
+    sync(240);
+    const cs = cables(r);
+    expect(cs).toHaveLength(4);
+    for (const c of cs) {
+      expect(c.visible).toBe(true);
+      // (up toward the Condors, not down into the ground where their hidden views were last drawn)
+      expect(new THREE.Vector3(0, 1, 0).applyQuaternion(c.quaternion).y).toBeGreaterThan(0.3);
+      expect(c.material).toBe(clearMat("normal"));
+    }
+  });
+
+  it("the cables hold on as a set-down Goliath eases to the ground", () => {
+    const { r, w, sync } = setup();
+    const g = spawnUnit(w, "goliath", "blue", 10, 10);
+    const a = spawnUnit(w, "condor", "blue", 9.5, 10);
+    const b = spawnUnit(w, "condor", "blue", 10.5, 10);
+    sync(2);
+    carry(g, a, b);
+    sync(240);
+    // the sim sets it down: the lift is gone at once, the view eases down
+    g.goliath!.lift = null;
+    a.order = b.order = { type: "idle" };
+    sync(15);
+    const gv = views(r).get(g.id)!.goliath!;
+    expect(gv.bh).toBeGreaterThan(0.05);
+    expect(cables(r).filter((c) => c.visible)).toHaveLength(4);
+    sync(120);
+    expect(cables(r).filter((c) => c.visible)).toHaveLength(0);
+  });
+
+  it("in love, a Goliath that was digging in draws no progress arc and no rings", () => {
+    const { r, w, sync } = setup({ shown: () => true });
+    const a = spawnUnit(w, "goliath", "blue", 10, 10);
+    const b = spawnUnit(w, "goliath", "red", 14, 10);
+    a.goliath!.mode = "anchoring";
+    a.goliath!.modeTicks = 20;
+    sync(30);
+    const calls: string[] = [];
+    // (a stand-in for the ground overlay: counts the drawing calls; px is world tiles per CSS px)
+    const gfx: unknown = new Proxy({}, {
+      get: (_t, k) => (typeof k === "symbol" ? undefined : k === "px" ? () => 0.02 : () => (calls.push(String(k)), gfx))
+    });
+    r.goliathMarks(gfx as never, new Set([a.id]));
+    expect(calls.length).toBeGreaterThan(0); // (digging in: the arc and the rings)
+    w.winner = "draw";
+    r.love([a.id, b.id], 12, 10);
+    sync(2);
+    calls.length = 0;
+    r.goliathMarks(gfx as never, new Set([a.id]));
+    expect(calls).toEqual([]);
+  });
+
+  it("a health-bar notch is amber while its weapon is down, not just below its line", async () => {
+    // (juice-view brings in the sound, which listens to the page)
+    (document as unknown as { addEventListener?: unknown }).addEventListener ??= () => {};
+    (globalThis as { window?: unknown }).window ??= { addEventListener: () => {} };
+    const { CombatJuice } = await import("../src/game/render/juice-view");
+    const juice = new CombatJuice({ dpr: 1 } as never, {} as never);
+    const fills: string[] = [];
+    const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (t, k) => (k === "fillRect" ? () => fills.push(String(t.fillStyle)) : k in t ? t[k] : () => {}),
+      set: (t, k, v) => ((t[k] = v), true)
+    });
+    const marks = [0.75, 0.5, 0.25];
+    // at 78%: above the mortars' line, but still offline (the restore margin), or rebooting
+    juice.healthBar(ctx as never, 1, 0, 0, 100, 0.78, true, 5, marks, [true, false, false]);
+    const amber = fills.filter((f) => f === "#ffb347");
+    expect(amber).toHaveLength(1);
+    fills.length = 0;
+    juice.healthBar(ctx as never, 1, 0, 0, 100, 0.78, true, 5, marks, [false, false, false]);
+    expect(fills.filter((f) => f === "#ffb347")).toHaveLength(0);
   });
 });

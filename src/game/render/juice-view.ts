@@ -224,12 +224,13 @@ export class CombatJuice {
    * space, crisp at every zoom. (x, y) is the bar's top-left in CSS px;
    * `hgt` its fill height (buildings take a taller one). `marks` notch
    * thresholds (shares of full health) taller than the segment ticks: a
-   * Goliath's, where each weapon goes offline — pale while the health is
-   * above one, amber once it has fallen below (that weapon is down).
+   * Goliath's, where each weapon goes offline — pale while the weapon is
+   * up, amber while it is down (`down`, per mark; without it, once the
+   * health has fallen below the mark).
    */
   healthBar(
     ctx: CanvasRenderingContext2D, id: number, x: number, y: number, width: number, ratio: number, friendly: boolean, hgt = 4,
-    marks?: readonly number[]
+    marks?: readonly number[], down?: readonly boolean[]
   ): void {
     const minW = 22;
     if (width < minW) {
@@ -259,14 +260,14 @@ export class CombatJuice {
     if (segs >= 2 && !marks) for (let i = 1; i < segs; i++) ctx.fillRect(x0 + snap((w * i) / segs, dpr), y0, px, h);
     ctx.globalAlpha = 1;
     if (marks)
-      for (const m of marks) {
+      marks.forEach((m, i) => {
         // a notch standing proud of the frame, rimmed dark so it reads over the fill
         const mx = x0 + snap(w * m, dpr);
         ctx.fillStyle = RIM;
         ctx.fillRect(mx - px, y0 - 3 * px, 3 * px, h + 6 * px);
-        ctx.fillStyle = r < m ? "#ffb347" : "rgba(255,255,255,0.9)";
+        ctx.fillStyle = (down ? down[i] : r < m) ? "#ffb347" : "rgba(255,255,255,0.9)";
         ctx.fillRect(mx, y0 - 2 * px, px, h + 4 * px);
-      }
+      });
   }
 
   /** A plain meter in the health bars' frame (production, harvester load): `k` of it filled in `color`. */

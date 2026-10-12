@@ -1059,7 +1059,9 @@ export class GameScene {
       if (u.goliath) {
         // a Goliath's bar is wider and taller, notched where each weapon goes offline
         const gw = Math.min(120, Math.max(60, (UNITS[u.kind].radius * 2.4) / rig.worldPerPx(p.x, p.y)));
-        this.juice.healthBar(ctx, u.id, s.x - gw / 2, s.y - 11, gw, u.hp / max, u.faction === PLAYER, 5, GOLIATH_MARKS);
+        // (amber while that weapon is down: offline, or rebooting after the Menders brought it back)
+        GOLIATH_MARK_WEAPONS.forEach((k, i) => (goliathDown[i] = !u.goliath!.weapons[k].online));
+        this.juice.healthBar(ctx, u.id, s.x - gw / 2, s.y - 11, gw, u.hp / max, u.faction === PLAYER, 5, GOLIATH_MARKS, goliathDown);
         continue;
       }
       const bw = Math.min(64, Math.max(30, (UNITS[u.kind].radius * 2.2) / rig.worldPerPx(p.x, p.y)));
@@ -1448,7 +1450,10 @@ export class GameScene {
 }
 
 /** Where a Goliath's weapons go offline, notched on its health bar (mortars, laser, cannons). */
-const GOLIATH_MARKS = [GOLIATH.weapons.mortars.lostBelow, GOLIATH.weapons.laser.lostBelow, GOLIATH.weapons.cannons.lostBelow];
+const GOLIATH_MARK_WEAPONS = ["mortars", "laser", "cannons"] as const;
+const GOLIATH_MARKS = GOLIATH_MARK_WEAPONS.map((k) => GOLIATH.weapons[k].lostBelow);
+/** Which of those weapons are down (refilled per Goliath as its bar is drawn). */
+const goliathDown = [false, false, false];
 
 /** The centre of the device pixel under CSS coordinate `v`. */
 function pxCentre(v: number, dpr: number): number {

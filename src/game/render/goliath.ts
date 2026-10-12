@@ -6,7 +6,7 @@ import { rulesOf } from "../../sim/rules";
 import type { Building, Faction, FxEvent, GoliathMode, GoliathWeapon, Unit, WeaponFx, World } from "../../sim/types";
 import { ModelBuilder } from "../three/builder";
 import { GoliathRig, type GoliathGun, type GoliathPose } from "../three/goliath";
-import { clearOfFog, setVariant } from "../three/materials";
+import { clearMat, clearOfFog, setVariant } from "../three/materials";
 import { modelMesh, TRACK, unitScale, type ModelInstance } from "../three/models";
 import type { GroundGfx } from "../three/ground-gfx";
 import { Ease } from "../three/tween";
@@ -46,7 +46,7 @@ export interface GoliathHost {
   /** The group the views' extra meshes (lift cables) go in. */
   group: THREE.Group;
   /** Another unit's rendered ground point and body height (a carrier Condor), or null. */
-  unitPose(id: number): { gx: number; gy: number; bh: number } | null;
+  unitPose(id: number): { gx: number; gy: number; bh: number; visible: boolean } | null;
 }
 
 /** Team colours of rings on the ground. */
@@ -109,6 +109,7 @@ function cable(): THREE.Mesh {
   }
   const m = modelMesh(cableGeo, false);
   m.userData.clear = true;
+  m.material = clearMat("normal"); // (drawn over the fog, like the Goliath it holds up)
   return m;
 }
 
@@ -189,6 +190,8 @@ export class GoliathView {
   private stepT = 0;
   private visible = true;
   private cables: THREE.Mesh[] = [];
+  /** The Condors of its last lift: the cables stay on them while it eases down after a set-down. */
+  private carriers: [number, number] | null = null;
   private fall: Fall | null = null;
   /** This frame's pose for the rig (reused, no per-frame garbage), and the ground under its feet. */
   private pose: GoliathPose = {
@@ -361,6 +364,11 @@ export class GoliathView {
       t: 0, x0: this.gx, y0: this.gy, x1: mx - dx * LOVE_GAP, y1: my - dy * LOVE_GAP,
       f0: this.face, f1: Math.atan2(dx, -dy), heartT: 0
     };
+  }
+
+  /** Back to following the sim (a replay rewound past the meeting). */
+  endLove(): void {
+    this.script = null;
   }
 
   /** Is it playing out Robot Love? */
@@ -576,7 +584,9 @@ export class GoliathView {
     pose.look = (1 - Math.min(1, speed)) * 0.35 * Math.sin(this.time / 1900) * (w.tick - fired > 25 ? 1 : 0);
     pose.ground = this.ground;
     this.rig.update(pose);
-    this.cablesTo(lift?.carriers ?? null, carrying || (!!lift && this.hangH > 0.05));
+    if (lift) this.carriers = lift.carriers;
+    else if (this.hangH <= 0.05) this.carriers = null;
+    this.cablesTo(lift?.carriers ?? this.carriers, carrying || (!!this.carriers && this.hangH > 0.05));
     if (!visible || dtMs <= 0) return;
 
     // ---- one-shots and running effects
@@ -663,7 +673,8 @@ export class GoliathView {
           continue;
         }
         this.rig.point(side ? "shoulderR" : "shoulderL", [side ? 0.1 : -0.1, 0.24, n ? 0.16 : -0.16], tmp);
-        tmp2.set(cp.gx, cp.bh - 0.08, cp.gy);
+        // (a Condor out of sight has no height on show: where it would fly, above the Goliath)
+        tmp2.set(cp.gx, (cp.visible ? cp.bh : this.bh + this.top + CARRY_CLEAR) - 0.08, cp.gy);
         const len = tmp.distanceTo(tmp2);
         c.visible = len > 0.05;
         c.position.copy(tmp);
@@ -791,7 +802,8 @@ export class GoliathView {
    */
   marks(g: GroundGfx, u: Unit, selected: boolean, ours: boolean): void {
     const goliath = u.goliath;
-    if (!goliath || this.fall) return;
+    // (in love, nothing of the fight or the dig: no rings, no progress arc)
+    if (!goliath || this.fall || this.script) return;
     const x = this.gx;
     const y = this.gy;
     const team = TEAM[this.faction];
