@@ -31,6 +31,7 @@ import { HeatMap, InboundWatch, TEMPO, TempoGuard, baseGoliath, raidAdvice, tall
 import { ADVISOR, COUNTERS, EnemyIntel, FACTORY_TAB, counterAdvice, sightingWeight } from "../src/game/advisor";
 import { BattleMood, FLAVOURS, MUSIC, stinger, stingerFor, type MoodHooks } from "../src/game/score";
 import { Chronicle, moments, pickTip, type DeathRec, type Sample, type TipInput } from "../src/game/chronicle";
+import { recapOf } from "../src/game/career";
 import { HeroPresenter } from "../src/game/hero-fx";
 import { UnitVoices } from "../src/game/voices";
 import { goliathsFielded, headline } from "../src/ui/report";
@@ -744,6 +745,19 @@ describe("Goliaths in the after-action report", () => {
     expect(headline({ ...o, winner: "red", spectator: true })).toEqual({ title: "RED WINS", cls: "lose", note: null });
     expect(headline({ ...o, winner: "draw", love: true })).toEqual({ title: "DRAW", cls: "draw", note: "💘 They fell in love" });
     expect(headline({ ...o, winner: "draw", spectator: true })).toEqual({ title: "DRAW", cls: "draw", note: null });
+  });
+
+  it("a draw is no win: no victory medal, but feats of arms still count", () => {
+    const w = createWorld(48, 48);
+    const c = new Chronicle(w);
+    w.tick = 200 * TICK_RATE; // (a fast, flawless, untouched match: every victory medal, had it been won)
+    c.onFx(goliathDeath("red", 5));
+    w.winner = "blue";
+    expect(computeMedals(recapOf(w, c, "blue"))).toEqual(["lightning", "untouchable", "flawless", "goliath-slayer"]);
+    w.winner = "draw";
+    expect(recapOf(w, c, "blue").won).toBe(false);
+    expect(computeMedals(recapOf(w, c, "blue"))).toEqual(["goliath-slayer"]);
+    expect(computeMedals(recapOf(w, c, "red"))).toEqual([]);
   });
 
   it("the Goliath Slayer medal: one enemy Goliath brought down", () => {
