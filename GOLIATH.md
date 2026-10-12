@@ -6,9 +6,10 @@ Implemented (commits 137e290 and 86572c0 for the Titan → Mastodon rename,
 6a64545…9b77538 for the Goliath, the Gantry and the two mutators below).
 The rest of this file is the spec as written; **DESIGN.md** describes the
 shipped game (Buildings, Units → *The Goliath* and *The two-Condor lift*,
-Battlefield salvage, Combat, Voices & announcer, Fog of war, Match flow,
-the finale and the report, Career, medals, mutators and the Daily Op,
-3D view). Where the code differs from the spec, and why:
+Battlefield salvage, Combat, Voices & announcer, Command UX, Fog of war,
+Match flow, the finale and the report, Career, medals, mutators and the
+Daily Op, Controls & UI, 3D view). Where the code differs from the spec,
+and why:
 
 - **Every starting number shipped as written**, in `GOLIATH`,
   `UNITS.goliath` and `BUILDINGS.gantry` (`src/sim/balance.ts`): 1,600
@@ -97,7 +98,7 @@ the finale and the report, Career, medals, mutators and the Daily Op,
     The whole suite passes (877).
   - Rocket Squads, Wasps, Lancers and Hornets are real answers: a Goliath
     loses to 1,600 scrap of each by 0.39–0.84 (`npm run balance goliath`;
-    DESIGN.md's counter web has the table).
+    DESIGN.md's counter web has every unit's margin).
 
 **Additions**, asked for after this spec was written (DESIGN.md,
 *Career, medals, mutators and the Daily Op*):
