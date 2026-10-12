@@ -364,9 +364,10 @@ function statsHtml(ctx: ReportContext): string {
     ${rows.join("")}</table>`;
 }
 
-/** Goliaths each side walked off a Gantry this match (the chronicle's built log). */
-export function goliathsFielded(c: Pick<Chronicle, "built">): Record<Faction, number> {
-  return { blue: c.built.blue["goliath"] ?? 0, red: c.built.red["goliath"] ?? 0 };
+/** Goliaths each side fielded this match: those it started with (Nomads) and those that walked off a Gantry. */
+export function goliathsFielded(c: Pick<Chronicle, "built"> & Partial<Pick<Chronicle, "startGoliaths">>): Record<Faction, number> {
+  const start = c.startGoliaths ?? { blue: 0, red: 0 };
+  return { blue: start.blue + (c.built.blue["goliath"] ?? 0), red: start.red + (c.built.red["goliath"] ?? 0) };
 }
 
 /** Calldowns fired per side (World.powers.fired), with the per-power counts. */
@@ -394,7 +395,8 @@ function tipHtml(ctx: ReportContext): string | null {
   const c = ctx.chronicle;
   const tip = pickTip({
     pov: ctx.pov, won: ctx.won, duration: ctx.secs, difficulty: ctx.enemy.difficulty.toLowerCase(),
-    built: c.built, firstBuilt: c.firstBuilt, deaths: c.deaths, samples: c.samples, factories: c.factories
+    built: c.built, firstBuilt: c.firstBuilt, deaths: c.deaths, samples: c.samples, factories: c.factories,
+    startGoliaths: c.startGoliaths
   });
   return `<p class="aar-tip"><b>Next time</b><span>${escapeHtml(tip)}</span></p>`;
 }

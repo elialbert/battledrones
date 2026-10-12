@@ -111,6 +111,8 @@ export class Chronicle {
   readonly built: Record<Faction, Record<string, number>> = { blue: {}, red: {} };
   /** Game second each building kind was first completed. */
   readonly firstBuilt: Record<Faction, Record<string, number>> = { blue: {}, red: {} };
+  /** Goliaths each side started with (Nomads: one each, never "built"). */
+  readonly startGoliaths: Record<Faction, number> = { blue: 0, red: 0 };
   /** Factory samples: total, and idle while the side could afford a unit. */
   readonly factories: Record<Faction, { total: number; idleRich: number }> = {
     blue: { total: 0, idleRich: 0 },
@@ -132,6 +134,7 @@ export class Chronicle {
       if (b) hq[f] = buildingCenter(b);
     }
     this.refs = { width: w.width, height: w.height, hq };
+    for (const u of w.units.values()) if (u.goliath) this.startGoliaths[u.faction]++;
     this.sample();
   }
 
@@ -579,6 +582,8 @@ export interface TipInput {
   deaths: DeathRec[];
   samples: Sample[];
   factories: Record<Faction, { total: number; idleRich: number }>;
+  /** Goliaths each side started with (Nomads), on top of those built. */
+  startGoliaths?: Record<Faction, number>;
 }
 
 /** One actionable tip, chosen by simple rules (the most pressing wins). */
@@ -597,7 +602,7 @@ export function pickTip(i: TipInput): string {
     });
 
   // the Goliath's tuned answers (GOLIATH.md); its Menders keep it alive and its weapons coming back
-  const goliaths = n(them, "goliath");
+  const goliaths = n(them, "goliath") + (i.startGoliaths?.[them] ?? 0);
   if (goliaths >= 1 && n(me, "rocket-squad", "wasp", "lancer", "hornet") <= 2)
     tips.push({
       score: 80,

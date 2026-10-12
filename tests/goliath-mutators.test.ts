@@ -199,5 +199,8 @@ describe("a draw in the career", () => {
     const { career } = applyResult(emptyCareer(), { ...base, won: false, drawn: true }, 20300);
     expect(career.wins).toBe(0);
     expect(career.losses).toBe(0);
+    // a quick meeting (Nomads + Robot Love: walk the Goliath over) pays no more than a quick loss
+    const quick = { ...base, secs: 75 };
+    expect(xp({ ...quick, won: false, drawn: true })).toBeLessThan(draw / 2);
   });
 });

@@ -70,7 +70,7 @@ export const XP = {
   loss: 30,
   /** A Robot Love draw: more than a loss, less than a win. */
   draw: 60,
-  /** A loss pays in full only after this long (no farming by quitting fast). */
+  /** A loss (or a draw) pays in full only after this long (no farming by quitting fast). */
   lossFullSecs: 300,
   medal: 25,
   /** Last Stand: per wave survived. */
@@ -140,11 +140,11 @@ export function xpLines(r: MatchResult): XpLine[] {
     lines.push({ label: `${waves} wave${waves === 1 ? "" : "s"} · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.wave * waves * mult) });
   } else if (r.won) {
     lines.push({ label: `Victory · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.win * mult) });
-  } else if (r.drawn) {
-    lines.push({ label: `Draw · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.draw * mult) });
   } else {
+    // (a short match pays a fraction, a draw as a loss: no farming XP by quitting, or by a quick Robot Love)
     const k = Math.max(0.2, Math.min(1, r.secs / XP.lossFullSecs));
-    lines.push({ label: `Defeat · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.loss * mult * k) });
+    if (r.drawn) lines.push({ label: `Draw · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.draw * mult * k) });
+    else lines.push({ label: `Defeat · ${diffLabel(r.difficulty)}`, xp: Math.round(XP.loss * mult * k) });
   }
   if (r.medals.length > 0)
     lines.push({ label: `${r.medals.length} medal${r.medals.length === 1 ? "" : "s"}`, xp: XP.medal * r.medals.length });

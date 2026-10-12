@@ -738,6 +738,18 @@ describe("Goliaths in the after-action report", () => {
     expect(c.firstBuilt.blue.goliath).toBe(0);
   });
 
+  it("under Nomads counts each side's starting Goliath as fielded, and the tip sees the enemy's", async () => {
+    const { createMapWorld } = await import("../src/sim/maps");
+    const w = createMapWorld("riverlands", { mutators: ["nomads"] });
+    const c = new Chronicle(w);
+    expect(goliathsFielded(c)).toEqual({ blue: 1, red: 1 });
+    const tip = pickTip({
+      pov: "blue", won: false, duration: 600, difficulty: "normal", built: { blue: {}, red: {} }, firstBuilt: { blue: {}, red: {} },
+      deaths: [], samples: [], factories: { blue: { total: 0, idleRich: 0 }, red: { total: 0, idleRich: 0 } }, startGoliaths: c.startGoliaths
+    });
+    expect(tip).toMatch(/^They fielded a Goliath\./);
+  });
+
   it("the headline: VICTORY, DEFEAT, a spectator's winner, or a DRAW styled as neither", () => {
     const o = { pov: "blue" as Faction, spectator: false, love: false };
     expect(headline({ ...o, winner: "blue" })).toEqual({ title: "VICTORY", cls: "win", note: null });

@@ -467,13 +467,18 @@ export class GameScene {
       if (!kf) return;
       Object.assign(this.world, structuredClone(kf));
       this.finale = null;
+      this.finaleAt = null;
       this.ended = false;
     }
     while (this.world.tick < target && !this.world.winner) {
       const cmds = feed.commands(this.world.tick);
       if (!cmds) break;
       step(this.world, cmds);
-      for (const ev of this.world.fx) this.chronicle.onFx(ev);
+      // (a seek to the end steps the deciding tick itself: the finale still names what decided it)
+      for (const ev of this.world.fx) {
+        this.chronicle.onFx(ev);
+        this.noteDecider(ev);
+      }
       this.chronicle.tick();
       feed.afterTick(this.world, true);
     }
@@ -795,16 +800,22 @@ export class GameScene {
     return { x, y, h: air ? g * 0.3 + AIR_H : g + lift };
   }
 
-  private handleFx(ev: FxEvent): void {
-    this.chronicle.onFx(ev);
-    this.heroes.handleFx(ev);
-    // the finale looks at the death that decided the match: the loser's HQ, or its last Goliath (in one
-    // tick unit deaths come before building deaths, and an HQ that falls with them is what decides it)
+  /**
+   * The finale looks at the death that decided the match: the loser's HQ, or its last Goliath (in one
+   * tick unit deaths come before building deaths, and an HQ that falls with them is what decides it).
+   */
+  private noteDecider(ev: FxEvent): void {
     const w0 = this.world;
     if (ev.type === "death" && w0.winner && w0.winner !== "draw" && ev.faction !== w0.winner) {
       if (ev.buildingKind === "hq") this.finaleAt = { x: ev.x, y: ev.y, size: BUILDINGS.hq.size, cause: "hq" };
       else if (ev.unitKind === "goliath" && this.finaleAt?.cause !== "hq") this.finaleAt = { x: ev.x, y: ev.y, size: 2, cause: "goliath" };
     }
+  }
+
+  private handleFx(ev: FxEvent): void {
+    this.chronicle.onFx(ev);
+    this.heroes.handleFx(ev);
+    this.noteDecider(ev);
     if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {

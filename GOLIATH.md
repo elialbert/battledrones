@@ -122,7 +122,8 @@ and why:
   `"draw"`), with a canned love scene — the two meet, eyes pink, hearts
   bubbling out, the banner "💘 They fell in love / It's a draw" and a
   sweet sting — a DRAW report, and a career result that is neither a win
-  nor a loss, with its own XP. Battle records end with no winner and the
+  nor a loss, with its own XP (scaled down for a short match, as a loss
+  is, so a quick meeting can't be farmed). Battle records end with no winner and the
   reason `"love"`.
 - Both conflict with Air War and Infantry War, which ban the Goliath, and
   the Daily Op draws its mutators from a frozen list that leaves them out.

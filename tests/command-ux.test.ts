@@ -409,6 +409,20 @@ describe("build advisor", () => {
     expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(false);
   });
 
+  it("counts squads an anchored Goliath is training toward the answer, as a Bay's queue does", () => {
+    const w = scene();
+    const intel = new EnemyIntel(w, "blue");
+    spawnUnit(w, "mastodon", "red", 8, 9);
+    spawnUnit(w, "mastodon", "red", 9, 9);
+    tickFog(w);
+    intel.update(0);
+    const g = spawnUnit(w, "goliath", "blue", 5, 14);
+    g.goliath!.mode = "anchored";
+    for (let i = 0; i < 6 && counterAdvice(w, "blue", intel, "rocket-squad", 0).active; i++)
+      g.goliath!.queue.push({ kind: "rocket-squad", remaining: 90 });
+    expect(counterAdvice(w, "blue", intel, "rocket-squad", 0).active).toBe(false);
+  });
+
   it("never suggests an option the match rules ban (Air War: no Flak, no SAM Sites)", () => {
     const w = scene();
     applyMutators(w, ["airwar"]);
