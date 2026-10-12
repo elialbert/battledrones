@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { anchoredGoliaths, goliathTrainer, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
+import { anchoredGoliaths, goliathTrainer, hasGoliath, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
 import { moveUnitToward } from "./movement";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
@@ -570,7 +570,8 @@ export function tickHarvest(w: World): void {
       // (an anchored Goliath counts; once it starts packing up it doesn't, and this reroutes)
       const home = nearestDropSite(w, u.faction, u.x, u.y, "ground");
       if (!home) {
-        u.order = { type: "idle" };
+        // a base on the move (a Goliath packing up, walking or on a lift) will dig in again: wait for it, loaded
+        if (!hasGoliath(w, u.faction)) u.order = { type: "idle" };
         continue;
       }
       const d = dockPoint(home, u.x, u.y);

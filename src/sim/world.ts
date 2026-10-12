@@ -202,9 +202,11 @@ export function canGetWithin(
 export function onHomeLand(w: World, faction: Faction, tx: number, ty: number): boolean {
   if (!w.rules?.islands) return true;
   const hq = hqOf(w, faction);
-  if (!hq) return true;
   const s = BUILDINGS.hq.size;
-  const home = regionAt(w, hq.tx + (s >> 1), hq.ty + (s >> 1), "ground");
+  // (the HQ gone, the land it stood on still counts: Rules.homeTiles)
+  const at = hq ? [hq.tx + (s >> 1), hq.ty + (s >> 1)] : w.rules.homeTiles?.[faction];
+  if (!at) return true;
+  const home = regionAt(w, at[0]!, at[1]!, "ground");
   return !home || regionAt(w, tx, ty, "ground") === home;
 }
 

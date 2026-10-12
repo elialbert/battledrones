@@ -186,3 +186,18 @@ describe("the mutator list", () => {
       for (const m of dailyOp(day).mutators) expect(DAILY_MUTATORS).toContain(m);
   });
 });
+
+describe("a draw in the career", () => {
+  it("pays between a loss and a win, and counts as neither", async () => {
+    const { xpLines, applyResult, emptyCareer } = await import("../src/game/career");
+    const base = { kind: "skirmish" as const, mapId: "riverlands", difficulty: "normal", secs: 600, buildingsLost: 0, medals: [], mutators: ["robotlove" as const], daily: null };
+    const xp = (r: Parameters<typeof xpLines>[0]) => xpLines(r).reduce((s, l) => s + l.xp, 0);
+    const draw = xp({ ...base, won: false, drawn: true });
+    expect(draw).toBeGreaterThan(xp({ ...base, won: false }));
+    expect(draw).toBeLessThan(xp({ ...base, won: true }));
+    expect(xpLines({ ...base, won: false, drawn: true })[0]!.label).toMatch(/^Draw/);
+    const { career } = applyResult(emptyCareer(), { ...base, won: false, drawn: true }, 20300);
+    expect(career.wins).toBe(0);
+    expect(career.losses).toBe(0);
+  });
+});

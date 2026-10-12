@@ -97,6 +97,20 @@ export function goliathReach(u: Unit): number {
   return r;
 }
 
+/**
+ * The reach (tiles) of Goliath `u`'s longest-ranged weapon that can fire now
+ * and can hit a target in `domain` (0: none can) — how close an attack order
+ * must bring it.
+ */
+export function goliathReachAt(u: Unit, domain: "ground" | "air"): number {
+  let r = 0;
+  for (const k of GOLIATH_WEAPONS) {
+    const t = GOLIATH.weapons[k].targets;
+    if (weaponReady(u, k) && (t === "both" || t === domain)) r = Math.max(r, GOLIATH.weapons[k].range);
+  }
+  return r;
+}
+
 /** Weapons down (offline or rebooting). */
 export function weaponsDown(u: Unit): GoliathWeapon[] {
   const g = u.goliath;

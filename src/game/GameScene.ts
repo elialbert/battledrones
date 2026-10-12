@@ -8,7 +8,7 @@ import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
-import { buildingCenter, hqOf } from "../sim/world";
+import { buildingCenter } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
 import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
@@ -39,7 +39,7 @@ import { CommandUi } from "../ui/command";
 import { showOpenerPicker } from "../ui/openers";
 import { createPowerPanel, type PowerPanel } from "../ui/powers";
 import { createObjectivePill, type ObjectivePill } from "../ui/objectives";
-import { fitZoom, hudInsets, startBox } from "./framing";
+import { fitZoom, homeBox, hudInsets, startBox } from "./framing";
 import { Stage } from "./three/stage";
 import { Terrain3D, type TerrainArt } from "./three/terrain";
 import { Particles } from "./three/particles";
@@ -301,8 +301,9 @@ export class GameScene {
       notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
     });
 
-    const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
-    const c = gameMode.op?.focus ?? (focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 });
+    // (the HQ, or under Nomads the anchored Goliath: framing.ts homeBox)
+    const focus = gameMode.spectator ? null : homeBox(this.world, PLAYER);
+    const c = gameMode.op?.focus ?? (focus ? { x: (focus.x0 + focus.x1) / 2, y: (focus.y0 + focus.y1) / 2 } : { x: this.world.width / 2, y: this.world.height / 2 });
     rig.zoom = this.clampedZoom(DEFAULT_ZOOM);
     rig.centerOn(c.x, c.y);
     this.targetZoom = rig.zoom;
@@ -1254,7 +1255,8 @@ export class GameScene {
         if (!released) return;
         // a long-press released without dragging (the degenerate box): an armed
         // calldown fires there (press and hold to aim), as a tap would; else, with
-        // loaded Condors selected, they fly there and drop their squads
+        // loaded Condors selected, they fly there and drop their squads (and a
+        // lift selected flies its Goliath there and sets it down)
         if (isHoldRelease(b.x0, b.y0, sx, sy)) {
           const p = this.worldAt(sx, sy);
           if (this.powerUi?.tapWorld(p.x, p.y)) return;
@@ -1297,7 +1299,8 @@ export class GameScene {
         }
         const p = this.worldAt(sx, sy);
         let hit = this.pick(sx, sy);
-        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it
+        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it,
+        // and on our own Goliath with two empty Condors selected lifts it
         if (hit.kind === "ownUnit" && this.ctrl.boardTap(hit.id)) return;
         // right-click never re-selects; own entities count as ground
         if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
@@ -1386,6 +1389,7 @@ export class GameScene {
         this.hud.togglePause();
       } else if (e.key === "q") this.ctrl.selectArmy();
       else if (e.key === "u") this.ctrl.unloadSelected();
+      else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
       else if (e.key === ".") this.aware.cycleSpeed();
       else if (e.key === "j") this.aware.jump();

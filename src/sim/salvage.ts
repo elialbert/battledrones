@@ -3,7 +3,7 @@ import { isInfantry } from "./infantry";
 import type { Building, Faction, Unit, World, Wreck } from "./types";
 import { incomeOf } from "./rules";
 import { worldRandom } from "./rand";
-import { buildingAtTile, buildingCenter, domainOf, groundPassable } from "./world";
+import { buildingAtTile, buildingCenter, domainOf, groundPassable, sideFrame } from "./world";
 import { cos, hypot, sin } from "./fmath";
 
 /**
@@ -40,10 +40,15 @@ export function wreckShareOf(w: World, faction: Faction): number {
  * `SALVAGE.shiftRadius` (aircraft over rock, a Lancer sinking near the bank,
  * a drone crashing onto a building), else null (lost in the lava).
  */
-export function wreckRestingSpot(w: World, x: number, y: number): { x: number; y: number } | null {
-  const tx = Math.floor(x);
-  const ty = Math.floor(y);
-  if (groundPassable(w, tx, ty)) return { x, y };
+export function wreckRestingSpot(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
+  // (with a faction, scanned in its side's frame, so mirror-image falls rest as mirror images: a
+  // Goliath dropped onto a building, lift.ts; without one, the world's frame as wrecks always were)
+  const fr = sideFrame(w, faction);
+  const p = fr.pt({ x, y });
+  const pass = (fx: number, fy: number) => groundPassable(w, ...fr.tile(fx, fy, 1));
+  const tx = Math.floor(p.x);
+  const ty = Math.floor(p.y);
+  if (pass(tx, ty)) return { x, y };
   const R = SALVAGE.shiftRadius;
   const span = Math.ceil(R);
   let best: { x: number; y: number } | null = null;
@@ -53,16 +58,16 @@ export function wreckRestingSpot(w: World, x: number, y: number): { x: number; y
     for (let dx = -span; dx <= span; dx++) {
       const nx = tx + dx;
       const ny = ty + dy;
-      if (!groundPassable(w, nx, ny)) continue;
+      if (!pass(nx, ny)) continue;
       // nearest point of that tile, kept off its very edge
-      const cx = Math.max(nx + 0.2, Math.min(nx + 0.8, x));
-      const cy = Math.max(ny + 0.2, Math.min(ny + 0.8, y));
-      const d = hypot(cx - x, cy - y);
+      const cx = Math.max(nx + 0.2, Math.min(nx + 0.8, p.x));
+      const cy = Math.max(ny + 0.2, Math.min(ny + 0.8, p.y));
+      const d = hypot(cx - p.x, cy - p.y);
       if (d > R || d >= bestD) continue;
       bestD = d;
       best = { x: cx, y: cy };
     }
-  return best;
+  return best ? fr.pt(best) : null;
 }
 
 /** Make room for one more wreck: the field holds so much, and the oldest burns out first. */

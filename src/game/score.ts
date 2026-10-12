@@ -627,7 +627,8 @@ export class Composer {
 
 // ------------------------------------------------------------ stingers ---
 
-export type StingerKind = "victory" | "defeat" | "epic" | "bad" | "good" | "first-blood";
+/** The stingers: the finale's victory, defeat or draw (Robot Love), and the announced big moments. */
+export type StingerKind = "victory" | "defeat" | "draw" | "epic" | "bad" | "good" | "first-blood";
 
 /**
  * Which stinger an announcement earns (music.ts plays it at the next beat),
@@ -686,6 +687,15 @@ export function stinger(kind: StingerKind, f: Flavour, root: number): StingerNot
         { beat: 4, len: 4, midi: [t], voice: "lead", vel: 0.8 },
         { beat: 4, len: 4, midi: [t - 12, t - 5, t + 3 - 12], voice: "brass", vel: 0.45 },
         { beat: 4, len: 0.8, midi: [t - 24], voice: "tom", vel: 0.9 }
+      ];
+    case "draw": // nobody won (Robot Love): bells rising sweetly over a soft held sixth chord; no fanfare, no lament, no drums
+      return [
+        { beat: 0, len: 1.5, midi: [], voice: "swell", vel: 0.3 },
+        { beat: 0, len: 0.9, midi: [t + 16], voice: "bell", vel: 0.5 },
+        { beat: 0.75, len: 0.9, midi: [t + 19], voice: "bell", vel: 0.5 },
+        { beat: 1.5, len: 0.9, midi: [t + 21], voice: "bell", vel: 0.55 },
+        { beat: 2.25, len: 4, midi: [t, t + 4, t + 9], voice: "brass", vel: 0.35 },
+        { beat: 2.25, len: 3, midi: [t + 24, t + 28], voice: "bell", vel: 0.6 }
       ];
     case "epic": // a rising three-note call over a cymbal swell
       return [

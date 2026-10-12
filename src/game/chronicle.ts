@@ -77,10 +77,11 @@ export interface HeroRec {
 
 /**
  * A story beat: first blood, the biggest battle, the turning point (or the
- * moment one side pulled away), the first Goliath to walk off a Gantry, and
- * an HQ that fell while its Goliath fought on (GOLIATH.md: the match goes on).
+ * moment one side pulled away), the first Goliath to walk off a Gantry, an
+ * HQ that fell while its Goliath fought on (GOLIATH.md: the match goes on),
+ * and Robot Love's ending, two Goliaths falling in love (a draw).
  */
-export type MomentKind = "first-blood" | "battle" | "turn" | "lead" | "goliath" | "hq";
+export type MomentKind = "first-blood" | "battle" | "turn" | "lead" | "goliath" | "hq" | "love";
 
 export interface Moment {
   kind: MomentKind;
@@ -116,6 +117,8 @@ export class Chronicle {
     red: { total: 0, idleRich: 0 }
   };
   readonly refs: MapRefs;
+  /** Robot Love: when and where two enemy Goliaths fell in love and ended the match in a draw. */
+  love: { t: number; x: number; y: number } | null = null;
   /** The best fallen unit per side (living units are checked at the end). */
   private fallen: Record<Faction, HeroRec | null> = { blue: null, red: null };
   private finished = false;
@@ -181,6 +184,8 @@ export class Chronicle {
       b[kind] = (b[kind] ?? 0) + 1;
       const fb = this.firstBuilt[ev.faction];
       if (fb[kind] === undefined) fb[kind] = this.t;
+    } else if (ev.type === "love") {
+      this.love = { t: this.t, x: ev.x, y: ev.y };
     }
   }
 
@@ -440,10 +445,17 @@ function firstGoliath(firstBuilt: Record<Faction, Record<string, number>> | unde
  * `firstBuilt` (the chronicle has it) the Goliath beats join in: the first
  * one to walk off a Gantry, and an HQ that fell while its Goliath fought on.
  * One Goliath beat (the match's first, not one per side) and at most one HQ
- * beat per side, so the chart's numbered marks stay readable.
+ * beat per side, so the chart's numbered marks stay readable. With `love`, a
+ * Robot Love draw is the last beat.
  */
 export function moments(
-  c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRefs; firstBuilt?: Record<Faction, Record<string, number>> },
+  c: {
+    samples: Sample[];
+    deaths: DeathRec[];
+    refs: MapRefs;
+    firstBuilt?: Record<Faction, Record<string, number>>;
+    love?: { t: number; x: number; y: number } | null;
+  },
   pov: Faction | null
 ): Moment[] {
   const out: Moment[] = [];
@@ -518,13 +530,14 @@ export function moments(
     }
   }
 
-  // the first Goliath to walk off a Gantry (the match's first: one beat, not one per side)
+  // the first Goliath to walk off a Gantry (the match's first: one beat, not one per side; under
+  // Nomads the Goliaths a side starts with were never built, so "off the Gantry" still holds)
   const fg = firstGoliath(c.firstBuilt);
   if (fg) {
     const f = fg.faction;
     out.push({
-      kind: "goliath", t: fg.t, title: "First Goliath",
-      text: pov === null ? `${side(f)}'s Goliath took the field` : f === pov ? "Your Goliath walked off the Gantry" : "Their Goliath took the field",
+      kind: "goliath", t: fg.t, title: "Goliath",
+      text: `${Cap(yours(f))} first Goliath walked off ${pov !== null && f !== pov ? "their" : "the"} Gantry`,
       tone: toneFor(f)
     });
   }
@@ -539,6 +552,16 @@ export function moments(
       kind: "hq", t: d.t, title: "HQ destroyed",
       text: `${Cap(yours(d.faction))} HQ fell; ${yours(d.faction)} Goliath fought on for ${fmtTime(end - d.t)}`,
       tone: toneFor(other(d.faction))
+    });
+  }
+
+  // Robot Love: the match ended with two Goliaths falling for each other (a draw, so nobody's beat)
+  if (c.love) {
+    const where = placeName(c.refs, c.love.x, c.love.y, pov);
+    out.push({
+      kind: "love", t: c.love.t, title: "Robot Love",
+      text: pov === null ? `Blue's and Red's Goliaths fell in love ${where}: a draw` : `Your Goliath and theirs fell in love ${where}: a draw`,
+      tone: "neutral"
     });
   }
   return out.sort((a, b2) => a.t - b2.t);

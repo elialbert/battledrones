@@ -9,7 +9,9 @@ import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
 import { AWARDS, MEDALS, computeMedals, type MatchRecap } from "../src/sim/awards";
+import { goliathsOf } from "../src/sim/goliath";
 import { createMapWorld } from "../src/sim/maps";
+import { makeRules } from "../src/sim/rules";
 import { step } from "../src/sim/sim";
 import type { Command, Faction, FactionStats, FxEvent, GoliathWeapon, World } from "../src/sim/types";
 import { buildingCenter, createWorld, hqOf, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -20,17 +22,19 @@ import {
   BattleCallouts,
   RadioQueue,
   decidedByGoliath,
+  isEndLine,
   speakable,
   type RadioLine
 } from "../src/game/callouts";
 import { lineSeconds } from "../src/game/announcer";
 import { HeatMap, InboundWatch, TEMPO, TempoGuard, baseGoliath, raidAdvice, tallyView } from "../src/game/awareness";
 import { ADVISOR, COUNTERS, EnemyIntel, FACTORY_TAB, counterAdvice, sightingWeight } from "../src/game/advisor";
-import { BattleMood, MUSIC, stingerFor, type MoodHooks } from "../src/game/score";
+import { BattleMood, FLAVOURS, MUSIC, stinger, stingerFor, type MoodHooks } from "../src/game/score";
 import { Chronicle, moments, pickTip, type DeathRec, type Sample, type TipInput } from "../src/game/chronicle";
+import { recapOf } from "../src/game/career";
 import { HeroPresenter } from "../src/game/hero-fx";
 import { UnitVoices } from "../src/game/voices";
-import { goliathsFielded } from "../src/ui/report";
+import { goliathsFielded, headline } from "../src/ui/report";
 
 // ------------------------------------------------------------ harness --
 
@@ -370,6 +374,64 @@ describe("Goliath callouts: the HQ falls, the match goes on", () => {
   });
 });
 
+describe("Robot Love and Nomads", () => {
+  it("a draw closes the radio with its own last word, never a victory or a defeat", () => {
+    for (const spectator of [false, true]) {
+      const r = rig({ spectator });
+      r.w.winner = "draw";
+      r.w.love = { ids: [1, 2], x: 24, y: 20, tick: 900 };
+      r.at(90, { type: "love", ids: [1, 2], x: 24, y: 20 });
+      expect(r.radio).toEqual([
+        expect.objectContaining({ key: "draw", text: "They fell in love. The battle is a draw.", priority: 0, tone: "good", x: 24, y: 20 })
+      ]);
+      r.at(91, death({ faction: "red" }), goliathDeath("red", 5));
+      expect(r.radio).toHaveLength(1); // (then silence)
+      expect(r.banners).toHaveLength(0);
+    }
+    expect(isEndLine({ key: "draw" })).toBe(true);
+    expect(isEndLine({ key: "victory" })).toBe(true);
+    expect(isEndLine({ key: "defeat" })).toBe(true);
+    expect(isEndLine({ key: "goliath-lost" })).toBe(false);
+  });
+
+  it("the sim's own Robot Love ending is a draw on the radio", () => {
+    const w = createWorld(48, 48);
+    w.rules = makeRules(["robotlove"]);
+    spawnBuilding(w, "hq", "blue", 2, 2);
+    spawnBuilding(w, "hq", "red", 43, 43);
+    spawnUnit(w, "goliath", "blue", 22, 24);
+    spawnUnit(w, "goliath", "red", 25, 24);
+    const r = rig({ world: w });
+    step(w, []);
+    r.at(w.tick / TICK_RATE, ...w.fx);
+    expect(w.winner).toBe("draw");
+    // (the shots they traded first are cleared by the announcer for the last word)
+    expect(r.keys().at(-1)).toBe("draw");
+    expect(r.keys().some((k) => k === "victory" || k === "defeat")).toBe(false);
+  });
+
+  it("Nomads: no HQ ever, so no HQ lines; the Goliath is the last life, and the last one decides it", () => {
+    const w = createMapWorld("riverlands", { mutators: ["nomads"] });
+    expect(hqOf(w, "blue")).toBeNull();
+    const ours = goliathsOf(w, "blue")[0]!;
+    const theirs = goliathsOf(w, "red")[0]!;
+    const r = rig({ world: w });
+    r.at(1, hit("blue", ours.id, false, ours.x, ours.y));
+    expect(r.radio.at(-1)).toMatchObject({ key: "goliath-attack", priority: 0 });
+    // a second Goliath: losing one is no longer the end, so the warning is P1 again
+    spawnUnit(w, "goliath", "blue", ours.x + 6, ours.y);
+    r.at(100, hit("blue", ours.id, false, ours.x, ours.y));
+    expect(r.radio.at(-1)).toMatchObject({ key: "goliath-attack", priority: 1 });
+    theirs.hp = 0;
+    step(w, []);
+    r.at(200, ...w.fx);
+    expect(w.winner).toBe("blue");
+    expect(r.radio.at(-1)).toMatchObject({ key: "victory", text: "Last enemy Goliath destroyed. Victory!" });
+    const all = [...r.radio.map((l) => l.text), ...r.banners.flatMap((b) => [b.text, b.sub ?? "", b.say ?? ""])];
+    expect(all.some((s) => /\bHQ\b/.test(s))).toBe(false);
+  });
+});
+
 describe("Goliath chatter stays lean", () => {
   it("a long siege of an anchored Goliath doesn't flood the radio", () => {
     const { w } = twoBases();
@@ -564,6 +626,22 @@ describe("Goliath mood and music cues", () => {
     expect(spec.alarm()).toBe(false);
   });
 
+  it("a draw ends on a sweet sting: bells over the tonic's sixth chord, no drums, neither fanfare nor lament", () => {
+    for (const f of Object.values(FLAVOURS)) {
+      const notes = stinger("draw", f, 0);
+      expect(notes.some((n) => n.voice === "tom" || n.voice === "crash")).toBe(false);
+      for (const n of notes) {
+        expect(n.len).toBeGreaterThan(0);
+        for (const m of n.midi) expect(m).toBeGreaterThan(12);
+      }
+      const t = ((f.tonic % 12) + 12) % 12;
+      const chord = notes.find((n) => n.voice === "brass")!;
+      expect(new Set(chord.midi.map((m) => m % 12))).toEqual(new Set([t, (t + 4) % 12, (t + 9) % 12]));
+      const bells = notes.filter((n) => n.voice === "bell").map((n) => n.midi[0]!);
+      for (let i = 1; i < bells.length; i++) expect(bells[i]!).toBeGreaterThan(bells[i - 1]!); // rising
+    }
+  });
+
   it("Goliath banners carry their stingers", () => {
     const r = rig();
     r.at(1, build("red", "started"));
@@ -622,18 +700,30 @@ describe("Goliaths in the after-action report", () => {
     const firstBuilt = { blue: { goliath: 300 }, red: { goliath: 420 } };
     const m = moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs, firstBuilt }, "blue");
     expect(m.map((x) => [x.kind, x.title, x.text, x.tone])).toEqual([
-      ["goliath", "First Goliath", "Your Goliath walked off the Gantry", "good"],
+      ["goliath", "Goliath", "Your first Goliath walked off the Gantry", "good"],
       ["hq", "HQ destroyed", "Your HQ fell; your Goliath fought on for 2:00", "bad"]
     ]);
     const spec = moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs, firstBuilt }, null);
-    expect(spec.map((x) => x.text)).toEqual(["Blue's Goliath took the field", "Blue's HQ fell; Blue's Goliath fought on for 2:00"]);
+    expect(spec.map((x) => x.text)).toEqual(["Blue's first Goliath walked off the Gantry", "Blue's HQ fell; Blue's Goliath fought on for 2:00"]);
     expect(spec.every((x) => x.tone === "neutral")).toBe(true);
-    expect(moments({ samples: samples(600), deaths: [], refs, firstBuilt }, "red")[0]!.text).toBe("Their Goliath took the field");
+    expect(moments({ samples: samples(600), deaths: [], refs, firstBuilt }, "red")[0]!.text).toBe("Their first Goliath walked off their Gantry");
     // an HQ that ended the match, or a side that never had a Goliath: no such beat
     expect(moments({ samples: samples(480), deaths: [hqRec("blue", 480)], refs, firstBuilt }, "blue").some((x) => x.kind === "hq")).toBe(false);
     expect(moments({ samples: samples(600), deaths: [hqRec("blue", 280)], refs, firstBuilt }, "blue").some((x) => x.kind === "hq")).toBe(false);
     // without a first-built log (older callers): the beats as before
     expect(moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs }, "blue")).toEqual([]);
+  });
+
+  it("Robot Love: the chronicle records where the Goliaths fell in love, the last beat of the story", () => {
+    const w = createWorld(48, 48);
+    const c = new Chronicle(w);
+    w.tick = 540 * TICK_RATE;
+    c.onFx({ type: "love", ids: [1, 2], x: 24, y: 24 });
+    expect(c.love).toEqual({ t: 540, x: 24, y: 24 });
+    const love = c.love!;
+    const mine = moments({ samples: samples(540), deaths: [], refs, love }, "blue");
+    expect(mine.at(-1)).toEqual({ kind: "love", t: 540, title: "Robot Love", text: "Your Goliath and theirs fell in love mid-map: a draw", tone: "neutral" });
+    expect(moments({ samples: samples(540), deaths: [], refs, love }, null).at(-1)!.text).toBe("Blue's and Red's Goliaths fell in love mid-map: a draw");
   });
 
   it("counts Goliaths fielded, and never counts a Gantry as an idle factory", () => {
@@ -646,6 +736,28 @@ describe("Goliaths in the after-action report", () => {
     c.onFx({ type: "built", faction: "blue", id: g.id });
     expect(goliathsFielded(c)).toEqual({ blue: 1, red: 0 });
     expect(c.firstBuilt.blue.goliath).toBe(0);
+  });
+
+  it("the headline: VICTORY, DEFEAT, a spectator's winner, or a DRAW styled as neither", () => {
+    const o = { pov: "blue" as Faction, spectator: false, love: false };
+    expect(headline({ ...o, winner: "blue" })).toEqual({ title: "VICTORY", cls: "win", note: null });
+    expect(headline({ ...o, winner: "red" })).toEqual({ title: "DEFEAT", cls: "lose", note: null });
+    expect(headline({ ...o, winner: "red", spectator: true })).toEqual({ title: "RED WINS", cls: "lose", note: null });
+    expect(headline({ ...o, winner: "draw", love: true })).toEqual({ title: "DRAW", cls: "draw", note: "💘 They fell in love" });
+    expect(headline({ ...o, winner: "draw", spectator: true })).toEqual({ title: "DRAW", cls: "draw", note: null });
+  });
+
+  it("a draw is no win: no victory medal, but feats of arms still count", () => {
+    const w = createWorld(48, 48);
+    const c = new Chronicle(w);
+    w.tick = 200 * TICK_RATE; // (a fast, flawless, untouched match: every victory medal, had it been won)
+    c.onFx(goliathDeath("red", 5));
+    w.winner = "blue";
+    expect(computeMedals(recapOf(w, c, "blue"))).toEqual(["lightning", "untouchable", "flawless", "goliath-slayer"]);
+    w.winner = "draw";
+    expect(recapOf(w, c, "blue").won).toBe(false);
+    expect(computeMedals(recapOf(w, c, "blue"))).toEqual(["goliath-slayer"]);
+    expect(computeMedals(recapOf(w, c, "red"))).toEqual([]);
   });
 
   it("the Goliath Slayer medal: one enemy Goliath brought down", () => {
