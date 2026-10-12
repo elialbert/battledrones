@@ -904,25 +904,23 @@ enemies you can currently see.
   (first hit after 20 s without one, tracked at any speed, so speeding up
   mid-siege doesn't snap back) — and once the HQ has fallen, a Goliath
   coming under a new attack the same way, since losing the last one loses
-  the match. A held fast-forward lets go too; the chip
-  pulses red and one ticker note says why ("Speed 1× — enemy Barrage
-  inbound", tap to look) — folded into the raid's own warning line, and
-  replacing the off-screen "Enemy Barrage inbound!" / "HQ under attack!" /
-  "Goliath under attack!" alerts, so it's still one line per event. The chosen speed stays stored
+  the match. A held fast-forward lets go too; the chip pulses red and one
+  ticker note says why ("Speed 1× — enemy Barrage inbound", tap to look) —
+  folded into the raid's own warning line, and replacing the off-screen
+  "Enemy Barrage inbound!" / "HQ under attack!" / "Goliath under attack!"
+  alerts, so it's still one line per event. The chosen speed stays stored
   for the next match. Spectators never slow down.
 - **Inbound warning:** when visible armed enemies (anything that can hit a
   ground target, and Condors, loaded or not: the warning doesn't give away
   their cargo) come within 12 tiles of a building or harvester (or a
   Goliath that is part of the base: anchored, or any once the HQ has
-  fallen), the group
-  (single-link, 5 tiles) is warned once, with counter advice by domain and
-  lead kind: "Enemy drones inbound — Flak, Raptors or a Turret", "Enemy
-  Mastodons inbound — Rocket Squads, Lancers or Wasps", "Enemy Goliath
-  inbound — Rocket Squads, Wasps, Lancers or Hornets", "Enemy troops inbound
-  — Mortars, Turrets or Snipers", "Enemy dropships inbound — Flak, Raptors
-  or a SAM"… (an enemy Goliath counts even in the fog: it can't hide). A
-  group seen in the zone
-  within 20 s isn't new; one that has been shooting your things for 1.5 s is
+  fallen), the group (single-link, 5 tiles) is warned once, with counter
+  advice by domain and lead kind: "Enemy drones inbound — Flak, Raptors or
+  a Turret", "Enemy Mastodons inbound — Rocket Squads, Lancers or Wasps",
+  "Enemy Goliath inbound — Rocket Squads, Wasps, Lancers or Hornets",
+  "Enemy troops inbound — Mortars, Turrets or Snipers", "Enemy dropships
+  inbound — Flak, Raptors or a SAM"… (an enemy Goliath counts even in the
+  fog: it can't hide). A group seen in the zone within 20 s isn't new; one that has been shooting your things for 1.5 s is
   a fight, not a raid; loud warnings are at least 12 s apart (quieter ones
   still get an arrow). The first raid of each kind per match is a banner
   ("DRONES INBOUND", sub-line with the counters, read out by the
@@ -938,8 +936,7 @@ enemies you can currently see.
   sight or units on watch buy several seconds.
 - **Hotspots and edge arrows:** hits on your things (HQ 0.6, other
   buildings, anchored Goliaths and harvesters 0.45, units 0.35 heat), your
-  losses (0.6), and
-  shots/kills by your units (0.2/0.4, at the shooter; not your calldowns'
+  losses (0.6), and shots/kills by your units (0.2/0.4, at the shooter; not your calldowns'
   kills, which the sim credits to your HQ — that was an "Attack" arrow
   pointing home) heat 6×6-tile cells
   that cool 15% per second; warm cells within 8 tiles cluster and a cluster
@@ -1182,9 +1179,9 @@ rules in `src/sim/objectives.ts`):
   (nearest wins); a crate nobody claims burns out after 45 s. Rewards,
   weighted: **+200 scrap** (38%), **Veterans** (+1 rank to the claimer and
   allies within 3, 20%), **Field Repair** (own units within 4 heal half
-  their HP, a Goliath excepted, 15%), **+40 ⚡ charge** (17%) and the rare **free veteran
-  Lancer** (10%). A kit that would do nothing (no one hurt, the meter full)
-  is stripped for up to 150 scrap instead.
+  their HP, a Goliath excepted, 15%), **+40 ⚡ charge** (17%) and the
+  rare **free veteran Lancer** (10%). A kit that would do nothing (no one
+  hurt, the meter full) is stripped for up to 150 scrap instead.
 - **Looks:** a neutral relay platform (generated art) whose dish idles on a
   slow scan, turns for its holder and spins up while being taken; a dashed
   capture ring and a bar round the platform in team colours, shown through
@@ -1955,8 +1952,9 @@ Reasons to come back between matches. Spectated games never count.
 - **Career** (`game/career.ts`, localStorage `battledrones.career`, pure math
   + try/catch storage): XP = win 100 / loss 30 (scaled down for losses under
   5:00) / a Robot Love draw 60 ("Draw · Normal": more than a loss, less
-  than a win, and counted as neither in the W/L record) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
-  × difficulty, +25 per medal, +100 for the day's first Daily Op win. Ten
+  than a win, and counted as neither in the W/L record) × difficulty
+  (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave × difficulty,
+  +25 per medal, +100 for the day's first Daily Op win. Ten
   ranks — Cadet, Private, Corporal, Sergeant, Lieutenant, Captain, Major,
   Colonel, General, Marshal (100 … 6,000 XP) — with chevron / bar / star
   insignia. Three **stars** per map × difficulty: win, win under 8:00, win
@@ -2010,16 +2008,16 @@ Reasons to come back between matches. Spectated games never count.
     the match ends there and then in a draw: `World.winner` is `"draw"`
     and `World.love` records who and where, for the presentation's love
     scene (see *Robot Love's finale* above). It runs after the tick's
-    deaths, so a side
-    beaten on that same tick stays beaten. A draw is a **DRAW** in the
-    report, its own sting and radio line, neither a win nor a loss in the
-    career (see *Career*), and in a battle record (`AGENT-BATTLES.md`) an
-    end of `{ winner: null, reason: "love" }`.
+    deaths, so a side beaten on that same tick stays beaten. A draw is a
+    **DRAW** in the report, has its own sting and radio line, is neither a
+    win nor a loss in the career (see *Career*), and ends a battle record
+    (`AGENT-BATTLES.md`) with `{ winner: null, reason: "love" }`.
 
   Air War conflicts with both infantry mutators (it bans their units), and
   Air War and Infantry War each conflict with Nomads and Robot Love (they
   ban the Goliath): the picker switches the other off (`toggleMutator`),
-  and `makeRules` keeps the first of a conflicting pair. Skirmish only; both sides obey them
+  and `makeRules` keeps the first of a conflicting pair. Skirmish only;
+  both sides obey them
   (`unitBlocker`/`buildingBlocker` say "Disabled: Air War", the HUD shows
   ⛔). The AI picks a personality whose plan survives the rules
   (`strategyFits`: no Rush/Ironclad in Air War; no Skyforce/Ironclad in
@@ -2180,8 +2178,8 @@ Disambiguation: a touch is a *tap* if it moves < 8 px and lasts < 250 ms;
 movement beyond the slop radius before the long-press timer fires commits
 to *pan*; after the timer fires it commits to *box-select*. A box
 released within the tap slop of where it began is a plain long-press: with
-loaded Condors (or a lift) selected it orders the drop there, otherwise it box-selects
-as usual; a box cut short by a second finger or a pointercancel is not a
+loaded Condors (or a lift) selected it orders the drop there, otherwise it
+box-selects as usual; a box cut short by a second finger or a pointercancel is not a
 release and does neither. Hit-testing
 uses an enlarged (≥ 24 CSS px) radius, and aircraft are tested where they
 are drawn (lifted above their shadows).
@@ -2193,8 +2191,8 @@ selected **⚓ Anchor** (or "⚠ …", why it can't here), **⇡ Pack up**, or
 its progress while it digs in or packs up ("⚓ 40%" on a narrow phone)
 (Stop shrinks to ■ on narrow screens to make room, and there an Unload or
 anchor chip takes Move only's place; a selection of only Condors, lifts
-or anchored Goliaths has no Move only, since it has no fights to skip); Sell
-(+refund) for buildings (producers
+or anchored Goliaths has no Move only, since it has no fights to skip);
+Sell (+refund) for buildings (producers
 show "Tap the map to set a rally point" in the selection panel instead of a
 chip); "Select army" and "💤 Idle N" when nothing is selected (both
 leave out harvesters and the unarmed Condor, which would outrun the army
