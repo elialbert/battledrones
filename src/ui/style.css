@@ -4951,11 +4951,25 @@ button {
     line-height: 1.12;
   }
 }
+.selpanel .ghead {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
 .selpanel .gline {
   display: flex;
   gap: 8px;
   align-items: baseline;
   white-space: nowrap;
+}
+/* short landscape: one line fewer, so the panel stays under the calldown block */
+@media (orientation: landscape) and (max-height: 560px) {
+  .selpanel .ghead {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 10px;
+  }
 }
 .selpanel .gmode {
   font-size: 12px;

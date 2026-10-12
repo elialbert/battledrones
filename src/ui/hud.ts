@@ -550,8 +550,9 @@ export function createHud(api: HudApi): Hud {
           ? `<span class="hint">${rulesOf(w).nomads ? "Trains Harvesters and squads" : "Trains squads"} · tap the map to rally</span>`
           : "";
     const live: Live = { hp: `${Math.ceil(u.hp)} / ${st.hp}`, head: headShare(g.queue), mode: goliathMode(u) };
-    const html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b>${title}</b>
-      <span class="gline"><span class="hp">${live.hp}</span><span class="gmode">${live.mode}</span></span>
+    // (short landscape screens put the name and the HP line side by side: style.css)
+    const html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><div class="ghead"><b>${title}</b>
+      <span class="gline"><span class="hp">${live.hp}</span><span class="gmode">${live.mode}</span></span></div>
       <span class="gweap">${strip}</span>${train}</div>`;
     return { key, html, live };
   }
