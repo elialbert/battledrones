@@ -122,10 +122,10 @@ const GUNS: Record<"cannon" | "pod" | "mg", [GoliathGun, GoliathGun]> = {
 /** The topple in progress. */
 interface Fall {
   t: number;
-  /** Falls about x (forward or back) or z (to a side), this way (±1), round a foot's edge (rig space). */
-  axis: "x" | "z";
-  sign: number;
+  /** It falls about this axis, round this point at a foot's edge (both in the rig's own space). */
+  axis: THREE.Vector3;
   pivot: THREE.Vector3;
+  sign: number;
   slammed: boolean;
   /** Came down over water or lava: no slam, it is swallowed. */
   liquid: boolean;
@@ -674,10 +674,13 @@ export class GoliathView {
   /** It was destroyed: begin the topple (call updateFall every frame until it says it's done). */
   startFall(): void {
     if (this.fall) return;
-    const dirs: ["x" | "z", number][] = [["x", -1], ["z", 1], ["z", -1], ["x", 1]];
-    const [axis, sign] = dirs[Math.floor(Math.random() * 3.4)]!;
-    // (it falls over the edge of a foot: forward over its toes, back over its heels, or sideways)
-    const pivot = axis === "x" ? new THREE.Vector3(0, 0, sign < 0 ? -0.5 : 0.4) : new THREE.Vector3(sign > 0 ? -0.6 : 0.6, 0, 0);
+    // it falls across the screen (east or west, a little toward the camera), where a fall reads best:
+    // over the edge of a foot, about the axis square to that way (taken into its own turned space)
+    const sign = Math.random() < 0.5 ? -1 : 1;
+    const d = new THREE.Vector3(sign, 0, 0.35).normalize();
+    const own = new THREE.Quaternion().setFromAxisAngle(UP, this.face);
+    const axis = new THREE.Vector3(d.z, 0, -d.x).applyQuaternion(own);
+    const pivot = d.clone().multiplyScalar(0.6).applyQuaternion(own);
     this.fall = { t: 0, axis, sign, pivot, slammed: false, liquid: false, smokeT: 0 };
     for (const c of this.cables) c.visible = false;
     if (this.hangH > 0.05) this.dropping = true;
@@ -725,10 +728,9 @@ export class GoliathView {
     // then over it goes, round a foot's edge, faster and faster
     const fk = clamp01((f.t - STAGGER_MS) / FALL_MS);
     const angle = (Math.PI / 2 - 0.1) * fk * fk;
-    if (f.axis === "x") body.rotation.set(f.sign * angle, 0, 0);
-    else body.rotation.set(0, 0, f.sign * angle);
+    body.quaternion.setFromAxisAngle(f.axis, angle);
     // (round the pivot: the body moves so the pivot stays put)
-    tmp.copy(f.pivot).applyEuler(body.rotation);
+    tmp.copy(f.pivot).applyQuaternion(body.quaternion);
     body.position.copy(f.pivot).sub(tmp);
     // lying there, then sinking away
     const sink = clamp01((f.t - STAGGER_MS - FALL_MS - LIE_MS) / SINK_MS);
@@ -863,6 +865,8 @@ export class GantryView {
   private steamT = 0;
   private craneOut = 0;
   private plateOn = false;
+  /** Shown once already (a stage first seen mid-build goes up without a shower). */
+  private shown = false;
 
   constructor(
     private host: GoliathHost,
@@ -916,11 +920,12 @@ export class GantryView {
     } else this.head = null;
     const stage = building ? Math.min(3, Math.floor(this.k * 4)) : -1;
     if (stage !== this.stage) {
-      const fresh = stage > this.stage && stage >= 0;
+      const fresh = stage > this.stage && stage >= 0 && this.shown;
       this.show(stage);
       // (a stage goes on in a shower of sparks)
-      if (fresh && visible) for (let i = 0; i < 4; i++) this.weld(true);
+      if (fresh && visible && !stunned) for (let i = 0; i < 4; i++) this.weld(true);
     }
+    this.shown = true;
     // ---- rollout: the arms swing clear while it walks off, then back
     let open = 0;
     if (this.roll >= 0) {
@@ -951,7 +956,8 @@ export class GantryView {
     const dropTo = lerp(RACK.drop, JIB_H - mechTop - 0.35, toMech);
     const dip = c < 0.3 ? Math.sin((c / 0.3) * Math.PI) : c >= 0.55 && c < 0.85 ? Math.sin(((c - 0.55) / 0.3) * Math.PI) : 0;
     const drop = lerp(0.4, dropTo, dip * 0.85 + 0.15);
-    jib.rotation.set(lerp(1.45, 0, this.craneOut), lerp(0, slew, this.craneOut), 0);
+    // (parked, the jib lies along the east tower; working, it slews out over the pad)
+    jib.rotation.set(0.03 * (1 - this.craneOut), lerp(Math.PI, slew, this.craneOut), 0);
     const hookOut = this.craneOut > 0.85;
     P.cable!.visible = P.hook!.visible = hookOut;
     P.cable!.position.set(0, 0, -r);
