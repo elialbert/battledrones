@@ -287,6 +287,48 @@ describe("the two-Condor lift", () => {
   }, 60000);
 });
 
+describe("the calldown dodge", () => {
+  it("never moves a dug-in Goliath (a move packs it up) or a Condor on a lift; a walking Goliath steps out", () => {
+    const w = createMapWorld("proving-grounds");
+    const ai = createAiState("boom", "normal", 1);
+    const c = buildingCenter(hqOf(w, "red")!);
+    const at = { x: c.x - 4, y: c.y + 6 };
+    const dug = spawnUnit(w, "goliath", "red", at.x, at.y);
+    step(w, [{ type: "anchor", faction: "red", unitIds: [dug.id] }]);
+    expect(dug.goliath!.mode).toBe("anchoring");
+    const walker = spawnUnit(w, "goliath", "red", at.x + 2.2, at.y - 0.5);
+    const lifted = spawnUnit(w, "goliath", "red", at.x - 0.5, at.y + 2.4);
+    const condors = [0, 1].map((i) => spawnUnit(w, "condor", "red", lifted.x - 1 + i * 2, lifted.y + 0.5));
+    step(w, [{ type: "lift", faction: "red", unitIds: condors.map((u) => u.id), goliathId: lifted.id }]);
+    for (let i = 0; i < 20 && lifted.goliath!.lift?.phase !== "carrying"; i++) step(w, []);
+    expect(lifted.goliath!.lift?.phase).toBe("carrying");
+    // blue sees it all, and shells the lot
+    tickFog(w);
+    w.fog.blue.vis.fill(2);
+    w.powers.meter.blue = 100;
+    const shell: Command = { type: "calldown", faction: "blue", power: "barrage", x: at.x, y: at.y + 0.8 };
+    const moved = new Set<number>();
+    const liftMoved: number[] = [];
+    for (let i = 0; i < 2 * TICK_RATE; i++) {
+      const cmds = tickAi(w, "red", ai);
+      for (const cmd of cmds)
+        if (cmd.type === "move")
+          for (const id of cmd.unitIds) {
+            moved.add(id);
+            if (w.units.get(id)?.order.type === "lift") liftMoved.push(id);
+          }
+      step(w, i === 0 ? [...cmds, shell] : cmds);
+    }
+    expect(w.powers.active.length).toBe(1);
+    expect(moved.has(walker.id)).toBe(true);
+    expect(moved.has(dug.id)).toBe(false);
+    expect(dug.goliath!.mode).not.toBe("packing");
+    // (a Condor on a lift is never told to move; set down, it's free to step out like anyone)
+    expect(liftMoved).toEqual([]);
+    for (const u of condors) expect(u.order.type === "lift" ? moved.has(u.id) : false).toBe(false);
+  });
+});
+
 describe("after the HQ falls", () => {
   it("fights on with its Goliath: digs in, takes the harvesters' scrap, trains squads and builds in its ring", () => {
     const w = createMapWorld("proving-grounds");
