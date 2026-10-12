@@ -1346,6 +1346,45 @@ Robot infantry (`ai/intel.ts`, `ai/condor.ts`):
   the landed drops destroy about two thirds of what they and the Condors
   cost (see *Infantry pass*): a harassment option, not a match winner.
 
+Goliaths (`ai/goliath.ts`; every threshold in `GOLIATH_AI`; what isn't
+finished is in `AI-GOLIATH-NOTES.md`):
+
+- **The Gantry.** Never on Easy, in Last Stand or an Op. From a
+  personality's hour (Ironclad 3:30, Boom 4:00, Balanced 5:00, Air Swarm
+  7:00, Skyforce 7:30, Rush 8:00; Hard 15% sooner, and sooner for anyone
+  once an enemy Gantry or Goliath is seen), with the income, an army, no
+  attack on the base, 2,000 scrap banked and 15,000 scrap of fields on its
+  own half (the island maps are exempt). The prerequisites it lacks are
+  built first; after two lost Gantries no third goes up.
+- **Goliaths.** One at a time, at most 2 alive (1 on the island maps), at
+  the escalating price; while one is wanted a share of each pass's income
+  is set aside for it, but nothing while the army is thin or the base is
+  threatened.
+- **Sites.** It digs a Goliath in at a rich field no drop-off serves, an
+  island relay, or (Balanced, Rush, Ironclad) a forward post, never under
+  the enemy's known guns; there harvesters unload at it, a Depot, a Turret
+  and a SAM site go up in its ring, and it trains squads. It packs up when
+  the field is dry, when it is losing a fight, or for a much better site.
+  Idle army worth part of its price (anti-air first if the enemy flies)
+  walks with it; 2–3 Menders go to it first when a weapon is down.
+- **Lifts.** Where it can't walk (an island, or a long way round), two
+  free Condors fly it once a route clear of known anti-air exists; anti-air
+  on the way sends it round or back, and a hurt Condor sets it down at once.
+- **Siege.** Rush and Ironclad Goliaths, and from 12:00 one holding a
+  forward post, fall in a few tiles behind a wave's lead, never alone into
+  the enemy's base.
+- **Hunts.** Idle units that can hurt an enemy Goliath strike when they
+  outweigh what it can still fire (sooner while a weapon is down), its
+  Menders first; anti-air goes for the Condors carrying one; an enemy Gantry
+  with a Goliath on its cradle is a wave's first target. Seeing Goliaths
+  tilts production toward Lancers, Rocket Squads and Hornets.
+- **No HQ.** With its HQ gone (or under Nomads, from the start) the
+  commander plays on: the Goliath digs in somewhere safe as the base, takes
+  the scrap, trains squads (and Harvesters, under Nomads), buildings go up in
+  its ring, and it moves the base on when the field runs dry. Under Robot
+  Love its Goliaths keep clear of the enemy's, unless it is plainly losing,
+  when it goes courting for the draw.
+
 Difficulty: **Easy** (slow reactions, 75% income, no raids, no Sniper
 Teams or Condor drops), **Normal**,
 **Hard** (fast reactions, +30% income, an extra harvester — shown in the
@@ -1651,6 +1690,52 @@ Normal went from 84% before infantry to 80% (72/90) at the Infantry pass
 and 83% (75/90) after the fixes (Balanced, Air Swarm and Skyforce won 4
 games each, Boom 2, Ironclad 1, Rush none), each step within about one
 standard error.
+
+**Goliath pass.** The Goliath and the Gantry were measured with the same
+harnesses; no unit number changed for them. A lone Goliath against 1,600
+scrap of each unit (`tools/balance.ts goliath`, from both sides of the
+field, + means the Goliath wins):
+
+| Wasp | Lancer | Hornet | Rocket | Mastodon | Stinger | Trooper | Mortar | Raptor | Sniper | Flak |
+|---|---|---|---|---|---|---|---|---|---|---|
+| −0.84 | −0.61 | −0.54 | −0.39 | −0.09 | +0.22 | +0.41 | +0.50 | +0.61 | +0.89 | +0.96 |
+
+So it is the counter GOLIATH.md wants: it crushes infantry, Snipers,
+Mortars and the anti-air that can't touch a ground giant, is even with
+Mastodons, and loses to its counters, Lancers, Rocket Squads, Hornets and
+Wasps (which strip most of its weapons before it dies). With
+two Menders (1,900 scrap against 1,900) the scores fall (Troopers −0.46,
+Stingers −0.24): a 20–40 s brawl is too short for repairs to pay back
+their price; the Menders earn it between fights, bringing weapons back.
+
+AI-vs-AI round robins at the head (`tools/balance.ts matches <map>`, 30
+matches a map, against `--no-goliath`):
+
+| Map | Mean length, no Goliaths → with | Matches with a Goliath | First rollout (median) | Undecided at 25:00 |
+|---|---|---|---|---|
+| Proving Grounds | 9.4 → 9.3 min | 0/30 | – | 0 → 0 |
+| Riverlands | 9.8 → 9.8 | 18/30 | 7:38 | 0 → 1 |
+| Dune Sea | 10.9 → 12.6 | 26/30 | 7:38 | 1 → 2 |
+| Frostbite | 10.4 → 11.6 | 22/30 | 6:34 | 0 → 0 |
+| Ashlands | 12.8 → 13.0 | 23/30 | 7:56 | 1 → 0 |
+| Archipelago | 16.0 → 16.7 | 24/30 | 9:08 | 1 → 2 |
+
+The Proving Grounds has too few fields for the AI's Gantry gate (15,000
+scrap of fields on its own half), so it doesn't build one there: in an
+earlier run without that gate Goliaths stretched its matches from 9.4 to
+11.8 minutes on average and left three of 30 level at 25:00. Elsewhere a Goliath that died lived 3–5 minutes after rollout,
+having killed 1,400–2,700 scrap and taken in 1,200–2,500 of harvest first:
+it pays its own list price back, mostly as a base. Outposts per match:
+Dune Sea 5.2 (10,217 scrap unloaded at Goliaths), Ashlands 4.5 (7,050),
+Riverlands 3.2 (5,147), Frostbite 1.8 (3,607), Archipelago 0.7, where 0.9
+lifts a match fly Goliaths to islands. A beaten side outlived its HQ on a
+Goliath once in 180 matches (by 5:24). Win rates by personality moved
+within the noise of 10 games each a map (Boom gained on Frostbite and
+Ashlands, Skyforce lost on Riverlands and gained on Dune Sea). Matches on
+the land maps still average 9–13 minutes; the Archipelago's
+two matches left level (against one without Goliaths) are the AI's open
+problem, a side dug in behind a Goliath and static defences that the
+winning side won't close out (`AI-GOLIATH-NOTES.md`).
 
 Known gaps (re-checked after the review fixes):
 

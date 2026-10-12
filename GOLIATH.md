@@ -81,24 +81,32 @@ and why:
   they are bases to hold (a Last Stand could otherwise stall with waves
   that have nothing left to attack). An op won on the enemy's last
   Goliath says "Enemy Goliath destroyed".
-- **Calldowns** need an HQ or a Goliath; with no HQ a Goliath stands in
-  as the killer the sim credits calldown kills to.
+- **Calldowns** need an HQ or a Goliath; with no HQ, calldown kills are
+  credited to no unit (crediting the Goliath would let it rank up on
+  barrages).
 - **A Goliath Slayer medal** (🪨, bring down one enemy Goliath) joined
   Giant Slayer, which still counts 3 Mastodons.
 - **Agents**, out of scope as planned: the arena's briefing tables list
   the Goliath and the Gantry and agents can build them, but there is no
   order to anchor or lift, and AGENT-BATTLES.md doesn't teach them.
 - **Done when:**
-  - 164 tests: `tests/goliath.test.ts` (77, the sim against this spec),
+  - 183 tests: `tests/goliath.test.ts` (76, the sim against this spec),
     `goliath-feedback.test.ts` (42: radio, banners, awareness, advisor,
-    music, report, voices), `goliath-ui.test.ts` (14: taps, the lift,
-    training, the build zone), `goliath-render.test.ts` (11),
-    `goliath-mutators.test.ts` (13: Nomads, Robot Love, the draw) and
-    `goliath-review.test.ts` (7: one per fix from the adversarial review).
-    The whole suite passes (877).
+    music, report, voices), `ai-goliath.test.ts` (20: the commander's
+    Gantry, Goliaths, sites, lifts, hunts, Nomads and Robot Love),
+    `goliath-ui.test.ts` (14: taps, the lift, training, the build zone),
+    `goliath-render.test.ts` (11), `goliath-mutators.test.ts` (13: Nomads,
+    Robot Love, the draw) and `goliath-review.test.ts` (7: one per fix from
+    the adversarial review). The whole suite passes (902).
   - Rocket Squads, Wasps, Lancers and Hornets are real answers: a Goliath
     loses to 1,600 scrap of each by 0.39–0.84 (`npm run balance goliath`;
-    DESIGN.md's counter web has every unit's margin).
+    DESIGN.md's *Goliath pass* has every unit's margin).
+  - The AI builds and uses them: in round robins of 30 AI-vs-AI matches a
+    map, 18–26 of 30 have a Goliath on every map but the Proving Grounds
+    (too few fields for the AI's Gantry), the first rolls out at a median
+    6:34–9:08, and mean match lengths move from 9.8–16.0 to 9.8–16.7
+    minutes. Not finished: on the Archipelago a side dug in behind a
+    Goliath can hold out to 25:00 (`AI-GOLIATH-NOTES.md`).
 
 **Additions**, asked for after this spec was written (DESIGN.md,
 *Career, medals, mutators and the Daily Op*):

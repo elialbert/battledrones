@@ -120,8 +120,8 @@ probes no match ended in a draw: they were decided at 15–19 minutes.
   Blue's ~20 Wasps also sit idle at home all game in that seed (they're
   raiders, not in `army`), which isn't new.
 - On the Proving Grounds Goliaths dragged matches out (3 of 30 undecided at
-  25:00 in the round robin below); the `gantryFields` gate since stops the
-  Gantry there altogether.
+  25:00 in an earlier round robin); the `gantryFields` gate now stops the
+  Gantry there altogether, so the AI never builds one on that map.
 - A Goliath's phase changes ~7.6 times in its life on average; some of that
   is churn between guard and siege.
 - The lift is rare: about one per Archipelago match, and Gantries are often
@@ -144,8 +144,8 @@ a base; Robot Love's "court" is untested in a real losing match.
 
 ## Playtest numbers
 
-Round robins of 30 AI-vs-AI matches a map, at 8ea4e58 (before the
-Proving Grounds gate and the 2,000 bank):
+Round robins of 30 AI-vs-AI matches a map at c7e0efd (the head when the AI
+work stopped):
 
 ```
 npx vite-node tools/balance.ts matches <map>
@@ -154,21 +154,26 @@ npx vite-node tools/balance.ts matches <map> --no-goliath
 
 | Map | Mean length, no Goliaths → with | Matches with a Goliath | First rollout (median) | Undecided at 25:00 |
 | --- | --- | --- | --- | --- |
-| Proving Grounds | 9.4 → 11.8 min | 17/30 | 8:02 | 0 → 3 |
-| Riverlands | 9.8 → 10.2 | 17/30 | 7:38 | 0 → 1 |
-| Dune Sea | 10.9 → 12.4 | 26/30 | 7:00 | 0 → 0 |
+| Proving Grounds | 9.4 → 9.3 min | 0/30 | – | 0 → 0 |
+| Riverlands | 9.8 → 9.8 | 18/30 | 7:38 | 0 → 1 |
+| Dune Sea | 10.9 → 12.6 | 26/30 | 7:38 | 1 → 2 |
 | Frostbite | 10.4 → 11.6 | 22/30 | 6:34 | 0 → 0 |
-| Ashlands | 12.8 → 12.9 | 25/30 | 8:00 | 0 → 0 |
-| Archipelago | 16.0 → 16.0 | 24/30 | 9:08 | 0 → 0 |
+| Ashlands | 12.8 → 13.0 | 23/30 | 7:56 | 1 → 0 |
+| Archipelago | 16.0 → 16.7 | 24/30 | 9:08 | 1 → 2 |
 
-On Dune Sea a match averaged 4.9 outposts and 11,437 scrap unloaded at
-Goliaths, Ashlands 5.1 outposts. On Archipelago the beaten side outlived its
-HQ on a Goliath in 3 of 30 matches (by 4:50 on average). A partial rerun at
-the head (64bd19d, 7–8 matches a map) had every match decided: Archipelago
-12.8–19.0 min, Ashlands 6.0–18.6, Dune Sea 5.5–23.6. A diagnostic run of 8
-matches on Dune Sea and Ashlands (`.arena-builds/pt/diag.ts`) saw 19
-Goliaths, one never dug in, spending 63% of their time holding a site, 16%
-on siege and 15% marching.
+A Goliath that died lived 3–5 minutes after rollout and had killed
+1,400–2,700 scrap and taken in 1,200–2,500 scrap of harvest first.
+Outposts per match: Dune Sea 5.2 (10,217 scrap unloaded at Goliaths),
+Ashlands 4.5 (7,050), Riverlands 3.2 (5,147), Frostbite 1.8 (3,607),
+Archipelago 0.7 (0.9 lifts a match). A beaten side outlived its HQ on a
+Goliath in 1 of 180 matches (Archipelago, by 5:24). Win rates by
+personality move within the noise of 10 games each a map.
+
+Before the Proving Grounds gate and the 2,000 bank (8ea4e58) the Proving
+Grounds had 17/30 matches with a Goliath, 9.4 → 11.8 min and 3 undecided.
+A diagnostic run of 8 matches on Dune Sea and Ashlands
+(`.arena-builds/pt/diag.ts`) saw 19 Goliaths, one never dug in, spending
+63% of their time holding a site, 16% on siege and 15% marching.
 
 ## What to do next
 
@@ -177,8 +182,8 @@ on siege and 15% marching.
    on a base defended by a Goliath, and Robot Love's "court" aside, a
    losing side's Goliath guarding home shouldn't make the HQ uncrackable.
    Then put the airlift test back to playing with Goliaths.
-2. Run a full round robin at the head on every map, with and without
-   Goliaths, and recheck lengths and undecided matches.
+2. ~~Run a full round robin at the head on every map, with and without
+   Goliaths~~ (done, above). Recheck after each change to the AI.
 3. Cut phase churn: give guard → siege → muster a minimum stay.
 4. Stop building Gantries that never produce (cancel the Gantry plan when the
    fund can't reach a Goliath within a few minutes).

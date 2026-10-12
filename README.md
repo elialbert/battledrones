@@ -103,7 +103,8 @@ whose server allows cross-origin reads (CORS), a file on GitHub or a Gist.
   Boom, Skyforce, Ironclad) and **3 difficulties**, playing by the same
   rules and fog of war as you — it gathers real waves, fights for the
   Uplinks, answers your infantry, flies Condor drops at your harvesters and
-  calls down strikes — or watch two AIs fight. Matches are tuned for
+  calls down strikes, and rolls out Goliaths to dig in at distant fields
+  and hunt yours — or watch two AIs fight. Matches are tuned for
   comebacks: the side ahead at 4:00 now wins 70% of AI-vs-AI games, not
   90%, and a decided AI-vs-AI game runs a median of about 10½ minutes.
 - **Veteran heroes**: units that rank up earn callsigns ("★★ Viper ·
