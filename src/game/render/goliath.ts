@@ -112,12 +112,21 @@ function cable(): THREE.Mesh {
   return m;
 }
 
+/** How far weapon `k` of Goliath `u` is through its reboot (0–1, at the frame's fraction of a tick), or -1 if it isn't rebooting. */
+function rebooted(u: Unit, k: GoliathWeapon, tickFrac: number): number {
+  const ws = u.goliath!.weapons[k];
+  return ws.reboot >= 0 ? clamp01(1 - (ws.reboot + tickFrac) / Math.round(GOLIATH.reboot * TICK_RATE)) : -1;
+}
+
 /** Which gun fires a weapon's shot, alternating left and right where it has two. */
 const GUNS: Record<"cannon" | "pod" | "mg", [GoliathGun, GoliathGun]> = {
   cannon: ["cannonL", "cannonR"],
   pod: ["podL", "podR"],
   mg: ["mgL", "mgR"]
 };
+
+/** The stabiliser spikes' rods (their points bite the ground). */
+const RODS = ["rodFL", "rodFR", "rodBL", "rodBR"] as const;
 
 /** The topple in progress. */
 interface Fall {
@@ -238,11 +247,6 @@ export class GoliathView {
     return GOLIATH_TOP * this.rig.root.scale.x;
   }
 
-  /** Is it on its way down, toppling, sinking? */
-  get falling(): boolean {
-    return this.fall !== null;
-  }
-
   // ------------------------------------------------------------ events ---
 
   /** A shot is fired: the gun it leaves kicks (two-gun weapons take turns). */
@@ -279,6 +283,11 @@ export class GoliathView {
 
   /** Its sim events: anchoring and packing, weapons going and coming back, the lift. */
   onFx(ev: FxEvent): void {
+    if (ev.type === "goliathLift" && ev.state === "dropped") {
+      // a Condor went down: it falls off its cables
+      this.dropping = true;
+      this.vy = 0;
+    }
     if (!this.visible) return;
     const fx = this.host.fx;
     const x = this.gx;
@@ -307,10 +316,6 @@ export class GoliathView {
           fx.dust(this.gx, this.gy, 4);
           fx.sound("stomp", this.gx, this.gy, 0.9);
         });
-      } else if (ev.state === "dropped") {
-        // a Condor went down: it falls off its cables
-        this.dropping = true;
-        this.vy = 0;
       }
     }
   }
@@ -499,15 +504,13 @@ export class GoliathView {
 
     // ---- weapons: limp cannons, a dark eye, sagging pods; a reboot brings each back as you watch
     const W = g.weapons;
-    const rebootTotal = Math.round(GOLIATH.reboot * TICK_RATE);
-    const rb = (k: GoliathWeapon) => (W[k].reboot >= 0 ? clamp01(1 - (W[k].reboot + tickFrac) / rebootTotal) : -1);
-    const cr = rb("cannons");
+    const cr = rebooted(u, "cannons", tickFrac);
     const droopT = W.cannons.online ? 0 : cr >= 0 ? 1 - smooth(0.25, 1, cr) : 1;
     this.droop += (droopT - this.droop) * (1 - Math.exp(-sec * 4));
-    const mr = rb("mortars");
+    const mr = rebooted(u, "mortars", tickFrac);
     const podsT = W.mortars.online ? 0 : mr >= 0 ? lerp(-0.45, 0, mr) + 0.3 * Math.sin(mr * Math.PI * 4) : -0.45;
     this.pods += (podsT - this.pods) * (1 - Math.exp(-sec * (mr >= 0 ? 12 : 4)));
-    const lr = rb("laser");
+    const lr = rebooted(u, "laser", tickFrac);
     // (the eye flickers back to life as it reboots, lit more of the time as it goes)
     let eye = W.laser.online ? 1 : lr >= 0 ? ((this.time * 0.011 + Math.sin(this.time * 0.037)) % 1 < lr * lr ? 1 : 0) : 0;
     if (this.boot >= 0) {
@@ -581,7 +584,7 @@ export class GoliathView {
     if (g.mode === "anchoring" && spikesBefore < 0.88 && this.spikes >= 0.88) this.spikesIn();
     if (g.mode === "packing" && spikesBefore > 0.55 && this.spikes <= 0.55) {
       // spikes wrenched free
-      for (const r of ["rodFL", "rodFR", "rodBL", "rodBR"] as const) {
+      for (const r of RODS) {
         const p = this.rig.point(r, [0, -0.7, 0], tmp);
         fxs.kick(p.x, p.z, 1);
       }
@@ -621,7 +624,7 @@ export class GoliathView {
   /** Its spikes bite: a thump, dirt thrown out at each, a small shake. */
   private spikesIn(): void {
     const fx = this.host.fx;
-    for (const r of ["rodFL", "rodFR", "rodBL", "rodBR"] as const) {
+    for (const r of RODS) {
       const p = this.rig.point(r, [0, -0.75, 0], tmp);
       fx.kick(p.x, p.z, 2);
       fx.dust(p.x, p.z, 1);
@@ -665,7 +668,7 @@ export class GoliathView {
         c.visible = len > 0.05;
         c.position.copy(tmp);
         c.quaternion.setFromUnitVectors(UP, tmp2.sub(tmp).normalize());
-        c.scale.set(0.022, len, 0.022);
+        c.scale.set(0.03, len, 0.03);
       }
     }
   }

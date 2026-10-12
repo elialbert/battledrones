@@ -220,6 +220,11 @@ function topsOf(geo: THREE.BufferGeometry, ox: number, oy: number, oz: number): 
  * ones fall where they stood; robots step aside out of vehicles' hulls. The
  * Condor comes down and drops its ramp to load or drop squads, with its
  * riders seated in the open bay; they step off the ramp and climb aboard by it.
+ *
+ * A Goliath is a posed rig with a view of its own (render/goliath.ts): it
+ * walks, anchors, fights and topples there, and its Condors climb over it to
+ * carry it. A Gantry shows its Goliath taking shape. The enemy always sees
+ * both, so they are drawn clear of the fog and never left as remembered ghosts.
  */
 export class EntityRenderer {
   private views = new Map<number, View3>();
