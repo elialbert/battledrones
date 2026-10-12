@@ -61,20 +61,27 @@ import { cos, sin } from "../fmath";
  *   on when the field runs dry, and backs off when it is losing a fight.
  * - ESCORTS: idle army with some anti-air walks with it and stands guard at
  *   its site; Menders (ai/menders.ts) favour it when a weapon is down.
- * - LIFTS: two Condors (none of them on a drop or an airlift trip) hook on
- *   and fly it on a route clear of anti-air; hurt on the way, it is set down
- *   on the nearest land at once. The Condor planners never touch a Condor on
- *   a lift (liftCondors).
- * - SIEGE: Rush and Ironclad Goliaths walk with an assault, but never alone
- *   into the enemy's base.
+ * - LIFTS: where it can't walk (an island, or far round by ground), two
+ *   Condors (none of them on a drop or an airlift trip) hook on once a route
+ *   clear of anti-air is there, and fly it; anti-air turning up on the way
+ *   sends it round by a flank or back where it came from, and a hurt Condor
+ *   sets it down on the nearest land at once. The Condor planners never
+ *   touch a Condor on a lift (liftCondors).
+ * - SIEGE: Rush and Ironclad Goliaths fall in with a wave going by their
+ *   post and walk a few tiles behind its lead — never alone into the
+ *   enemy's base.
  * - HUNTS: enemy Goliaths are always in sight; idle units that can hurt one
  *   strike it when they outweigh what it can still fire (its Menders first,
- *   and better while a weapon is down), and anti-air goes for a Condor
+ *   and sooner while a weapon is down), and anti-air goes for a Condor
  *   carrying one. An enemy Gantry building one is a wave's first target
  *   (commander.ts pickPriorityTarget).
  *
- * After the HQ falls a Goliath carries on as the base: it digs in, trains,
- * takes the harvesters' scrap, and buildings go up in its ring.
+ * After the HQ falls (and under Nomads, which starts that way) a Goliath is
+ * the base: it digs in, builds Harvesters (Nomads) and trains squads, takes
+ * the harvesters' scrap, buildings go up in its ring, and it moves the base
+ * on to a fresh field when its own runs dry or the ring is full. Under Robot
+ * Love its Goliaths keep clear of the enemy's (a meeting is a draw), unless
+ * it is plainly losing.
  */
 
 export const GOLIATH_AI = {
@@ -1218,6 +1225,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
           return;
         }
         setPhase(w, plan, "guard");
+        plan.since = w.tick; // (a look round again GOLIATH_AI.recheck from now, not every pass)
         if (dist(g.x, g.y, ctx.guardPoint.x, ctx.guardPoint.y) > 4) move(ctx.guardPoint);
         return;
       }
