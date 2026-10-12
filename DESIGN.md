@@ -1036,7 +1036,9 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   selected sets the rally point for the squads it trains ("Rally point
   set: pack up first (G) to move the Goliath"), and in a group the rest go
   without it ("The anchored Goliath stays put: pack up first (G)"); a tap
-  on an enemy gives it an attack order without packing it up. ⚔ Select
+  on an enemy its guns reach from where it stands gives it an attack order
+  without packing it up (one out of reach: it stays dug in, "Out of reach:
+  pack up first (G) to go after it", and the rest go). ⚔ Select
   army and 💤 Idle leave anchored Goliaths out (they are neither the army
   nor idle). The **lift**: with Condors selected, a tap
   (or right-click) on your own walking Goliath has the two nearest empty
