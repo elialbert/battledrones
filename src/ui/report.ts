@@ -27,7 +27,8 @@ import { callsignOf, killsLabel, stars } from "../game/heroes";
 
 export interface ReportOpts {
   world: World;
-  winner: Faction;
+  /** Who won, or "draw" (Robot Love: two enemy Goliaths fell in love, World.love). */
+  winner: Faction | "draw";
   /** The local player's side (the report's point of view unless spectating). */
   pov: Faction;
   spectator: boolean;
@@ -213,15 +214,30 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
 
 // ------------------------------------------------------------- sections ---
 
+/**
+ * The report's headline: VICTORY / DEFEAT (a spectator: who won), or DRAW
+ * when nobody did — Robot Love, whose lovers get a 💘 note — styled neither
+ * as a win nor as a loss.
+ */
+export function headline(o: { winner: Faction | "draw"; pov: Faction; spectator: boolean; love: boolean }): {
+  title: string;
+  cls: "win" | "lose" | "draw";
+  note: string | null;
+} {
+  if (o.winner === "draw") return { title: "DRAW", cls: "draw", note: o.love ? "💘 They fell in love" : null };
+  if (o.spectator) return { title: `${o.winner.toUpperCase()} WINS`, cls: o.winner === "blue" ? "win" : "lose", note: null };
+  const won = o.winner === o.pov;
+  return { title: won ? "VICTORY" : "DEFEAT", cls: won ? "win" : "lose", note: null };
+}
+
 function headHtml(ctx: ReportContext): string {
   if (ctx.head) return `<h1 class="${ctx.head.cls}">${escapeHtml(ctx.head.title)}</h1><p class="time">${escapeHtml(ctx.head.sub)}</p>`;
   const spec = ctx.spectator;
-  const title = spec ? `${ctx.winner.toUpperCase()} WINS` : ctx.won ? "VICTORY" : "DEFEAT";
-  const cls = spec ? (ctx.winner === "blue" ? "win" : "lose") : ctx.won ? "win" : "lose";
+  const h = headline({ winner: ctx.winner, pov: ctx.pov, spectator: spec, love: !!ctx.world.love });
   const vs = spec
     ? escapeHtml(`${ctx.strategies?.blue ?? "Blue"} vs ${ctx.strategies?.red ?? "Red"}`)
     : `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`;
-  return `<h1 class="${cls}">${title}</h1><p class="time">${vs} · ${fmtTime(ctx.secs)}</p>`;
+  return `<h1 class="${h.cls}">${h.title}</h1><p class="time">${h.note ? `${h.note} · ` : ""}${vs} · ${fmtTime(ctx.secs)}</p>`;
 }
 
 function momentsHtml(ctx: ReportContext): string | null {
@@ -425,7 +441,7 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
   const right = rendered.filter((r) => r.s.col !== "left").map(block).join("");
   endEl.hidden = false;
   endEl.innerHTML = `
-    <div class="panel aar ${ctx.spectator ? "spec" : ctx.won ? "won" : "lost"}">
+    <div class="panel aar ${ctx.spectator ? "spec" : ctx.winner === "draw" ? "draw" : ctx.won ? "won" : "lost"}">
       <header class="aar-sec aar-head" style="--d:0ms">${headHtml(ctx)}</header>
       <div class="aar-cols"><div class="aar-col l">${left}</div><div class="aar-col r">${right}</div></div>
       <div class="aar-actions${o.actions?.length ? " more" : ""}">

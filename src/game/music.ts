@@ -166,18 +166,19 @@ export class Music {
   }
 
   /**
-   * The match ended: resolve into a victory fanfare or defeat lament and
+   * The match ended: resolve into a victory fanfare, a defeat lament or, when
+   * nobody won (Robot Love's draw), a sweet sting on the tonic major, and
    * settle on a quiet coda. Returns false when music is off (play the SFX
    * jingle instead).
    */
-  finale(kind: "victory" | "defeat"): boolean {
+  finale(kind: "victory" | "defeat" | "draw"): boolean {
     if (this.finished) return true;
     if (!this.running || !this.e || !this.g) return false;
     this.finished = true;
     this.mode = "end";
     const t = this.nextBeat(0.04);
     this.renderEvents(this.composer.closeGates(), t);
-    this.renderChord(this.composer.holdTonic(kind === "victory", 64), t, true);
+    this.renderChord(this.composer.holdTonic(kind !== "defeat", 64), t, true);
     this.playStinger(kind, t, true);
     this.g.ambience.stop(t + 2);
     return true;

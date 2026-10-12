@@ -129,6 +129,7 @@ export interface RecapStrike {
 /** Everything the medals need, from one side's point of view. */
 export interface MatchRecap {
   pov: Faction;
+  /** The pov side won. A draw (Robot Love: two Goliaths fell in love) is not a win. */
   won: boolean;
   /** Match length in seconds. */
   secs: number;
@@ -177,7 +178,12 @@ function killsWhere(r: MatchRecap, pred: (d: RecapDeath) => boolean): number {
   return n;
 }
 
-/** The medals this recap earns, in display order. */
+/**
+ * The medals this recap earns, in display order. Victory medals need the
+ * win; feats of arms count in defeat and in a draw alike (a match that ends
+ * with two Goliaths in love was won by nobody, but what was destroyed on the
+ * way still was).
+ */
 export function computeMedals(r: MatchRecap): MedalId[] {
   if (r.waves !== undefined && r.waves !== null) {
     const out: MedalId[] = [];

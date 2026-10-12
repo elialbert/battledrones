@@ -316,14 +316,14 @@ export class BattleCallouts {
 
   /**
    * A Goliath under fire: "Our Goliath is under attack" off screen (on
-   * screen too while it is our base or our last life), at P0 once our HQ is
-   * gone: losing it then loses the match. Spectators hear about a side's last
-   * Goliath only.
+   * screen too while it is our base or our last life), at P0 when it is the
+   * last life — no HQ (fallen, or never built: Nomads) and no other Goliath —
+   * since losing it loses the match. Spectators hear about a side's last life only.
    */
   private goliathHit(ev: Extract<FxEvent, { type: "hit" }>, t: number): void {
     const h = this.h;
     const w = h.world;
-    const last = !hqOf(w, ev.faction);
+    const last = !hqOf(w, ev.faction) && goliathsOf(w, ev.faction).length <= 1;
     if (h.spectator) {
       const key = `goliath-attack-${ev.faction}`;
       if (last && this.ready(key, t, 40))
@@ -577,7 +577,14 @@ export class BattleCallouts {
       // an op that ends on its objective is narrated by its own op-complete /
       // op-failed banner (spoken like any banner), so say nothing over it
       if (w.ops?.result?.byGoal) return;
-      // what fell last: the HQ, or (the HQ long gone) the last Goliath — the finale banner words it the same way
+      if (w.winner === "draw") {
+        // Robot Love (rules.ts): two enemy Goliaths met and fell in love. Nobody won and nobody lost,
+        // for players and spectators alike: its own last word, never a victory or a defeat
+        const text = w.love ? "They fell in love. The battle is a draw." : "The battle is a draw.";
+        this.say({ key: "draw", text, priority: 0, tone: "good", caption: false, ...(w.love ? { x: w.love.x, y: w.love.y } : {}) }, t);
+        return;
+      }
+      // what fell last: the HQ, or (the HQ long gone, or never there: Nomads) the last Goliath — the finale banner words it the same way
       const byGoliath = decidedByGoliath(fx, enemyOf(w.winner));
       if (w.survival) {
         // (watched or played, Last Stand only ends one way: matches the banner and the lament)
@@ -1020,6 +1027,9 @@ export class RadioQueue {
     this.items = [];
   }
 }
+
+/** The match's last word (victory, defeat, or a draw): the announcer clears the queue for it and then falls silent. */
+export const isEndLine = (line: Pick<RadioLine, "key">): boolean => line.key === "victory" || line.key === "defeat" || line.key === "draw";
 
 /**
  * Make banner text speakable: drop emoji and symbols, turn SHOUTED banner
