@@ -249,7 +249,7 @@ broad headlands and coves, and which leaves the necks as they are.
 ### Battlefield salvage
 
 Every destroyed combat unit leaves a burning wreck worth **30% of its
-cost** (Stinger 45, Titan 143, Hornet 113 …; harvesters and robot infantry
+cost** (Stinger 45, Mastodon 143, Hornet 113 …; harvesters and robot infantry
 squads leave none; Last
 Stand's wave units only 5%, see Last Stand) for **60 s**. After 2.5 s it
 has cooled enough to touch, and the first ground
@@ -334,7 +334,7 @@ re-run with it in (see *Infantry pass* under Balance & pacing).
 | **Fab Plant** | Builds ground vehicles. 2×2. | — |
 | **Airpad** | Builds aircraft (and the Condor dropship). 2×2. | — |
 | **Assembly Bay** | Builds robot infantry: Trooper Squads, Rocket Squads, Sniper Teams. 2×2. | — |
-| **Tech Lab** | Unlocks Mortar, Titan, Lancer, Hornet and Sniper Team. 2×2. | Fab Plant, Airpad or Assembly Bay |
+| **Tech Lab** | Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper Team. 2×2. | Fab Plant, Airpad or Assembly Bay |
 | **Depot** | Forward scrap drop-off for distant fields. 2×2. | — |
 | **Turret** | Autocannon, hits ground and air. 1×1. | — |
 | **SAM Site** | Long-range anti-air missiles. 1×1. | — |
@@ -354,14 +354,14 @@ below). One construction at a time. Buildings can be **sold** for 50%
 | **Stinger** | Fab | Ground | Ground | Cheap fast light tank |
 | **Flak Crawler** | Fab | Ground | Air | The anti-air answer |
 | **Mortar** ⚗ | Fab | Ground | Ground | Long-range splash artillery with a minimum range; shells are real projectiles and can be dodged |
-| **Titan** ⚗ | Fab | Ground | Ground | Super-heavy twin-cannon tank |
+| **Mastodon** ⚗ | Fab | Ground | Ground | Super-heavy twin-cannon tank |
 | **Lancer** ⚗ | Fab | Hover | Both | Anti-armour laser that also hits air (at reduced effect) and crosses water |
 | **Wasp** | Airpad | Air | Ground | Rocket strike drone |
 | **Raptor** | Airpad | Air | Air | Interceptor |
 | **Hornet** ⚗ | Airpad | Air | Ground | Heavy bomber: splash vs ground and bases |
 | **Mender** | Airpad | Air | — | Repair drone: heals units and buildings |
 | **Trooper Squad** | Assembly Bay | Foot | Both | Cheap rifle robots; half damage vs air; best in woods |
-| **Rocket Squad** | Assembly Bay | Foot | Both | Anti-armour rockets: kills Titans and Hornets, weak vs infantry |
+| **Rocket Squad** | Assembly Bay | Foot | Both | Anti-armour rockets: kills Mastodons and Hornets, weak vs infantry |
 | **Sniper Team** ⚗ | Assembly Bay | Foot | Ground | Long-range marksmen: deletes infantry, useless vs vehicles; hides in woods |
 | **Condor** | Airpad | Air | — | Unarmed dropship: carries two squads over anything |
 
@@ -411,21 +411,21 @@ Condor. EMP freezes Condors and boarding squads like anything else.
 
 The counter web (verified by the cost-equal duel matrix in
 `tools/balance.ts duels`): **Stingers** beat Flak, Mortars and Lancers ·
-**Lancers** burn through Titans · **Titans** crush Stingers, Flak and
+**Lancers** burn through Mastodons · **Mastodons** crush Stingers, Flak and
 Mortars · **Flak** beats all aircraft · **Wasps** beat tanks and artillery ·
 **Raptors** beat aircraft · **Hornets** smash bases and armour but die to
-Flak/Raptors/SAMs. Stinger › Lancer › Titan › Stinger is the ground
+Flak/Raptors/SAMs. Stinger › Lancer › Mastodon › Stinger is the ground
 triangle; air vs anti-air sits across it.
 
 Robot infantry adds a web on foot (duel margins from the *Infantry pass*):
-**Rocket Squads** kill Titans (+0.69) and Hornets (+0.31) and beat Flak,
+**Rocket Squads** kill Mastodons (+0.69) and Hornets (+0.31) and beat Flak,
 Lancers, Wasps and Raptors too, but lose to Stingers, Mortars, Troopers and
 Snipers · **Troopers** beat Rocket Squads (+0.79) and Lancers (+0.43) ·
 **Sniper Teams** delete Troopers (+0.37) and Rocket Squads (+0.87) and lose
 by 0.75–0.94 to every vehicle or aircraft that can hit ground units ·
 **Mortars**, **Hornets** and **Stingers** handle infantry (+0.55, +0.68
-and +0.15 vs Troopers), and a Turret beats two Trooper Squads. **Titans**
-are poor against infantry: cannon fire does ×0.4 to it, so a Titan army
+and +0.15 vs Troopers), and a Turret beats two Trooper Squads. **Mastodons**
+are poor against infantry: cannon fire does ×0.4 to it, so a Mastodon army
 only edges out Troopers (+0.13, against +0.61–0.88 over vehicle armies)
 and loses hard to Rocket Squads.
 
@@ -440,7 +440,7 @@ and loses hard to Rocket Squads.
   | Damage type (used by) | light | medium | heavy | structure | infantry |
   |---|---|---|---|---|---|
   | kinetic (Stinger, Trooper, Turret, HQ gun) | 1.0 | 1.0 | 0.6 | 0.65 | 1.0 |
-  | cannon (Titan, Rocket Squad) | 0.8 | 1.0 | 1.3 | 1.0 | 0.4 |
+  | cannon (Mastodon, Rocket Squad) | 0.8 | 1.0 | 1.3 | 1.0 | 0.4 |
   | flak (Flak Crawler) | 1.25 | 1.0 | 1.15 | 0.5 | 1.25 |
   | missile (Wasp, Raptor, SAM) | 1.15 | 1.0 | 0.9 | 0.6 | 0.7 |
   | explosive (Mortar, Hornet) | 1.2 | 0.9 | 0.85 | 1.35 | 1.3 |
@@ -451,9 +451,9 @@ and loses hard to Rocket Squads.
   Splash falls off from 100% to 50% at the edge.
 - **Cover.** Ground units in woods take 30% less damage; robot infantry
   take half (`INFANTRY.woodsCover` 0.5).
-- **Crushing.** A Titan that actually drove this tick deals 30 HP/s to
+- **Crushing.** A Mastodon that actually drove this tick deals 30 HP/s to
   every enemy squad whose centre is within its radius + 0.15 tiles,
-  credited to the Titan (kills, XP, retaliation); a Titan standing still
+  credited to the Mastodon (kills, XP, retaliation); a Mastodon standing still
   crushes nothing. Squads step aside for their own vehicles on the move
   (sideways off the vehicle's line when in front of it, else straight
   back); a squad and a parked vehicle share the push, as two vehicles do,
@@ -508,7 +508,7 @@ being hit), and kills, losses and income must each feel distinct. Rules in
 - **Team ground rings:** any unit that fired or was hit in the last 3 s
   sits on a thin blue/red ellipse (fading over its last second), so mixed
   clumps read even at the default zoom. Aircraft rings sit under the craft.
-- **Deaths:** small hulls get a smaller fireball and glow (Titans and
+- **Deaths:** small hulls get a smaller fireball and glow (Mastodons and
   Hornets keep their big one); impacts are trimmed so explosions stop
   hiding the clump. An expanding ring in the victim's colour says whose
   unit just died. A robot squad has no fireball: its robots topple one at a
@@ -591,7 +591,7 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
 - **Unit chirp-voices** (`src/game/voices.ts`): each unit class has a
   synthesized robot voice: a carrier glides through two formant
   band-passes, plus a dry share so thin voices carry on phone speakers.
-  Titans growl at 80 Hz, Hornets drone with FM buzz, Wasps buzz at 60 Hz,
+  Mastodons growl at 80 Hz, Hornets drone with FM buzz, Wasps buzz at 60 Hz,
   Lancers shimmer, Menders ring like bells and Harvesters go "boop-boop";
   Trooper Squads chirp high in a chorus, Rocket Squads bark gruff and
   buzzy, Sniper Teams murmur low and calm, and the Condor drones like an
@@ -622,7 +622,7 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   | Structure lost: X | 1 | own building destroyed; 15 s |
   | Incoming artillery! / EMP inbound! / Enemy drop pod! | 1 | an enemy Barrage / EMP / Drop Pod aimed at our units or buildings (the siren's "threatened" rule); 20 s each; dropped if it can't start within 1.5 / 1 / 2.5 s (the Sky Hammer has its own spoken banner) |
   | Our units are under fire | 2 | own unit hit off screen; 60 s (not for the hits of an enemy strike just warned about) |
-  | Harvester lost / Titan lost | 2 | off screen; expensive (≥ 350) or veteran units |
+  | Harvester lost / Mastodon lost | 2 | off screen; expensive (≥ 350) or veteran units |
   | Condor down with N squads aboard / Condor down! Troops bailing out | 1 | own loaded Condor shot down, over water or rock / over land; 10 s |
   | Enemy troops landing! | 1 | an enemy Condor drop we can see; 20 s |
   | Troops deployed | 3 | our Condor drop lands; 20 s |
@@ -645,7 +645,7 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   *Double kill* / *Triple kill* / *Rampage* for 2 / 3 / 5 kills within a
   4 s sliding window. The tier is called after a 0.6 s hold, so a fast
   third kill upgrades the line. Tier cooldowns are 30 / 30 / 45 s.
-  Expensive kills get their own banner ("TITAN DOWN", spoken "Enemy Titan
+  Expensive kills get their own banner ("MASTODON DOWN", spoken "Enemy Mastodon
   destroyed"), or ride along under a streak. Kill banners are at least 6 s
   apart; a streak climbing a tier needs only 2 s.
 - **Calldown kills count, and say so.** A calldown's kills are credited to
@@ -702,7 +702,7 @@ enemies you can currently see.
   their cargo) come within 12 tiles of a building or harvester, the group
   (single-link, 5 tiles) is warned once, with counter advice by domain and
   lead kind: "Enemy drones inbound — Flak, Raptors or a Turret", "Enemy
-  Titans inbound — Rocket Squads, Lancers or Wasps", "Enemy troops inbound
+  Mastodons inbound — Rocket Squads, Lancers or Wasps", "Enemy troops inbound
   — Mortars, Turrets or Snipers", "Enemy dropships inbound — Flak, Raptors
   or a SAM"… A group seen in the zone
   within 20 s isn't new; one that has been shooting your things for 1.5 s is
@@ -773,11 +773,11 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   each for 60 s after its last sighting, plus enemy Turrets and SAM Sites
   from the fog memory. A build button whose counters (from the duel matrix:
   Flak → Wasps, Raptors, Hornets, Menders, Condors; Stingers → Flak,
-  Mortars, Lancers, Troopers, Snipers; Titans → Stingers, Flak, Mortars;
-  Lancers → Titans; Wasps → Stingers, Mortars, Titans, Lancers; Raptors →
-  Wasps, Hornets, Menders, Condors; Hornets → Titans, Mortars and all three
+  Mortars, Lancers, Troopers, Snipers; Mastodons → Stingers, Flak, Mortars;
+  Lancers → Mastodons; Wasps → Stingers, Mortars, Mastodons, Lancers; Raptors →
+  Wasps, Hornets, Menders, Condors; Hornets → Mastodons, Mortars and all three
   infantry squads; Mortars → Turrets, SAMs and all three squads; Troopers →
-  Rocket Squads; Rocket Squads → Titans, Hornets; Sniper Teams and Turrets →
+  Rocket Squads; Rocket Squads → Mastodons, Hornets; Sniper Teams and Turrets →
   all three squads; SAM Site → Hornets, Wasps, Condors) have been seen at
   least twice gets an amber ⚔ corner (pulsing for
   its first 6 s), and its tab a ⚔ dot, until your own force of that kind
@@ -1005,7 +1005,7 @@ emits ordinary commands. Six personalities, picked at random each match:
 | Air Swarm | Airpad first, wasp raids, bombers later; an Assembly Bay for Rocket Squads once it has seen heavy armour |
 | Boom | Greedy economy, a turret and the Tech Lab before its forward depot, huge late push; an Assembly Bay for Rocket Squads once it has seen heavy armour |
 | Skyforce | Air force first; the Fab Plant only guards home; Rocket Squads once it has seen heavy armour, like Air Swarm |
-| Ironclad | Tech Lab right after its first turret, then an Assembly Bay: Titans, each with a Rocket Squad escort, Lancers and Mortars |
+| Ironclad | Tech Lab right after its first turret, then an Assembly Bay: Mastodons, each with a Rocket Squad escort, Lancers and Mortars |
 
 Behaviours: build orders with reactive SAM sites and extra factories when
 scrap piles up; forward depots at distant fields; adaptive production
@@ -1055,7 +1055,7 @@ Robot infantry (`ai/intel.ts`, `ai/condor.ts`):
   units) the Fab Plant builds a Mortar or a Stinger 65% of the time (Mortars
   capped at min(3, 1 + squads / 4): they die fast in a brawl); 5 squads
   seen add a Turret, 9 a second; Sniper Teams answer infantry (min(3,
-  squads / 3), never on Easy), Rocket Squads answer Titans and Hornets
+  squads / 3), never on Easy), Rocket Squads answer Mastodons and Hornets
   (0.8 per heavy unit seen). Threat response and waves never send a unit
   whose damage multiplier against the target is below 0.45: no Sniper Team
   at a tank or a building. Infantry still marching up to the staging point
@@ -1133,7 +1133,7 @@ What changed (numbers only, plus AI thresholds):
 - Unit stats are unchanged. The duel matrix (`tools/balance.ts duels`)
   moved by a few hundredths with the final pass's fairness fix (red's units
   now path as blue's mirror image) and every counter in the web still holds
-  (e.g. Stingers +0.66 vs Flak, Lancers +0.30 vs Titans, Titans +0.63 vs
+  (e.g. Stingers +0.66 vs Flak, Lancers +0.30 vs Mastodons, Mastodons +0.63 vs
   Stingers, Flak +0.66 / +0.65 / +0.21 vs Wasps / Raptors / Hornets).
 - **Final pass** (every lane merged): the skirmish numbers above needed no
   re-tuning (the "Merged" column below, re-measured with lane C's
@@ -1252,12 +1252,12 @@ harnesses and tuned until every target held. The duel matrix
 (`tools/balance.ts duels`: cost-equal armies of 1,800 scrap, + means the
 row army wins):
 
-| | Stinger | Flak | Mortar | Titan | Lancer | Wasp | Raptor | Hornet | Trooper | Rocket | Sniper |
+| | Stinger | Flak | Mortar | Mastodon | Lancer | Wasp | Raptor | Hornet | Trooper | Rocket | Sniper |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **Stinger** | – | 0.66 | 0.39 | −0.63 | 0.40 | −0.29 | 0.03 | −0.41 | 0.15 | 0.48 | 0.87 |
 | **Flak** | −0.66 | – | −1.07 | −0.88 | −0.68 | 0.66 | 0.65 | 0.21 | −0.38 | −0.52 | −0.40 |
 | **Mortar** | −0.39 | 1.07 | – | −0.61 | −0.52 | −0.92 | 0.10 | −0.86 | 0.55 | 0.62 | 0.89 |
-| **Titan** | 0.63 | 0.88 | 0.61 | – | −0.30 | −0.28 | 0.08 | −0.20 | 0.13 | −0.69 | 0.91 |
+| **Mastodon** | 0.63 | 0.88 | 0.61 | – | −0.30 | −0.28 | 0.08 | −0.20 | 0.13 | −0.69 | 0.91 |
 | **Lancer** | −0.40 | 0.68 | 0.52 | 0.30 | – | −0.41 | 0.26 | −0.10 | −0.43 | −0.33 | 0.89 |
 | **Wasp** | 0.29 | −0.66 | 0.92 | 0.28 | 0.41 | – | −0.42 | −0.04 | −0.26 | −0.61 | 0.75 |
 | **Raptor** | −0.03 | −0.65 | −0.10 | −0.08 | −0.26 | 0.42 | – | 0.41 | −0.13 | −0.63 | −0.03 |
@@ -1280,12 +1280,12 @@ two seeds, `--with <personality>` for single-lever tests):
   and Mortars by 0.55; Lancers still lose to Troopers (−0.43).
 - **Rocket Squad 180 HP / ×0.8 vs air → 210 / ×1.5.** At the draft's
   numbers they lost to Hornets by 0.59, because each bomb splashes several
-  squads. Now they beat Hornets by 0.31 and Titans by 0.69 (was 0.33). HP
+  squads. Now they beat Hornets by 0.31 and Mastodons by 0.69 (was 0.33). HP
   stays at or below 225, so two Sniper shots still wipe a squad.
-- **Cannon vs infantry ×0.6 → ×0.4.** With the draft's ×0.6, Titans beat
+- **Cannon vs infantry ×0.6 → ×0.4.** With the draft's ×0.6, Mastodons beat
   Troopers by 0.41 cost for cost, and no Trooper buff could close that
-  without Troopers beating Stingers again. At ×0.4 Titans only edge them
-  out (+0.13), Rocket Squads beat Titans by 0.69 (was 0.52) and lose to
+  without Troopers beating Stingers again. At ×0.4 Mastodons only edge them
+  out (+0.13), Rocket Squads beat Mastodons by 0.69 (was 0.52) and lose to
   Troopers by 0.79 (was 0.68); the rest of the matrix is unchanged.
   Re-measured with `tools/balance.ts matches` (one seed): Balanced 56,
   Rush 38, Air Swarm 48, Boom 52, Skyforce 42, Ironclad 64%, no draws;
@@ -1302,13 +1302,13 @@ two seeds, `--with <personality>` for single-lever tests):
   Boom had risen to 74–76%; 3 harvesters gave 34%, waves at 2400 82%, at
   1700 61%; the later Depot gave 61% with more even pairings.
 - **Ironclad's assault threshold 1500 → 1400**, plus an Assembly Bay after
-  its Tech Lab and one Rocket Squad escort per Titan. It sat at 72–76%;
-  1300 gave 58%, 1800 82%, and 0.6 escorts per Titan 77%.
+  its Tech Lab and one Rocket Squad escort per Mastodon. It sat at 72–76%;
+  1300 gave 58%, 1800 82%, and 0.6 escorts per Mastodon 77%.
 - **Balanced** adds an Assembly Bay after its Tech Lab and keeps a quarter
   of its army value in infantry; **Air Swarm** and **Skyforce** build a Bay
   early once they have seen two heavy units, for Rocket Squads and Sniper
   Teams only, and since the review fixes so does **Boom** (before, it never
-  answered Titans with Rocket Squads; it fields 1–3 now on 4 of 5 maps
+  answered Mastodons with Rocket Squads; it fields 1–3 now on 4 of 5 maps
   against Ironclad).
 - **AI anti-air counted in Flak** (*AI opponent*). Before, any unit that
   could hit air counted as one anti-air unit, so blue's starting squad by
@@ -1495,7 +1495,7 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   per side (`World.powers.fired`), plus any numeric stats other features
   add to `FactionStats` (with friendly labels); and one rule-picked tip (no
   anti-air vs an air force, harvesters lost, idle factories, banked scrap,
-  Titans unanswered (Rocket Squads count as an answer), 8+ enemy infantry
+  Mastodons unanswered (Rocket Squads count as an answer), 8+ enemy infantry
   squads against at most one Mortar, Hornet, Sniper Team or Turret, 6+ units
   lost to enemy calldowns, …). Calldown kills
   never count as "your defences" (tips, Iron Wall). Spectators get both
@@ -1516,14 +1516,14 @@ best per map and difficulty is saved on the device and shown on the menu
   (Easy 1:50, Hard 1:25), then one every 50 s (60 s after a boss). Each block
   of five plays four of the five regular themes in a seeded order —
   **Air Raid** (wasps, then hornets and raptors), **Armour Column**
-  (stingers, lancers, titans), **Artillery** (mortars with escorts),
+  (stingers, lancers, mastodons), **Artillery** (mortars with escorts),
   **Mixed Assault** and **Bot Swarm** (robot infantry, below) — then a
-  **Boss** wave (Titan Spearhead, Bomber Wing or Elite Strike Force, in a
+  **Boss** wave (Mastodon Spearhead, Bomber Wing or Elite Strike Force, in a
   seeded order). *(Before robot infantry each block was a shuffle of all
   four themes.)* The theme that sits a block out is benched by seeded
   rules: every theme exactly once in each run of five blocks, never twice
   in a row; never the theme the block's own boss grows out of (so an
-  Armour Column comes before a Titan Spearhead, an Air Raid before a Bomber
+  Armour Column comes before a Mastodon Spearhead, an Air Raid before a Bomber
   Wing, a Mixed Assault before an Elite Strike Force); and never Air Raid or Bot
   Swarm in the first block, so the two threats that need their own
   counter arrive while they are small. Wave 1 is always a small ground wave
@@ -1536,7 +1536,7 @@ best per map and difficulty is saved on the device and shown on the menu
   other themes 36): cheap squads would reach 34–36 from wave 8 on Normal,
   and a wave bigger than the live cap below stands at its edge waiting for
   the units the cap holds back until the 50 s march timeout. The bosses
-  bring infantry too: a few Rocket Squads walk with the Titan Spearhead,
+  bring infantry too: a few Rocket Squads walk with the Mastodon Spearhead,
   and the Elite Strike Force adds Troopers and Rocket Squads (each held to
   15%; measured, they change nothing).
 - **Budgets** grow as (240 + 228·n^1.4) scrap × difficulty (0.7 / 1 / 1.3),
@@ -1560,7 +1560,7 @@ best per map and difficulty is saved on the device and shown on the menu
   ground unit they can see within sight + 2 tiles (squads first), and with
   nothing to shoot walk back to the nearest walking ally. A swarm's
   formation spreads 4–6 tiles, like a vehicle wave's; mid-size swarms are
-  released in 22–45 s, big ones on Ashlands at the 50 s timeout, as Titan
+  released in 22–45 s, big ones on Ashlands at the 50 s timeout, as Mastodon
   columns are.
 - **Announcements**: the next wave's theme is in the top-bar pill from the
   start of its countdown ("Wave 8 · 0:42 / ✈ Air Raid"); 15 s ahead a banner
@@ -1639,7 +1639,7 @@ Reasons to come back between matches. Spectated games never count.
   building lost), 🔄 Comeback (win after your army fell to ≤ ½ of theirs and
   800+ behind, after 1:30), 💎 Flawless (win losing ≤ 5 units), 💰 Tycoon (win
   harvesting 2× theirs), and — in defeat too — 🎖️ Ace (one unit, 9 kills),
-  🗿 Giant Slayer (3 Titans), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
+  🗿 Giant Slayer (3 Mastodons), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
   (defences kill 30), ☠️ Exterminator (60 kills), 🏚 Wrecking Crew (12
   buildings); the battlefield's own feats, in defeat too — 🛰️ Orbital (one
   Sky Hammer destroys 1,000 scrap of units and buildings), ♻️ Scavenger
@@ -1766,7 +1766,7 @@ completion goal.
 | 4 | ❄ Frozen Assets | Frostbite | Boom, Normal | 3,000 scrap, no income (not even salvage) or harvesters, no calldowns: HQ by 6:00 | 4 harvesters killed · under 4:00 |
 | 5 | 🏴‍☠️ Sky Pirates | Ashlands | Balanced, Easy, digs in on half income | No Fab Plants, Assembly Bays, ground units or Condors (air only; the Drop Pod lands Wasps; the starting squad is kept, with no Condor to fly it), pre-placed SAMs: HQ by 7:00 | lose ≤ 12 · under 4:30 |
 | 6 | 💥 Glass Jaw | Dune Sea | Rush, Normal, 4 harvesters | Glass Cannons + Rapid Fab: HQ by 6:00 | lose no building · under 4:00 |
-| 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Titans killed · ≤ 1 building lost |
+| 7 | 🛡 Iron Tide | Frostbite | Ironclad, Hard | Hold 6:00 (Fab Plant + Tech Lab given) | 2 Mastodons killed · ≤ 1 building lost |
 | 8 | 🕯 Last Light | Riverlands | Last Stand waves (Easy budgets, first at 0:45, every 40 s) | Survive 10 waves from a dug-in base | ≤ 2 buildings lost · under 7:00 |
 
 - **Measured** (stand-in pilots, `npx vite-node tools/ops.ts all 6`, after
@@ -2042,14 +2042,14 @@ y up.
   0.000, cadence from each robot's own size and speed), an idle sway and
   head scan, a raise-and-aim firing pose with recoil, a topple outward,
   clear of the robots still standing, each time the squad's HP drops one, a
-  step sideways out of any ground vehicle's hull (so a Titan grinding
+  step sideways out of any ground vehicle's hull (so a Mastodon grinding
   through a squad parts it, throwing sparks and scrap), hops into and out of a
   Condor, and a seated pose in its bay. A volley leaves every standing
   robot's own muzzle a beat apart: a crackle of rifle tracers, a ripple of
   shoulder rockets with backblast, or one white-hot rail streak with a
   glowing wake and a crack.
 - **The Condor** (`three/models.ts`, `render/entities.ts`): a ducted-fan
-  dropship about a Titan's length but much slimmer (the Hornet's size, 1.5):
+  dropship about a Mastodon's length but much slimmer (the Hornet's size, 1.5):
   an armoured nose tapering to a point under an amber canopy, an
   open-roofed troop bay amidships with benches and team rims (you can see
   who's riding in your own: riders sit at 40% scale so two whole squads fit;
@@ -2137,7 +2137,7 @@ src/
     economy.ts      # scrap, harvesting, depots, tech rules, build queues, selling
     movement.ts     # terrain-weighted A* (ground/hover/air), region-aware goals, steering
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
-    infantry.ts     # robot squads: robots standing, firepower, Sniper concealment (unitSeenBy), Titan crushing
+    infantry.ts     # robot squads: robots standing, firepower, Sniper concealment (unitSeenBy), Mastodon crushing
     transport.ts    # the Condor: boarding, drop points and unloading, bail-outs
     lifeline.ts     # the island map's free replacement Condor
     fog.ts          # per-side visibility maps + building memory
