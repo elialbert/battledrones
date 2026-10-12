@@ -29,7 +29,7 @@ import {
 import { lineSeconds } from "../src/game/announcer";
 import { HeatMap, InboundWatch, TEMPO, TempoGuard, baseGoliath, raidAdvice, tallyView } from "../src/game/awareness";
 import { ADVISOR, COUNTERS, EnemyIntel, FACTORY_TAB, counterAdvice, sightingWeight } from "../src/game/advisor";
-import { BattleMood, MUSIC, stingerFor, type MoodHooks } from "../src/game/score";
+import { BattleMood, FLAVOURS, MUSIC, stinger, stingerFor, type MoodHooks } from "../src/game/score";
 import { Chronicle, moments, pickTip, type DeathRec, type Sample, type TipInput } from "../src/game/chronicle";
 import { HeroPresenter } from "../src/game/hero-fx";
 import { UnitVoices } from "../src/game/voices";
@@ -623,6 +623,22 @@ describe("Goliath mood and music cues", () => {
     const spec = new BattleMood(hooks({ spectator: true, baseUnit: () => true }));
     for (let i = 0; i < MUSIC.alarmHits; i++) spec.events([hit("blue", 7)], 10 + i * 0.5);
     expect(spec.alarm()).toBe(false);
+  });
+
+  it("a draw ends on a sweet sting: bells over the tonic's sixth chord, no drums, neither fanfare nor lament", () => {
+    for (const f of Object.values(FLAVOURS)) {
+      const notes = stinger("draw", f, 0);
+      expect(notes.some((n) => n.voice === "tom" || n.voice === "crash")).toBe(false);
+      for (const n of notes) {
+        expect(n.len).toBeGreaterThan(0);
+        for (const m of n.midi) expect(m).toBeGreaterThan(12);
+      }
+      const t = ((f.tonic % 12) + 12) % 12;
+      const chord = notes.find((n) => n.voice === "brass")!;
+      expect(new Set(chord.midi.map((m) => m % 12))).toEqual(new Set([t, (t + 4) % 12, (t + 9) % 12]));
+      const bells = notes.filter((n) => n.voice === "bell").map((n) => n.midi[0]!);
+      for (let i = 1; i < bells.length; i++) expect(bells[i]!).toBeGreaterThan(bells[i - 1]!); // rising
+    }
   });
 
   it("Goliath banners carry their stingers", () => {
