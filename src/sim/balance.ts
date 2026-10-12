@@ -566,11 +566,14 @@ export const GOLIATH = {
    * (≈ 1,400 scrap of firepower), lost in this order as its health falls.
    */
   weapons: {
-    // two shoulder tubes taking turns: a Mortar shell every 1.5 s
+    // two shoulder tubes taking turns: a Mortar shell every 1.5 s. (A tighter
+    // burst than the Mortar's 1.1: at 1.1 a cost-equal group of Rocket Squads
+    // only edged it, −0.14 in tools/balance.ts goliath duels; at 0.9, −0.39,
+    // a real answer like Lancers, Wasps and Hornets, and it still beats Troopers.)
     mortars: {
       name: "Mortars", lostBelow: 0.75,
       targets: "ground", dps: 36, range: 8, minRange: 2.5, shotInterval: 1.5,
-      splash: 1.1, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell"
+      splash: 0.9, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell"
     },
     laser: {
       name: "Eye laser", lostBelow: 0.5,
