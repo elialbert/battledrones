@@ -347,10 +347,11 @@ const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS)
  * to one shoulders it aside, as a second vehicle would — else it would be
  * pinned there, short of its goal, for good).
  *
- * A Goliath is never pushed: whatever it meets takes the whole push (it
- * shoulders tanks aside, and an anchored one stays dug in). Two Goliaths
- * share it. A Goliath on a lift and its Condors are placed by the lift
- * (lift.ts), so they sit separation out.
+ * A dug-in Goliath (anchoring, anchored or packing up) is never pushed:
+ * whatever it meets takes the whole push (its footprint is in the occupancy
+ * grid, so paths already go round it). A walking one parts like any unit. A
+ * Goliath on a lift and its Condors are placed by the lift (lift.ts), so
+ * they sit separation out.
  */
 function separate(w: World, driving: Set<number>): void {
   const units = [...w.units.values()].filter((u) => u.order.type !== "lift" && !isLifted(u));
@@ -389,9 +390,11 @@ function separate(w: World, driving: Set<number>): void {
         ux = dx / d;
         uy = dy / d;
       }
-      if (!!a.goliath !== !!b.goliath) {
-        // a Goliath stands its ground: the other takes the whole push
-        if (a.goliath) nudge(w, b, ux * push * 2, uy * push * 2);
+      const planted = (u: Unit) => !!u.goliath && !canWalk(u);
+      if (planted(a) && planted(b)) continue; // (two dug in never budge: their footprints can't overlap anyway)
+      if (planted(a) !== planted(b)) {
+        // a dug-in Goliath doesn't budge: the other takes the whole push
+        if (planted(a)) nudge(w, b, ux * push * 2, uy * push * 2);
         else nudge(w, a, -ux * push * 2, -uy * push * 2);
         continue;
       }

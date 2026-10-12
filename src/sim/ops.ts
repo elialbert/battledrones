@@ -3,7 +3,7 @@ import { createAiState, type AiState, type Difficulty, type Strategy, type Strat
 import { nearestReachableResource } from "./economy";
 import { setupSurvival, wavesSurvived, type SurvivalOptions } from "./modes/survival";
 import { NO_GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
-import type { BuildingKind, Faction, UnitKind, World } from "./types";
+import type { BuildingKind, Faction, FxEvent, UnitKind, World } from "./types";
 import { carrierOf } from "./transport";
 import { buildingCenter, hqOf, inBounds, moveClassOf, passable, spawnBuilding, spawnUnit } from "./world";
 
@@ -603,6 +603,12 @@ function finish(w: World, op: OpDef, st: OpsState, won: boolean, reason: string,
   if (!w.winner) w.winner = won ? st.player : st.enemy;
 }
 
+/** This tick's `death` event matching `pred`, if any. */
+function deathOf(w: World, pred: (ev: Extract<FxEvent, { type: "death" }>) => boolean): Extract<FxEvent, { type: "death" }> | undefined {
+  for (const ev of w.fx) if (ev.type === "death" && pred(ev)) return ev;
+  return undefined;
+}
+
 /**
  * Per-tick op bookkeeping (step() calls it after deaths are cleaned up):
  * tally kills and losses, and once a second check the goals — completing
@@ -621,11 +627,20 @@ export function tickOps(w: World): void {
     book[kind] = (book[kind] ?? 0) + 1;
     if (Object.values(st.tags).some((ids) => ids.includes(ev.id))) st.lastTagDeath = { x: ev.x, y: ev.y };
   }
-  // an HQ fell this tick (combat already named the winner)
+  // an op is a base to hold: our HQ falling loses it, even with a Goliath still standing
+  if (!w.winner && !hqOf(w, st.player)) {
+    const fell = deathOf(w, (ev) => ev.buildingKind === "hq" && ev.faction === st.player);
+    finish(w, op, st, false, "Our HQ has fallen", fell ? { x: fell.x, y: fell.y } : centreOf(w, st.player), false);
+    return;
+  }
+  // an HQ (or an enemy's last Goliath, its HQ already gone) fell this tick: combat already named the winner
   if (w.winner) {
     const won = w.winner === st.player;
     const hq = won ? null : hqOf(w, st.player);
-    finish(w, op, st, won, won ? "Enemy HQ destroyed" : "Our HQ has fallen", hq ? buildingCenter(hq) : centreOf(w, won ? st.enemy : st.player), false);
+    const lastGoliath = won ? deathOf(w, (ev) => ev.unitKind === "goliath" && ev.faction === st.enemy) : undefined;
+    const enemyHqFell = !!deathOf(w, (ev) => ev.buildingKind === "hq" && ev.faction === st.enemy);
+    if (lastGoliath && !enemyHqFell) finish(w, op, st, true, "Enemy Goliath destroyed", { x: lastGoliath.x, y: lastGoliath.y }, false);
+    else finish(w, op, st, won, won ? "Enemy HQ destroyed" : "Our HQ has fallen", hq ? buildingCenter(hq) : centreOf(w, won ? st.enemy : st.player), false);
     return;
   }
   if (w.tick % TICK_RATE !== 0) return;

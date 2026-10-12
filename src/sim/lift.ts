@@ -174,15 +174,17 @@ export function routeLiftCommand(w: World, c: Command): Set<number> {
       handled.delete(id); // (this Condor takes the order as usual)
       continue;
     }
+    // (kept over the map: a lift never flies off its edge)
+    const onMap = (x: number, y: number) => ({ x: Math.min(w.width - 0.5, Math.max(0.5, x)), y: Math.min(w.height - 0.5, Math.max(0.5, y)) });
     if (c.type === "stop") {
       lift.dest = null;
       lift.setDown = false;
     } else if (c.type === "unload") {
       const hasPoint = Number.isFinite(c.x) && Number.isFinite(c.y);
-      lift.dest = hasPoint ? { x: c.x!, y: c.y! } : { x: g.x, y: g.y };
+      lift.dest = hasPoint ? onMap(c.x!, c.y!) : { x: g.x, y: g.y };
       lift.setDown = true;
-    } else {
-      lift.dest = { x: c.x, y: c.y };
+    } else if (Number.isFinite(c.x) && Number.isFinite(c.y)) {
+      lift.dest = onMap(c.x, c.y);
       lift.setDown = false;
     }
   }

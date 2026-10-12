@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { anchoredGoliaths, goliathTrainer, inGoliathRing, isAnchored, overlapsGoliath, trainable, unitCost } from "./goliath";
+import { anchoredGoliaths, goliathTrainer, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
 import { moveUnitToward } from "./movement";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
@@ -67,7 +67,7 @@ export function unitBlocker(w: World, faction: Faction, kind: UnitKind): string 
   const stats = UNITS[kind];
   const banned = bannedBy(w, kind, faction);
   if (banned) return banned;
-  if (!hasBuilding(w, faction, stats.builtAt) && !(trainable(kind) && anchoredGoliaths(w, faction).length > 0))
+  if (!hasBuilding(w, faction, stats.builtAt) && !(trainableAt(w, kind) && anchoredGoliaths(w, faction).length > 0))
     return `Needs ${BUILDINGS[stats.builtAt].name}`;
   if (stats.requires && !hasBuilding(w, faction, stats.requires))
     return `Needs ${BUILDINGS[stats.requires].name}`;
@@ -170,11 +170,11 @@ const queueCap = (kind: UnitKind): number => (kind === "goliath" ? GOLIATH.queue
 
 /**
  * Why an anchored Goliath can't train `kind` now (null = it can): robot
- * infantry only, while anchored, under the usual tech and bans — but no
- * Assembly Bay needed (the Goliath is the barracks).
+ * infantry (and under Nomads, Harvesters) only, while anchored, under the
+ * usual tech and bans — but no Assembly Bay needed (the Goliath is the barracks).
  */
 export function trainBlocker(w: World, g: Unit, kind: UnitKind): string | null {
-  if (!g.goliath || !trainable(kind)) return "Can't train that";
+  if (!g.goliath || !trainableAt(w, kind)) return "Can't train that";
   const banned = bannedBy(w, kind, g.faction);
   if (banned) return banned;
   const req = UNITS[kind].requires;
@@ -224,7 +224,7 @@ export function producersOf(w: World, faction: Faction, kind: UnitKind): Produce
   const out: Producer[] = [];
   for (const b of w.buildings.values())
     if (b.faction === faction && b.kind === UNITS[kind].builtAt) out.push({ id: b.id, queue: b.queue, goliath: null });
-  if (trainable(kind)) for (const g of anchoredGoliaths(w, faction)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
+  if (trainableAt(w, kind)) for (const g of anchoredGoliaths(w, faction)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
   return out;
 }
 
@@ -283,7 +283,8 @@ export function tickProduction(w: World): void {
     if (head.remaining > 0) continue;
     b.queue.shift();
     const size = BUILDINGS[b.kind].size;
-    const spot = findSpawnSpot(w, { tx: b.tx, ty: b.ty, size, faction: b.faction }, head.kind);
+    // (an outpost rolls out round itself, even out on an island)
+    const spot = findSpawnSpot(w, { tx: b.tx, ty: b.ty, size, faction: b.faction }, head.kind, !b.outpost);
     const u = spawnUnit(w, head.kind, b.faction, spot.x, spot.y);
     applySpawnRank(w, u);
     const c = buildingCenter(b);
@@ -505,7 +506,7 @@ export function tickHarvest(w: World): void {
       w.tick - u.damagedTick < FLEE_TICKS &&
       (o.phase === "toField" || o.phase === "harvesting")
     ) {
-      const home = nearestDropSite(w, u.faction, u.x, u.y);
+      const home = nearestDropSite(w, u.faction, u.x, u.y, "ground");
       if (home) {
         const d = dockPoint(home, u.x, u.y);
         moveUnitToward(w, u, d.x, d.y);
@@ -567,7 +568,7 @@ export function tickHarvest(w: World): void {
       }
     } else if (o.phase === "toBase") {
       // (an anchored Goliath counts; once it starts packing up it doesn't, and this reroutes)
-      const home = nearestDropSite(w, u.faction, u.x, u.y);
+      const home = nearestDropSite(w, u.faction, u.x, u.y, "ground");
       if (!home) {
         u.order = { type: "idle" };
         continue;
