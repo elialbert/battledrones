@@ -10,7 +10,10 @@ the v2 overhaul expanded it to 11 units, 8 buildings, 5 maps across 4
 biomes with gameplay-relevant terrain, a damage/armor model, AI
 personalities and difficulty levels, painted art and procedural audio.
 Robot infantry (three squad types, the Condor dropship and the Assembly
-Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings.
+Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings. The
+Goliath (a giant walking mech that is also a mobile base, built at a new
+top-of-the-tree Gantry; spec in GOLIATH.md) took it to 16 units and 10
+buildings, and renamed the Titan tank the Mastodon.
 
 ## Design pillars
 
@@ -31,8 +34,8 @@ Bay; draft spec in INFANTRY.md) took it to 15 units and 9 buildings.
 | Platform | Web PWA — TypeScript, three.js (WebGL), rendered at device pixel ratio (≤ 2×, adaptive) |
 | Opponent | Single-player vs scripted AI (6 personalities × 3 difficulties), AI vs AI spectator, Last Stand waves, or the Ops campaign |
 | Core mechanics | Resource harvesting, base building, tech tree, fog of war, terrain |
-| Win condition | Destroy the enemy HQ (Last Stand: survive as many waves as you can; Ops: the op's objective) |
-| Roster size | 15 units (three of them robot infantry squads), 9 buildings |
+| Win condition | Destroy the enemy HQ and every Goliath it has (Last Stand: survive as many waves as you can; Ops: the op's objective) |
+| Roster size | 16 units (three of them robot infantry squads, one the Goliath), 10 buildings |
 | Art | Procedural low-poly 3D models; painted terrain (OpenAI `gpt-image-2.5-sunburst`, see ART.md) draped over a 3D heightfield |
 | Controls | Full-screen touch-first (mouse also supported); portrait and landscape both first-class |
 
@@ -326,11 +329,11 @@ first raids — it hits air at half damage — and a cheap Uplink holder.
 Every match now has two more units than before, so the balance tools were
 re-run with it in (see *Infantry pass* under Balance & pacing).
 
-### Buildings (9)
+### Buildings (10)
 
 | Building | Role | Requires |
 |---|---|---|
-| **HQ** | Pre-placed. Builds Harvesters, takes scrap, point-defence gun vs aircraft. Lose it, lose the game. 3×3. | — |
+| **HQ** | Pre-placed. Builds Harvesters, takes scrap, point-defence gun vs aircraft. Lose it and every Goliath, lose the game. 3×3. | — |
 | **Fab Plant** | Builds ground vehicles. 2×2. | — |
 | **Airpad** | Builds aircraft (and the Condor dropship). 2×2. | — |
 | **Assembly Bay** | Builds robot infantry: Trooper Squads, Rocket Squads, Sniper Teams. 2×2. | — |
@@ -339,13 +342,17 @@ re-run with it in (see *Infantry pass* under Balance & pacing).
 | **Turret** | Autocannon, hits ground and air. 1×1. | — |
 | **SAM Site** | Long-range anti-air missiles. 1×1. | — |
 | **Radar** | Reveals a 13-tile radius through the fog. 1×1. | — |
+| **Gantry** | Builds the Goliath, one at a time. One per side; the enemy always sees it, and the Goliath taking shape on it. 3×3. | Fab Plant, Airpad, Tech Lab **and** Assembly Bay |
 
 C&C build flow: pick a structure → it constructs on a timer → tap it again
 and place it on a valid spot within 6 tiles of your base (see "Command UX"
+below), or anything but an HQ within 3 tiles of an anchored Goliath, as an
+**outpost** that never counts as base for build range (see *The Goliath*
 below). One construction at a time. Buildings can be **sold** for 50%
-(scaled by health).
+(scaled by health, plus whatever is still queued in them, at what it
+cost).
 
-### Units (15)
+### Units (16)
 
 | Unit | Built at | Domain | Hits | Role |
 |---|---|---|---|---|
@@ -364,8 +371,9 @@ below). One construction at a time. Buildings can be **sold** for 50%
 | **Rocket Squad** | Assembly Bay | Foot | Both | Anti-armour rockets: kills Mastodons and Hornets, weak vs infantry |
 | **Sniper Team** ⚗ | Assembly Bay | Foot | Ground | Long-range marksmen: deletes infantry, useless vs vehicles; hides in woods |
 | **Condor** | Airpad | Air | — | Unarmed dropship: carries two squads over anything |
+| **Goliath** | Gantry | Ground | Both | Giant walking mech and mobile base; loses its weapons as it is hurt |
 
-⚗ = needs a Tech Lab.
+⚗ = needs a Tech Lab (the Gantry already does).
 
 **Robot infantry** (`src/sim/infantry.ts`). A squad is **one sim unit**
 drawn as several robots: one HP pool, and a robot falls each time HP
@@ -409,6 +417,133 @@ clear of the water's edge the same way; over water, rock or a building
 they go down with it, each a unit lost and a kill for whoever downed the
 Condor. EMP freezes Condors and boarding squads like anything else.
 
+**The Goliath** (`src/sim/goliath.ts`; spec in GOLIATH.md). A giant
+walking mech that is also a base on legs. The Gantry builds one at a time
+(`GOLIATH.queueMax`) and it walks off the cradle when it is done. It moves
+like a tank (the `ground` move class: slow in mud and woods, no water or
+rock) and fights with four weapon systems at once, which it loses one by
+one as it is hurt.
+
+| | Goliath | Gantry |
+|---|---|---|
+| Cost / HP | 1,600 (+25% per Goliath owned) / 3,000, heavy armour | 600 / 1,200 |
+| Speed / sight | 1.0 / 10 | — / 5 |
+| Size | radius 1.0; anchors on a 2×2 patch | 3×3 |
+| Build time | 60 s | 25 s |
+
+| System (`GOLIATH.weapons`) | Like | Damage | Range | Hits | Offline below | Back at |
+|---|---|---|---|---|---|---|
+| **Mortars** (two shoulder tubes, taking turns) | 2 Mortars | 36 DPS explosive: a shell every 1.5 s, splash 0.9 | 2.5–8 | Ground | 75% HP | 80% |
+| **Eye laser** | 1 Lancer | 28 DPS laser, ×0.65 vs air | 4.5 | Both | 50% | 55% |
+| **Arm cannons** (two, taking turns) | 1 Mastodon | 46 DPS cannon: half a shell every 0.6 s | 4 | Ground | 25% | 30% |
+| **Machine guns** | 1 Trooper Squad | 15 DPS kinetic, ×0.5 vs air | 3 | Both | never | — |
+
+That is about 1,400 scrap of firepower (two Mortars, a Lancer, a Mastodon
+and a Trooper Squad). `UNITS.goliath`'s own weapon line (125 DPS, range 8,
+hits both) only sums them up for tooltips and estimates.
+
+- **Walking and anchored.** Walking, it moves and fights, and that's all.
+  The anchor command (the ⚓ chip, or G) digs it in where it stands, onto
+  the middle of the nearest 2×2 patch (`GOLIATH.footprint`) of buildable
+  ground with no building, Uplink platform, crate or ground unit on it,
+  anywhere on the map: there is no build-range rule (`anchorBlocker` says
+  why not: "Needs open ground", "Unit in the way", "Blocked", "Off the
+  map"). Digging in takes 4 s (`anchorTime`) and packing up 6 s
+  (`packTime`), so leaving under fire is the risky moment; an EMP pauses
+  either. Dug in (anchoring, anchored or packing up), its patch is stamped
+  into the occupancy grid like a building's: paths go round it, nothing is
+  built or anchors there, and it is never pushed. It fires as usual. A move
+  or attack-move sent to it packs it up, and it walks off once it is free;
+  an attack order doesn't (it fires from where it stands), and a dug-in
+  Goliath that is shot doesn't go after the shooter as an idle unit would.
+- **Anchored, it is a base.** Harvesters unload at it, docking at the edge
+  of its patch; those bound for it reroute to the nearest other drop-off
+  the moment it starts packing up. It trains robot infantry on its own
+  queue (up to 6) with no Assembly Bay (a Sniper Team still needs a Tech
+  Lab): squads step out round its feet, on an island too, and head for its
+  rally point, and the queue pauses while it walks, packs up or is EMP'd.
+  And any building but an HQ can go up within 3 tiles of it (`buildRing`,
+  from its centre to the building's footprint): an **outpost**.
+- **Outposts** (`Building.outpost`, decided when the building is placed:
+  one inside normal base range is a normal building, Goliath or not). An
+  outpost never counts as base for build range (`inBaseRange`), so nothing
+  can be built off it unless a Goliath anchors nearby again. Otherwise it
+  works like any other building and keeps working after the Goliath has
+  gone: an outpost Depot still takes scrap, an outpost factory rolls its
+  units out round itself (on an island too).
+- **Weapons.** Each system has its own clock and picks its own target: the
+  ordered target when it can reach it, else what it was shooting while
+  that stays in reach (switching to an enemy Mender that comes into reach),
+  else the best target in its own reach. It fires on the move; on
+  attack-move it halts once any weapon has a target, on an attack order
+  once the target is in reach of a weapon that can hit it. The torso turns
+  to the heaviest weapon's target.
+- **Damage takes them offline**, longest reach first: the mortars below
+  75% HP, the laser below 50%, the arm cannons below 25% (`lostBelow`).
+  The machine guns always work, so it is never helpless against aircraft
+  or infantry, and its reach (and the threat ring that shows it) shrinks
+  as it weakens, 8 → 4.5 → 4 → 3 tiles: a hurt Goliath can no longer shell
+  a base from afar.
+- **Repair: Menders only.** A Field Repair crate passes it over and a rank-3
+  Goliath doesn't patch itself up. A lost weapon comes back once HP is 5%
+  of max above its line (`restoreMargin`: the mortars at 80%, the laser at
+  55%, the cannons at 30%), after a 2.5 s reboot (`reboot`); knocked back
+  under the line mid-reboot, it goes offline again. A Mender heals 10 HP/s,
+  a third of a percent of 3,000: one takes 15 s to win back the 5% a
+  weapon needs, three take 5 s, so it takes a cloud of them to make real
+  progress (and the enemy shoots Menders first). A Mender's own pick
+  favours a Goliath with a weapon down, rebooting or a few percent from
+  coming back (`repairUrgency`). An EMP on the Goliath blocks repair and
+  holds a reboot while it lasts.
+- **Seen by everyone.** Sight 10, the best of any unit (Radar sees 13).
+  The enemy always sees it (`UNITS.goliath.alwaysVisible`), and the Gantry
+  with whatever it is building (see *Fog of war*).
+- **Cost.** Each Goliath costs 25% of the list price more for every one
+  the side already has, alive or on a Gantry's cradle (`goliathCost`:
+  1,600, then 2,000, 2,400…), so losing one makes the next cheaper again.
+  A cancel refunds what was paid (`QueueItem.paid`). The Gantry is
+  `unique` (one per side, one under construction included) and needs all
+  four of its prerequisites (`requiresAll`; the reason names the missing
+  ones: "Needs Tech Lab and Assembly Bay").
+- **Defeat.** A side is beaten only when its HQ **and** every Goliath are
+  gone (`cleanupDeaths`: an HQ falls with no Goliath left, or the last
+  Goliath falls with no HQ). With its HQ gone and a Goliath standing, a
+  side plays on: it still builds near an anchored Goliath and in range of
+  its surviving buildings (never a new HQ), and still calls down strikes
+  ("Calldowns need an HQ or a Goliath"). Last Stand and Ops are bases to
+  hold: there the HQ still decides.
+- **Death.** It topples (the fall hurts nothing) and leaves no wreck: its
+  salvage lies scattered in 6–8 scrap piles (see *Battlefield salvage*).
+- **Readability.** Its health bar is wider and taller than a unit's and
+  notched where each weapon goes offline; each lost system shows on the
+  model (a smoking shoulder, a dark eye, drooping cannons; see *3D view*);
+  a ring of dashes marks its current reach (strong when it is selected,
+  faint for an enemy's) and a team-coloured ring its build ring while it
+  is dug in; a progress arc round its feet counts down digging in and
+  packing up; and the radio calls its news (see *Voices & announcer*).
+
+**The two-Condor lift** (`src/sim/lift.ts`). Two empty Condors of its side
+can carry a walking Goliath ("Pack up first" otherwise). Select them (of
+several, the two nearest go) and tap the Goliath, or right-click it: they
+fly in, hook on 1.1 tiles to either side of it (`lift.span`) and lift it
+once both are on, and the selection becomes the lift. A tap then flies it
+there to hover, a long-press flies it there and sets it down, **⇣ Set
+down** (key U) puts it down where it hovers and ■ Stop holds it still; an
+order given while the Condors are still hooking on waits until it is up
+(a Stop calls the lift off). It flies straight at half a Condor's speed
+(`lift.speedMult`), and never off the map's edge. A set-down point a
+Goliath can't stand on (water, a building) drifts to the nearest ground
+within 6 tiles that it can (`lift.setDownSearch`); with none, it hovers.
+In the air it is an **air target** (`domainOf`) and only its machine guns
+fire; its Condors take no passengers while they lift, and an EMP on any of
+the three holds the whole lift still. **If either Condor is shot down** it
+drops: onto ground a walker could stand on (sliding off a building to open
+ground close by) it lands with 25% of its max HP in damage
+(`lift.dropDamage`), credited to whoever downed the Condor; into water, sea
+or lava, or onto rock, it is destroyed, like squads in a downed Condor.
+There are no special island rules: set down on an Archipelago island, it
+anchors and trains squads there like anywhere else.
+
 The counter web (verified by the cost-equal duel matrix in
 `tools/balance.ts duels`): **Stingers** beat Flak, Mortars and Lancers ·
 **Lancers** burn through Mastodons · **Mastodons** crush Stingers, Flak and
@@ -428,6 +563,17 @@ and +0.15 vs Troopers), and a Turret beats two Trooper Squads. **Mastodons**
 are poor against infantry: cannon fire does ×0.4 to it, so a Mastodon army
 only edges out Troopers (+0.13, against +0.61–0.88 over vehicle armies)
 and loses hard to Rocket Squads.
+
+The **Goliath** was tuned against four answers (`npm run balance goliath`:
+one Goliath against 1,600 scrap of each unit, from both sides of the
+field, + = the Goliath wins): it falls to **Wasps** (−0.84), **Lancers**
+(−0.61), **Hornets** (−0.54) and **Rocket Squads** (−0.39), about trades
+with Mastodons (−0.09), and beats Flak (+0.96), Sniper Teams (+0.89),
+Raptors (+0.61; they can't hit it), Mortars (+0.50), Troopers (+0.41) and
+Stingers (+0.22). Two Menders behind it (`--menders 2`, 1,900 scrap a
+side) don't pay for themselves in a straight fight: Wasps (−0.78), Lancers
+(−0.70), Rocket Squads (−0.61), Hornets (−0.49) and Mastodons (−0.32)
+still win, and Troopers (−0.46) and Stingers (−0.24) now do too.
 
 ### Combat
 
