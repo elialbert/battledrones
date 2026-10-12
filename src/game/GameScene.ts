@@ -19,7 +19,7 @@ import { BattleMood } from "./score";
 import { voices, type VoiceHooks } from "./voices";
 import { Announcer } from "./announcer";
 import { Awareness } from "./awareness-view";
-import { calldownThreatens, planTicks } from "./awareness";
+import { baseGoliath, calldownThreatens, planTicks } from "./awareness";
 import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
@@ -236,7 +236,12 @@ export class GameScene {
       sees: (x, y) => this.seesPoint(x, y),
       factionOf: (id) => (this.world.units.get(id) ?? this.world.buildings.get(id))?.faction ?? null,
       // (the siren's rule: a strike that would catch our units or buildings)
-      threatened: (x, y, r) => calldownThreatens(this.world, PLAYER, x, y, r)
+      threatened: (x, y, r) => calldownThreatens(this.world, PLAYER, x, y, r),
+      // (an anchored Goliath, or the last of the base once the HQ is gone, is the base)
+      baseUnit: (id) => {
+        const u = this.world.units.get(id);
+        return !!u && baseGoliath(this.world, u);
+      }
     });
     music.play("battle", this.world.biome);
     const inView = (x: number, y: number) => rig.onScreen(x, y);
@@ -863,9 +868,10 @@ export class GameScene {
             this.lastAlert = this.simSeconds;
             sfx.play("alert", 0.8);
             const hq = ev.building && w.buildings.get(ev.id)?.kind === "hq";
+            const goliath = !ev.building && !!w.units.get(ev.id)?.goliath;
             // (a drop to 1× for this attack already put "Speed 1× — HQ under attack" in the ticker)
-            if (!(hq && this.aware.slowedFor("hq")))
-              this.hud.alert(hq ? "HQ under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
+            if (!(hq && this.aware.slowedFor("hq")) && !(goliath && this.aware.slowedFor("goliath")))
+              this.hud.alert(hq ? "HQ under attack!" : goliath ? "Goliath under attack!" : ev.building ? "Base under attack!" : "Units under attack!", ev.x, ev.y);
           }
         }
         this.hud.ping(ev.x, ev.y);
