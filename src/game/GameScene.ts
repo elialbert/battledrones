@@ -8,7 +8,7 @@ import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
-import { buildingCenter, hqOf } from "../sim/world";
+import { buildingCenter } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
 import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
@@ -39,7 +39,7 @@ import { CommandUi } from "../ui/command";
 import { showOpenerPicker } from "../ui/openers";
 import { createPowerPanel, type PowerPanel } from "../ui/powers";
 import { createObjectivePill, type ObjectivePill } from "../ui/objectives";
-import { fitZoom, hudInsets, startBox } from "./framing";
+import { fitZoom, homeBox, hudInsets, startBox } from "./framing";
 import { Stage } from "./three/stage";
 import { Terrain3D, type TerrainArt } from "./three/terrain";
 import { Particles } from "./three/particles";
@@ -300,8 +300,9 @@ export class GameScene {
       notify: (msg, tone, x, y) => this.hud?.notice(msg, tone, x, y)
     });
 
-    const focus = gameMode.spectator ? null : hqOf(this.world, PLAYER);
-    const c = gameMode.op?.focus ?? (focus ? buildingCenter(focus) : { x: this.world.width / 2, y: this.world.height / 2 });
+    // (the HQ, or under Nomads the anchored Goliath: framing.ts homeBox)
+    const focus = gameMode.spectator ? null : homeBox(this.world, PLAYER);
+    const c = gameMode.op?.focus ?? (focus ? { x: (focus.x0 + focus.x1) / 2, y: (focus.y0 + focus.y1) / 2 } : { x: this.world.width / 2, y: this.world.height / 2 });
     rig.zoom = this.clampedZoom(DEFAULT_ZOOM);
     rig.centerOn(c.x, c.y);
     this.targetZoom = rig.zoom;

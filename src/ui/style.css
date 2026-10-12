@@ -996,6 +996,11 @@ button {
   color: var(--red);
   text-shadow: 0 0 24px rgba(255, 110, 90, 0.5);
 }
+/* a draw (Robot Love): neither side's colour, and never a defeat's red */
+.panel h1.draw {
+  color: #ffb3d9;
+  text-shadow: 0 0 24px rgba(255, 140, 200, 0.5);
+}
 .panel .time {
   color: var(--dim);
   margin-bottom: 16px;

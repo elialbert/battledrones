@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { GOLIATH } from "../src/sim/balance";
+import { unitBlocker } from "../src/sim/economy";
+import { createMapWorld } from "../src/sim/maps";
 import type { Unit, World } from "../src/sim/types";
-import { createWorld, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { createWorld, hqOf, spawnBuilding, spawnUnit } from "../src/sim/world";
 import { Controller, isRooted, pickProducer } from "../src/game/controller";
+import { homeBox, startBox } from "../src/game/framing";
 import { zoneAt } from "../src/game/placement-view";
 
 /** A flat 40×40 field with a blue HQ at (4,4) and a red HQ at (32,32). */
@@ -239,6 +242,25 @@ describe("training from an anchored Goliath", () => {
     w.buildings.delete(bay.id);
     g.goliath!.queue.length = 0;
     expect(pickProducer(w, "rocket-squad", none)?.id).toBe(g.id);
+  });
+
+  it("under Nomads, Harvesters queue on the anchored Goliath, and a ground tap gives it a rally point", () => {
+    const w = createMapWorld("riverlands", { mutators: ["nomads"] });
+    expect(hqOf(w, "blue")).toBeNull();
+    const g = [...w.units.values()].find((u) => u.goliath && u.faction === "blue")!;
+    expect(isRooted(g)).toBe(true);
+    expect(unitBlocker(w, "blue", "harvester")).toBeNull();
+    expect(pickProducer(w, "harvester", new Set())?.id).toBe(g.id);
+    expect(pickProducer(w, "trooper", new Set())?.id).toBe(g.id);
+    const c = new Controller(w);
+    c.selectUnits([g.id]);
+    c.tapWorld(g.x + 4.5, g.y, { kind: "ground" });
+    expect(c.drainCommands()).toEqual([{ type: "rally", faction: "blue", buildingId: g.id, x: g.x + 4.5, y: g.y }]);
+    // the opening shot frames the Goliath, the base that walks
+    const box = homeBox(w, "blue")!;
+    expect((box.x0 + box.x1) / 2).toBeCloseTo(g.x);
+    expect((box.y0 + box.y1) / 2).toBeCloseTo(g.y);
+    expect(startBox(w, "blue")).not.toBeNull();
   });
 
   it("a Gantry holds one Goliath at a time", () => {

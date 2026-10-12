@@ -27,7 +27,8 @@ import { callsignOf, killsLabel, stars } from "../game/heroes";
 
 export interface ReportOpts {
   world: World;
-  winner: Faction;
+  /** Who won, or "draw" (Robot Love: neither side's win, and never a defeat). */
+  winner: Faction | "draw";
   /** The local player's side (the report's point of view unless spectating). */
   pov: Faction;
   spectator: boolean;
@@ -216,8 +217,9 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
 function headHtml(ctx: ReportContext): string {
   if (ctx.head) return `<h1 class="${ctx.head.cls}">${escapeHtml(ctx.head.title)}</h1><p class="time">${escapeHtml(ctx.head.sub)}</p>`;
   const spec = ctx.spectator;
-  const title = spec ? `${ctx.winner.toUpperCase()} WINS` : ctx.won ? "VICTORY" : "DEFEAT";
-  const cls = spec ? (ctx.winner === "blue" ? "win" : "lose") : ctx.won ? "win" : "lose";
+  const draw = ctx.winner === "draw";
+  const title = draw ? "DRAW" : spec ? `${ctx.winner.toUpperCase()} WINS` : ctx.won ? "VICTORY" : "DEFEAT";
+  const cls = draw ? "draw" : spec ? (ctx.winner === "blue" ? "win" : "lose") : ctx.won ? "win" : "lose";
   const vs = spec
     ? escapeHtml(`${ctx.strategies?.blue ?? "Blue"} vs ${ctx.strategies?.red ?? "Red"}`)
     : `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`;
@@ -425,7 +427,7 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
   const right = rendered.filter((r) => r.s.col !== "left").map(block).join("");
   endEl.hidden = false;
   endEl.innerHTML = `
-    <div class="panel aar ${ctx.spectator ? "spec" : ctx.won ? "won" : "lost"}">
+    <div class="panel aar ${ctx.spectator ? "spec" : ctx.winner === "draw" ? "drawn" : ctx.won ? "won" : "lost"}">
       <header class="aar-sec aar-head" style="--d:0ms">${headHtml(ctx)}</header>
       <div class="aar-cols"><div class="aar-col l">${left}</div><div class="aar-col r">${right}</div></div>
       <div class="aar-actions${o.actions?.length ? " more" : ""}">

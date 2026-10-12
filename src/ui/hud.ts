@@ -4,6 +4,7 @@ import { Vis } from "../sim/fog";
 import { anchorBlocker, modeProgress, unitCost, weaponReady } from "../sim/goliath";
 import { isTransport, squadAlive, squadSize, unitSeenBy } from "../sim/infantry";
 import { liftedBy } from "../sim/lift";
+import { rulesOf } from "../sim/rules";
 import type { BuildingKind, Faction, GoliathWeapon, QueueItem, Unit, UnitKind, World } from "../sim/types";
 import { hasBuilding } from "../sim/world";
 import { sfx } from "../game/audio";
@@ -51,7 +52,8 @@ export interface HudApi {
 export interface Hud {
   /** Every frame; `dtMs` is the frame's real time (drives hint pacing). */
   update(dtMs?: number): void;
-  showEnd(winner: Faction): void;
+  /** The end screen: who won, or "draw" (Robot Love), which never reads as a defeat. */
+  showEnd(winner: Faction | "draw"): void;
   alert(msg: string, x: number, y: number): void;
   /** A small radio caption for an announcer line (tap jumps to x, y). */
   radio(msg: string, tone: string, x?: number, y?: number): void;
@@ -534,13 +536,14 @@ export function createHud(api: HudApi): Hud {
     const strip = GOLIATH_STRIP.map(
       ({ k, short }, i) => `<span class="gw ${states[i]}" title="${GOLIATH.weapons[k].name}: ${said[states[i]!]}">${short}</span>`
     ).join("");
-    // ours, anchored: it trains squads (a queue that stopped when it packed up stays cancellable)
+    // ours, anchored: it trains squads, and under Nomads Harvesters too (a queue that
+    // stopped when it packed up stays cancellable)
     const train = !own
       ? ""
       : g.queue.length > 0
         ? queueHtml(u.id, g.queue)
         : g.mode === "anchored" && !g.lift
-          ? `<span class="hint">Train squads on the Infantry tab · tap the map to rally</span>`
+          ? `<span class="hint">${rulesOf(w).nomads ? "Trains Harvesters and squads" : "Trains squads"} · tap the map to rally</span>`
           : "";
     const live: Live = { hp: `${Math.ceil(u.hp)} / ${st.hp}`, head: headShare(g.queue), mode: goliathMode(u) };
     const html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b>${title}</b>
@@ -1194,9 +1197,10 @@ export function createHud(api: HudApi): Hud {
     mctx.stroke();
   }
 
-  function showEnd(winner: Faction): void {
+  function showEnd(winner: Faction | "draw"): void {
     const rematch = () => relaunch(rematchToken());
-    if (surv && !ops) {
+    // (Last Stand only ends one way; a draw anywhere goes to the report, titled DRAW)
+    if (surv && !ops && winner !== "draw") {
       surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());
       shield(endEl);
       return;
@@ -1275,7 +1279,7 @@ export const HELP_HTML = `
   <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (four of Air Raid, Armour Column, Artillery, Mixed and Bot Swarm, then a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
   <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00 — 12:00 on the Archipelago — and win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
-  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ or a Depot. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost (a Last Stand wave's only 5%) for a minute: roll any ground unit over one to salvage it.</p>
+  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ, a Depot or an anchored Goliath. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost (a Last Stand wave's only 5%) for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. With a mouse, Shift+click adds a unit to the selection or takes it out. Tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
