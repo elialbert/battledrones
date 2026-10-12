@@ -33,7 +33,7 @@ import { BattleMood, MUSIC, stingerFor, type MoodHooks } from "../src/game/score
 import { Chronicle, moments, pickTip, type DeathRec, type Sample, type TipInput } from "../src/game/chronicle";
 import { HeroPresenter } from "../src/game/hero-fx";
 import { UnitVoices } from "../src/game/voices";
-import { goliathsFielded } from "../src/ui/report";
+import { goliathsFielded, headline } from "../src/ui/report";
 
 // ------------------------------------------------------------ harness --
 
@@ -707,6 +707,15 @@ describe("Goliaths in the after-action report", () => {
     c.onFx({ type: "built", faction: "blue", id: g.id });
     expect(goliathsFielded(c)).toEqual({ blue: 1, red: 0 });
     expect(c.firstBuilt.blue.goliath).toBe(0);
+  });
+
+  it("the headline: VICTORY, DEFEAT, a spectator's winner, or a DRAW styled as neither", () => {
+    const o = { pov: "blue" as Faction, spectator: false, love: false };
+    expect(headline({ ...o, winner: "blue" })).toEqual({ title: "VICTORY", cls: "win", note: null });
+    expect(headline({ ...o, winner: "red" })).toEqual({ title: "DEFEAT", cls: "lose", note: null });
+    expect(headline({ ...o, winner: "red", spectator: true })).toEqual({ title: "RED WINS", cls: "lose", note: null });
+    expect(headline({ ...o, winner: "draw", love: true })).toEqual({ title: "DRAW", cls: "draw", note: "💘 They fell in love" });
+    expect(headline({ ...o, winner: "draw", spectator: true })).toEqual({ title: "DRAW", cls: "draw", note: null });
   });
 
   it("the Goliath Slayer medal: one enemy Goliath brought down", () => {
