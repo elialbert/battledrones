@@ -210,7 +210,7 @@ export const UNITS: Record<UnitKind, UnitStats> = {
 
 export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
   hq: {
-    name: "HQ", role: "Command centre. Builds Harvesters, takes scrap. Lose it, lose the game.",
+    name: "HQ", role: "Command centre. Builds Harvesters, takes scrap. Lose it and every Goliath, lose the game.",
     cost: 0, hp: 3200, sight: 7, size: 3, buildTime: 0, dropOff: true,
     // point defence: swats early drone raids, leaves ground assaults to real defences
     targets: "air", dps: 9, range: 4.5, shotInterval: 0.5, dmgType: "kinetic", fx: "mg"
