@@ -1,5 +1,5 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, GOLIATH, INFANTRY, OBJECTIVES, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
-import { GOLIATH_WEAPONS, canWalk, hasGoliath, repairUrgency, weaponReady } from "./goliath";
+import { GOLIATH_WEAPONS, canWalk, hasGoliath, repairUrgency, unplant, weaponReady } from "./goliath";
 import { dropLifts } from "./lift";
 import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
 import { IGNORE_TICKS, moveUnitToward } from "./movement";
@@ -658,6 +658,7 @@ export function cleanupDeaths(w: World): void {
   for (const { u, killer } of deadUnits) {
     const id = u.id;
     w.units.delete(id);
+    unplant(w, u); // (a dug-in Goliath's ground opens up)
     w.factions[u.faction].stats.unitsLost++;
     const air = unitDomain(u) === "air";
     w.fx.push({ type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2, air, kind: "unit" });

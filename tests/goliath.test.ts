@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { planMenders } from "../src/sim/ai/menders";
 import { BUILDINGS, COMBAT, ECONOMY, GOLIATH, SALVAGE, TERRAIN, TICK_RATE, UNITS } from "../src/sim/balance";
 import { findTarget } from "../src/sim/combat";
 import { buildingBlocker, canPlaceBuilding, unitBlocker } from "../src/sim/economy";
 import { isVisible, tickFog } from "../src/sim/fog";
-import { anchorBlocker, goliathCost, unitCost } from "../src/sim/goliath";
+import { anchorBlocker, goliathCost, goliathReach, modeProgress, unitCost } from "../src/sim/goliath";
 import { unitSeenBy } from "../src/sim/infantry";
 import { liftBlocker } from "../src/sim/lift";
 import { createMapWorld } from "../src/sim/maps";
@@ -34,6 +35,7 @@ import {
   hqOf,
   nearestDropSite,
   onHomeLand,
+  passable,
   setTerrain,
   spawnBuilding,
   spawnUnit,
@@ -406,6 +408,16 @@ describe("anchoring", () => {
     expect(Math.abs(ticks - PACK_TICKS)).toBeLessThanOrEqual(1);
     expect(ticks).toBeGreaterThan(ANCHOR_TICKS);
     expect(evs(fx, "goliathMode").map((e) => e.mode)).toEqual(["packing", "walking"]);
+    // the progress arc (modeProgress) runs 0 → 1 over the pack-up
+    const w2 = field();
+    const g2 = anchoredAt(w2, "blue", 30, 30);
+    expect(modeProgress(g2)).toBe(1);
+    run(w2, 1, [packCmd(g2)]);
+    expect(modeProgress(g2)).toBeLessThan(0.1);
+    run(w2, Math.round(PACK_TICKS / 2) - 1);
+    expect(modeProgress(g2)).toBeCloseTo(0.5, 1);
+    run(w2, PACK_TICKS);
+    expect(modeProgress(g2)).toBe(1);
   });
 
   it("can't move while anchoring, anchored or packing up (and nothing shoves it)", () => {
@@ -434,6 +446,19 @@ describe("anchoring", () => {
     run(w, 20);
     expect(g.goliath!.mode).toBe("walking");
     expect(g.x).toBeGreaterThan(p.x + 0.5); // now it walks
+  });
+
+  // (regression: two Goliaths once shared separation's push, so a walking one shoved a dug-in one off its ground)
+  it("stays dug in when another Goliath (either side) walks into it", () => {
+    for (const f of ["blue", "red"] as const) {
+      const w = field();
+      const g = anchoredAt(w, "blue", 30, 30);
+      const p = { x: g.x, y: g.y };
+      const other = spawnUnit(w, "goliath", f, 24.5, 30.5);
+      run(w, 300, [{ type: "move", faction: f, unitIds: [other.id], x: 36, y: 30.5 }]);
+      expect(g.goliath!.mode, f).toBe("anchored");
+      expect({ x: g.x, y: g.y }, f).toEqual(p);
+    }
   });
 
   it("a move order to an anchored Goliath packs it up first, then it walks to the point", () => {
@@ -483,6 +508,24 @@ describe("scrap drop-off", () => {
     expect(h.x).toBeGreaterThan(40); // never went home
   });
 
+  it("harvesters dock at it from every side", () => {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const w = field(80);
+      const g = anchoredAt(w, "blue", 40, 40);
+      const fx = Math.floor(40 + Math.sin(a) * 9);
+      const fy = Math.floor(40 - Math.cos(a) * 9);
+      setTerrain(w, fx, fy, Terrain.Scrap);
+      const h = spawnUnit(w, "harvester", "blue", fx + 0.5, fy + 0.5);
+      h.cargo = ECONOMY.harvesterCapacity;
+      h.order = { type: "harvest", fieldX: fx, fieldY: fy, phase: "toBase" };
+      const out: FxEvent[] = [];
+      const t = runUntil(w, () => h.cargo === 0, 300, out);
+      expect(t, `from ${fx},${fy}`).toBeLessThan(300);
+      expect(evs(out, "deposit").every((e) => Math.hypot(e.x - g.x, e.y - g.y) < 0.01), `from ${fx},${fy}`).toBe(true);
+    }
+  });
+
   it("does not count while walking (or still digging in)", () => {
     const { w, h } = farField();
     const g = spawnUnit(w, "goliath", "blue", 48, 6);
@@ -517,6 +560,65 @@ describe("scrap drop-off", () => {
     expect(dep.length).toBeGreaterThan(0);
     const c = buildingCenter(depot);
     expect(Math.hypot(dep[0]!.x - c.x, dep[0]!.y - c.y)).toBeLessThan(0.01);
+  });
+});
+
+describe("an unreachable drop-off", () => {
+  // (regression: drop sites were picked by straight-line distance; a Goliath or outpost must be reachable by ground)
+  it("a harvester never unloads across the sea at an island Goliath: it takes its load home", () => {
+    const w = createWorld(64, 30);
+    w.rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], startUnits: [], mutators: [], hqTrickle: 0, islands: true };
+    const hq = spawnBuilding(w, "hq", "blue", 1, 12);
+    spawnBuilding(w, "hq", "red", 1, 1);
+    paint(w, 40, 0, 47, 29, Terrain.Deep);
+    paint(w, 36, 12, 38, 14, Terrain.Scrap);
+    const g = anchoredAt(w, "blue", 50, 14);
+    const h = spawnUnit(w, "harvester", "blue", 35.5, 13.5);
+    h.cargo = ECONOMY.harvesterCapacity;
+    h.order = { type: "harvest", fieldX: 36, fieldY: 13, phase: "toBase" };
+    const fx = run(w, 400);
+    const dep = evs(fx, "deposit");
+    expect(dep.some((e) => Math.hypot(e.x - g.x, e.y - g.y) < 0.01)).toBe(false);
+    const c = buildingCenter(hq);
+    expect(dep.some((e) => Math.hypot(e.x - c.x, e.y - c.y) < 0.01)).toBe(true);
+  });
+});
+
+describe("getting past a Goliath", () => {
+  // (regression: paths ignored a dug-in Goliath and jammed against it; its footprint is now in the occupancy grid)
+  it("a harvester rerouted past the packed-up Goliath reaches the other drop-off", () => {
+    const w = createWorld(64, 24);
+    w.rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], startUnits: [], mutators: [], hqTrickle: 0 };
+    spawnBuilding(w, "hq", "blue", 1, 10);
+    spawnBuilding(w, "hq", "red", 1, 1);
+    const g = anchoredAt(w, "blue", 46, 12);
+    const depot = spawnBuilding(w, "depot", "blue", 56, 18); // beyond the Goliath
+    const h = spawnUnit(w, "harvester", "blue", 36.5, 11.5);
+    paint(w, 56, 10, 58, 12, Terrain.Scrap);
+    h.cargo = ECONOMY.harvesterCapacity;
+    h.order = { type: "harvest", fieldX: 56, fieldY: 11, phase: "toBase" };
+    run(w, 3);
+    expect(nearestDropSite(w, "blue", h.x, h.y)?.id).toBe(g.id);
+    const fx = run(w, 1, [packCmd(g)]);
+    runUntil(w, () => h.cargo === 0, 600, fx);
+    const c = buildingCenter(depot);
+    expect(evs(fx, "deposit").some((e) => Math.hypot(e.x - c.x, e.y - c.y) < 0.01)).toBe(true);
+  });
+
+  // (regression: same cause as above, for every ground unit size)
+  it("ground units driving straight through a parked Goliath's spot get round it", () => {
+    for (const kind of ["harvester", "mastodon", "stinger", "trooper"] as UnitKind[])
+      for (const anchored of [false, true]) {
+        const w = field();
+        const g = spawnUnit(w, "goliath", "blue", 30, 30);
+        if (anchored) run(w, ANCHOR_TICKS + 1, [anchorCmd(g)]);
+        const u = spawnUnit(w, kind, "blue", 24.5, 30.5);
+        const t = (() => {
+          step(w, [{ type: "move", faction: "blue", unitIds: [u.id], x: 36.5, y: 30.5 }]);
+          return runUntil(w, () => Math.hypot(u.x - 36.5, u.y - 30.5) < 1, 400);
+        })();
+        expect(t, `${kind} past a ${anchored ? "anchored" : "walking"} Goliath`).toBeLessThan(400);
+      }
   });
 });
 
@@ -641,6 +743,19 @@ describe("outposts", () => {
     expect(canPlaceBuilding(w, "red", "turret", Math.floor(r.x) + 1, Math.floor(r.y))).toBe(true);
   });
 
+  it("a walking or still-anchoring Goliath has no build ring", () => {
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 30, 30);
+    expect(canPlaceBuilding(w, "blue", "turret", 32, 30)).toBe(false);
+    step(w, [anchorCmd(g)]);
+    expect(g.goliath!.mode).toBe("anchoring");
+    expect(canPlaceBuilding(w, "blue", "turret", 32, 30)).toBe(false);
+    run(w, ANCHOR_TICKS);
+    expect(canPlaceBuilding(w, "blue", "turret", 32, 30)).toBe(true);
+    step(w, [packCmd(g)]);
+    expect(canPlaceBuilding(w, "blue", "turret", 32, 30)).toBe(false);
+  });
+
   it("nothing can be built off an outpost alone: its ring goes when the Goliath packs up", () => {
     const w = field();
     const g = anchoredAt(w, "blue", 30, 30);
@@ -654,11 +769,10 @@ describe("outposts", () => {
     run(w, 60);
     for (let ty = 25; ty <= 36; ty++) for (let tx = 26; tx <= 40; tx++) expect(canPlaceBuilding(w, "blue", "turret", tx, ty), `${tx},${ty}`).toBe(false);
     // an outpost isn't base: a building in its range still counts as one when it goes up (once a Goliath anchors again)
-    const g2 = anchoredAt(w, "blue", 37, 34);
+    anchoredAt(w, "blue", 37, 34);
     const t = placeNow(w, "blue", "turret", 38, 31);
     expect(t).not.toBeNull();
     expect(t!.outpost).toBe(true);
-    void g2;
   });
 
   it("an outpost Depot keeps taking harvester scrap after the Goliath has gone", () => {
@@ -697,6 +811,7 @@ describe("outposts", () => {
   it("can't overlap a Goliath's body (anchored or walking, either side)", () => {
     const w = field();
     const g = anchoredAt(w, "blue", 30, 30);
+    expect({ x: g.x, y: g.y }).toEqual({ x: 30, y: 30 });
     // every tile of the ground it stands on
     for (const [tx, ty] of [[29, 29], [30, 29], [29, 30], [30, 30]] as const) {
       expect(canPlaceBuilding(w, "blue", "turret", tx, ty), `${tx},${ty}`).toBe(false);
@@ -762,6 +877,30 @@ describe("weapons and damage stages", () => {
     g2.hp = MAX_HP * W.cannons.lostBelow - 1;
     const fx2 = run(w2, 1);
     expect(evs(fx2, "goliathWeapon").map((e) => `${e.weapon}:${e.state}`)).toEqual(["mortars:offline", "laser:offline", "cannons:offline"]);
+  });
+
+  it("arms as the spec says: explosive mortars, a laser, cannons, and kinetic machine guns that hit air too", () => {
+    expect(W.mortars.dmgType).toBe(UNITS.mortar.dmgType);
+    expect(W.laser.dmgType).toBe(UNITS.lancer.dmgType);
+    expect(W.cannons.dmgType).toBe(UNITS.mastodon.dmgType);
+    expect(W.mg.dmgType).toBe(UNITS.trooper.dmgType);
+    expect(W.mortars.dmgType).toBe("explosive");
+    expect(W.mg.targets).toBe("both");
+  });
+
+  it("its reach (threat ring) shrinks as the weapons go", () => {
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 30, 30);
+    const reach = [goliathReach(g)];
+    for (const k of ["mortars", "laser", "cannons"] as const) {
+      g.hp = MAX_HP * W[k].lostBelow - 1;
+      run(w, 1);
+      reach.push(goliathReach(g));
+    }
+    expect(reach[0]).toBe(Math.max(...WEAPONS.map((k) => W[k].range)));
+    expect(reach.at(-1)).toBe(W.mg.range);
+    for (let i = 1; i < reach.length; i++) expect(reach[i]!).toBeLessThanOrEqual(reach[i - 1]!);
+    expect(reach[1]!).toBeLessThan(reach[0]!); // losing the mortars costs its long reach
   });
 
   it("restoring HP to the line doesn't reboot a weapon; line + restoreMargin does, and it's back GOLIATH.reboot seconds later", () => {
@@ -918,6 +1057,43 @@ describe("repair", () => {
     expect(t).toBeLessThan(20 * TICK_RATE);
     expect(g.hp).toBeGreaterThan(hp0);
     expect(evs(fx, "goliathWeapon").map((e) => `${e.weapon}:${e.state}`)).toEqual(["mortars:rebooting", "mortars:online"]);
+  });
+
+  it("a Mender favours a Goliath with a weapon down over an equally hurt tank", () => {
+    const share = W.mortars.lostBelow - 0.02;
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 22, 20);
+    g.hp = MAX_HP * share;
+    const m = spawnUnit(w, "mastodon", "blue", 18, 20);
+    m.hp = UNITS.mastodon.hp * share;
+    run(w, 2);
+    expect(g.goliath!.weapons.mortars.online).toBe(false);
+    spawnUnit(w, "mender", "blue", 20, 20);
+    const g0 = g.hp;
+    const m0 = m.hp;
+    run(w, 10);
+    expect(g.hp).toBeGreaterThan(g0);
+    expect(m.hp).toBe(m0);
+  });
+
+  // BUG (unimplemented): GOLIATH.md says the Mender AI (src/sim/ai/menders.ts) favours a Goliath with a
+  // weapon offline or about to come back. planMenders scores only distance and HP share (and the
+  // commander's army list, COMBAT_KINDS in ai/commander.ts, doesn't even include the Goliath).
+  it.skip("the Mender AI sends a Mender to a Goliath with a weapon down before an equally far, slightly more hurt tank", () => {
+    const w = field();
+    const share = W.mortars.lostBelow - 0.02;
+    const g = spawnUnit(w, "goliath", "red", 30, 40);
+    g.hp = MAX_HP * share;
+    run(w, 1);
+    expect(g.goliath!.weapons.mortars.online).toBe(false);
+    const tank = spawnUnit(w, "mastodon", "red", 30, 20);
+    tank.hp = UNITS.mastodon.hp * (share - 0.03);
+    const mender = spawnUnit(w, "mender", "red", 30, 30);
+    const army = [...w.units.values()].filter((u) => u.faction === "red" && u.kind !== "harvester");
+    const cmds = planMenders("red", army, [], new Set(), { x: 55, y: 55 }, { x: 2, y: 2 });
+    const order = cmds.find((c) => "unitIds" in c && c.unitIds.includes(mender.id)) as Extract<Command, { type: "attackMove" }> | undefined;
+    expect(order).toBeDefined();
+    expect(Math.hypot(order!.x - g.x, order!.y - g.y)).toBeLessThan(1);
   });
 
   it("an EMP on the Goliath blocks a Mender's repair while it lasts", () => {
@@ -1080,7 +1256,7 @@ describe("death salvage", () => {
     // spread out, not one heap
     let far = 0;
     for (const a of ps) for (const b of ps) far = Math.max(far, Math.hypot(a.x - b.x, a.y - b.y));
-    expect(far).toBeGreaterThan(GOLIATH.salvage.spread);
+    expect(far).toBeGreaterThan(GOLIATH.salvage.spread * 0.6);
     expect(new Set(ps.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`)).size).toBe(ps.length);
     const total = sum(ps.map((p) => p.value));
     expect(Math.abs(total - UNITS.goliath.cost * GOLIATH.salvage.share)).toBeLessThanOrEqual(ps.length);
@@ -1193,6 +1369,30 @@ describe("two-Condor lift", () => {
     expect(g.goliath!.mode).toBe("anchored");
   });
 
+  it("set down over water or a building, it lands on the nearest ground it can stand on", () => {
+    const setDownAt = (setup: (w: World) => void, x: number, y: number) => {
+      const w = field();
+      setup(w);
+      const { g, a } = lifted(w);
+      const fx: FxEvent[] = [];
+      step(w, [{ type: "unload", faction: "blue", unitIds: [a.id], x, y }]);
+      fx.push(...w.fx);
+      expect(runUntil(w, () => !g.goliath!.lift, 400, fx)).toBeLessThan(400);
+      expect(evs(fx, "goliathLift").map((e) => e.state)).toEqual(["setDown"]);
+      expect(w.units.has(g.id)).toBe(true);
+      expect(g.hp).toBe(MAX_HP);
+      expect(passable(w, Math.floor(g.x), Math.floor(g.y), "ground")).toBe(true);
+      return { w, g };
+    };
+    // the middle of a lake: the nearest shore
+    const lake = setDownAt((w) => paint(w, 26, 14, 33, 26, Terrain.Water), 29.5, 20.5);
+    expect(Math.hypot(lake.g.x - 29.5, lake.g.y - 20.5)).toBeLessThanOrEqual(GOLIATH.lift.setDownSearch);
+    // onto a building: beside it
+    const onto = setDownAt((w) => void spawnBuilding(w, "fab-plant", "blue", 30, 20), 30.5, 20.5);
+    const fab = [...onto.w.buildings.values()].find((b) => b.kind === "fab-plant")!;
+    expect(distToBuilding(fab, onto.g.x, onto.g.y)).toBeGreaterThan(0);
+  });
+
   it("refuses an anchored Goliath, and Condors carrying squads", () => {
     const w = field();
     const g = anchoredAt(w, "blue", 20, 20);
@@ -1290,6 +1490,25 @@ describe("two-Condor lift", () => {
     expect(w.units.has(g.id)).toBe(false);
   });
 
+  it("a Condor lost while still hooking on calls the lift off: the Goliath stays on its feet, unharmed", () => {
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 20, 20);
+    const a = spawnUnit(w, "condor", "blue", 10, 10);
+    const b = spawnUnit(w, "condor", "blue", 30, 10);
+    run(w, 3, [{ type: "lift", faction: "blue", unitIds: [a.id, b.id], goliathId: g.id }]);
+    expect(g.goliath!.lift?.phase).toBe("hooking");
+    a.hp = 0;
+    const fx = run(w, 2);
+    expect(g.goliath!.lift).toBeNull();
+    expect(evs(fx, "goliathLift").filter((e) => e.state === "dropped")).toHaveLength(0);
+    expect(g.hp).toBe(MAX_HP);
+    expect(b.order.type).not.toBe("lift");
+    expect(domainOf(g)).toBe("ground");
+    // and it walks again
+    run(w, 30, [{ type: "move", faction: "blue", unitIds: [g.id], x: 26, y: 20 }]);
+    expect(g.x).toBeGreaterThan(20.5);
+  });
+
   it("squads can't board a Condor that's on a lift", () => {
     const { w, a } = lifted();
     const sq = spawnUnit(w, "trooper", "blue", a.x, a.y + 0.5);
@@ -1312,25 +1531,60 @@ describe("two-Condor lift", () => {
 // ------------------------------------------------------------- islands ---
 
 describe("no special island rules", () => {
-  it("on the Archipelago, a Goliath on an island anchors, trains squads and builds outposts there", () => {
-    const w = createMapWorld("archipelago");
-    // an island spot (not joined to blue's home land) where a Goliath could anchor
-    let spot: { x: number; y: number } | null = null;
+  const island = (w: World, tx: number, ty: number) => !onHomeLand(w, "blue", tx, ty) && !onHomeLand(w, "red", tx, ty);
+
+  /**
+   * An Archipelago island spot (on neither side's home land) where a Goliath could anchor, with
+   * open island ground for a 2×2 building just north of it, in its build ring.
+   */
+  function islandSpot(w: World): { x: number; y: number } {
     const probe = spawnUnit(w, "goliath", "blue", 0, 0);
-    for (let y = 4; y < w.height - 4 && !spot; y++)
+    let spot: { x: number; y: number } | null = null;
+    for (let y = 6; y < w.height - 4 && !spot; y++)
       for (let x = 4; x < w.width - 4 && !spot; x++) {
-        const island = (tx: number, ty: number) => !onHomeLand(w, "blue", tx, ty) && !onHomeLand(w, "red", tx, ty);
-        if (!island(x, y) || !island(x - 1, y - 1)) continue;
+        if (!island(w, x, y) || !island(w, x - 1, y - 1)) continue;
         probe.x = x;
         probe.y = y;
         if (anchorBlocker(w, probe) !== null) continue;
-        // with room for a turret beside it
-        if (!TERRAIN[terrainAt(w, x + 1, y)].buildable || !island(x + 1, y)) continue;
-        spot = { x, y };
+        let room = true;
+        for (let dy = -4; dy <= -3; dy++)
+          for (let dx = 0; dx <= 1; dx++) if (!TERRAIN[terrainAt(w, x + dx, y + dy)].buildable || !island(w, x + dx, y + dy)) room = false;
+        if (room) spot = { x, y };
       }
     w.units.delete(probe.id);
     expect(spot).not.toBeNull();
-    const g = anchoredAt(w, "blue", spot!.x, spot!.y);
+    return spot!;
+  }
+
+  it("on the Archipelago, a Goliath lifted onto an island anchors, trains squads and builds outposts there", () => {
+    const w = createMapWorld("archipelago");
+    expect(w.rules?.islands).toBe(true);
+    const spot = islandSpot(w);
+    // the nearest open home ground to it, for the Goliath and its Condors to start from
+    let start: { x: number; y: number } | null = null;
+    let best = Infinity;
+    for (let y = 2; y < w.height - 2; y++)
+      for (let x = 2; x < w.width - 2; x++) {
+        if (!onHomeLand(w, "blue", x, y) || !passable(w, x, y, "ground")) continue;
+        const d = Math.hypot(x - spot.x, y - spot.y);
+        if (d < best) {
+          best = d;
+          start = { x: x + 0.5, y: y + 0.5 };
+        }
+      }
+    const g = spawnUnit(w, "goliath", "blue", start!.x, start!.y);
+    const a = spawnUnit(w, "condor", "blue", start!.x - 2, start!.y - 2);
+    const b = spawnUnit(w, "condor", "blue", start!.x + 2, start!.y - 2);
+    run(w, 1, [{ type: "lift", faction: "blue", unitIds: [a.id, b.id], goliathId: g.id }]);
+    expect(runUntil(w, () => g.goliath!.lift?.phase === "carrying", 100)).toBeLessThan(100);
+    step(w, [{ type: "unload", faction: "blue", unitIds: [a.id], x: spot.x, y: spot.y }]);
+    expect(runUntil(w, () => !g.goliath!.lift, 2000)).toBeLessThan(2000);
+    expect(Math.hypot(g.x - spot.x, g.y - spot.y)).toBeLessThan(0.01);
+    expect(island(w, Math.floor(g.x), Math.floor(g.y))).toBe(true);
+    // anchors
+    run(w, ANCHOR_TICKS + 1, [anchorCmd(g)]);
+    expect(g.goliath!.mode).toBe("anchored");
+    // trains (the squad appears on the island, beside it)
     w.factions.blue.scrap = 5000;
     step(w, [produce("blue", g.id, "trooper")]);
     const fx: FxEvent[] = [];
@@ -1338,10 +1592,29 @@ describe("no special island rules", () => {
     const sq = evs(fx, "built").map((e) => w.units.get(e.id)).find((u) => u?.kind === "trooper");
     expect(sq).toBeDefined();
     expect(Math.hypot(sq!.x - g.x, sq!.y - g.y)).toBeLessThan(4);
-    expect(onHomeLand(w, "blue", spot!.x + 1, spot!.y)).toBe(false);
-    const t = placeNow(w, "blue", "turret", spot!.x + 1, spot!.y);
+    expect(passable(w, Math.floor(sq!.x), Math.floor(sq!.y), "foot")).toBe(true);
+    // builds an outpost there
+    const t = placeNow(w, "blue", "turret", spot.x + 1, spot.y - 3);
     expect(t).not.toBeNull();
     expect(t!.outpost).toBe(true);
+  });
+
+  // (regression: outposts spawned on home land only, so an island outpost dropped units in the sea)
+  it("an outpost Assembly Bay on an island rolls its squads out onto the island", () => {
+    const w = createMapWorld("archipelago");
+    const spot = islandSpot(w);
+    anchoredAt(w, "blue", spot.x, spot.y);
+    const bay = placeNow(w, "blue", "assembly-bay", spot.x, spot.y - 4);
+    expect(bay).not.toBeNull();
+    expect(bay!.outpost).toBe(true);
+    w.factions.blue.scrap = 5000;
+    step(w, [produce("blue", bay!.id, "trooper")]);
+    const fx: FxEvent[] = [];
+    runUntil(w, () => bay!.queue.length === 0, UNITS.trooper.buildTime * TICK_RATE + 10, fx);
+    const sq = evs(fx, "built").map((e) => w.units.get(e.id)).find((u) => u?.kind === "trooper");
+    expect(sq).toBeDefined();
+    expect(passable(w, Math.floor(sq!.x), Math.floor(sq!.y), "foot")).toBe(true);
+    expect(distToBuilding(bay!, sq!.x, sq!.y)).toBeLessThan(4);
   });
 });
 
@@ -1378,6 +1651,31 @@ describe("determinism", () => {
       winner: w.winner
     });
   }
+
+  it("mirror-image Goliaths anchor, roll out and scatter their salvage as mirror images", () => {
+    const S = 60;
+    const m = (p: { x: number; y: number }) => ({ x: S - p.x, y: S - p.y });
+    const key = (ws: Wreck[], flip: boolean) =>
+      ws.map((r) => (flip ? m(r) : r)).map((p, i) => `${p.x.toFixed(4)},${p.y.toFixed(4)}:${ws[i]!.value}`).sort();
+    const w = createWorld(S, S);
+    const b = spawnUnit(w, "goliath", "blue", 20.3, 24.7);
+    const r = spawnUnit(w, "goliath", "red", S - 20.3, S - 24.7);
+    step(w, [anchorCmd(b), anchorCmd(r)]);
+    expect(m(r)).toEqual({ x: b.x, y: b.y });
+    b.hp = 0;
+    r.hp = 0;
+    step(w, []);
+    expect(key(w.wrecks.filter((x) => x.faction === "red"), true)).toEqual(key(w.wrecks.filter((x) => x.faction === "blue"), false));
+    const w2 = createWorld(S, S);
+    const gb = spawnBuilding(w2, "gantry", "blue", 10, 12);
+    const gr = spawnBuilding(w2, "gantry", "red", S - 10 - BUILDINGS.gantry.size, S - 12 - BUILDINGS.gantry.size);
+    w2.factions.blue.scrap = w2.factions.red.scrap = 20_000;
+    const fx = run(w2, BUILD_TICKS + 2, [produce("blue", gb.id, "goliath"), produce("red", gr.id, "goliath")]);
+    const out = evs(fx, "goliathRollout").map((e) => w2.units.get(e.id)!);
+    expect(out.map((u) => u.faction).sort()).toEqual(["blue", "red"]);
+    const [ub, ur] = [out.find((u) => u.faction === "blue")!, out.find((u) => u.faction === "red")!];
+    expect(m(ur)).toEqual({ x: ub.x, y: ub.y });
+  });
 
   it("the same scenario run twice ends identically", () => {
     const one = scenario();

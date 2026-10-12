@@ -607,5 +607,7 @@ export const GOLIATH = {
   /** A Gantry destroyed mid-build scatters this share of the scrap paid × the build's progress, in up to `piles` piles. */
   gantrySalvage: { share: 0.3, piles: 4, spread: 2.5 },
   /** Seconds a scrap pile lies before it burns out (longer than a wreck: holding the ground pays). */
-  pileTtl: 90
+  pileTtl: 90,
+  /** Robot Love mutator: enemy Goliaths this close (tiles, centre to centre) fall in love, and the match is a draw. */
+  love: { range: 5 }
 };
