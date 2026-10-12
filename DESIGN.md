@@ -716,8 +716,9 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
   groove once your units are in contact, **drums** (with a crash on entry
   and fills every fourth bar) when a fight is on screen, and a 16th-note
   **arp** when it gets big. While your base is under sustained attack
-  (3+ building hits in 4 s) the arp swaps in a tritone and the filters open
-  — for at most 15 s per attack, so it stays a warning.
+  (3+ building hits in 4 s; a hit on an anchored Goliath, or on any Goliath
+  once the HQ has fallen, counts as one) the arp swaps in a tritone and the
+  filters open — for at most 15 s per attack, so it stays a warning.
 - **Biomes:** temperate D dorian (Dm7–Fmaj7–Cmaj7–G7, kalimba pluck),
   desert E phrygian dominant (E–F–Am–Dm, oud pluck, tresillo bass, tabla),
   arctic F lydian (Fmaj7–G7–Dm7–Am7, FM glass bells, half-time drums),
@@ -742,7 +743,10 @@ now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
   (HQ-parked camera 24/42/23/11); first drums at 36–138 s.
 - **Stingers** on the next beat: a I–IV–V–I fanfare (victory, which then
   holds the tonic major for a quiet coda), a descending minor lament
-  (defeat), and for `announce()` lines a rising call (`epic`), two low stabs
+  (defeat), a sweet sting for a Robot Love draw (bells rising over a soft
+  held sixth chord, no drums, then the same major coda; with music off its
+  heart-burst chime stands in), and for `announce()` lines a rising call
+  (`epic`: an enemy Goliath or HQ destroyed), two low stabs
   a semitone apart (`bad`, which also lifts the tension for 8 s), a light
   lift (`good`, priority ≤ 1) or a tom hit (keys matching `first-blood`).
   At most one per 3.5 s. When music is off, the old SFX jingles play instead.
@@ -771,8 +775,11 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   Mastodons growl at 80 Hz, Hornets drone with FM buzz, Wasps buzz at 60 Hz,
   Lancers shimmer, Menders ring like bells and Harvesters go "boop-boop";
   Trooper Squads chirp high in a chorus, Rocket Squads bark gruff and
-  buzzy, Sniper Teams murmur low and calm, and the Condor drones like an
-  engine under rotors.
+  buzzy, Sniper Teams murmur low and calm, the Condor drones like an
+  engine under rotors, and the Goliath rumbles lowest and slowest of all,
+  at 58 Hz with a slow mechanical shudder (it reports in with *ready* when
+  it walks off the Gantry, and again when it has dug in where you can see
+  it).
   Lines: *select* (two rising syllables), *move* (two short, then a fall),
   *attack* (a noise bark and three fast syllables), *ready* (three rising,
   replacing the generic chime), *rank* (four ascending with a sparkle,
@@ -805,7 +812,16 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   | Troops deployed | 3 | our Condor drop lands; 20 s |
   | Enemy X destroyed | 2 | enemy building; 15 s |
   | Construction complete / X promoted (rank ≥ 2) / Insufficient scrap | 3 | |
-  | Enemy HQ destroyed. Victory! / Our HQ has fallen. Mission failed. | 0 | last word; nothing after it |
+  | Enemy Goliath nearly complete | 1 | an enemy Gantry's build passes 85% (`GOLIATH.nearlyDone`); 20 s |
+  | Goliath ready | 1 | ours walks off the Gantry; 10 s |
+  | Our Goliath is under attack | 1 (0 when it is the last life: no HQ, no other Goliath) | hit off screen, or on screen while it is part of the base (anchored, or the HQ gone); 30 s (60 s on screen) |
+  | Enemy Goliath digging in / Enemy Goliath packing up | 2 / 3 | an enemy Goliath starts to anchor / to pack up; 20 / 30 s |
+  | Goliath anchored | 3 | ours has dug in (captioned only off screen); 15 s |
+  | Enemy Goliath: mortars down! / Enemy Goliath laser back online | 2 | its weapon systems going offline, or rebooted back ("mortars and laser down!" when they go together); 20 s per system |
+  | Goliath mortars offline / Goliath cannons back online | 1 / 3 | ours, the same way; 20 s per system |
+  | Goliath airborne / Enemy Goliath airborne | 3 / 2 | two Condors lift one; 20 s |
+  | Goliath dropped! / Enemy Goliath dropped! | 1 / 2 | a lift's Condor shot down, and the Goliath survived the fall; 10 s |
+  | Enemy HQ destroyed. Victory! / Our HQ has fallen. Mission failed. | 0 | last word; nothing after it ("Last enemy Goliath destroyed. Victory!" / "Our last Goliath has fallen. Mission failed." when a Goliath decided it; "They fell in love. The battle is a draw." for Robot Love) |
 
   Delivery goes through `RadioQueue`: most important first, ≥ 2.5 s between
   lines, at most two waiting, and lines dropped after waiting 3 s (6 s for
@@ -825,6 +841,21 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   Expensive kills get their own banner ("MASTODON DOWN", spoken "Enemy Mastodon
   destroyed"), or ride along under a streak. Kill banners are at least 6 s
   apart; a streak climbing a tier needs only 2 s.
+- **Goliath banners.** A Gantry and its Goliath are always seen, so their
+  news needs no fog check. An enemy Gantry starting one is a banner, "Enemy
+  Goliath in production" (sub-line "Their Gantry has started one"), and so
+  is its rollout, "Enemy Goliath on the field" with its counters ("Counter:
+  Rocket Squads, Wasps, Lancers, Hornets"). A Goliath kill is always its
+  own epic banner, "GOLIATH DOWN" (spoken "Enemy Goliath destroyed"; an
+  elite's "ELITE GOLIATH DOWN"), never held back by the big-kill cooldowns
+  or folded under a streak; its sub-line names a calldown, "Dropped from
+  its lift", or, with that side's HQ gone, what is left ("One Goliath
+  left"). Ours lost is "Goliath lost" (P0 once the HQ is gone: "Our last
+  Goliath fights on", "Lost in the drop"). An HQ that falls while a
+  Goliath stands doesn't end the match, so it gets a banner instead of the
+  last word: "Our HQ has fallen / The Goliath fights on" (P0), or "Enemy HQ
+  destroyed / Destroy their Goliath to win". The blow that decides the
+  match is left to the last word and the finale.
 - **Calldown kills count, and say so.** A calldown's kills are credited to
   its side's HQ in the sim; `calldown-credit.ts` (engine-free, tested) spots
   them — killed by the enemy HQ, next to one of that side's impacts in the
@@ -839,7 +870,10 @@ out without eating screen space (C&C's EVA, arena-shooter streaks).
   of our Condor.
 - **Spectators** hear a neutral caster ("Red HQ under attack", "Double
   kill for Red", "Blue Fab Plant destroyed", "Blue troops landing", "Blue
-  wins the battle"), with full information.
+  wins the battle"; for Goliaths "Red Goliath in production", "Blue
+  Goliath on the field", "Red Goliath: mortars down", "Blue HQ destroyed /
+  Blue's Goliath fights on", "Red's last Goliath destroyed. Blue wins the
+  battle"), with full information.
 - **Measured** over six AI-vs-AI matches (32 min,
   `callout-rates.ts`): 4.5 delivered lines/min (at most 9 in any 60 s, in
   end-game sieges), 1.2 banners/min (at most 5 in 60 s), and 9–13
@@ -868,20 +902,26 @@ enemies you can currently see.
   aimed at your units or buildings (the same "threatened" rule as its
   siren), a spoken inbound warning, or the HQ coming under a new attack
   (first hit after 20 s without one, tracked at any speed, so speeding up
-  mid-siege doesn't snap back). A held fast-forward lets go too; the chip
+  mid-siege doesn't snap back) — and once the HQ has fallen, a Goliath
+  coming under a new attack the same way, since losing the last one loses
+  the match. A held fast-forward lets go too; the chip
   pulses red and one ticker note says why ("Speed 1× — enemy Barrage
   inbound", tap to look) — folded into the raid's own warning line, and
-  replacing the off-screen "Enemy Barrage inbound!" / "HQ under attack!"
-  alerts, so it's still one line per event. The chosen speed stays stored
+  replacing the off-screen "Enemy Barrage inbound!" / "HQ under attack!" /
+  "Goliath under attack!" alerts, so it's still one line per event. The chosen speed stays stored
   for the next match. Spectators never slow down.
 - **Inbound warning:** when visible armed enemies (anything that can hit a
   ground target, and Condors, loaded or not: the warning doesn't give away
-  their cargo) come within 12 tiles of a building or harvester, the group
+  their cargo) come within 12 tiles of a building or harvester (or a
+  Goliath that is part of the base: anchored, or any once the HQ has
+  fallen), the group
   (single-link, 5 tiles) is warned once, with counter advice by domain and
   lead kind: "Enemy drones inbound — Flak, Raptors or a Turret", "Enemy
-  Mastodons inbound — Rocket Squads, Lancers or Wasps", "Enemy troops inbound
+  Mastodons inbound — Rocket Squads, Lancers or Wasps", "Enemy Goliath
+  inbound — Rocket Squads, Wasps, Lancers or Hornets", "Enemy troops inbound
   — Mortars, Turrets or Snipers", "Enemy dropships inbound — Flak, Raptors
-  or a SAM"… A group seen in the zone
+  or a SAM"… (an enemy Goliath counts even in the fog: it can't hide). A
+  group seen in the zone
   within 20 s isn't new; one that has been shooting your things for 1.5 s is
   a fight, not a raid; loud warnings are at least 12 s apart (quieter ones
   still get an arrow). The first raid of each kind per match is a banner
@@ -897,7 +937,8 @@ enemies you can currently see.
   mining line gets well under a second, while Radar, the HQ's 8.5-tile
   sight or units on watch buy several seconds.
 - **Hotspots and edge arrows:** hits on your things (HQ 0.6, other
-  buildings and harvesters 0.45, units 0.35 heat), your losses (0.6), and
+  buildings, anchored Goliaths and harvesters 0.45, units 0.35 heat), your
+  losses (0.6), and
   shots/kills by your units (0.2/0.4, at the shooter; not your calldowns'
   kills, which the sim credits to your HQ — that was an "Attack" arrow
   pointing home) heat 6×6-tile cells
@@ -918,7 +959,8 @@ enemies you can currently see.
 - **Battle meter:** while at least 2 of your armed units and 2 visible
   enemy ones are in view and shots were fired there in the last 3 s, a slim
   tug-of-war bar under the clock compares Σ cost × HP fraction (turrets and
-  SAMs count, harvesters don't), easing over 300 ms and lingering 1.5 s. A
+  SAMs count, harvesters don't; an enemy Goliath in view counts, fog or
+  not), easing over 300 ms and lingering 1.5 s. A
   swing of more than 20 points within 4 s flashes **Turning point!** (green
   toward you, red away; at most every 8 s; ignored when the camera jumps).
 - **Ticker:** toasts left the battlefield's centre for a compact,
@@ -951,12 +993,15 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   from the fog memory. A build button whose counters (from the duel matrix:
   Flak → Wasps, Raptors, Hornets, Menders, Condors; Stingers → Flak,
   Mortars, Lancers, Troopers, Snipers; Mastodons → Stingers, Flak, Mortars;
-  Lancers → Mastodons; Wasps → Stingers, Mortars, Mastodons, Lancers; Raptors →
-  Wasps, Hornets, Menders, Condors; Hornets → Mastodons, Mortars and all three
-  infantry squads; Mortars → Turrets, SAMs and all three squads; Troopers →
-  Rocket Squads; Rocket Squads → Mastodons, Hornets; Sniper Teams and Turrets →
-  all three squads; SAM Site → Hornets, Wasps, Condors) have been seen at
-  least twice gets an amber ⚔ corner (pulsing for
+  Lancers → Mastodons, Goliaths; Wasps → Stingers, Mortars, Mastodons,
+  Lancers, Goliaths; Raptors → Wasps, Hornets, Menders, Condors; Hornets →
+  Mastodons, Mortars, Goliaths and all three infantry squads; Mortars →
+  Turrets, SAMs and all three squads; Troopers → Rocket Squads; Rocket
+  Squads → Mastodons, Hornets, Goliaths; Sniper Teams and Turrets → all
+  three squads; SAM Site → Hornets, Wasps, Condors) have been seen at
+  least twice (one sighting of anything costing 800 or more counts once
+  more per 800, `ADVISOR.heavyValue`, so a lone Goliath lights its
+  counters by itself) gets an amber ⚔ corner (pulsing for
   its first 6 s), and its tab a ⚔ dot, until your own force of that kind
   (built + queued, squads riding in Condors included) is worth 75% of what
   it counters. The long-press card
@@ -965,6 +1010,9 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
 - **Idle factories:** a Fab Plant, Assembly Bay or Airpad with an empty
   queue for 6 s while you can afford its cheapest combat unit puts a
   pulsing amber **IDLE** tag on the Vehicles, Infantry or Aircraft tab.
+  The Gantry never does: it builds one Goliath at a time and sits idle
+  between them by design (and the report's idle-factory tip leaves it out
+  too).
 - **Loading and dropping** (`src/game/controller.ts`): with infantry squads
   selected, tapping (or right-clicking) your own Condor sends them aboard,
   as many as it has seats not already promised, nearest first ("Room for 1
@@ -981,10 +1029,31 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   squads where the Condor is. A boarding squad draws a blue line to its
   craft, a drop a gold waypoint where the squads will land. One-time hints
   teach infantry and the Condor the first time you select them.
+- **Goliaths** (`src/game/controller.ts`): the **⚓ Anchor** chip (key G)
+  digs the selected walking Goliaths in where they stand (those the ground
+  takes; where none can, the chip reads "⚠ Needs open ground" or the like,
+  shakes with a buzz, and the ticker says "Can't anchor here: …"); with
+  none walking, **⇡ Pack up** (G again) packs up the anchored ones, and
+  while they dig in or pack up the chip shows the progress ("⚓ Anchoring
+  40%"). An anchored Goliath stays put: a tap on the ground with it alone
+  selected sets the rally point for the squads it trains ("Rally point
+  set: pack up first (G) to move the Goliath"), and in a group the rest go
+  without it ("The anchored Goliath stays put: pack up first (G)"); a tap
+  on an enemy gives it an attack order without packing it up. ⚔ Select
+  army and 💤 Idle leave dug-in Goliaths out (they are neither the army
+  nor idle). The **lift**: with Condors selected, a tap
+  (or right-click) on your own walking Goliath has the two nearest empty
+  ones hook on, and the selection becomes the lift (see *The two-Condor
+  lift*); a tap flies it and hovers, a long-press sets it down there,
+  **⇣ Set down** (U) where it is. One-time hints teach anchoring the first
+  time you select a Goliath, and the lift the first time you select two
+  empty Condors with a walking Goliath on the field.
 - **Placement on touch:** tapping a ready structure drops the ghost on the
   best valid spot near the middle of the view (closest to it, avoiding
   spots that would wall a lane shut), gliding there if it's off screen; the
-  build-range zone is tinted and outlined. A tap on the map moves the ghost
+  build-range zone is tinted and outlined, and takes in the build ring of
+  every anchored Goliath for anything but an HQ (ring-only ground tinted
+  team blue: what goes up there is an outpost). A tap on the map moves the ghost
   (snapping one tile onto a valid spot when that's all it takes), dragging
   the ghost slides it, and tapping the ghost or **✓ Place X** builds. A bad
   spot says why above the ghost and on the chip — *Too far from base*,
@@ -1010,10 +1079,14 @@ minutes in a typical match. Numbers live in `POWERS` in `balance.ts`.
 | **Sky Hammer** | — / 150 s | 3 s | Online for both sides at 6:00. Units within 2.5 tiles take 260 × (1 − 0.5·d/r), air included; buildings a flat 700 (an HQ loses 22%) |
 
 - **Same rules for both sides.** One `calldown` command, validated by
-  `calldownBlocker` (charge, cooldown, the HQ alive, an *explored* target —
+  `calldownBlocker` (charge, cooldown, the HQ alive — or, with no HQ, a
+  Goliath: "Calldowns need an HQ or a Goliath" — an *explored* target —
   a *visible*, ground-passable one for the pod) for the player and the AI
   alike. Calldowns only hurt the enemy; kills are credited to the firing
-  side (its HQ is the killer, so faction stats count them; no unit XP). The
+  side (its HQ is the killer, so faction stats count them; no unit XP).
+  With no HQ standing, the side's oldest Goliath takes the credit instead,
+  kills and XP included, and the presentation layers can't tell those
+  kills from its own. The
   presentation layers name the strike instead of "defences" or the HQ (see
   *Calldown kills count* under Voices & announcer): first blood, streaks,
   hero toasts ("✝ Viper (Lancer, 9 kills) destroyed by an enemy Barrage"),
@@ -1109,7 +1182,7 @@ rules in `src/sim/objectives.ts`):
   (nearest wins); a crate nobody claims burns out after 45 s. Rewards,
   weighted: **+200 scrap** (38%), **Veterans** (+1 rank to the claimer and
   allies within 3, 20%), **Field Repair** (own units within 4 heal half
-  their HP, 15%), **+40 ⚡ charge** (17%) and the rare **free veteran
+  their HP, a Goliath excepted, 15%), **+40 ⚡ charge** (17%) and the rare **free veteran
   Lancer** (10%). A kit that would do nothing (no one hurt, the meter full)
   is stripped for up to 150 scrap instead.
 - **Looks:** a neutral relay platform (generated art) whose dish idles on a
