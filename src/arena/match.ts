@@ -310,7 +310,11 @@ export class Arena {
   result(side: Faction): string {
     const e = this.record.end;
     if (!e) return "The battle is still on.";
-    const how = e.reason === "hq" ? "the enemy HQ fell" : e.reason === "time" ? `time ran out at ${clock(e.tick)}` : "the battle was stopped";
+    const how =
+      e.reason === "hq" ? "the enemy HQ fell"
+      : e.reason === "time" ? `time ran out at ${clock(e.tick)}`
+      : e.reason === "love" ? "two Goliaths fell in love"
+      : "the battle was stopped";
     const verdict = e.winner === null ? "DRAW" : e.winner === side ? "YOU WON" : "YOU LOST";
     const hq = e.reason === "hq" && e.winner !== side ? "your HQ fell" : how;
     return `THE BATTLE IS OVER at ${clock(e.tick)}: ${verdict} (${hq}). No more orders are needed.`;

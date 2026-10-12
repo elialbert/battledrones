@@ -237,3 +237,56 @@ describe("final review regressions", () => {
     expect(unitBlocker(plain, "blue", "harvester")).toBe(`Needs HQ`);
   });
 });
+
+describe("final review: integration", () => {
+  it("Archipelago under Nomads: a side that loses its Condor gets a free one at its Goliath", async () => {
+    const { LIFELINE, TICK_RATE } = await import("../src/sim/balance");
+    const w = createMapWorld("archipelago", { seed: 3, objectives: true, mutators: ["nomads"] });
+    const condor = [...w.units.values()].find((u) => u.faction === "blue" && u.kind === "condor")!;
+    condor.passengers = [];
+    condor.hp = 0;
+    for (let i = 0; i < (LIFELINE.delay + 10) * TICK_RATE && !w.winner; i++) step(w, []);
+    expect(w.lifeline!.blue.given).toBe(1);
+    const fresh = [...w.units.values()].find((u) => u.faction === "blue" && u.kind === "condor")!;
+    expect(fresh.free).toBe(true);
+    // it sets down by the Goliath (the side's base), not off at the map's middle
+    const g = goliathsOf(w, "blue")[0]!;
+    expect(fresh.order.type === "move" ? Math.hypot(fresh.order.x - g.x, fresh.order.y - g.y) : 0).toBeLessThan(6);
+  });
+
+  it("calldown kills by a side with no HQ are still named as the calldown's", async () => {
+    const { TICK_RATE } = await import("../src/sim/balance");
+    const { CalldownCredit } = await import("../src/game/calldown-credit");
+    const w = createMapWorld("riverlands", { seed: 3, mutators: ["nomads"] });
+    const x = w.width / 2;
+    const y = w.height / 2;
+    spawnUnit(w, "scout", "blue", x, y + 4);
+    const victims = [0, 1, 2, 3].map((i) => {
+      const u = spawnUnit(w, "harvester", "red", x + (i % 2) * 0.4, y + Math.floor(i / 2) * 0.4);
+      u.hp = 1;
+      return u;
+    });
+    step(w, []);
+    w.powers.meter.blue = 100;
+    const credit = new CalldownCredit(w);
+    const named = new Set<number>();
+    for (let i = 0; i < 20 * TICK_RATE; i++) {
+      step(w, i === 0 ? [{ type: "calldown", faction: "blue", power: "barrage", x, y }] : []);
+      for (const [id, k] of credit.scan(w.fx)) if (k.power === "barrage" && k.faction === "blue") named.add(id);
+    }
+    expect(victims.every((v) => !w.units.has(v.id))).toBe(true);
+    expect(named.size).toBe(victims.length);
+  });
+
+  it("Nomads + Veterans: the starting Goliath rolls out at rank 1, like every other combat unit", () => {
+    const w = createMapWorld("riverlands", { mutators: ["nomads", "veterans"] });
+    for (const f of ["blue", "red"] as const) expect(goliathsOf(w, f)[0]!.rank).toBe(1);
+  });
+
+  it("an arena agent told the battle is over hears that two Goliaths fell in love", async () => {
+    const { Arena, parseSeat } = await import("../src/arena/match");
+    const a = new Arena({ map: "riverlands", seed: 1, seats: { blue: parseSeat("agent"), red: parseSeat("agent") }, mutators: ["robotlove"] });
+    (a.record as { end: unknown }).end = { tick: 6000, winner: null, reason: "love" };
+    expect(a.result("blue")).toMatch(/DRAW \(two Goliaths fell in love\)/);
+  });
+});

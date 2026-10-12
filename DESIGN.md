@@ -178,7 +178,9 @@ broad headlands and coves, and which leaves the necks as they are.
   add a second one and the AI plans around it).
 - **The free replacement Condor** (`lifeline.ts`): a side with no Condor
   flying or being built gets one 45 s later, flown in from the map edge
-  nearest its HQ to set down beside it, with a free Trooper Squad aboard if
+  nearest its HQ to set down beside it (with no HQ, as under Nomads or
+  after it falls with a Goliath fighting on, beside the Goliath, an anchored
+  one first), with a free Trooper Squad aboard if
   the side has fewer than 2 squads. Map-given units (`Unit.free`) leave no
   wreck and charge no ⚡ meter when lost, so throwing a Condor away gains
   nothing: a bought one comes back free only after the wait, and the squad

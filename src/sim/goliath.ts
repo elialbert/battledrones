@@ -1,7 +1,7 @@
 import { BUILDINGS, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
-import { rulesOf } from "./rules";
+import { applySpawnRank, rulesOf } from "./rules";
 import type { Command, Faction, GoliathMode, GoliathWeapon, Unit, UnitKind, World } from "./types";
 import { buildingCenter, hqOf, inBounds, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
 import { hypot } from "./fmath";
@@ -339,6 +339,7 @@ export function nomadStart(w: World): void {
     const c = buildingCenter(hq);
     removeBuilding(w, hq);
     const g = spawnUnit(w, "goliath", f, c.x, c.y);
+    applySpawnRank(w, g); // (Veterans: rank 1, like the starting squads)
     g.goliath!.mode = "anchored";
     plant(w, g);
   }
