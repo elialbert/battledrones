@@ -122,6 +122,11 @@ const STEAM: EmitCfg = {
   tex: TEX.puff, tex2: TEX.puff2, life: [550, 950], speed: [0.15, 0.45], up: [0.6, 1.0], size: [0.16, 0.24], grow: [2.4, 3.2],
   alpha: [0.6, 0], tints: [0xe8eef2, 0xdfe6ea], end: 0xf6f8fa, drag: 0.55, spin: 0.4, rot: 0.4, wind: [0.3, 0.12], fadeIn: 0.12, easeOut: true
 };
+/** Hearts bubbling up out of a Goliath in love: pink and red, rising, rocking and fading. */
+const HEARTS: EmitCfg = {
+  tex: TEX.heart, life: [1500, 2300], speed: [0.08, 0.3], up: [0.45, 0.85], size: [0.2, 0.32], grow: [1.15, 1.5],
+  alpha: [1, 0], tints: [0xff5fa2, 0xff3b6b, 0xff8cc6, 0xe0245e], drag: 0.5, spin: 0.9, rot: 0.35, fadeIn: 0.08, easeOut: true
+};
 /** A welding arc's spatter: white-hot, cooling to amber, falling. */
 const WELD: EmitCfg = {
   tex: TEX.spark, additive: true, life: [180, 420], speed: [0.6, 2.2], up: [0.2, 1.6], size: [0.1, 0.16], grow: [0.2, 0.3],
@@ -718,6 +723,36 @@ export class Fx {
   /** Steam venting at `p` (a Goliath's hydraulics). */
   steam(p: P3, n = 1): void {
     this.emit(STEAM, p, n);
+  }
+
+  /** Hearts bubbling up from `p` (Robot Love). */
+  hearts(p: P3, n = 1): void {
+    this.emit(HEARTS, p, n);
+  }
+
+  /**
+   * The big moment of Robot Love at (x, y, h): one huge heart swelling up,
+   * a ring of hearts flung out all round, a soft pink bloom and a ring of
+   * light across the ground.
+   */
+  heartBurst(x: number, y: number, h: number): void {
+    const pt = this.v.particles;
+    tmpC.setHex(0xff4f8f);
+    pt.spawn({ x, y: h, z: y, vy: 0.35, life: 2600, tex: TEX.heart, size0: 0.6, size1: 2.6, alpha0: 1, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b, easeOut: true }, false);
+    for (let i = 0; i < 28; i++) {
+      const a = (i / 28) * Math.PI * 2;
+      const sp = 1.2 + Math.random() * 1.4;
+      tmpC.setHex(HEARTS.tints[i % HEARTS.tints.length]!);
+      pt.spawn(
+        {
+          x, y: h, z: y, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, vy: 0.6 + Math.random() * 1.2, drag: 0.6, life: 1600 + Math.random() * 900,
+          tex: TEX.heart, size0: 0.26, size1: 0.42, alpha0: 1, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b, rot: (Math.random() - 0.5) * 0.8, spin: (Math.random() - 0.5) * 2
+        },
+        false
+      );
+    }
+    this.flash({ x, y, h }, 2.2, 0xff8cc6, 0.7);
+    this.pulse(x, y, 0xff5fa2, 2.6);
   }
 
   /** A welding arc at `p`: a white flicker and a spatter of sparks. */

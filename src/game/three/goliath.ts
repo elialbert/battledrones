@@ -113,7 +113,7 @@ const AT: Record<GoliathJoint, [GoliathJoint | null, Vec3]> = {
  */
 export type GoliathPart =
   | "legs" | "pelvis" | "frame" | "plates" | "panels" | "arms" | "pods" | "mg"
-  | "head" | "eyeLit" | "eyeDark" | "spikes" | "hopper" | "crane";
+  | "head" | "eyeLit" | "eyeDark" | "eyeLove" | "spikes" | "hopper" | "crane";
 
 /**
  * The half-built Goliath on a Gantry's cradle, stage by stage (render/goliath.ts):
@@ -269,6 +269,11 @@ function buildParts(t: Team): Part[] {
   b.sphere(0.072, [0, 0.11, -0.2], 0x25292e, { w: 10, h: 6, scale: [1, 1, 0.6] });
   b.sphere(0.03, [0, 0.11, -0.234], 0x3a2a1c, { w: 6, h: 4 });
   add("head", "eyeDark", b);
+  // (Robot Love: in love, it glows pink)
+  b = pb();
+  b.sphere(0.072, [0, 0.11, -0.2], 0xff5fa2, { glow: 1, w: 10, h: 6, scale: [1, 1, 0.6] });
+  b.sphere(0.032, [0, 0.11, -0.236], 0xffd0e6, { glow: 1, w: 6, h: 4 });
+  add("head", "eyeLove", b);
 
   // ---- arms: a shoulder drum under a team pauldron, the upper arm, and a cannon for a forearm
   for (const sx of [-1, 1]) {
@@ -387,6 +392,10 @@ export interface GoliathPose {
   crane: number;
   /** Idle head scan (rad). */
   look: number;
+  /** Robot Love: the eye glows pink (≥ 0.5), the arms reach out to the other (0–1), the head bows shyly (rad). */
+  love?: number;
+  hug?: number;
+  nod?: number;
   /** World ground height at (x, z), so each foot stands on the terrain under it. */
   ground?: (x: number, z: number) => number;
 }
@@ -574,15 +583,18 @@ export class GoliathRig {
 
     // ---- torso: twists to its target, leans into the stride
     J.torso.rotation.set(-0.05 * m, p.yaw, Math.sin(2 * Math.PI * u0) * 0.025 * m);
-    J.head.rotation.set(0.04 - R.eye * 0.08, p.look, 0);
+    const hug = p.hug ?? 0;
+    J.torso.rotation.x -= 0.12 * hug;
+    J.head.rotation.set(0.04 - R.eye * 0.08 + (p.nod ?? 0), p.look, 0);
 
     // ---- arms: they swing a little with the stride; drooped, the cannons hang at the ground
     const swing = Math.sin(2 * Math.PI * u0) * 0.07 * m;
     for (let i = 0; i < 2; i++) {
       const sx = i ? 1 : -1;
       const kick = i ? R.cannonR : R.cannonL;
-      (i ? J.shoulderR : J.shoulderL).rotation.set(-sx * swing * (1 - p.droop) - 0.06 * kick + 0.12 * p.droop, 0, -sx * 0.1 * p.droop);
-      const a = 0.04 - 1.15 * p.droop;
+      // (reaching out, the arms swing in and up toward the one in front)
+      (i ? J.shoulderR : J.shoulderL).rotation.set(-sx * swing * (1 - p.droop) - 0.06 * kick + 0.12 * p.droop + 0.55 * hug, sx * 0.5 * hug, -sx * 0.1 * p.droop);
+      const a = 0.04 - 1.15 * p.droop + 0.25 * hug;
       const gun = i ? J.cannonR : J.cannonL;
       gun.rotation.set(a, 0, 0);
       const at = AT[i ? "cannonR" : "cannonL"][1];
@@ -606,10 +618,12 @@ export class GoliathRig {
     J.hook.quaternion.copy(tmpQ);
 
     // ---- the eye, lit or dark
-    const lit = p.eye >= 0.5;
+    const love = (p.love ?? 0) >= 0.5;
+    const lit = p.eye >= 0.5 && !love;
     for (const { mesh, part } of this.meshes) {
       if (part === "eyeLit") mesh.visible = lit;
-      else if (part === "eyeDark") mesh.visible = !lit;
+      else if (part === "eyeDark") mesh.visible = !lit && !love;
+      else if (part === "eyeLove") mesh.visible = love;
     }
   }
 
@@ -622,7 +636,7 @@ export class GoliathRig {
     const inv = this.root.matrixWorld.clone().invert();
     const list: THREE.BufferGeometry[] = [];
     for (const { mesh, part } of this.meshes) {
-      if (parts ? !parts.includes(part) : part === "eyeDark" || part === "frame") continue;
+      if (parts ? !parts.includes(part) : part === "eyeDark" || part === "eyeLove" || part === "frame") continue;
       list.push(mesh.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, mesh.matrixWorld)));
     }
     const g = mergeGeometries(list, false)!;
