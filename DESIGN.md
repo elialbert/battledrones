@@ -1683,24 +1683,29 @@ Known gaps (re-checked after the review fixes):
    Ops, pick an op card → briefing → Start op.
 2. Skirmish (and the Daily Op): opener cards over the frozen battlefield
    (Blitz / Industry / Air Wing; tap, or keys 1–3; cards a mutator bans are
-   greyed out). The camera already frames the HQ, its home field, the
+   greyed out). The camera already frames the HQ (under Nomads, the
+   anchored Goliath), its home field, the
    factory site and the starting squad, clear of the HUD (the zoom buttons
    included). Spectated AIs pick instantly. Last Stand and Ops have their
    own set-ups and no cards.
 3. The pick rolls out (factory, units, harvesters already mining) and the
-   clock starts. Real-time play until one HQ is destroyed (or an op's goal
-   is met). Pause any time. Calldowns charge from the first losses; in a
-   skirmish, Uplinks are there to take from the start and the first supply
-   drop lands at 1:30; at 6:00 the Sky Hammer comes online for both sides,
-   so a stalemate can't last.
-4. The HQ kill plays as a short cinematic, then the after-action report
-   → Rematch (back to the cards) or Menu.
+   clock starts. Real-time play until a side has lost its HQ and every
+   Goliath (or an op's goal is met, or under Robot Love two enemy Goliaths
+   meet). A side whose HQ falls while a Goliath stands plays on: it can
+   still build near an anchored Goliath and in range of its surviving
+   buildings, but never a new HQ. Pause any time. Calldowns charge from the
+   first losses; in a skirmish, Uplinks are there to take from the start
+   and the first supply drop lands at 1:30; at 6:00 the Sky Hammer comes
+   online for both sides, so a stalemate can't last.
+4. The deciding kill (an HQ, or a side's last Goliath) plays as a short
+   cinematic (Robot Love: the two Goliaths falling in love), then the
+   after-action report → Rematch (back to the cards) or Menu.
 
 First-time players get contextual hints (command your opener units — or
 build a Fab on a classic start — then counters, tech; the tech hint is
 skipped, and the tutorial finished, when a Tech Lab already stands), plus
 one-time hints for squads, touch placement, robot infantry, the Condor,
-calldowns and salvage. They all go through one
+the Goliath and its lift, calldowns and salvage. They all go through one
 queue (`game/hints.ts`, tested) so a new player is never handed several at
 once: at most one every 12 s of play (paused time and the opener cards
 don't count), what you're doing right now first (placing a building, a
@@ -1731,13 +1736,26 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   toast per tick; "… destroyed by an enemy Barrage" when one strike got
   them); a visible enemy ace (rank 3 or ≥ 3 kills) dying gives "🎯 Enemy
   ace … down" ("… down to your Sky Hammer").
-- **Finale** (`game/finale.ts`): when an HQ falls the render clocks (tweens,
-  particles, tracers, model animation) drop to 0.3×, the camera glides and
-  zooms onto the wreck (centred in the area the dock leaves free), five
-  staged blasts roll across it, then a white flash, a shake, the result
-  banner and the stinger at 1.5 s; time eases back and the report appears at
-  2.8 s. Input and pause are locked meanwhile; everything runs on the real
-  frame delta.
+- **Finale** (`game/finale.ts`): when the match is decided — an HQ falls,
+  or a side's last Goliath (when both go on the deciding tick, the HQ is
+  what decided it) — the render clocks (tweens, particles, tracers, model
+  animation) drop to 0.3×, the camera glides and zooms onto the wreck or
+  the toppling Goliath (centred in the area the dock leaves free), five
+  staged blasts roll across it (smaller for a Goliath), then a white
+  flash, a shake, the result banner ("Enemy HQ destroyed / Victory", "Our
+  last Goliath has fallen / Defeat", a spectator's "Red Goliath destroyed /
+  Blue wins") and the stinger at 1.5 s; time eases back and the report
+  appears at 2.8 s. Input and pause are locked meanwhile; everything runs
+  on the real frame delta.
+- **Robot Love's finale** (`LOVE_FINALE`, and `render/goliath.ts` for the
+  pair): no slow motion and no blasts. The camera pushes in close where
+  the two Goliaths meet. They turn to face each other, walk to meet
+  (stopping a little short of the point between them), pause shyly with a
+  little dip, then reach out to each other, their eyes glowing pink and
+  hearts bubbling up out of them. At 4.3 s a burst of hearts and a sweet
+  chime where their hands meet; at 4.7 s the banner "💘 They fell in love /
+  It's a draw" (spoken "They fell in love. It's a draw.") and the draw's
+  own sting (see *Music & ambience*); the report at 7.8 s.
 - **After-action report** (`ui/report.ts`, data from `game/chronicle.ts`,
   which samples both armies every 5 s with full information and logs every
   death; squads riding in a Condor still count toward their army, and can
@@ -1746,16 +1764,23 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   the *biggest battle* (most deaths within 20 s and 10 tiles, with each
   side's losses and where), and the *turning point* (the lead passing to the
   other side and holding 30 s) or, if it never changed hands, when the
-  winner *pulled ahead* (≥ 1.5× and 400 up to the end). Calldowns are named
+  winner *pulled ahead* (≥ 1.5× and 400 up to the end) — plus, when there
+  were Goliaths, the match's first Goliath to walk off a Gantry, an HQ
+  that fell while its side's Goliath fought on ("Your HQ fell; your
+  Goliath fought on for 3:12", for an HQ that fell 5 s or more before the
+  end), and Robot Love's ending as the last beat. Calldowns are named
   in them: "Your Barrage took out their Stinger", "At your base: you lost 6
   (4 to their Barrage), they lost 5", "Your army overtook theirs after your
   Sky Hammer" (a strike by the new leader that killed 2+ units or 400 scrap
   in the 20 s before). Then the MVP card (most kills, fallen or alive — a
   unit, never the HQ that calldown kills are credited to) and the enemy's
-  ace; stats with correct kill counts, *Scrap salvaged*, *Calldowns* fired
+  ace; stats with correct kill counts, *Goliaths fielded* (when anyone
+  fielded one), *Scrap salvaged*, *Calldowns* fired
   per side (`World.powers.fired`), plus any numeric stats other features
   add to `FactionStats` (with friendly labels); and one rule-picked tip (no
   anti-air vs an air force, harvesters lost, idle factories, banked scrap,
+  an enemy Goliath met with at most two Rocket Squads, Wasps, Lancers or
+  Hornets ("…bring one down; shoot its Menders first"),
   Mastodons unanswered (Rocket Squads count as an answer), 8+ enemy infantry
   squads against at most one Mortar, Hornet, Sniper Team or Turret, 6+ units
   lost to enemy calldowns, …). Calldown kills
@@ -1763,7 +1788,10 @@ Presentation only — the sim just counts `Unit.kills` and faction stats.
   MVPs and a one-line story per commander instead of a tip. Buttons stay
   pinned at the bottom of the scrolling panel; landscape uses two columns.
   `addReportSection()` lets later features add blocks (career medals).
-  The Last Stand end screen shows the run's MVP card too.
+  The Last Stand end screen shows the run's MVP card too. A Robot Love
+  draw heads the report **DRAW** (styled as neither a win nor a loss, with
+  "💘 They fell in love" by the match line), for the player and spectators
+  alike.
 
 ### Last Stand (survival mode)
 
@@ -1771,6 +1799,8 @@ A second mode for short, replayable sessions: no enemy base or economy, just
 endless themed waves against your base. The score is **waves survived**; the
 best per map and difficulty is saved on the device and shown on the menu
 (selector line and map-card badges) and on the end screen ("New record!").
+It is a base to hold: the run ends when the HQ falls, even with a Goliath
+standing (`tickSurvival`).
 
 - **Waves** (`src/sim/modes/survival.ts`, a pure, seeded wave director called
   from `step()` only when `World.survival` is set): the first lands at 1:35
@@ -1900,7 +1930,9 @@ Reasons to come back between matches. Spectated games never count.
   building lost), 🔄 Comeback (win after your army fell to ≤ ½ of theirs and
   800+ behind, after 1:30), 💎 Flawless (win losing ≤ 5 units), 💰 Tycoon (win
   harvesting 2× theirs), and — in defeat too — 🎖️ Ace (one unit, 9 kills),
-  🗿 Giant Slayer (3 Mastodons), ✈️ Air Superiority (30 aircraft), 🧱 Iron Wall
+  🗿 Giant Slayer (3 Mastodons), 🪨 Goliath Slayer (bring down one enemy
+  Goliath: it takes a real army, or a clever drop), ✈️ Air Superiority (30
+  aircraft), 🧱 Iron Wall
   (defences kill 30), ☠️ Exterminator (60 kills), 🏚 Wrecking Crew (12
   buildings); the battlefield's own feats, in defeat too — 🛰️ Orbital (one
   Sky Hammer destroys 1,000 scrap of units and buildings), ♻️ Scavenger
@@ -1917,17 +1949,21 @@ Reasons to come back between matches. Spectated games never count.
   1,500 was 82% (AI sweeps; median 2,600–2,800 a side), at 3,000 42%;
   Steady Hands at 3 dodges 25–32%, with the AI's 0.6 s reflex. A human
   salvages and dodges by hand, so those two should land lower. Calldown
-  kills no longer count toward Iron Wall.
+  kills no longer count toward Iron Wall. A Robot Love draw is no win, so
+  it earns none of the victory medals, but the feats of arms count in it
+  as they do in defeat.
 - **Career** (`game/career.ts`, localStorage `battledrones.career`, pure math
   + try/catch storage): XP = win 100 / loss 30 (scaled down for losses under
-  5:00) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
+  5:00) / a Robot Love draw 60 ("Draw · Normal": more than a loss, less
+  than a win, and counted as neither in the W/L record) × difficulty (Easy 1, Normal 1.5, Hard 2.2), Last Stand 10 per wave
   × difficulty, +25 per medal, +100 for the day's first Daily Op win. Ten
   ranks — Cadet, Private, Corporal, Sergeant, Lieutenant, Captain, Major,
   Colonel, General, Marshal (100 … 6,000 XP) — with chevron / bar / star
   insignia. Three **stars** per map × difficulty: win, win under 8:00, win
   without losing a building (classic rules only). Wins/losses, medal counts,
   Last Stand totals (bests stay in `battledrones.laststand`) and the Daily
-  streak. Banked once when the HQ falls (`game/meta.ts settleCareer`).
+  streak. Banked once when the match is decided (`game/meta.ts
+  settleCareer`).
 - **Menu** (`ui/career.ts`): rank badge with XP bar under the logo (tap: the
   Career sheet — medals, star grid, Last Stand bests, rank ladder), the Daily
   Op card, a mutator picker, ☆☆☆ on each map card for the chosen difficulty.
@@ -1941,11 +1977,13 @@ Reasons to come back between matches. Spectated games never count.
   absent = classic, read through `rulesOf(w)`): ⚡ Blitz (3,000 starting
   scrap), 💰 Gold Rush (income ×1.5, multiplied on top of the AI's own
   `incomeMult`), 💥 Glass Cannons (damage ×2), 🔧 Rapid Fab (build progress ×2
-  per tick), ✈️ Air War (no ground combat units — robot infantry included,
-  though each side keeps its starting Trooper Squad — Condors to fly that
-  squad into the fight, Fab Plants, Assembly Bays or SAM sites; measured:
+  per tick), ✈️ Air War (no ground combat units — robot infantry and the
+  Goliath included, though each side keeps its starting Trooper Squad —
+  Condors to fly that squad into the fight, Fab Plants, Assembly Bays or
+  SAM sites, and no Gantry, which builds nothing but Goliaths; measured:
   with SAMs every AI-vs-AI air war drew at 25:00), 🤖 Infantry War (robot
-  infantry only: no combat vehicles, combat aircraft or Fab Plants; the
+  infantry only: no combat vehicles (the Goliath, so the Gantry, among
+  them), combat aircraft or Fab Plants; the
   Airpad stays for Condors, Scouts and Menders, Turrets and SAM sites stay,
   and Drop Pods carry 2 Trooper Squads + a Rocket Squad, 3 Rocket Squads
   with a Tech Lab; no opener survives it, so both sides start the classic
@@ -1953,10 +1991,35 @@ Reasons to come back between matches. Spectated games never count.
   each side's starting Trooper Squad, mirror-fair: one of each squad and a
   ride; `Rules.startUnits`, spawned by `createMapWorld`), 🎖️ Veterans
   (combat units roll out at rank 1, the starting squads too), ☀️ Clear
-  Skies (no fog for either side; a Sniper Team in woods still hides).
-  Air War conflicts with both infantry mutators (it bans their units): the
-  picker switches the other off (`toggleMutator`), and `makeRules` keeps
-  the first of a conflicting pair. Skirmish only; both sides obey them
+  Skies (no fog for either side; a Sniper Team in woods still hides), and
+  the two Goliath mutators:
+  - 🦿 **Nomads** ("Each side starts with a Goliath instead of a base";
+    `Rules.nomads`, `nomadStart`): in a skirmish each side's HQ is replaced
+    by a Goliath standing anchored where it stood; the starting Harvester
+    and Trooper Squad stay. The base walks: anchored Goliaths also build
+    Harvesters (`trainableAt`), and with no HQ to count as base every
+    building goes up as an outpost in a Goliath's ring, the opener's
+    factory included (the openers set up round the Goliath). There is no
+    HQ trickle, calldowns work with a Goliath and no HQ, the camera opens
+    on the Goliath, and a side is beaten when its last Goliath falls. On
+    the Archipelago `Rules.homeTiles` still marks each side's home land.
+  - 💘 **Robot Love** ("Two enemy Goliaths that meet fall in love, and the
+    battle ends in a draw"; `Rules.robotLove`, `tickLove`): the first tick
+    a blue and a red Goliath stand within 5 tiles of each other, centre to
+    centre (`GOLIATH.love.range`; the closest pair if there are several),
+    the match ends there and then in a draw: `World.winner` is `"draw"`
+    and `World.love` records who and where, for the presentation's love
+    scene (see *Robot Love's finale* above). It runs after the tick's
+    deaths, so a side
+    beaten on that same tick stays beaten. A draw is a **DRAW** in the
+    report, its own sting and radio line, neither a win nor a loss in the
+    career (see *Career*), and in a battle record (`AGENT-BATTLES.md`) an
+    end of `{ winner: null, reason: "love" }`.
+
+  Air War conflicts with both infantry mutators (it bans their units), and
+  Air War and Infantry War each conflict with Nomads and Robot Love (they
+  ban the Goliath): the picker switches the other off (`toggleMutator`),
+  and `makeRules` keeps the first of a conflicting pair. Skirmish only; both sides obey them
   (`unitBlocker`/`buildingBlocker` say "Disabled: Air War", the HUD shows
   ⛔). The AI picks a personality whose plan survives the rules
   (`strategyFits`: no Rush/Ironclad in Air War; no Skyforce/Ironclad in
@@ -1976,7 +2039,10 @@ Reasons to come back between matches. Spectated games never count.
   Shown in an opening banner, the pause screen and the end screen.
 - **Daily Op** (`game/daily.ts`): the local date hashes into a map, an AI
   personality, Normal or Hard, two compatible mutators and the match seed —
-  the same match for everyone. Its own rematch, +100 XP for the first win of
+  the same match for everyone. The mutators come from a frozen list of the
+  nine older ones (`DAILY_MUTATORS`, like the frozen map list), so adding
+  a mutator never changes a day's op; Nomads and Robot Love stay menu
+  picks. Its own rematch, +100 XP for the first win of
   the day, and a win streak that survives until a whole day passes without
   a win. No stars (it is always mutated).
 - AI-vs-AI sanity (50 matches each, 25:00 cap): classic 48/50 decisive,
@@ -2012,7 +2078,10 @@ completion goal.
   scrap, protect a tagged group (or ≥ N of a kind), within N seconds, lose at
   most N units / of a kind / buildings. Meeting every achievement goal wins;
   breaking a condition (time, protected group, losses) loses; an HQ kill still
-  ends it the classic way. The result sets `World.winner`, so the finale
+  ends it the classic way. An op is a base to hold: our HQ falling loses
+  it even with a Goliath standing ("Our HQ has fallen"), and one won on the
+  enemy's last Goliath, its HQ already gone, says "Enemy Goliath
+  destroyed". The result sets `World.winner`, so the finale
   (without HQ blasts when no HQ died), report and career run unchanged.
 - **The ops** (verified by `tests/ops.test.ts`: each sets up on legal ground,
   runs, is completed with ★★+ by at least one stand-in pilot — an AI
