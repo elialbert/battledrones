@@ -93,8 +93,12 @@ export const GOLIATH_AI = {
   answerGantry: 0.75,
   /** Income (scrap a minute, harvest + salvage + objectives) a side needs before it starts a Gantry… */
   gantryIncome: 900,
-  /** …or this much scrap in the bank. */
-  gantryBank: 900,
+  /**
+   * …or this much scrap floating in the bank. (At 900, sides on the
+   * Archipelago's lean income put up Gantries 58 times in 30 round-robin
+   * matches for 25 Goliaths: a Gantry with no Goliath to follow is 600 thrown away.)
+   */
+  gantryBank: 2000,
   /** No Gantry or Goliath while the army is worth less than this (scrap): the army comes first. */
   armyFloor: 900,
   /** A Gantry that found no room (or was lost) is not started again for this long (s)… */
