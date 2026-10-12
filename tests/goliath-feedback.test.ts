@@ -9,7 +9,9 @@ import { createAiState, tickAi } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
 import { AWARDS, MEDALS, computeMedals, type MatchRecap } from "../src/sim/awards";
+import { goliathsOf } from "../src/sim/goliath";
 import { createMapWorld } from "../src/sim/maps";
+import { makeRules } from "../src/sim/rules";
 import { step } from "../src/sim/sim";
 import type { Command, Faction, FactionStats, FxEvent, GoliathWeapon, World } from "../src/sim/types";
 import { buildingCenter, createWorld, hqOf, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -20,6 +22,7 @@ import {
   BattleCallouts,
   RadioQueue,
   decidedByGoliath,
+  isEndLine,
   speakable,
   type RadioLine
 } from "../src/game/callouts";
@@ -367,6 +370,64 @@ describe("Goliath callouts: the HQ falls, the match goes on", () => {
     expect(decidedByGoliath([goliathDeath("blue", 5)], "red")).toBe(false);
     expect(decidedByGoliath([goliathDeath("red", 5), hqDeath("red")], "red")).toBe(false);
     expect(decidedByGoliath([], "red")).toBe(false);
+  });
+});
+
+describe("Robot Love and Nomads", () => {
+  it("a draw closes the radio with its own last word, never a victory or a defeat", () => {
+    for (const spectator of [false, true]) {
+      const r = rig({ spectator });
+      r.w.winner = "draw";
+      r.w.love = { ids: [1, 2], x: 24, y: 20, tick: 900 };
+      r.at(90, { type: "love", ids: [1, 2], x: 24, y: 20 });
+      expect(r.radio).toEqual([
+        expect.objectContaining({ key: "draw", text: "They fell in love. The battle is a draw.", priority: 0, tone: "good", x: 24, y: 20 })
+      ]);
+      r.at(91, death({ faction: "red" }), goliathDeath("red", 5));
+      expect(r.radio).toHaveLength(1); // (then silence)
+      expect(r.banners).toHaveLength(0);
+    }
+    expect(isEndLine({ key: "draw" })).toBe(true);
+    expect(isEndLine({ key: "victory" })).toBe(true);
+    expect(isEndLine({ key: "defeat" })).toBe(true);
+    expect(isEndLine({ key: "goliath-lost" })).toBe(false);
+  });
+
+  it("the sim's own Robot Love ending is a draw on the radio", () => {
+    const w = createWorld(48, 48);
+    w.rules = makeRules(["robotlove"]);
+    spawnBuilding(w, "hq", "blue", 2, 2);
+    spawnBuilding(w, "hq", "red", 43, 43);
+    spawnUnit(w, "goliath", "blue", 22, 24);
+    spawnUnit(w, "goliath", "red", 25, 24);
+    const r = rig({ world: w });
+    step(w, []);
+    r.at(w.tick / TICK_RATE, ...w.fx);
+    expect(w.winner).toBe("draw");
+    // (the shots they traded first are cleared by the announcer for the last word)
+    expect(r.keys().at(-1)).toBe("draw");
+    expect(r.keys().some((k) => k === "victory" || k === "defeat")).toBe(false);
+  });
+
+  it("Nomads: no HQ ever, so no HQ lines; the Goliath is the last life, and the last one decides it", () => {
+    const w = createMapWorld("riverlands", { mutators: ["nomads"] });
+    expect(hqOf(w, "blue")).toBeNull();
+    const ours = goliathsOf(w, "blue")[0]!;
+    const theirs = goliathsOf(w, "red")[0]!;
+    const r = rig({ world: w });
+    r.at(1, hit("blue", ours.id, false, ours.x, ours.y));
+    expect(r.radio.at(-1)).toMatchObject({ key: "goliath-attack", priority: 0 });
+    // a second Goliath: losing one is no longer the end, so the warning is P1 again
+    spawnUnit(w, "goliath", "blue", ours.x + 6, ours.y);
+    r.at(100, hit("blue", ours.id, false, ours.x, ours.y));
+    expect(r.radio.at(-1)).toMatchObject({ key: "goliath-attack", priority: 1 });
+    theirs.hp = 0;
+    step(w, []);
+    r.at(200, ...w.fx);
+    expect(w.winner).toBe("blue");
+    expect(r.radio.at(-1)).toMatchObject({ key: "victory", text: "Last enemy Goliath destroyed. Victory!" });
+    const all = [...r.radio.map((l) => l.text), ...r.banners.flatMap((b) => [b.text, b.sub ?? "", b.say ?? ""])];
+    expect(all.some((s) => /\bHQ\b/.test(s))).toBe(false);
   });
 });
 
