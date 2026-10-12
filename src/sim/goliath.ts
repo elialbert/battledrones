@@ -325,3 +325,43 @@ export const weaponName = (k: GoliathWeapon): string => GOLIATH.weapons[k].name;
 
 /** Building kinds that can go up as outposts in a Goliath's build ring (anything but an HQ). */
 export const outpostable = (kind: keyof typeof BUILDINGS): boolean => kind !== "hq";
+
+// ------------------------------------------------- queries for planners ---
+
+/**
+ * Why a Goliath of `faction` couldn't anchor standing at (x, y), or null when
+ * it could: anchorBlocker's ground checks for a spot it hasn't walked to yet
+ * (the AI vets a site before the trip). `selfId` is never in its own way.
+ */
+export function anchorBlockedAt(w: World, faction: Faction, x: number, y: number, selfId = -1): string | null {
+  const { tx, ty, size } = anchorFootprint(w, faction, x, y);
+  for (let dy = 0; dy < size; dy++)
+    for (let dx = 0; dx < size; dx++) {
+      const fx = tx + dx;
+      const fy = ty + dy;
+      if (!inBounds(w, fx, fy)) return "Off the map";
+      if (buildingAtTile(w, fx, fy)) return "Blocked";
+      if (!TERRAIN[terrainAt(w, fx, fy)].buildable) return "Needs open ground";
+    }
+  if (blocksObjective(w, tx, ty, size)) return "Blocked";
+  for (const o of w.units.values())
+    if (o.id !== selfId && UNITS[o.kind].domain === "ground" && !isLifted(o) && o.x >= tx && o.x < tx + size && o.y >= ty && o.y < ty + size)
+      return "Unit in the way";
+  return null;
+}
+
+/**
+ * Share (0…1) of Goliath `u`'s firepower that can fire right now (weaponReady:
+ * online, and not grounded to its machine guns by a lift), by DPS. 0 for
+ * anything else. What its threat is worth to the AI.
+ */
+export function readyFirepower(u: Unit): number {
+  if (!u.goliath) return 0;
+  let all = 0;
+  let up = 0;
+  for (const k of GOLIATH_WEAPONS) {
+    all += GOLIATH.weapons[k].dps;
+    if (weaponReady(u, k)) up += GOLIATH.weapons[k].dps;
+  }
+  return all > 0 ? up / all : 0;
+}

@@ -232,6 +232,14 @@ export interface AirliftContext {
   seen: Unit[];
   /** A real attack on the base is under way: no new lifts board. */
   threatened: boolean;
+  /** Condors on (or held for) a Goliath's lift (ai/goliath.ts liftCondors): never the airlift's to fly. */
+  skip?: ReadonlySet<number>;
+}
+
+/** Is Condor `id` out on an airlift trip (boarding, outbound, coming back) or loaded? Not one to lend a Goliath's lift. */
+export function airliftBusy(s: AiState, id: number): boolean {
+  const lift = memos.get(s)?.lifts.get(id);
+  return !!lift && (lift.phase !== "home" || lift.squads.length > 0);
 }
 
 interface Island {
@@ -371,7 +379,10 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
 
   // --- lifts: every Condor of ours -----------------------------------------
   const home = homeSpot(w, faction, ctx.hqC);
-  const condors = ctx.mine.filter((u) => u.kind === "condor").sort((a, b) => a.id - b.id);
+  // (not a Condor on a Goliath's lift: an order to it would redirect or set down the Goliath)
+  const condors = ctx.mine
+    .filter((u) => u.kind === "condor" && u.order.type !== "lift" && !ctx.skip?.has(u.id))
+    .sort((a, b) => a.id - b.id);
   for (const id of [...m.lifts.keys()]) if (!w.units.has(id)) m.lifts.delete(id);
   // squads free to fly, nearest home first (Sniper Teams only when nobody else is free;
   // Rocket Squads first once the enemy flies drones: a garrison is its own anti-air)
