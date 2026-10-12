@@ -20,4 +20,6 @@ Grounds, Chromium headless with SwiftShader. All taken 2026-10-12.
 | `gantry-stages.png` | The Gantry's six stages: empty (crane parked), foundation (legs bolted to the cradle, crane working), frame (hips and torso skeleton, a plate coming down), armament (plated, cannons and mortars on), finishing (head on, eye dark), rollout (arms swung clear, the Goliath stepping off). |
 | `gantry-stages-red.png` | The same six stages for red: its Goliath faces north, the way red's walk out. |
 | `gantry-ingame-frame.png` | In game, a Gantry at the frame stage: the crane lowering an armour plate onto the torso skeleton, floor lights on. |
-| `robot-love.png` | Robot Love: the two Goliaths met, eyes pink, hearts bubbling out of them and a big heart between them, the draw banner. |
+| `gantry-rollout.png` | In game: finishing (head on, eye dark, crane parked), rollout (scaffold arms swung clear, the Goliath stepping off the cradle), walked off (the Gantry empty again, its arms swinging back). |
+| `robot-love.png` | Robot Love: the two Goliaths have walked to meet, arms reaching out, a burst of hearts between them. |
+| `robot-love-banner.png` | A moment later: the big heart fading, hearts still bubbling up, the draw banner. |

@@ -310,7 +310,9 @@ stage.rig.bounds = { x0: -100, y0: -100, x1: 100, y1: 100 };
 const pitch = q.get("pitch");
 if (pitch !== null) stage.rig.pitchFor = () => THREE.MathUtils.degToRad(Number(pitch));
 stage.rig.zoom = Number(q.get("zoom") ?? 46);
-stage.rig.centerOn(Number(q.get("x") ?? 7), Number(q.get("y") ?? 4));
+// (the Goliath and Gantry line-ups open centred on themselves; an icon on the model)
+const home = only === "goliath" ? [16, 2] : only === "gantry" ? [9, 1.5] : only === "icon" ? [0, 0] : [7, 4];
+stage.rig.centerOn(Number(q.get("x") ?? home[0]), Number(q.get("y") ?? home[1]));
 let last = performance.now();
 const loop = () => {
   const t = performance.now();
