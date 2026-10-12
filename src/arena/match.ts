@@ -30,7 +30,7 @@ import { SideLog, type Urgent } from "./events";
 import { clock, enemyOf, frameOf } from "./frame";
 import { briefing, look, observeState, renderObservation } from "./observe";
 import { parseOrders, suggestSpot, type BuildIntent } from "./orders";
-import { HASH_EVERY, worldHash, type BattleRecord, type RoundLog, type SeatInfo, type Usage } from "./record";
+import { HASH_EVERY, endOf, worldHash, type BattleRecord, type RoundLog, type SeatInfo, type Usage } from "./record";
 
 export const ROUND_TICKS = 50;
 /** 20:00 of game time: a battle nobody can finish is a draw. */
@@ -355,7 +355,7 @@ export class Arena {
         if (w.tick % HASH_EVERY === 0) this.record.hashes.push([w.tick, worldHash(w)]);
       }
       this.logRound(start);
-      if (w.winner) this.record.end = { tick: w.tick, winner: w.winner, reason: "hq" };
+      if (w.winner) this.record.end = endOf(w.tick, w.winner);
       else if (w.tick >= this.maxTicks) this.record.end = { tick: w.tick, winner: null, reason: "time" };
     }
     this.record.tick = w.tick;

@@ -566,11 +566,14 @@ export const GOLIATH = {
    * (≈ 1,400 scrap of firepower), lost in this order as its health falls.
    */
   weapons: {
-    // two shoulder tubes taking turns: a Mortar shell every 1.5 s
+    // two shoulder tubes taking turns: a Mortar shell every 1.5 s. (A tighter
+    // burst than the Mortar's 1.1: at 1.1 a cost-equal group of Rocket Squads
+    // only edged it, −0.14 in tools/balance.ts goliath duels; at 0.9, −0.39,
+    // a real answer like Lancers, Wasps and Hornets, and it still beats Troopers.)
     mortars: {
       name: "Mortars", lostBelow: 0.75,
       targets: "ground", dps: 36, range: 8, minRange: 2.5, shotInterval: 1.5,
-      splash: 1.1, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell"
+      splash: 0.9, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell"
     },
     laser: {
       name: "Eye laser", lostBelow: 0.5,
@@ -604,5 +607,7 @@ export const GOLIATH = {
   /** A Gantry destroyed mid-build scatters this share of the scrap paid × the build's progress, in up to `piles` piles. */
   gantrySalvage: { share: 0.3, piles: 4, spread: 2.5 },
   /** Seconds a scrap pile lies before it burns out (longer than a wreck: holding the ground pays). */
-  pileTtl: 90
+  pileTtl: 90,
+  /** Robot Love mutator: enemy Goliaths this close (tiles, centre to centre) fall in love, and the match is a draw. */
+  love: { range: 5 }
 };

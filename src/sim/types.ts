@@ -154,6 +154,12 @@ export interface GoliathState {
   rally: { x: number; y: number } | null;
   /** Two Condors hooking on or carrying it, or null. */
   lift: GoliathLift | null;
+  /**
+   * Dug in (anchoring, anchored or packing up): the top-left tile of the
+   * GOLIATH.footprint² it stands on, stamped with its id in World.occupancy
+   * so paths go round it like a building. null while it walks.
+   */
+  foot: { tx: number; ty: number } | null;
 }
 
 export interface Unit {
@@ -589,6 +595,17 @@ export type FxEvent =
       x: number;
       y: number;
       destroyed?: boolean;
+    }
+  | {
+      /**
+       * Robot Love: enemy Goliaths `ids` (blue's, red's) came within
+       * GOLIATH.love.range of each other and fell in love; the match ends in
+       * a draw this tick. (x, y) is the point between them, where they meet.
+       */
+      type: "love";
+      ids: [number, number];
+      x: number;
+      y: number;
     };
 
 /**
@@ -737,8 +754,13 @@ export interface World {
   /** Map objectives: Uplink relays and supply drops (objectives.ts). Empty unless the match enables them. */
   objectives: ObjectiveState;
   factions: Record<Faction, FactionState>;
-  /** null while the match runs; the winning faction once an HQ dies. */
-  winner: Faction | null;
+  /**
+   * null while the match runs; then the winning faction (once a side has lost
+   * its HQ and every Goliath), or "draw" (Robot Love: two enemy Goliaths fell
+   * in love, goliath.ts tickLove). Anything that only asks "is it over?" can
+   * test it for truthiness.
+   */
+  winner: Faction | "draw" | null;
   /** Transient render events emitted this tick (cleared each step). */
   fx: FxEvent[];
   fog: Record<Faction, FactionFog>;
@@ -758,6 +780,8 @@ export interface World {
   ops?: OpsState | null;
   /** Free replacement Condors (lifeline.ts); absent unless the map hands them out. */
   lifeline?: Record<Faction, LifelineSlot> | null;
+  /** Robot Love: the two Goliaths that fell in love and ended the match in a draw, where and when (goliath.ts tickLove). */
+  love?: { ids: [number, number]; x: number; y: number; tick: number } | null;
 }
 
 /** One side's free-Condor clock (lifeline.ts). */

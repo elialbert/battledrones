@@ -269,7 +269,8 @@ export function newGoliathState(): GoliathState {
     weapons: { mortars: weapon(), laser: weapon(), cannons: weapon(), mg: weapon() },
     queue: [],
     rally: null,
-    lift: null
+    lift: null,
+    foot: null
   };
 }
 
@@ -381,13 +382,21 @@ export interface DropSite {
   size: number;
 }
 
-/** Nearest friendly drop site to a point: a drop-off building, or an anchored Goliath (packing up, it is none). */
-export function nearestDropSite(w: World, faction: Faction, x: number, y: number): DropSite | null {
+/**
+ * Nearest friendly drop site to a point: a drop-off building, or an anchored
+ * Goliath (packing up, it is none). With `mc`, a Goliath or an outpost (which
+ * can stand out on an island) only counts if a unit of that class at (x, y)
+ * can drive up to it; the base's own drop-offs always count, as they always did.
+ */
+export function nearestDropSite(w: World, faction: Faction, x: number, y: number, mc?: MoveClass): DropSite | null {
   let best: DropSite | null = null;
   let bestD = Infinity;
+  const reaches = (tx: number, ty: number, size: number) =>
+    !mc || canGetWithin(w, mc, x, y, tx + size / 2, ty + size / 2, DOCK_REACH, (px, py) => distToFootprint(tx, ty, size, px, py), size);
   for (const b of w.buildings.values()) {
     if (b.faction !== faction || !BUILDINGS[b.kind].dropOff) continue;
     const size = BUILDINGS[b.kind].size;
+    if (b.outpost && !reaches(b.tx, b.ty, size)) continue;
     const d = distToFootprint(b.tx, b.ty, size, x, y);
     if (d < bestD) {
       bestD = d;
@@ -397,8 +406,9 @@ export function nearestDropSite(w: World, faction: Faction, x: number, y: number
   const size = GOLIATH.footprint;
   for (const u of w.units.values()) {
     if (u.faction !== faction || u.goliath?.mode !== "anchored" || u.goliath.lift) continue;
-    const tx = u.x - size / 2;
-    const ty = u.y - size / 2;
+    const tx = u.goliath.foot?.tx ?? u.x - size / 2;
+    const ty = u.goliath.foot?.ty ?? u.y - size / 2;
+    if (!reaches(tx, ty, size)) continue;
     const d = distToFootprint(tx, ty, size, x, y);
     if (d < bestD) {
       bestD = d;
@@ -407,6 +417,9 @@ export function nearestDropSite(w: World, faction: Faction, x: number, y: number
   }
   return best;
 }
+
+/** How close (tiles) to a drop site's footprint a harvester must get to unload (economy.ts tickHarvest). */
+const DOCK_REACH = 1.2;
 
 /** Distance from a point to a size² footprint at top-left (tx, ty) (0 inside). */
 function distToFootprint(tx: number, ty: number, size: number, x: number, y: number): number {

@@ -1,8 +1,9 @@
 import { BUILDINGS, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
+import { rulesOf } from "./rules";
 import type { Command, Faction, GoliathMode, GoliathWeapon, Unit, UnitKind, World } from "./types";
-import { buildingAtTile, inBounds, sideFrame, terrainAt } from "./world";
+import { buildingCenter, hqOf, inBounds, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
 import { hypot } from "./fmath";
 
 /**
@@ -155,7 +156,7 @@ export function anchorBlocker(w: World, u: Unit): string | null {
       const x = tx + dx;
       const y = ty + dy;
       if (!inBounds(w, x, y)) return "Off the map";
-      if (buildingAtTile(w, x, y)) return "Blocked";
+      if (w.occupancy[y * w.width + x] !== 0) return "Blocked"; // (a building, or another dug-in Goliath)
       if (!TERRAIN[terrainAt(w, x, y)].buildable) return "Needs open ground";
     }
   if (blocksObjective(w, tx, ty, size)) return "Blocked";
@@ -201,14 +202,43 @@ function setMode(w: World, u: Unit, mode: GoliathMode, ticks: number): void {
 /** Dig in where it stands (anchorBlocker permitting): it settles onto the middle of its footprint and stops. */
 export function anchor(w: World, u: Unit): boolean {
   if (anchorBlocker(w, u)) return false;
-  const { tx, ty, size } = anchorFootprint(w, u.faction, u.x, u.y);
-  u.x = tx + size / 2;
-  u.y = ty + size / 2;
+  plant(w, u);
   u.order = { type: "idle" };
   u.path = null;
   u.pathGoal = null;
   setMode(w, u, "anchoring", Math.round(GOLIATH.anchorTime * TICK_RATE));
   return true;
+}
+
+/**
+ * Settle Goliath `u` onto the middle of its anchor footprint and stamp the
+ * footprint into World.occupancy with its id, so paths go round it like a
+ * building (and nothing else digs in or is built on it). Paths that ran
+ * across it re-plan.
+ */
+function plant(w: World, u: Unit): void {
+  const { tx, ty, size } = anchorFootprint(w, u.faction, u.x, u.y);
+  u.x = tx + size / 2;
+  u.y = ty + size / 2;
+  u.goliath!.foot = { tx, ty };
+  for (let dy = 0; dy < size; dy++)
+    for (let dx = 0; dx < size; dx++)
+      if (inBounds(w, tx + dx, ty + dy) && w.occupancy[(ty + dy) * w.width + tx + dx] === 0) w.occupancy[(ty + dy) * w.width + tx + dx] = u.id;
+  const near = (p: { x: number; y: number }) => p.x >= tx - 1 && p.x < tx + size + 1 && p.y >= ty - 1 && p.y < ty + size + 1;
+  for (const o of w.units.values()) if (o.path && o.path.some(near)) o.path = null;
+}
+
+/** Clear a dug-in Goliath's footprint from World.occupancy (it walks again, or it fell). */
+export function unplant(w: World, u: Unit): void {
+  const foot = u.goliath?.foot;
+  if (!foot) return;
+  const size = GOLIATH.footprint;
+  for (let dy = 0; dy < size; dy++)
+    for (let dx = 0; dx < size; dx++) {
+      const i = (foot.ty + dy) * w.width + foot.tx + dx;
+      if (inBounds(w, foot.tx + dx, foot.ty + dy) && w.occupancy[i] === u.id) w.occupancy[i] = 0;
+    }
+  u.goliath!.foot = null;
 }
 
 /** Start packing up (anchored or still digging in): it walks again GOLIATH.packTime later. */
@@ -276,20 +306,73 @@ export function goliathTrainer(w: World, id: number, faction: Faction): Unit | n
 /** Can an anchored Goliath train this kind? (Robot infantry: what an Assembly Bay builds.) */
 export const trainable = (kind: UnitKind): boolean => UNITS[kind].builtAt === "assembly-bay";
 
+/** Can an anchored Goliath build this kind in this match? Robot infantry, and under Nomads Harvesters too (no HQ to build them). */
+export const trainableAt = (w: World, kind: UnitKind): boolean => trainable(kind) || (kind === "harvester" && !!rulesOf(w).nomads);
+
+// ------------------------------------------------------------ mutators ---
+
+/**
+ * Nomads (createMapWorld, skirmish): each side's HQ is replaced by a Goliath
+ * standing anchored where it stood — the base walks. The starting Harvester
+ * and squad stay; the Goliath builds Harvesters (trainableAt), takes their
+ * scrap and lets buildings go up round it. With no HQ, a side is beaten when
+ * its last Goliath falls.
+ */
+export function nomadStart(w: World): void {
+  for (const f of ["blue", "red"] as const) {
+    const hq = hqOf(w, f);
+    if (!hq) continue;
+    const c = buildingCenter(hq);
+    removeBuilding(w, hq);
+    const g = spawnUnit(w, "goliath", f, c.x, c.y);
+    g.goliath!.mode = "anchored";
+    plant(w, g);
+  }
+}
+
+/**
+ * Robot Love (per tick, after deaths): the closest pair of enemy Goliaths
+ * within GOLIATH.love.range of each other fall in love, and the match ends in
+ * a draw there and then (World.love records who and where, for the
+ * presentation's canned meeting). A side beaten this same tick stays beaten.
+ */
+export function tickLove(w: World): void {
+  if (!rulesOf(w).robotLove || w.winner) return;
+  let best: { a: Unit; b: Unit; d: number } | null = null;
+  for (const a of w.units.values()) {
+    if (!a.goliath || a.faction !== "blue" || a.hp <= 0) continue;
+    for (const b of w.units.values()) {
+      if (!b.goliath || b.faction !== "red" || b.hp <= 0) continue;
+      const d = hypot(a.x - b.x, a.y - b.y);
+      if (d <= GOLIATH.love.range && (!best || d < best.d)) best = { a, b, d };
+    }
+  }
+  if (!best) return;
+  const ids: [number, number] = [best.a.id, best.b.id];
+  const x = (best.a.x + best.b.x) / 2;
+  const y = (best.a.y + best.b.y) / 2;
+  w.winner = "draw";
+  w.love = { ids, x, y, tick: w.tick };
+  w.fx.push({ type: "love", ids, x, y });
+}
+
 // --------------------------------------------------------------- tick ---
 
 /**
  * Per tick, after deaths are cleaned up: anchoring and packing count down
  * (an EMP pauses them), and weapon systems go offline below their line and
- * reboot back once repaired GOLIATH.restoreMargin above it.
+ * reboot back once repaired GOLIATH.restoreMargin above it (an EMP holds the
+ * reboot too).
  */
 export function tickGoliaths(w: World): void {
   const rebootTicks = Math.round(GOLIATH.reboot * TICK_RATE);
   for (const u of w.units.values()) {
     const g = u.goliath;
     if (!g || u.hp <= 0) continue;
-    if ((g.mode === "anchoring" || g.mode === "packing") && !isStunned(w, u.id) && --g.modeTicks <= 0)
+    if ((g.mode === "anchoring" || g.mode === "packing") && !isStunned(w, u.id) && --g.modeTicks <= 0) {
+      if (g.mode === "packing") unplant(w, u); // free to walk: its ground is open again
       setMode(w, u, g.mode === "anchoring" ? "anchored" : "walking", 0);
+    }
     const share = u.hp / UNITS[u.kind].hp;
     for (const k of LOSABLE_WEAPONS) {
       const ws = g.weapons[k];
@@ -306,6 +389,8 @@ export function tickGoliaths(w: World): void {
         if (share < line) {
           ws.reboot = -1; // knocked back down mid-reboot
           ev("offline");
+        } else if (isStunned(w, u.id)) {
+          // an EMP holds the reboot (it blocks repair while it lasts)
         } else if (--ws.reboot <= 0) {
           ws.online = true;
           ws.reboot = -1;

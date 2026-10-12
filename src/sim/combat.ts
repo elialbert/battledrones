@@ -1,5 +1,5 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, GOLIATH, INFANTRY, OBJECTIVES, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
-import { GOLIATH_WEAPONS, hasGoliath, repairUrgency, weaponReady } from "./goliath";
+import { GOLIATH_WEAPONS, canWalk, hasGoliath, repairUrgency, unplant, weaponReady } from "./goliath";
 import { dropLifts } from "./lift";
 import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
 import { IGNORE_TICKS, moveUnitToward } from "./movement";
@@ -561,6 +561,7 @@ function retaliate(w: World, incidents: Incident[]): void {
     const faction = victim?.faction ?? vb?.faction;
     for (const u of w.units.values()) {
       if (u.faction !== faction || u.order.type !== "idle") continue;
+      if (u.goliath && !canWalk(u)) continue; // dug in (or on a lift): its guns answer on their own
       const stats = UNITS[u.kind];
       if (stats.targets === "none" || !canHit(stats.targets, attacker.domain)) continue;
       const self = u.id === victimId;
@@ -657,6 +658,7 @@ export function cleanupDeaths(w: World): void {
   for (const { u, killer } of deadUnits) {
     const id = u.id;
     w.units.delete(id);
+    unplant(w, u); // (a dug-in Goliath's ground opens up)
     w.factions[u.faction].stats.unitsLost++;
     const air = unitDomain(u) === "air";
     w.fx.push({ type: "explosion", x: u.x, y: u.y, size: UNITS[u.kind].radius * 2, air, kind: "unit" });
@@ -691,8 +693,8 @@ export function cleanupDeaths(w: World): void {
     if (b.kind === "hq" && w.winner === null && !hasGoliath(w, b.faction))
       w.winner = b.faction === "blue" ? "red" : "blue";
   }
-  // the last Goliath of a side whose HQ is already gone
+  // the last Goliath of a side whose HQ is already gone (not Last Stand's waves: they never had one)
   for (const { u } of deadUnits)
-    if (u.goliath && w.winner === null && !hqOf(w, u.faction) && !hasGoliath(w, u.faction))
+    if (u.goliath && w.winner === null && !hqOf(w, u.faction) && !hasGoliath(w, u.faction) && (!w.survival || u.faction === w.survival.defender))
       w.winner = u.faction === "blue" ? "red" : "blue";
 }

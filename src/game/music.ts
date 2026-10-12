@@ -25,6 +25,7 @@ import {
   layerTargets,
   mtof,
   stinger,
+  stingerFor,
   type BellKind,
   type DrumVoice,
   type Flavour,
@@ -192,16 +193,7 @@ export class Music {
 
   /** Announcements: 'epic' lines get a rising call, 'bad' ones a warning stab (and raise the tension). */
   announced(a: Announcement): void {
-    if ((a.priority ?? 2) > 2) return;
-    const kind: StingerKind | null = /first.?blood/i.test(a.key)
-      ? "first-blood"
-      : a.tone === "epic"
-        ? "epic"
-        : a.tone === "bad"
-          ? "bad"
-          : a.tone === "good" && (a.priority ?? 2) <= 1
-            ? "good"
-            : null;
+    const kind = stingerFor(a);
     if (!kind) return;
     if (kind === "bad" && this.e) {
       this.bumpLevel = 0.4;
