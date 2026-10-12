@@ -719,10 +719,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   for (const id of goliathHolds(w, s)) used.add(id);
   const staging = towardEnemy(w, hqC, 9, enemyHqPos);
   cmds.push(
-    ...planGoliaths(w, faction, s, {
-      army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq,
-      waveTarget: s.mode === "assault" && goliaths.length > 0 ? pickPriorityTarget(w, faction, seen, enemyHqPos) : null
-    })
+    ...planGoliaths(w, faction, s, { army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq })
   );
   cmds.push(...huntGoliaths(w, faction, s, { army, used, seen, enemyHqPos, mode: s.mode, threatened }));
 

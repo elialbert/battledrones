@@ -173,6 +173,10 @@ export const GOLIATH_AI = {
   retreatHp: 0.35,
   /** …until it is back up to this share. */
   resumeHp: 0.7,
+  /** Walking with a wave it falls back below this share (its laser gone: the walk home is under fire). */
+  siegeRetreat: 0.5,
+  /** With a wave it keeps this many tiles behind the wave's lead. */
+  behind: 3,
   /** Visible enemy firepower within `danger` tiles over this many times what holds the site (and it hurt): pack up and go. */
   loseEdge: 1.5,
   danger: 9,
@@ -205,8 +209,9 @@ export const GOLIATH_AI = {
   huntReach: 32,
   /** …this much less when a weapon of it is down (strike while it's weak)… */
   huntWeak: 0.8,
-  /** …no more often than this (s) per Goliath. */
-  huntEvery: 12
+  /** …no more often than this (s) per Goliath; units that can hit them go for its Menders first, this many each. */
+  huntEvery: 12,
+  medicHunters: 2
 };
 
 type P = { x: number; y: number };
@@ -239,6 +244,9 @@ interface Plan {
   waypoint: P | null;
   lifting: boolean;
   liftTick: number;
+  /** Where the lift took off (a called-off lift flies back there), and where a called-off one comes down. */
+  origin: P | null;
+  landing: P | null;
   tries: number;
   /** Tick of the last move order, and of the last re-check of a held site. */
   moved: number;
@@ -591,8 +599,6 @@ export interface GoliathContext {
   mode: AiMode;
   /** A real attack on the base is under way. */
   threatened: boolean;
-  /** Where the wave is headed (assault). */
-  waveTarget: P | null;
   /** Where the army gathers for a wave. */
   staging: P;
   /** The mined field near home, shaded toward home (ai/commander guardPoint). */
@@ -1015,7 +1021,7 @@ export function goliathBarracks(
 function newPlan(w: World): Plan {
   return {
     phase: "muster", since: w.tick, site: null, next: "muster", escorts: [], harvesters: [], carriers: [], launchHp: [],
-    waypoint: null, lifting: false, liftTick: 0, tries: 0, moved: -1e9, checked: w.tick
+    waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, tries: 0, moved: -1e9, checked: w.tick
   };
 }
 
@@ -1098,7 +1104,7 @@ function loveStep(w: World, faction: Faction, g: Unit, plan: Plan, ctx: GoliathC
   const d = dist(e.x, e.y, g.x, g.y);
   if (mood === "court") {
     if (gs.mode === "anchored" || gs.mode === "anchoring") cmds.push({ type: "packUp", faction, unitIds: [g.id] });
-    else if (gs.mode === "walking") {
+    else if (gs.mode === "walking" && walkable(w, g, e)) {
       const o = g.order;
       if (!(o.type === "move" && dist(o.x, o.y, e.x, e.y) < 2)) cmds.push({ type: "move", faction, unitIds: [g.id], x: e.x, y: e.y });
     }
@@ -1120,7 +1126,8 @@ function loveStep(w: World, faction: Faction, g: Unit, plan: Plan, ctx: GoliathC
   const k = (gap + 2) / Math.max(0.5, d);
   const to = inMap(w, { x: g.x + (g.x - e.x) * k, y: g.y + (g.y - e.y) * k });
   const o = g.order;
-  if (!(o.type === "move" && dist(o.x, o.y, to.x, to.y) < 2)) cmds.push({ type: "move", faction, unitIds: [g.id], x: to.x, y: to.y });
+  if (!(o.type === "move" && dist(o.x, o.y, to.x, to.y) < 2) && walkable(w, g, to))
+    cmds.push({ type: "move", faction, unitIds: [g.id], x: to.x, y: to.y });
   plan.site = null;
   setPhase(w, plan, "guard");
   return true;
@@ -1132,6 +1139,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
   const move = (p: P) => {
     const o = g.order;
     if (o.type === "move" && dist(o.x, o.y, p.x, p.y) < 0.6) return;
+    if (!walkable(w, g, p)) return; // (never across the water it can't walk: an island is a lift away)
     cmds.push({ type: "move", faction, unitIds: [g.id], x: p.x, y: p.y });
     plan.moved = w.tick;
   };
@@ -1143,7 +1151,9 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
   }
 
   // --- hurt: fall back to the Menders and home ----------------------------
-  if (canWalk(g) && plan.phase !== "retreat" && (hp < GOLIATH_AI.retreatHp || !gs.weapons.cannons.online)) {
+  // (walking with a wave it falls back sooner: its laser gone, the long walk home is under fire)
+  const floor = plan.phase === "siege" ? GOLIATH_AI.siegeRetreat : GOLIATH_AI.retreatHp;
+  if (canWalk(g) && plan.phase !== "retreat" && (hp < floor || !gs.weapons.cannons.online)) {
     setPhase(w, plan, "retreat");
     plan.site = null;
   }
@@ -1250,8 +1260,10 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         return;
       }
       // (it stopped a little off the spot: the nearest open ground, else another site)
-      const alt = spotNear(w, faction, g, 0, 2.5, (p) => dist(p.x, p.y, g.x, g.y));
-      if (alt && anchorBlockedAt(w, faction, alt.x, alt.y, g.id) === null && plan.tries < 3) {
+      const relay = site.relayId !== undefined ? w.objectives.uplinks.find((l) => l.id === site.relayId) : undefined;
+      const offRelay = (p: P) => !relay || dist(p.x, p.y, relay.x, relay.y) >= GOLIATH_AI.relayMin;
+      const alt = spotNear(w, faction, g, 0, 2.5, (p) => dist(p.x, p.y, g.x, g.y) + (offRelay(p) ? 0 : 99));
+      if (alt && offRelay(alt) && anchorBlockedAt(w, faction, alt.x, alt.y, g.id) === null && plan.tries < 3) {
         plan.tries++;
         site.at = alt;
         cmds.push({ type: "move", faction, unitIds: [g.id], x: alt.x, y: alt.y });
@@ -1337,7 +1349,6 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         setPhase(w, plan, "muster");
         return;
       }
-      const target = ctx.waveTarget ?? ctx.enemyHqPos;
       const company = value(ctx.army.filter((u) => u.kind !== "mender" && dist(u.x, u.y, g.x, g.y) <= 8));
       const deep = dist(g.x, g.y, ctx.enemyHqPos.x, ctx.enemyHqPos.y) < GOLIATH_AI.deep;
       if (deep && company < GOLIATH_AI.company) {
@@ -1348,9 +1359,18 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         if (dist(g.x, g.y, to.x, to.y) > 3) move({ x: to.x, y: to.y });
         return;
       }
+      // with the wave, a few tiles behind its lead (its mortars outreach the defences it shells),
+      // never out in front of it; no wave out yet: the staging point
+      const lead = waveLead(ctx, new Set([...m.plans.values()].flatMap((p) => p.escorts)));
+      let goal = ctx.staging;
+      if (lead) {
+        const back = Math.max(0.5, dist(lead.x, lead.y, ctx.hqC.x, ctx.hqC.y));
+        goal = { x: lead.x + ((ctx.hqC.x - lead.x) / back) * GOLIATH_AI.behind, y: lead.y + ((ctx.hqC.y - lead.y) / back) * GOLIATH_AI.behind };
+      }
+      if (dist(g.x, g.y, goal.x, goal.y) <= 2 || !walkable(w, g, goal)) return;
       const o = g.order;
-      if (o.type === "attackMove" && dist(o.x, o.y, target.x, target.y) < 2) return;
-      cmds.push({ type: "attackMove", faction, unitIds: [g.id], x: target.x, y: target.y });
+      if (o.type === "attackMove" && dist(o.x, o.y, goal.x, goal.y) < 2) return;
+      cmds.push({ type: "attackMove", faction, unitIds: [g.id], x: goal.x, y: goal.y });
       return;
     }
     case "retreat": {
@@ -1375,6 +1395,34 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
   }
 }
 
+/**
+ * Where our wave's lead is: the strongest group of ours (worth GOLIATH_AI.company
+ * within 6 tiles at least) out past the staging point, attacking or
+ * attack-moving (escorts aside). Null with no wave out.
+ */
+function waveLead(ctx: GoliathContext, escorts: ReadonlySet<number>): P | null {
+  const out = dist(ctx.staging.x, ctx.staging.y, ctx.hqC.x, ctx.hqC.y) + 2;
+  const pushing = ctx.army.filter(
+    (u) =>
+      u.kind !== "mender" && !escorts.has(u.id) && (u.order.type === "attack" || u.order.type === "attackMove") &&
+      dist(u.x, u.y, ctx.hqC.x, ctx.hqC.y) > out
+  );
+  let lead: Unit | null = null;
+  let best = 0;
+  for (const u of pushing) {
+    let v = 0;
+    for (const o of pushing) if (dist(o.x, o.y, u.x, u.y) <= 6) v += UNITS[o.kind].cost;
+    if (v > best) {
+      best = v;
+      lead = u;
+    }
+  }
+  return lead && best >= GOLIATH_AI.company ? { x: lead.x, y: lead.y } : null;
+}
+
+/** Can Goliath `g` walk to within reach of `p` (not across the water)? */
+const walkable = (w: World, g: Unit, p: P): boolean => canGetWithin(w, "ground", g.x, g.y, p.x, p.y, 2.5);
+
 /** Our own units standing on an anchoring Goliath's footprint step aside. */
 function shoveAside(w: World, faction: Faction, g: Unit, ctx: GoliathContext, cmds: Command[]): void {
   const fr = sideFrame(w, faction);
@@ -1391,7 +1439,8 @@ function shoveAside(w: World, faction: Faction, g: Unit, ctx: GoliathContext, cm
     }
     const n = Math.max(0.05, dist(0, 0, dx, dy));
     const to = inMap(w, { x: g.x + (dx / n) * 3, y: g.y + (dy / n) * 3 });
-    if (!passable(w, Math.floor(to.x), Math.floor(to.y), moveClassOf(u.kind))) continue;
+    const mc = moveClassOf(u.kind);
+    if (!passable(w, Math.floor(to.x), Math.floor(to.y), mc) || !canGetWithin(w, mc, u.x, u.y, to.x, to.y, 1)) continue;
     ctx.used.add(u.id);
     cmds.push({ type: "move", faction, unitIds: [u.id], x: to.x, y: to.y });
   }
@@ -1427,7 +1476,12 @@ function keepEscorts(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan
   const hasAa = escorts.some((u) => aaWeight(UNITS[u.kind]) >= AA_COVER);
   if (have < want) {
     const pool = ctx.army
-      .filter((u) => !ctx.used.has(u.id) && u.order.type === "idle" && u.kind !== "mender" && u.kind !== "scout" && u.kind !== "sniper")
+      // (idle, or on the way to the economy guard: not a wave, not a fight)
+      .filter((u) => {
+        const o = u.order;
+        const free = o.type === "idle" || (o.type === "attackMove" && dist(o.x, o.y, ctx.guardPoint.x, ctx.guardPoint.y) < 2);
+        return free && !ctx.used.has(u.id) && u.kind !== "mender" && u.kind !== "scout" && u.kind !== "sniper";
+      })
       .filter((u) => dist(u.x, u.y, g.x, g.y) <= GOLIATH_AI.escortReach && reachable(u))
       .sort((a, b) => {
         // anti-air first while the escort has none and the enemy flies
@@ -1508,6 +1562,8 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
     plan.carriers = [];
     plan.launchHp = [];
     plan.lifting = false;
+    plan.origin = null;
+    plan.landing = null;
     plan.waypoint = null;
   };
   if (!lift) {
@@ -1555,6 +1611,8 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
     }
     cmds.push({ type: "lift", faction, unitIds: [...plan.carriers], goliathId: g.id });
     plan.lifting = true;
+    plan.origin = { x: g.x, y: g.y };
+    plan.landing = null;
     plan.liftTick = w.tick;
     plan.launchHp = plan.carriers.map((id) => w.units.get(id)!.hp);
     plan.waypoint = wp;
@@ -1573,24 +1631,47 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
     }
     return;
   }
-  // carrying
+  // carrying: called off already? Down where it was sent
+  const setDownAt = (p: P) => {
+    if (!(lift.setDown && lift.dest && dist(lift.dest.x, lift.dest.y, p.x, p.y) < 0.5))
+      cmds.push({ type: "unload", faction, unitIds: [g.id], x: p.x, y: p.y });
+  };
+  if (plan.landing) {
+    setDownAt(plan.landing);
+    return;
+  }
   const carriers = lift.carriers.map((id) => w.units.get(id));
   const hurt = carriers.some((c, i) => !c || c.hp < (plan.launchHp[i] ?? UNITS.condor.hp) - UNITS.condor.hp * GOLIATH_AI.liftAbort);
   const { covered, clear } = liftAirspace(w, faction, ctx.seen);
   const goal = site?.at ?? null;
-  const ahead = plan.waypoint ?? goal;
-  const blocked = !goal || !ahead || !clear(g.x, g.y, ahead.x, ahead.y) || covered(goal.x, goal.y) ||
-    (plan.waypoint !== null && !clear(plan.waypoint.x, plan.waypoint.y, goal.x, goal.y));
-  if (hurt || blocked) {
-    if (lift.setDown && lift.dest && passable(w, Math.floor(lift.dest.x), Math.floor(lift.dest.y), "ground") && dist(lift.dest.x, lift.dest.y, g.x, g.y) < 3) return; // (already coming down)
-    // down on the nearest land, now (a Condor lost over water drops it into the sea)
-    const land = nearestLand(w, faction, g);
+  /** Call it off: down at `p` (or, nothing given, the nearest land) and think again. */
+  const callOff = (p: P | null) => {
+    const to = p ?? nearestLand(w, faction, g);
     avoidSite(w, m, site);
-    plan.site = null;
     plan.waypoint = null;
-    if (land) cmds.push({ type: "unload", faction, unitIds: [g.id], x: land.x, y: land.y });
-    else cmds.push({ type: "move", faction, unitIds: [g.id], x: ctx.hqC.x, y: ctx.hqC.y }); // (open sea all round: head home)
+    if (!to) {
+      cmds.push({ type: "move", faction, unitIds: [g.id], x: ctx.hqC.x, y: ctx.hqC.y }); // (open sea all round: head home)
+      return;
+    }
+    plan.landing = to;
+    setDownAt(to);
+  };
+  // hurt (a Condor going down drops it): down on the nearest land, now
+  if (hurt || !goal) {
+    callOff(null);
     return;
+  }
+  // anti-air at the site, or no clear way on from here: back where it came from (or the nearest land)
+  if (plan.waypoint && !(clear(g.x, g.y, plan.waypoint.x, plan.waypoint.y) && clear(plan.waypoint.x, plan.waypoint.y, goal.x, goal.y)))
+    plan.waypoint = null;
+  if (!plan.waypoint && (covered(goal.x, goal.y) || !clear(g.x, g.y, goal.x, goal.y))) {
+    const wp = covered(goal.x, goal.y) ? undefined : route(w, g, goal, clear);
+    if (wp) plan.waypoint = wp;
+    else {
+      const back = plan.origin && clear(g.x, g.y, plan.origin.x, plan.origin.y) ? plan.origin : null;
+      callOff(back);
+      return;
+    }
   }
   if (lift.setDown) return; // on its way down at the site
   if (plan.waypoint) {
@@ -1662,30 +1743,41 @@ export function huntGoliaths(w: World, faction: Faction, s: AiState, ctx: HuntCo
     const armour = UNITS[mark.kind].armor;
     const able = ctx.army
       .filter((u) => !ctx.used.has(u.id) && u.order.type === "idle" && u.kind !== "mender")
-      .filter((u) => effectivenessVs(u.kind, armour, domain) >= USELESS && dist(u.x, u.y, e.x, e.y) <= GOLIATH_AI.huntReach)
-      .filter((u) => engageable(w, u, mark.id))
+      .filter((u) => dist(u.x, u.y, e.x, e.y) <= GOLIATH_AI.huntReach)
       .sort((a, b) => dist(a.x, a.y, e.x, e.y) - dist(b.x, b.y, e.x, e.y) || a.id - b.id);
+    // its Menders first (a mended Goliath never goes down): a couple of units that can hit each
+    const menders = lifted
+      ? []
+      : ctx.seen
+          .filter((o) => UNITS[o.kind].heal && dist(o.x, o.y, e.x, e.y) <= 4)
+          .sort((a, b) => dist(a.x, a.y, e.x, e.y) - dist(b.x, b.y, e.x, e.y) || a.id - b.id)
+          .slice(0, 2);
+    const onMender = new Map<number, number[]>();
     const strike: Unit[] = [];
+    const taken = new Set<number>();
+    for (const md of menders) {
+      const ids = able
+        .filter((u) => !taken.has(u.id) && effectivenessVs(u.kind, UNITS[md.kind].armor, domainOf(md)) >= USELESS && engageable(w, u, md.id))
+        .slice(0, GOLIATH_AI.medicHunters);
+      for (const u of ids) {
+        taken.add(u.id);
+        strike.push(u);
+      }
+      if (ids.length > 0) onMender.set(md.id, ids.map((u) => u.id));
+    }
+    // then what it takes to bring the Goliath down
     let v = 0;
+    const onIt: number[] = [];
     for (const u of able) {
       if (v >= need) break;
+      if (taken.has(u.id) || effectivenessVs(u.kind, armour, domain) < USELESS || !engageable(w, u, mark.id)) continue;
+      onIt.push(u.id);
       strike.push(u);
       v += UNITS[u.kind].cost;
     }
     if (v < need) continue;
-    // its Menders first, for those that can hit them
-    const menders = ctx.seen
-      .filter((o) => UNITS[o.kind].heal && dist(o.x, o.y, e.x, e.y) <= 4)
-      .sort((a, b) => dist(a.x, a.y, e.x, e.y) - dist(b.x, b.y, e.x, e.y) || a.id - b.id);
-    const onMender: number[] = [];
-    const onIt: number[] = [];
-    for (const u of strike) {
-      const md = menders[0];
-      if (!lifted && md && effectivenessVs(u.kind, UNITS[md.kind].armor, domainOf(md)) >= USELESS && engageable(w, u, md.id)) onMender.push(u.id);
-      else onIt.push(u.id);
-    }
-    if (onMender.length > 0) cmds.push({ type: "attack", faction, unitIds: onMender, targetId: menders[0]!.id });
-    if (onIt.length > 0) cmds.push({ type: "attack", faction, unitIds: onIt, targetId: mark.id });
+    for (const [id, ids] of onMender) cmds.push({ type: "attack", faction, unitIds: ids, targetId: id });
+    cmds.push({ type: "attack", faction, unitIds: onIt, targetId: mark.id });
     for (const u of strike) ctx.used.add(u.id);
     m.hunts.set(e.id, { tick: w.tick, ids: strike.map((u) => u.id) });
     break; // (one new strike a pass)
