@@ -425,7 +425,7 @@ export function anchorBlockedAt(w: World, faction: Faction, x: number, y: number
       const fx = tx + dx;
       const fy = ty + dy;
       if (!inBounds(w, fx, fy)) return "Off the map";
-      if (buildingAtTile(w, fx, fy)) return "Blocked";
+      if (w.occupancy[fy * w.width + fx] !== 0) return "Blocked"; // (a building, or another dug-in Goliath)
       if (!TERRAIN[terrainAt(w, fx, fy)].buildable) return "Needs open ground";
     }
   if (blocksObjective(w, tx, ty, size)) return "Blocked";

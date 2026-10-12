@@ -18,7 +18,7 @@ import { isInfantry } from "../infantry";
 import { canCarry } from "../lift";
 import { findPath } from "../movement";
 import { blocksObjective, uplinkPay } from "../objectives";
-import { bannedBy } from "../rules";
+import { bannedBy, rulesOf } from "../rules";
 import { isLoaded } from "../transport";
 import { Terrain, type Building, type BuildingKind, type Command, type Faction, type QueueItem, type Unit, type UnitKind, type World } from "../types";
 import {
@@ -126,6 +126,14 @@ export const GOLIATH_AI = {
   front: { balanced: true, rush: true, airswarm: false, boom: false, skyforce: false, ironclad: true } as Record<StrategyName, boolean>,
   /** Personalities whose Goliaths walk with an assault. */
   siege: { balanced: false, rush: true, airswarm: false, boom: false, skyforce: false, ironclad: true } as Record<StrategyName, boolean>,
+  /** With no HQ, the base Goliath moves on once the field within this many tiles runs dry… */
+  baseField: 9,
+  /** …to a field no farther than this (tiles): it is the base, and it is slow. */
+  baseMove: 36,
+  /** Robot Love: our Goliaths keep this far (tiles) from the enemy's (GOLIATH.love.range is a draw)… */
+  loveGap: 9,
+  /** …unless what we field is under this share of what we see of theirs, the base in trouble: a draw beats a loss. */
+  loveLosing: 0.5,
   /** Seconds between a held site's re-checks (is a better one worth the pack-up?). */
   recheck: 20,
   /** A better site must score this many times the current one to move. */
@@ -251,6 +259,8 @@ interface Memo {
   lastOutpost: number;
   lastOrder: number;
   gantryFail: number;
+  /** Tick a building last found no room (no HQ: the rings are full). */
+  noRoom: number;
   /** Strikes on enemy Goliaths: when, and who went. */
   hunts: Map<number, { tick: number; ids: number[] }>;
   /** Field clusters, re-read every few seconds. */
@@ -265,7 +275,7 @@ function memo(s: AiState): Memo {
   if (!m) {
     m = {
       plans: new Map(), fund: 0, tally: null, income: [], home: null, outpost: null, lastOutpost: -1e9,
-      lastOrder: -1e9, gantryFail: -1e9, hunts: new Map(), clusters: null, avoid: []
+      lastOrder: -1e9, gantryFail: -1e9, noRoom: -1e9, hunts: new Map(), clusters: null, avoid: []
     };
     memos.set(s, m);
   }
@@ -295,14 +305,17 @@ export function noteHome(s: AiState, at: P): void {
 }
 
 /**
- * Home for a side whose HQ has fallen: where it stood (the frame stays the
- * same), else (never seen) its first Goliath, else the map centre.
+ * Home for a side with no HQ: where it stood (the frame stays the same),
+ * else — never had one (Nomads) — where its first Goliath stood when first
+ * asked (where the HQ would have been), else the map centre.
  */
 export function lostHome(w: World, faction: Faction, s: AiState): P {
   const m = memo(s);
   if (m.home) return m.home;
   const g = goliathsOf(w, faction).sort(byId)[0];
-  return g ? { x: g.x, y: g.y } : { x: w.width / 2, y: w.height / 2 };
+  if (!g) return { x: w.width / 2, y: w.height / 2 };
+  m.home = { x: g.x, y: g.y };
+  return m.home;
 }
 
 // --- income and the Goliath fund ----------------------------------------
@@ -399,6 +412,11 @@ export function wantGantry(w: World, faction: Faction, s: AiState, ctx: { armyVa
   if (w.tick < from * TICK_RATE) return false;
   if (ctx.threatened || ctx.armyValue < GOLIATH_AI.armyFloor || !roomForGoliath(w, faction, s)) return false;
   return incomeRate(m) >= GOLIATH_AI.gantryIncome || f.scrap >= GOLIATH_AI.gantryBank;
+}
+
+/** A building found no room (no HQ: every ring is full): the base Goliath may move on (planGoliaths). */
+export function noteNoRoom(w: World, s: AiState): void {
+  memo(s).noRoom = w.tick;
 }
 
 /** The Gantry found no room: don't start another for a while. */
@@ -629,6 +647,9 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   const taken: P[] = [];
   for (const [id, plan] of m.plans) if (id !== g.id && plan.site) taken.push(plan.site.field ?? plan.site.at);
   const caution = s.strategy.name === "boom" ? 1 : 0.6;
+  // Robot Love: nowhere near an enemy Goliath (a meeting is a draw)
+  const shy = !!rulesOf(w).robotLove;
+  const loveClear = (p: P) => !shy || !ctx.seen.some((e) => !!e.goliath && dist(e.x, e.y, p.x, p.y) < GOLIATH_AI.loveGap + 4);
   const exposure = (p: P) => Math.max(-1, Math.min(1, (dist(p.x, p.y, home.x, home.y) - dist(p.x, p.y, enemyHq.x, enemyHq.y)) / 20));
   const cands: (Site & { key: P })[] = [];
 
@@ -650,7 +671,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     // beside the field (about two tiles from its nearest tile), on our side of it
     const reach = Math.min(12, GOLIATH_AI.siteReach + Math.sqrt(tiles.length));
     const at = spotNear(w, faction, c, 0, reach, (p) => Math.abs(nearField(p) - 2) * 2 + dist(p.x, p.y, home.x, home.y) * 0.02);
-    if (!at || nearField(at) > 3.2 || underGuns(known, at)) continue;
+    if (!at || nearField(at) > 3.2 || underGuns(known, at) || !loveClear(at)) continue;
     const lift = regionAt(w, Math.floor(at.x), Math.floor(at.y), "ground") !== gRegion;
     if (lift && !lifts) continue;
     const d = dist(g.x, g.y, at.x, at.y);
@@ -668,7 +689,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       // an enemy Goliath already there: not a landing
       if (ctx.seen.some((e) => e.goliath && regionAt(w, Math.floor(e.x), Math.floor(e.y), "ground") === lr)) continue;
       const at = spotNear(w, faction, l, GOLIATH_AI.relayMin, GOLIATH_AI.relayMax, (p) => dist(p.x, p.y, l.x, l.y) + dist(p.x, p.y, home.x, home.y) * 0.02, lr);
-      if (!at || underGuns(known, at)) continue;
+      if (!at || underGuns(known, at) || !loveClear(at)) continue;
       const enemyOwned = l.owner !== null && l.owner !== faction ? 1.3 : 1;
       const v = uplinkPay(l) * GOLIATH_AI.relayWorth * enemyOwned;
       const d = dist(g.x, g.y, at.x, at.y);
@@ -705,7 +726,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     const aim = { x: home.x + (enemyHq.x - home.x) * t, y: home.y + (enemyHq.y - home.y) * t };
     if (!avoided(aim)) {
       const at = spotNear(w, faction, aim, 0, 6, (p) => dist(p.x, p.y, aim.x, aim.y), gRegion);
-      if (at && !underGuns(known, at, GOLIATH_AI.defenceGap + 2) && !taken.some((p) => dist(p.x, p.y, at.x, at.y) < 6))
+      if (at && !underGuns(known, at, GOLIATH_AI.defenceGap + 2) && loveClear(at) && !taken.some((p) => dist(p.x, p.y, at.x, at.y) < 6))
         return { kind: "front", at, field: null, value: GOLIATH_AI.frontValue, score: GOLIATH_AI.frontValue / (dist(g.x, g.y, at.x, at.y) + 30), lift: false };
     }
   }
@@ -1022,21 +1043,87 @@ export function planGoliaths(w: World, faction: Faction, s: AiState, ctx: Goliat
   prune(w, faction, m);
   const goliaths = goliathsOf(w, faction).sort(byId);
   if (goliaths.length === 0) return cmds;
+  // with no HQ (lost, or Nomads) one Goliath is the base: the first dug in (else the first);
+  // any other plays as if the HQ stood
+  const base = ctx.hasHq ? null : goliaths.find(isAnchored) ?? goliaths[0]!;
+  const love = loveMood(w, ctx, goliaths);
   for (const g of goliaths) {
     let plan = m.plans.get(g.id);
     if (!plan) {
       plan = newPlan(w);
       m.plans.set(g.id, plan);
     }
+    const gctx = base && g.id !== base.id ? { ...ctx, hasHq: true } : ctx;
     if (ctx.used.has(g.id) && canWalk(g)) {
-      keepEscorts(w, faction, s, g, plan, ctx, cmds);
+      keepEscorts(w, faction, s, g, plan, gctx, cmds);
       continue; // (dodging a reticle)
     }
-    step(w, faction, s, g, plan, ctx, m, cmds);
+    if (!(love && loveStep(w, faction, g, plan, gctx, love, cmds))) step(w, faction, s, g, plan, gctx, m, cmds);
     ctx.used.add(g.id);
-    keepEscorts(w, faction, s, g, plan, ctx, cmds);
+    keepEscorts(w, faction, s, g, plan, gctx, cmds);
   }
   return cmds;
+}
+
+// --- Robot Love ------------------------------------------------------------
+
+/**
+ * Under Robot Love (two enemy Goliaths within GOLIATH.love.range: a draw),
+ * how our Goliaths should feel about theirs: "shy" — keep clear, the usual
+ * case — or "court" when we're plainly losing (what we field and see of
+ * ours is under GOLIATH_AI.loveLosing of what we see of theirs, and the base
+ * is under attack or gone): a draw beats a defeat. Null without the mutator
+ * or an enemy Goliath.
+ */
+function loveMood(w: World, ctx: GoliathContext, ours: readonly Unit[]): "shy" | "court" | null {
+  if (!rulesOf(w).robotLove || !ctx.seen.some((e) => !!e.goliath)) return null;
+  const mine = value(ctx.army) + ours.reduce((v, g) => v + threatValue(g), 0);
+  const theirs = ctx.seen.reduce((v, e) => v + (UNITS[e.kind].dps > 0 || e.goliath ? threatValue(e) : 0), 0);
+  const losing = mine < GOLIATH_AI.loveLosing * theirs && (ctx.threatened || !ctx.hasHq);
+  return losing ? "court" : "shy";
+}
+
+/**
+ * One Goliath's pass under Robot Love; true when it took the Goliath's orders.
+ * Shy: an enemy Goliath within GOLIATH_AI.loveGap sends ours the other way
+ * (packing up first if it is dug in and the other is close). Courting: ours
+ * walks to meet the nearest of theirs.
+ */
+function loveStep(w: World, faction: Faction, g: Unit, plan: Plan, ctx: GoliathContext, mood: "shy" | "court", cmds: Command[]): boolean {
+  const gs = g.goliath!;
+  if (gs.lift) return false;
+  const foes = ctx.seen.filter((e) => !!e.goliath).sort((a, b) => dist(a.x, a.y, g.x, g.y) - dist(b.x, b.y, g.x, g.y) || a.id - b.id);
+  const e = foes[0];
+  if (!e) return false;
+  const d = dist(e.x, e.y, g.x, g.y);
+  if (mood === "court") {
+    if (gs.mode === "anchored" || gs.mode === "anchoring") cmds.push({ type: "packUp", faction, unitIds: [g.id] });
+    else if (gs.mode === "walking") {
+      const o = g.order;
+      if (!(o.type === "move" && dist(o.x, o.y, e.x, e.y) < 2)) cmds.push({ type: "move", faction, unitIds: [g.id], x: e.x, y: e.y });
+    }
+    plan.site = null;
+    setPhase(w, plan, "guard");
+    return true;
+  }
+  const gap = GOLIATH_AI.loveGap;
+  if (d > gap + (gs.mode === "walking" ? 0 : GOLIATH.packTime * UNITS.goliath.speed)) return false;
+  if (gs.mode === "anchored" || gs.mode === "anchoring") {
+    cmds.push({ type: "packUp", faction, unitIds: [g.id] });
+    plan.next = "guard";
+    plan.site = null;
+    setPhase(w, plan, "pack");
+    return true;
+  }
+  if (gs.mode !== "walking") return true; // (packing up: away once it walks)
+  // straight away from it, as far again as the gap (kept on the map)
+  const k = (gap + 2) / Math.max(0.5, d);
+  const to = inMap(w, { x: g.x + (g.x - e.x) * k, y: g.y + (g.y - e.y) * k });
+  const o = g.order;
+  if (!(o.type === "move" && dist(o.x, o.y, to.x, to.y) < 2)) cmds.push({ type: "move", faction, unitIds: [g.id], x: to.x, y: to.y });
+  plan.site = null;
+  setPhase(w, plan, "guard");
+  return true;
 }
 
 function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: GoliathContext, m: Memo, cmds: Command[]): void {
@@ -1186,8 +1273,24 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         return;
       }
       const site = plan.site;
-      // the HQ gone: this is the base now (it stays, whatever else turns up)
-      if (!ctx.hasHq) return;
+      // no HQ (lost, or Nomads): this is the base. It stays — unless its field is dry, or its
+      // ring is full and the field thin, and a field worth it lies within reach: then it moves
+      // on, while nothing threatens it (it's a drop-off and a barracks again within a minute)
+      if (!ctx.hasHq) {
+        if (w.tick - plan.checked < GOLIATH_AI.recheck * TICK_RATE) return;
+        plan.checked = w.tick;
+        const left = fieldLeft(w, g, GOLIATH_AI.baseField);
+        const full = w.tick - m.noRoom < GOLIATH_AI.recheck * 2 * TICK_RATE;
+        if (!(left < GOLIATH_AI.leaveBelow || (full && left < GOLIATH_AI.siteMin))) return;
+        if (ctx.threatened || enemyNear(ctx.seen, g, GOLIATH_AI.danger + 3) > 0) return;
+        const next = chooseSite(w, faction, s, g, ctx, m);
+        if (!next || next.kind !== "field" || next.lift || dist(g.x, g.y, next.at.x, next.at.y) > GOLIATH_AI.baseMove) return;
+        cmds.push({ type: "packUp", faction, unitIds: [g.id] });
+        plan.site = next;
+        plan.next = "march";
+        setPhase(w, plan, "pack");
+        return;
+      }
       // a siege personality packs up to walk with an assault
       if (GOLIATH_AI.siege[s.strategy.name] && ctx.mode === "assault" && hp >= GOLIATH_AI.resumeHp && site?.kind !== "relay") {
         cmds.push({ type: "packUp", faction, unitIds: [g.id] });
@@ -1219,6 +1322,11 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       if (gs.mode === "walking") {
         const next = plan.next;
         plan.next = "muster";
+        if (next === "march" && plan.site) {
+          setPhase(w, plan, "march");
+          move(plan.site.at);
+          return;
+        }
         plan.site = null;
         setPhase(w, plan, next);
       } else if (gs.mode === "anchored") cmds.push({ type: "packUp", faction, unitIds: [g.id] }); // (the order was lost: again)

@@ -41,7 +41,7 @@ export const MENDER_AI = {
   goliathReach: 30,
   /** A Goliath this far (tiles) from home keeps one Mender by it even when whole. */
   goliathAway: 10,
-  /** Menders stand this far (tiles) from a Goliath's centre, on the home side (their reach is 3). */
+  /** A Mender this close (tiles) to a Goliath's centre is there (its reach is 3; the Goliath's radius 1). */
   goliathStand: 1.6
 };
 
@@ -65,7 +65,9 @@ export function planMenders(
   const cmds: Command[] = [];
   const menders = army.filter((u) => u.kind === "mender" && !used.has(u.id));
   if (menders.length === 0) return cmds;
-  const others = army.filter((u) => u.kind !== "mender");
+  // (a Goliath handed in with the army is served as one too)
+  const allGoliaths = [...goliaths, ...army.filter((u) => !!u.goliath && !goliaths.includes(u))];
+  const others = army.filter((u) => u.kind !== "mender" && !u.goliath);
   const company = (u: Unit) =>
     others.reduce((v, o) => (dist(o.x, o.y, u.x, u.y) <= MENDER_AI.company ? v + UNITS[o.kind].cost : v), 0);
   // a lone unit deep in enemy ground (a raider, the last of a wave): not worth following in there
@@ -99,17 +101,13 @@ export function planMenders(
       .filter((m) => dist(m.x, m.y, g.x, g.y) <= MENDER_AI.goliathReach)
       .sort((a, b) => dist(a.x, a.y, g.x, g.y) - dist(b.x, b.y, g.x, g.y) || a.id - b.id)
       .slice(0, n);
-    // beside it, on the home side (it stands at the front)
-    const d = Math.max(0.01, dist(g.x, g.y, home.x, home.y));
-    const k = Math.min(1, MENDER_AI.goliathStand / d);
-    const goal = { x: g.x + (home.x - g.x) * k, y: g.y + (home.y - g.y) * k };
     for (const m of picks) {
       free.splice(free.indexOf(m), 1);
       used.add(m.id);
-      go(m, goal, 1, true);
+      go(m, g, MENDER_AI.goliathStand, true); // (over it: every side of it is in reach)
     }
   };
-  const repairable = goliaths.filter((g) => !isLifted(g) && !(w && isStunned(w, g.id)));
+  const repairable = allGoliaths.filter((g) => !isLifted(g) && !(w && isStunned(w, g.id)));
   const hurt = repairable
     .filter((g) => repairUrgency(g) > 0 || hp(g) < MENDER_AI.wounded)
     .sort((a, b) => repairUrgency(b) - repairUrgency(a) || hp(a) - hp(b) || a.id - b.id);

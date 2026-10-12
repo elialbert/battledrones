@@ -27,6 +27,7 @@ import {
   liftWantsCondors,
   lostHome,
   noteGantryFailed,
+  noteNoRoom,
   noteGoliathOrdered,
   noteHome,
   outpostSpot,
@@ -37,7 +38,7 @@ import {
   wantGoliath
 } from "./goliath";
 import { GOLIATH } from "../balance";
-import { distToFootprint, goliathsOf, hasGoliath, isAnchored, repairUrgency, unitCost } from "../goliath";
+import { distToFootprint, goliathsOf, hasGoliath, isAnchored, repairUrgency, trainableAt, unitCost } from "../goliath";
 import type {
   ArmorClass,
   Building,
@@ -347,13 +348,17 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const seen = seenEnemies(w, faction); // through fog and Sniper concealment alike
   observeEnemy(s, seen, enemyGantryBuilds(w, faction).length);
 
-  // (the HQ gone, a Goliath fighting on: home is where it stood — the frame stays the same)
-  const hqC = hq ? buildingCenter(hq) : lostHome(w, faction, s);
-  if (hq) noteHome(s, hqC);
+  // where our HQ stands, or stood (Nomads: where our Goliath started): the enemy's home is its
+  // mirror image, and that stays put
+  const origin = hq ? buildingCenter(hq) : lostHome(w, faction, s);
+  if (hq) noteHome(s, origin);
+  // the base: the HQ, else (lost, or Nomads) our first dug-in Goliath, else where the HQ stood
+  const baseGoliath = hq ? undefined : goliaths.find(isAnchored);
+  const hqC = baseGoliath ? { x: baseGoliath.x, y: baseGoliath.y } : origin;
   // island maps: the two landmasses meet only at the bridges, and a field on
   // the enemy's side of them is theirs to defend, not ours to mine
   const islandMap = !!w.rules?.islands;
-  const enemyHome = mirror(w, hqC.x, hqC.y);
+  const enemyHome = mirror(w, origin.x, origin.y);
   const ourSide = (tx: number, ty: number) =>
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
   const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
@@ -374,32 +379,39 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const raidValue = atHome.reduce((v, t) => v + t.value, 0);
   const threatened = raidValue >= HOME_ALARM_VALUE;
   const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq");
-  const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : mirror(w, hqC.x, hqC.y);
+  const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : enemyHome;
 
   // --- construction: place a ready building, or start the next one -------
   // (late in a match, rich and with an army: a Gantry and whatever it needs first, ai/goliath.ts)
-  const gantryWanted = !!hq && wantGantry(w, faction, s, { armyValue, threatened });
-  const wanted = nextBuilding(w, faction, myBuildings, s, gantryWanted);
-  /** Behind the HQ: the Gantry is big, and the enemy always sees it. */
-  const gantryAnchor = () => towardEnemy(w, hqC, -5);
+  // (with no HQ, lost or Nomads, there's a Gantry only while a Goliath is dug in to build round)
+  const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened });
+  /** Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the HQ (it is big, and always seen), the rest by the HQ. */
+  const anchorFor = (kind: BuildingKind) =>
+    kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
+      ? guardPoint
+      : kind === "radar" ? towardEnemy(w, hqC, 4) : kind === "gantry" ? towardEnemy(w, hqC, -5) : hqC;
+  // (no HQ: every building goes up in a Goliath's ring, and a full ring is skipped, not started and refunded)
+  let roomless = false;
+  const fits = (kind: BuildingKind) => {
+    const ok = !!findPlacementSpot(w, faction, kind, anchorFor(kind));
+    if (!ok) roomless = true;
+    return ok;
+  };
+  const wanted = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits);
+  if (roomless) noteNoRoom(w, s); // (the base Goliath may move on to build more: ai/goliath.ts)
   if (f.pending?.ready) {
     const kind = f.pending.kind;
     // an outpost goes up in its Goliath's ring (ai/goliath.ts)
     let spot: { tx: number; ty: number } | null = outpostSpot(w, faction, s, kind, enemyHqPos);
-    if (spot) {
-      // (placed)
-    } else if (kind === "depot") {
-      const site = hq ? depotSite(w, faction, hqC) : null;
+    if (!spot && kind === "depot" && hq) {
+      const site = depotSite(w, faction, hqC);
       spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
-    } else {
-      const anchor =
-        kind === "turret" || kind === "sam-site" ? guardPoint : kind === "radar" ? towardEnemy(w, hqC, 4) : kind === "gantry" ? gantryAnchor() : hqC;
-      spot = findPlacementSpot(w, faction, kind, anchor);
-    }
+    } else if (!spot) spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
     if (spot) cmds.push({ type: "placeBuilding", faction, tx: spot.tx, ty: spot.ty });
     else {
       cmds.push({ type: "cancelBuilding", faction }); // nowhere to put it
       if (kind === "gantry") noteGantryFailed(w, s);
+      if (!hq) noteNoRoom(w, s);
     }
   } else if (!f.pending) {
     // an outpost for a dug-in Goliath first (cheap, and few), else the base's next building
@@ -407,7 +419,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (outpost) cmds.push({ type: "startBuilding", faction, building: outpost });
     else if (wanted && f.scrap >= BUILDINGS[wanted].cost) {
       // (a Gantry only with room for it: else it would go up only to be refunded)
-      if (wanted === "gantry" && !findPlacementSpot(w, faction, "gantry", gantryAnchor())) noteGantryFailed(w, s);
+      if (wanted === "gantry" && hq && !fits("gantry")) noteGantryFailed(w, s);
       else cmds.push({ type: "startBuilding", faction, building: wanted });
     }
   }
@@ -426,8 +438,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   });
   cmds.push(...goliathFields.cmds);
   const wantHarvesters = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots + goliathFields.extra);
-  if (hq && fieldsLeft && harvesters.length < wantHarvesters && hq.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
-    cmds.push({ type: "produce", faction, buildingId: hq.id, unit: "harvester" });
+  // (Nomads: no HQ ever — the dug-in Goliath builds them, goliath.ts trainableAt)
+  const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
+  if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
+    cmds.push({ type: "produce", faction, buildingId: yard.id, unit: "harvester" });
   for (const h of harvesters) {
     if (goliathFields.keep.has(h.id)) continue; // (working a Goliath's field)
     const o = h.order;
@@ -688,7 +702,6 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const homeGuard = value(army.filter((u) => dist(u.x, u.y, hqC.x, hqC.y) <= DEFENSE_RADIUS));
   if (raidValue >= HOME_ALARM_VALUE && raidValue > homeGuard) {
     s.mode = "buildup";
-    const enemyHome = mirror(w, hqC.x, hqC.y);
     const away = army.filter(
       (u) =>
         !used.has(u.id) &&
@@ -1010,7 +1023,14 @@ function observeEnemy(s: AiState, seen: Unit[], gantryBuilds = 0): void {
  * whatever it still needs of its four prerequisites first. Outposts (built
  * in a Goliath's ring, far from base) don't count toward the base's order.
  */
-function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: AiState, gantry = false): BuildingKind | null {
+function nextBuilding(
+  w: World,
+  faction: Faction,
+  myBuildings: Building[],
+  s: AiState,
+  gantry = false,
+  fits?: (kind: BuildingKind) => boolean
+): BuildingKind | null {
   const have = new Map<BuildingKind, number>();
   // (with no HQ every building is an outpost: then they're the base)
   const hasHq = !!hqOf(w, faction);
@@ -1063,6 +1083,7 @@ function nextBuilding(w: World, faction: Faction, myBuildings: Building[], s: Ai
       }
     }
     if (buildingBlocker(w, faction, kind)) continue;
+    if (fits && !fits(kind)) continue; // (no room for it in any ring: the next thing that fits)
     return kind;
   }
   return null;
