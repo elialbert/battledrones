@@ -33,7 +33,7 @@ const FEATURES: Record<UnitKind, string[]> = {
     "Has a minimum range and light armour: anything that closes the distance tears it apart."
   ],
   mastodon: [
-    "Super-heavy twin-cannon tank with by far the most HP of any unit.",
+    "Super-heavy twin-cannon tank with by far the most HP of any tank.",
     "Its cannons hit heavy armour harder, and it crushes Stingers, Flak and Mortars.",
     "Slow and unable to shoot at air — Wasps and Lancers are its nightmare."
   ],

@@ -1,5 +1,5 @@
 import { POWERS, TICK_RATE, UNITS } from "./balance";
-import { goliathsOf, hasGoliath } from "./goliath";
+import { hasGoliath } from "./goliath";
 import { areaBlast, strikeDamage } from "./combat";
 import { isExplored, isVisible } from "./fog";
 import { worldRandom } from "./rand";
@@ -210,8 +210,8 @@ export function chargePowers(w: World): void {
   for (const f of FACTIONS) m[f] = Math.min(POWERS.meterMax, m[f]);
 }
 
-/** Who a calldown's kills are credited to: the HQ, else a Goliath standing in for it (none: 0, no killer). */
-const attackerOf = (w: World, f: Faction) => hqOf(w, f)?.id ?? goliathsOf(w, f)[0]?.id ?? 0;
+/** Who a calldown's kills are credited to: the HQ (so faction stats count them, and no unit takes their XP), else no one (0). */
+const attackerOf = (w: World, f: Faction) => hqOf(w, f)?.id ?? 0;
 
 function impact(w: World, c: Calldown, x: number, y: number, hits: number, unitIds: number[] = []): void {
   w.fx.push({

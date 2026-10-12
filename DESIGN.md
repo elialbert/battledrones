@@ -1080,10 +1080,9 @@ minutes in a typical match. Numbers live in `POWERS` in `balance.ts`.
   Goliath: "Calldowns need an HQ or a Goliath" — an *explored* target —
   a *visible*, ground-passable one for the pod) for the player and the AI
   alike. Calldowns only hurt the enemy; kills are credited to the firing
-  side (its HQ is the killer, so faction stats count them; no unit XP).
-  With no HQ standing, the side's oldest Goliath takes the credit instead,
-  kills and XP included, and the presentation layers can't tell those
-  kills from its own. The
+  side (its HQ is the killer, so faction stats count them; no unit XP;
+  with no HQ standing, nobody is, and the faction stats still count them).
+  The
   presentation layers name the strike instead of "defences" or the HQ (see
   *Calldown kills count* under Voices & announcer): first blood, streaks,
   hero toasts ("✝ Viper (Lancer, 9 kills) destroyed by an enemy Barrage"),
@@ -2538,7 +2537,7 @@ src/
   sim/        # Pure TS, no engine. The authoritative game state.
     world.ts        # entities, tile grid, occupancy, passability
     balance.ts      # every tunable number: units, buildings, terrain, damage table
-    maps.ts         # the 5 maps (seeded painter) + createMapWorld
+    maps.ts         # the 6 maps (seeded painter) + createMapWorld
     modes/survival.ts # Last Stand wave director (pure, seeded)
     rules.ts        # match mutators (World.rules) and their hooks
     ops.ts          # the Ops campaign: op definitions, goals, tickOps
