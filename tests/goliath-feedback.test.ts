@@ -699,18 +699,30 @@ describe("Goliaths in the after-action report", () => {
     const firstBuilt = { blue: { goliath: 300 }, red: { goliath: 420 } };
     const m = moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs, firstBuilt }, "blue");
     expect(m.map((x) => [x.kind, x.title, x.text, x.tone])).toEqual([
-      ["goliath", "First Goliath", "Your Goliath walked off the Gantry", "good"],
+      ["goliath", "Goliath", "Your first Goliath walked off the Gantry", "good"],
       ["hq", "HQ destroyed", "Your HQ fell; your Goliath fought on for 2:00", "bad"]
     ]);
     const spec = moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs, firstBuilt }, null);
-    expect(spec.map((x) => x.text)).toEqual(["Blue's Goliath took the field", "Blue's HQ fell; Blue's Goliath fought on for 2:00"]);
+    expect(spec.map((x) => x.text)).toEqual(["Blue's first Goliath walked off the Gantry", "Blue's HQ fell; Blue's Goliath fought on for 2:00"]);
     expect(spec.every((x) => x.tone === "neutral")).toBe(true);
-    expect(moments({ samples: samples(600), deaths: [], refs, firstBuilt }, "red")[0]!.text).toBe("Their Goliath took the field");
+    expect(moments({ samples: samples(600), deaths: [], refs, firstBuilt }, "red")[0]!.text).toBe("Their first Goliath walked off their Gantry");
     // an HQ that ended the match, or a side that never had a Goliath: no such beat
     expect(moments({ samples: samples(480), deaths: [hqRec("blue", 480)], refs, firstBuilt }, "blue").some((x) => x.kind === "hq")).toBe(false);
     expect(moments({ samples: samples(600), deaths: [hqRec("blue", 280)], refs, firstBuilt }, "blue").some((x) => x.kind === "hq")).toBe(false);
     // without a first-built log (older callers): the beats as before
     expect(moments({ samples: samples(600), deaths: [hqRec("blue", 480)], refs }, "blue")).toEqual([]);
+  });
+
+  it("Robot Love: the chronicle records where the Goliaths fell in love, the last beat of the story", () => {
+    const w = createWorld(48, 48);
+    const c = new Chronicle(w);
+    w.tick = 540 * TICK_RATE;
+    c.onFx({ type: "love", ids: [1, 2], x: 24, y: 24 });
+    expect(c.love).toEqual({ t: 540, x: 24, y: 24 });
+    const love = c.love!;
+    const mine = moments({ samples: samples(540), deaths: [], refs, love }, "blue");
+    expect(mine.at(-1)).toEqual({ kind: "love", t: 540, title: "Robot Love", text: "Your Goliath and theirs fell in love mid-map: a draw", tone: "neutral" });
+    expect(moments({ samples: samples(540), deaths: [], refs, love }, null).at(-1)!.text).toBe("Blue's and Red's Goliaths fell in love mid-map: a draw");
   });
 
   it("counts Goliaths fielded, and never counts a Gantry as an idle factory", () => {
