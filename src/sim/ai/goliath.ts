@@ -94,6 +94,12 @@ export const GOLIATH_AI = {
   gantryRetry: 90,
   /** Goliaths alive or on the cradle, at most. */
   max: { easy: 1, normal: 2, hard: 2 } as Record<Difficulty, number>,
+  /**
+   * …and one on the island maps, where the war is squads, Condors and air over
+   * the islands and a slow walk by the bridges (with two, the Archipelago's
+   * lean economy stalled: island matches ran the full 25 minutes undecided).
+   */
+  islandMax: 1,
   /** Seconds between ordering one Goliath and the next. */
   again: 150,
   /** Share of income set aside for the next Goliath while one is wanted (the rest keeps the army coming). */
@@ -163,6 +169,8 @@ export const GOLIATH_AI = {
   relayGarrison: 3,
   lastGarrison: 4,
 
+  /** Menders the Airpads add for our Goliaths, at most (one with any; three for each hurt one). */
+  menders: 4,
   /** Escort value (share of its list price) of idle army that walks with it… */
   escort: 0.35,
   /** …recruited from within this many tiles… */
@@ -175,8 +183,10 @@ export const GOLIATH_AI = {
   resumeHp: 0.7,
   /** Walking with a wave it falls back below this share (its laser gone: the walk home is under fire). */
   siegeRetreat: 0.5,
-  /** With a wave it keeps this many tiles behind the wave's lead. */
+  /** With a wave it keeps this many tiles behind the wave's lead… */
   behind: 3,
+  /** …and falls in with one whose lead passes within this many tiles of it. */
+  join: 16,
   /** Visible enemy firepower within `danger` tiles over this many times what holds the site (and it hurt): pack up and go. */
   loseEdge: 1.5,
   danger: 9,
@@ -194,6 +204,8 @@ export const GOLIATH_AI = {
   liftAbort: 0.25,
   /** Anti-air (Flak-weighted) on a lift's route above this calls it off: a downed Condor drops the Goliath. */
   liftAa: 0.2,
+  /** A lift given up on isn't tried again for this long (s). */
+  liftRetry: 150,
   /** Seconds the Condors have to hook on before the lift is called off. */
   liftHook: 30,
 
@@ -247,6 +259,8 @@ interface Plan {
   /** Where the lift took off (a called-off lift flies back there), and where a called-off one comes down. */
   origin: P | null;
   landing: P | null;
+  /** No lift is tried again before this tick (one just failed for want of Condors or a clear sky). */
+  noLift: number;
   tries: number;
   /** Tick of the last move order, and of the last re-check of a held site. */
   moved: number;
@@ -377,7 +391,7 @@ export function goliathFund(w: World, faction: Faction, s: AiState, ctx: FundCon
 function roomForGoliath(w: World, faction: Faction, s: AiState): boolean {
   let n = goliathsOf(w, faction).length;
   for (const b of w.buildings.values()) if (b.faction === faction) for (const q of b.queue) if (q.kind === "goliath") n++;
-  return n < GOLIATH_AI.max[s.difficulty];
+  return n < (w.rules?.islands ? GOLIATH_AI.islandMax : GOLIATH_AI.max[s.difficulty]);
 }
 
 /**
@@ -389,6 +403,8 @@ export function wantGoliath(w: World, faction: Faction, s: AiState, ctx: FundCon
   const m = memo(s);
   if (w.survival || ctx.threatened || ctx.armyValue < GOLIATH_AI.armyFloor) return false;
   if (!roomForGoliath(w, faction, s) || w.tick - m.lastOrder < GOLIATH_AI.again * TICK_RATE) return false;
+  // (another while one walks: only on an income that pays for it, not out of the last of the bank)
+  if (goliathsOf(w, faction).length > 0 && incomeRate(m) < GOLIATH_AI.gantryIncome) return false;
   return ctx.spendable >= goliathCost(w, faction);
 }
 
@@ -646,7 +662,10 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   const enemyHq = ctx.enemyHqPos;
   const fr = sideFrame(w, faction);
   const gRegion = regionAt(w, Math.floor(g.x), Math.floor(g.y), "ground");
-  const lifts = canLift(w, faction, s);
+  const lifts = canLift(w, faction, s) && w.tick >= (m.plans.get(g.id)?.noLift ?? -1e9);
+  // (a site by lift only with a way there clear of anti-air now: the Condors are only held then)
+  const sky = lifts ? liftAirspace(w, faction, ctx.seen) : null;
+  const flyable = (at: P) => !!sky && !sky.covered(at.x, at.y) && route(w, g, at, sky.clear) !== undefined;
   m.avoid = m.avoid.filter((a) => a.until > w.tick);
   const avoided = (p: P) => m.avoid.some((a) => dist(a.x, a.y, p.x, p.y) < 4);
   // sites other Goliaths of ours have
@@ -679,7 +698,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     const at = spotNear(w, faction, c, 0, reach, (p) => Math.abs(nearField(p) - 2) * 2 + dist(p.x, p.y, home.x, home.y) * 0.02);
     if (!at || nearField(at) > 3.2 || underGuns(known, at) || !loveClear(at)) continue;
     const lift = regionAt(w, Math.floor(at.x), Math.floor(at.y), "ground") !== gRegion;
-    if (lift && !lifts) continue;
+    if (lift && !flyable(at)) continue;
     const d = dist(g.x, g.y, at.x, at.y);
     let score = (cl.value / (d + 30)) * (1 - 0.5 * caution * Math.max(0, exposure(at))) - enemyNear(ctx.seen, at, 8) / 40;
     if (lift) score *= 0.7;
@@ -695,7 +714,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       // an enemy Goliath already there: not a landing
       if (ctx.seen.some((e) => e.goliath && regionAt(w, Math.floor(e.x), Math.floor(e.y), "ground") === lr)) continue;
       const at = spotNear(w, faction, l, GOLIATH_AI.relayMin, GOLIATH_AI.relayMax, (p) => dist(p.x, p.y, l.x, l.y) + dist(p.x, p.y, home.x, home.y) * 0.02, lr);
-      if (!at || underGuns(known, at) || !loveClear(at)) continue;
+      if (!at || underGuns(known, at) || !loveClear(at) || !flyable(at)) continue;
       const enemyOwned = l.owner !== null && l.owner !== faction ? 1.3 : 1;
       const v = uplinkPay(l) * GOLIATH_AI.relayWorth * enemyOwned;
       const d = dist(g.x, g.y, at.x, at.y);
@@ -713,12 +732,12 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       const path = findPath(w, g.x, g.y, c.at.x, c.at.y, "ground", faction);
       const end = path?.[path.length - 1];
       if (!path || !end || dist(end.x, end.y, c.at.x, c.at.y) > 1.5) {
-        if (!lifts) continue;
+        if (!flyable(c.at)) continue;
         c.lift = true; // cut off by ground: fly it
       } else {
         const straight = dist(g.x, g.y, c.at.x, c.at.y);
         const walk = path.length; // (tiles: near enough)
-        if (lifts && walk > straight * GOLIATH_AI.liftDetour && walk - straight > GOLIATH_AI.liftGain && freeCondors(w, faction, s, g, m).length >= 2)
+        if (walk > straight * GOLIATH_AI.liftDetour && walk - straight > GOLIATH_AI.liftGain && freeCondors(w, faction, s, g, m).length >= 2 && flyable(c.at))
           c.lift = true;
       }
     }
@@ -1021,7 +1040,7 @@ export function goliathBarracks(
 function newPlan(w: World): Plan {
   return {
     phase: "muster", since: w.tick, site: null, next: "muster", escorts: [], harvesters: [], carriers: [], launchHp: [],
-    waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, tries: 0, moved: -1e9, checked: w.tick
+    waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, noLift: -1e9, tries: 0, moved: -1e9, checked: w.tick
   };
 }
 
@@ -1182,8 +1201,8 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       }
       if (gs.mode === "packing") return;
       if (plan.phase === "guard" && w.tick - plan.since < GOLIATH_AI.recheck * TICK_RATE) return;
-      // siege personalities walk with an assault
-      if (GOLIATH_AI.siege[s.strategy.name] && ctx.mode === "assault" && ctx.hasHq && hp >= GOLIATH_AI.resumeHp) {
+      // siege personalities fall in with a wave going by
+      if (joinsWave(s, g, ctx, m, hp)) {
         setPhase(w, plan, "siege");
         return;
       }
@@ -1303,8 +1322,8 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         setPhase(w, plan, "pack");
         return;
       }
-      // a siege personality packs up to walk with an assault
-      if (GOLIATH_AI.siege[s.strategy.name] && ctx.mode === "assault" && hp >= GOLIATH_AI.resumeHp && site?.kind !== "relay") {
+      // a siege personality packs up to fall in with a wave going by (a forward post is on its way)
+      if (site?.kind !== "relay" && joinsWave(s, g, ctx, m, hp)) {
         cmds.push({ type: "packUp", faction, unitIds: [g.id] });
         plan.next = "siege";
         setPhase(w, plan, "pack");
@@ -1362,6 +1381,11 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       // with the wave, a few tiles behind its lead (its mortars outreach the defences it shells),
       // never out in front of it; no wave out yet: the staging point
       const lead = waveLead(ctx, new Set([...m.plans.values()].flatMap((p) => p.escorts)));
+      // the wave's over (or gone on without it): back to its own business
+      if (!lead && w.tick - plan.since > GOLIATH_AI.recheck * TICK_RATE) {
+        setPhase(w, plan, "muster");
+        return;
+      }
       let goal = ctx.staging;
       if (lead) {
         const back = Math.max(0.5, dist(lead.x, lead.y, ctx.hqC.x, ctx.hqC.y));
@@ -1393,6 +1417,18 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       return;
     }
   }
+}
+
+/**
+ * Does Goliath `g` (a siege personality's, healthy, the HQ standing) fall in
+ * with our wave now: one is out, its lead within GOLIATH_AI.join tiles (a
+ * Goliath walks at a tank's half speed: it joins a wave going by its post,
+ * it doesn't chase one across the map)?
+ */
+function joinsWave(s: AiState, g: Unit, ctx: GoliathContext, m: Memo, hp: number): boolean {
+  if (!GOLIATH_AI.siege[s.strategy.name] || ctx.mode !== "assault" || !ctx.hasHq || hp < GOLIATH_AI.resumeHp) return false;
+  const lead = waveLead(ctx, new Set([...m.plans.values()].flatMap((p) => p.escorts)));
+  return !!lead && dist(lead.x, lead.y, g.x, g.y) <= GOLIATH_AI.join;
 }
 
 /**
@@ -1588,6 +1624,20 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
     }
     if (gs.mode !== "walking") return;
     const late = w.tick - plan.since > GOLIATH_AI.liftWait * TICK_RATE;
+    const giveUp = () => {
+      avoidSite(w, m, site);
+      release();
+      plan.noLift = w.tick + GOLIATH_AI.liftRetry * TICK_RATE;
+      setPhase(w, plan, "muster");
+    };
+    // a clear way there first (the Condors are only held once there is one: the airlift needs them)
+    const { covered, clear } = liftAirspace(w, faction, ctx.seen);
+    const wp = covered(site.at.x, site.at.y) ? undefined : route(w, g, site.at, clear);
+    if (wp === undefined) {
+      plan.carriers = [];
+      if (late) giveUp();
+      return;
+    }
     // hold two Condors
     plan.carriers = plan.carriers.filter((id) => {
       const c = w.units.get(id);
@@ -1598,15 +1648,8 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
         if (plan.carriers.length >= 2) break;
         if (!plan.carriers.includes(c.id)) plan.carriers.push(c.id);
       }
-    const enemies = ctx.seen;
-    const { covered, clear } = liftAirspace(w, faction, enemies);
-    const wp = covered(site.at.x, site.at.y) ? undefined : route(w, g, site.at, clear);
-    if (plan.carriers.length < 2 || wp === undefined) {
-      if (late) {
-        avoidSite(w, m, site);
-        release();
-        setPhase(w, plan, "muster");
-      }
+    if (plan.carriers.length < 2) {
+      if (late) giveUp();
       return;
     }
     cmds.push({ type: "lift", faction, unitIds: [...plan.carriers], goliathId: g.id });

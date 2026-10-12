@@ -570,10 +570,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       const armySize = army.length;
       // (Condors on, or held for, a Goliath's lift aren't the drop plan's or the airlift's)
       const condors = have("condor") - liftHeld.size;
-      // Menders for our Goliaths: one each, three for a hurt one (only Menders repair them)
+      // Menders for our Goliaths (only Menders repair them): one with any, three for each hurt one
       const goliathMenders = Math.min(
-        5,
-        goliaths.reduce((n, g) => n + (repairUrgency(g) > 0 || g.hp < UNITS.goliath.hp * 0.85 ? 3 : 1), 0)
+        GOLIATH_AI.menders,
+        Math.max(goliaths.length > 0 ? 1 : 0, goliaths.filter((g) => repairUrgency(g) > 0 || g.hp < UNITS.goliath.hp * 0.85).length * 3)
       );
       let kind: UnitKind;
       if (have("scout") < 1 && w.tick - s.lastScoutTick > 60 * TICK_RATE) {

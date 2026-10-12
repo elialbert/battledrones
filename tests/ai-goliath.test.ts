@@ -118,25 +118,39 @@ describe("the Gantry", () => {
     expect(cmds.some((c) => c.type === "startBuilding" && c.building === "gantry")).toBe(false);
   });
 
-  it("queues one Goliath at its escalating price, and no second within GOLIATH_AI.again", () => {
+  /** Ironclad at 6:40 with a Gantry and 5,000 scrap; every Goliath it orders, and the price it paid. */
+  function gantrySide() {
     const { w, ai, hq } = midGame("ironclad", "normal", 400, true);
     placeNear(w, "gantry", buildingCenter(hq).x, buildingCenter(hq).y + 10);
-    // one already out there: the next costs a quarter more
-    spawnUnit(w, "goliath", "red", 30.5, 14.5);
     w.factions.red.scrap = 5000;
-    const orders: number[] = [];
-    let paid = 0;
-    runRed(w, 60, ai, (cmds) => {
-      for (const c of cmds)
-        if (c.type === "produce" && c.unit === "goliath") {
-          orders.push(w.tick);
-          paid = goliathCost(w, "red");
-        }
+    const orders: { tick: number; paid: number }[] = [];
+    const watch = (cmds: Command[]) => {
+      for (const c of cmds) if (c.type === "produce" && c.unit === "goliath") orders.push({ tick: w.tick, paid: goliathCost(w, "red") });
+    };
+    return { w, ai, orders, watch };
+  }
+
+  it("queues a Goliath, and no second within GOLIATH_AI.again", () => {
+    const { w, ai, orders, watch } = gantrySide();
+    runRed(w, 90, ai, watch);
+    expect(orders).toHaveLength(1);
+    expect(orders[0]!.paid).toBe(UNITS.goliath.cost);
+    expect(GOLIATH_AI.again).toBeGreaterThan(90);
+  }, 30000);
+
+  it("a second, while one walks, only on an income that pays for it — at the escalated price", () => {
+    const { w, ai, orders, watch } = gantrySide();
+    spawnUnit(w, "goliath", "red", 30.5, 14.5);
+    // out of the bank alone: no (the army spends it)
+    runRed(w, 30, ai, watch);
+    expect(orders).toHaveLength(0);
+    // with a harvest coming in (1,200 scrap a minute) a share of it is set aside, and it comes
+    runRed(w, 240, ai, (cmds) => {
+      w.factions.red.stats.scrapHarvested += 2;
+      watch(cmds);
     });
     expect(orders).toHaveLength(1);
-    expect(paid).toBe(Math.round(UNITS.goliath.cost * (1 + GOLIATH.costStep)));
-    const queued = buildings(w, "red", "gantry")[0]!.queue[0];
-    expect(queued?.kind ?? "goliath").toBe("goliath"); // (on the cradle, or already out)
+    expect(orders[0]!.paid).toBe(Math.round(UNITS.goliath.cost * (1 + GOLIATH.costStep)));
   }, 30000);
 });
 

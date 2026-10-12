@@ -597,7 +597,10 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
   m.wantSquads = Math.max(0, want + 1 - waiting.length);
   m.openTargets = open;
   // the squads the next lifts will want wait at home (not swept off with a wave or to a guard post)
-  waiting.slice(0, Math.min(want, cap * condors.filter((c) => !isLoaded(c)).length)).forEach((u) => ctx.used.add(u.id));
+  // (no more than the airlift's own Condors could carry: Condors bought for a Goliath's lift
+  // and back from it don't keep a second wave of squads sitting at home)
+  const empty = Math.min(AIRLIFT.condors[s.difficulty], condors.filter((c) => !isLoaded(c)).length);
+  waiting.slice(0, Math.min(want, cap * empty)).forEach((u) => ctx.used.add(u.id));
 
   // --- intercepts: enemy Condors near our relays, base or Condors -----------
   cmds.push(...intercepts(w, faction, ctx, islands));
