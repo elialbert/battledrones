@@ -97,8 +97,17 @@ export const GOLIATH_AI = {
   gantryBank: 900,
   /** No Gantry or Goliath while the army is worth less than this (scrap): the army comes first. */
   armyFloor: 900,
-  /** A Gantry that found no room is not started again for this long (s). */
+  /** A Gantry that found no room (or was lost) is not started again for this long (s)… */
   gantryRetry: 90,
+  /** …and after this many are lost, not at all. */
+  gantries: 2,
+  /**
+   * Field scrap (crystal at its worth) that must be left on our side of the map
+   * for a Gantry: a mobile base pays only with fields to work. (The Proving
+   * Grounds hold ~13k a side by 4:00 and run dry by 9:00: Goliaths there only
+   * dragged short matches into 25-minute stalls; the bigger maps hold 25–70k.)
+   */
+  gantryFields: 15000,
   /** Goliaths alive or on the cradle, at most. */
   max: { easy: 1, normal: 2, hard: 2 } as Record<Difficulty, number>,
   /**
@@ -198,6 +207,8 @@ export const GOLIATH_AI = {
   behind: 3,
   /** …and falls in with one whose lead passes within this many tiles of it. */
   join: 16,
+  /** From this many minutes in, a Goliath with nothing better to hold (a forward post) joins any assault. */
+  lateSiege: 12,
   /** Visible enemy firepower within `danger` tiles over this many times what holds the site (and it hurt): pack up and go. */
   loseEdge: 1.5,
   danger: 9,
@@ -294,6 +305,9 @@ interface Memo {
   lastOutpost: number;
   lastOrder: number;
   gantryFail: number;
+  /** A Gantry of ours stood at the last look, and how many have been lost. */
+  gantryUp: boolean;
+  gantriesLost: number;
   /** Tick a building last found no room (no HQ: the rings are full). */
   noRoom: number;
   /** Strikes on enemy Goliaths: when, and who went. */
@@ -310,7 +324,7 @@ function memo(s: AiState): Memo {
   if (!m) {
     m = {
       plans: new Map(), fund: 0, tally: null, income: [], home: null, outpost: null, lastOutpost: -1e9,
-      lastOrder: -1e9, gantryFail: -1e9, noRoom: -1e9, hunts: new Map(), clusters: null, avoid: []
+      lastOrder: -1e9, gantryFail: -1e9, gantryUp: false, gantriesLost: 0, noRoom: -1e9, hunts: new Map(), clusters: null, avoid: []
     };
     memos.set(s, m);
   }
@@ -437,20 +451,45 @@ export function noteGoliathOrdered(w: World, s: AiState): void {
  * army to show for it; never with the base under attack. The prerequisites
  * it lacks are the commander's to build first.
  */
-export function wantGantry(w: World, faction: Faction, s: AiState, ctx: { armyValue: number; threatened: boolean }): boolean {
+export function wantGantry(
+  w: World,
+  faction: Faction,
+  s: AiState,
+  ctx: { armyValue: number; threatened: boolean; home: P; enemyHome: P }
+): boolean {
   if (w.survival || w.ops) return false;
   if (bannedBy(w, "gantry", faction) || bannedBy(w, "goliath", faction)) return false;
   const f = w.factions[faction];
-  for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "gantry") return false;
-  if (f.pending?.kind === "gantry") return false;
   const m = memo(s);
+  // one standing, or going up: nothing to do (one lost: not again at once, and not a third time)
+  if ([...w.buildings.values()].some((b) => b.faction === faction && b.kind === "gantry")) {
+    m.gantryUp = true;
+    return false;
+  }
+  if (m.gantryUp) {
+    m.gantryUp = false;
+    m.gantriesLost++;
+    m.gantryFail = w.tick;
+  }
+  if (f.pending?.kind === "gantry" || m.gantriesLost >= GOLIATH_AI.gantries) return false;
   if (w.tick - m.gantryFail < GOLIATH_AI.gantryRetry * TICK_RATE) return false;
   let from = GOLIATH_AI.gantryFrom[s.strategy.name] * GOLIATH_AI.gantryPace[s.difficulty];
   if (!Number.isFinite(from)) return false;
   if (knownBuildings(w, faction).some((kb) => kb.kind === "gantry")) from *= GOLIATH_AI.answerGantry;
   if (w.tick < from * TICK_RATE) return false;
   if (ctx.threatened || ctx.armyValue < GOLIATH_AI.armyFloor || !roomForGoliath(w, faction, s)) return false;
+  // a mobile base pays only with fields left to work: not on a map already mined out
+  // (the island maps' relays are what a Goliath goes for there)
+  if (!w.rules?.islands && fieldsOurSide(w, faction, m, ctx.home, ctx.enemyHome) < GOLIATH_AI.gantryFields) return false;
   return incomeRate(m) >= GOLIATH_AI.gantryIncome || f.scrap >= GOLIATH_AI.gantryBank;
+}
+
+/** Scrap left (crystal at its worth) in the fields nearer our home than theirs. */
+function fieldsOurSide(w: World, faction: Faction, m: Memo, home: P, enemyHome: P): number {
+  let v = 0;
+  for (const cl of fieldClusters(w, faction, m))
+    if (dist(cl.c.x, cl.c.y, home.x, home.y) <= dist(cl.c.x, cl.c.y, enemyHome.x, enemyHome.y)) v += cl.value;
+  return v;
 }
 
 /** A building found no room (no HQ: every ring is full): the base Goliath may move on (planGoliaths). */
@@ -1223,12 +1262,18 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       if (gs.mode === "packing") return;
       if (plan.phase === "guard" && w.tick - plan.since < GOLIATH_AI.recheck * TICK_RATE) return;
       // siege personalities fall in with a wave going by
-      if (joinsWave(s, g, ctx, m, hp)) {
+      if (joinsWave(w, s, g, ctx, m, hp)) {
         setPhase(w, plan, "siege");
         return;
       }
       const site = chooseSite(w, faction, s, g, ctx, m);
       plan.site = site;
+      if (!site && ctx.mode === "assault" && ctx.hasHq && hp >= GOLIATH_AI.resumeHp) {
+        // nowhere worth digging in, and an assault on: whatever the personality, it walks with
+        // the waves rather than stand idle at home
+        setPhase(w, plan, "siege");
+        return;
+      }
       if (!site) {
         // nowhere worth digging in: stand guard by the home field (or, the HQ gone, dig in there)
         const at = ctx.hasHq ? ctx.guardPoint : spotNear(w, faction, ctx.guardPoint, 0, 8, (p) => dist(p.x, p.y, ctx.guardPoint.x, ctx.guardPoint.y));
@@ -1345,7 +1390,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         return;
       }
       // a siege personality packs up to fall in with a wave going by (a forward post is on its way)
-      if (site?.kind !== "relay" && joinsWave(s, g, ctx, m, hp)) {
+      if (site?.kind !== "relay" && joinsWave(w, s, g, ctx, m, hp, site?.kind === "front")) {
         cmds.push({ type: "packUp", faction, unitIds: [g.id] });
         plan.next = "siege";
         setPhase(w, plan, "pack");
@@ -1403,11 +1448,8 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       // with the wave, a few tiles behind its lead (its mortars outreach the defences it shells),
       // never out in front of it; no wave out yet: the staging point
       const lead = waveLead(ctx, new Set([...m.plans.values()].flatMap((p) => p.escorts)));
-      // the wave's over (or gone on without it): back to its own business
-      if (!lead && w.tick - plan.since > GOLIATH_AI.recheck * TICK_RATE) {
-        setPhase(w, plan, "muster");
-        return;
-      }
+      // (no wave out: it waits for the next at the staging point, where it counts toward it —
+      // commander.ts — rather than walk back to dig in and pack up again)
       let goal = ctx.staging;
       if (lead) {
         const back = Math.max(0.5, dist(lead.x, lead.y, ctx.hqC.x, ctx.hqC.y));
@@ -1447,8 +1489,12 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
  * Goliath walks at a tank's half speed: it joins a wave going by its post,
  * it doesn't chase one across the map)?
  */
-function joinsWave(s: AiState, g: Unit, ctx: GoliathContext, m: Memo, hp: number): boolean {
-  if (!GOLIATH_AI.siege[s.strategy.name] || ctx.mode !== "assault" || !ctx.hasHq || hp < GOLIATH_AI.resumeHp) return false;
+function joinsWave(w: World, s: AiState, g: Unit, ctx: GoliathContext, m: Memo, hp: number, idle = false): boolean {
+  if (ctx.mode !== "assault" || !ctx.hasHq || hp < GOLIATH_AI.resumeHp) return false;
+  // (late on, a Goliath with nothing better to hold — a forward post — joins the assault whatever
+  // the personality: dried-out fields and trickling waves otherwise stall into a 25-minute draw)
+  if (idle && w.tick >= GOLIATH_AI.lateSiege * 60 * TICK_RATE) return true;
+  if (!GOLIATH_AI.siege[s.strategy.name]) return false;
   const lead = waveLead(ctx, new Set([...m.plans.values()].flatMap((p) => p.escorts)));
   return !!lead && dist(lead.x, lead.y, g.x, g.y) <= GOLIATH_AI.join;
 }
