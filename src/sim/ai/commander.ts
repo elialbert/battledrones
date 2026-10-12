@@ -785,10 +785,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const staged = army.filter(
       (u) => !used.has(u.id) && dist(u.x, u.y, staging.x, staging.y) <= STAGE_RADIUS
     );
-    // (a Goliath waiting there to walk with the wave counts for what it can fire: ai/goliath.ts)
-    const stagedValue =
-      value(staged) +
-      goliaths.reduce((v, g) => (canWalk(g) && dist(g.x, g.y, staging.x, staging.y) <= STAGE_RADIUS ? v + threatValue(g) : v), 0);
+    // (a Goliath waiting there to walk with the wave counts for what it can fire, ai/goliath.ts, but
+    // never for more than the army staged beside it: alone it would launch empty waves every pass,
+    // and the rest of the army would never be called up to the staging point)
+    const goliathStaged = goliaths.reduce(
+      (v, g) => (canWalk(g) && dist(g.x, g.y, staging.x, staging.y) <= STAGE_RADIUS ? v + threatValue(g) : v),
+      0
+    );
+    const stagedValue = value(staged) + Math.min(goliathStaged, value(staged));
     // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
     const airWar = bannedBy(w, "fab-plant", faction) !== null && !infantryWar;
     const launchAt = airWar ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);

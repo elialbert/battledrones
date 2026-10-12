@@ -16,6 +16,8 @@
 // for an A/B run.
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
 import { CONDOR_AI } from "../src/sim/ai/condor";
+import { GOLIATH_AI } from "../src/sim/ai/goliath";
+import { MENDER_AI } from "../src/sim/ai/menders";
 import * as balance from "../src/sim/balance";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { MAPS, createMapWorld, mapById } from "../src/sim/maps";
@@ -337,7 +339,7 @@ function passive(): void {
 
 function applyTune(json: string | undefined): void {
   if (!json) return;
-  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI };
+  const roots: Record<string, unknown> = { ...balance, STRATEGIES, CONDOR_AI, GOLIATH_AI, MENDER_AI };
   for (const [path, v] of Object.entries(JSON.parse(json) as Record<string, unknown>)) {
     const parts = path.split(".");
     let o = roots as Record<string, unknown>;

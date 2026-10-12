@@ -122,6 +122,13 @@ export const CALLOUTS = {
   killBannerGapS: 6,
   /** …except a streak climbing to a higher tier, which only needs this. */
   escalateGapS: 2,
+  /**
+   * At most this many banners in any 60 s: past it, flavour kill banners
+   * (streaks, big kills: priority 2 and 3) are dropped, while news (an HQ
+   * falling, a Goliath on the field) always shows. A Goliath racking up
+   * kills fed streak banners faster than the pleasantness budget allows.
+   */
+  bannersPerMinute: 6,
   /** Losing a unit worth this much (or a rank-2 veteran) gets a radio line. */
   bigLossValue: 350
 } as const;
@@ -185,6 +192,8 @@ export class BattleCallouts {
   private credit: CalldownCredit;
   private firstBlood = false;
   private lastKillBanner = -Infinity;
+  /** When each banner went up (CALLOUTS.bannersPerMinute). */
+  private shown: number[] = [];
   private lastBigKill = -Infinity;
   private wasReady = false;
   private airSeen: Record<Faction, number> = { blue: -Infinity, red: -Infinity };
@@ -264,8 +273,11 @@ export class BattleCallouts {
   }
 
   private banner(a: Announcement, t: number): void {
+    // (a busy minute keeps its headlines and drops the flavour)
+    if ((a.priority ?? 2) >= 2 && this.bannersWithin(t) >= CALLOUTS.bannersPerMinute) return;
     this.lastKillBanner = t;
     this.counts.set(a.key, (this.counts.get(a.key) ?? 0) + 1);
+    this.shown.push(t);
     this.h.announce(a);
   }
 
@@ -273,7 +285,14 @@ export class BattleCallouts {
   private raise(a: Announcement, t: number, cdKey = a.key): void {
     this.last.set(cdKey, t);
     this.counts.set(a.key, (this.counts.get(a.key) ?? 0) + 1);
+    this.shown.push(t);
     this.h.announce(a);
+  }
+
+  /** Banners shown in the 60 s up to `t` (older ones are forgotten). */
+  private bannersWithin(t: number): number {
+    while (this.shown.length > 0 && t - this.shown[0]! >= 60) this.shown.shift();
+    return this.shown.length;
   }
 
   // -------------------------------------------------------------- events --

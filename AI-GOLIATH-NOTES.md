@@ -6,9 +6,10 @@ Unfinished. The AI commander builds Gantries, rolls out Goliaths, digs them
 in at fields with outposts, escorts and mends them, lifts them to islands,
 hunts the enemy's, and plays the Nomads and Robot Love mutators. It is good
 enough for `tools/balance.ts matches` to say something about Goliaths, not
-good enough to call done. **One test is red** at the head of this branch
-(see *Known bad behaviour*), and several behaviours have been seen working
-in a handful of matches, not proven.
+good enough to call done: with Goliaths about one Archipelago match in five
+of the pairing measured below is still level at 25:00 (see *Known bad
+behaviour*), and several behaviours have been seen working in a handful of
+matches, not proven. The full test suite passes.
 
 Nearly all of it lives in `src/sim/ai/goliath.ts` (`GOLIATH_AI` holds every
 threshold), called from `src/sim/ai/commander.ts`. Tests:
@@ -99,19 +100,24 @@ probes no match ended in a draw: they were decided at 15–19 minutes.
 
 ## Known bad behaviour
 
-- **Red test:** `tests/ai-islands.test.ts` › *AI vs AI on Archipelago … the
-  match is decided* (`playMatch("archipelago", "balanced", "ironclad", 7013,
-  13)`) runs 25:00 undecided. Blue's army is worth ~7,900 against red's
-  ~1,000 from 15:00 on and never finishes. It last passed at db7159b; a
-  one-line change in e8635fe first flipped it, and reverting that alone at
-  the head doesn't help, so the outcome of this one seed is chaotic. One real
-  cause found: in `commander.ts`, `stagedValue` (6147eb4) counts a Goliath
-  waiting at the staging point, and on its own (1,600) it beats `launchAt`
-  every pass, so an empty wave "launches" and the rest of the army is never
-  called up to the staging point. Counting the Goliath for no more than the
-  army staged beside it (`stagedArmy + Math.min(stagedGoliaths,
-  stagedArmy)`) is right, but it didn't make this match end, so it is not
-  committed. Blue's ~20 Wasps also sit idle at home all game (they're
+- **Stalemates on the Archipelago.** Balanced (blue) vs Ironclad (red), 10
+  seeds (7001, 7004 … 7028), at the head: **2 of 10 still level at 25:00
+  with Goliaths, 0 of 10 without** (mean 17.5 min against 16.8). In seed
+  7004 blue lifts its Goliath onto a central island and anchors it there all
+  match, while red's Goliath stands guard behind its turret and SAM line;
+  by 25:00 red is down to that Goliath and two harvesters and blue never
+  closes it out. A Goliath dug in behind static defences is hard to crack,
+  and the AI doesn't commit to the final push. (Measured with a throwaway
+  copy of `tools/pacing-match.ts`'s loop over seeds; `--no-goliath`-style
+  bans for the comparison.)
+- **Fixed (lead):** `stagedValue` in `commander.ts` counted a Goliath
+  waiting at the staging point at its full 1,600, which alone beat
+  `launchAt` every pass, so an empty wave "launched" and the rest of the
+  army was never called up. It now counts for no more than the army staged
+  beside it. The airlift test in `tests/ai-islands.test.ts` (seed 7013) runs
+  with `noGoliath` (a new `playMatch` option): it is about the airlift and
+  the relays, and with Goliaths that seed is one of the stalemates above.
+  Blue's ~20 Wasps also sit idle at home all game in that seed (they're
   raiders, not in `army`), which isn't new.
 - On the Proving Grounds Goliaths dragged matches out (3 of 30 undecided at
   25:00 in the round robin below); the `gantryFields` gate since stops the
@@ -166,10 +172,11 @@ on siege and 15% marching.
 
 ## What to do next
 
-1. Get `tests/ai-islands.test.ts` green: commit the `stagedValue` cap above,
-   then find why blue's winning army still doesn't finish on seed 7013
-   (where its waves go, and whether hunts or the Goliath's escort pin units
-   at home).
+1. End the Archipelago stalemates: a side well ahead should commit its
+   whole army (and its Goliath, from an island anchor too) to the final push
+   on a base defended by a Goliath, and Robot Love's "court" aside, a
+   losing side's Goliath guarding home shouldn't make the HQ uncrackable.
+   Then put the airlift test back to playing with Goliaths.
 2. Run a full round robin at the head on every map, with and without
    Goliaths, and recheck lengths and undecided matches.
 3. Cut phase churn: give guard → siege → muster a minimum stay.
@@ -177,8 +184,7 @@ on siege and 15% marching.
    fund can't reach a Goliath within a few minutes).
 5. A real test of Robot Love's "court" and of a Goliath carrying on after the
    HQ falls in a full AI match.
-6. Add `GOLIATH_AI` and `MENDER_AI` to the `--tune` roots in
-   `tools/balance.ts`, `tools/pacing.ts` and `tools/beginner.ts` (not my
-   files).
+6. ~~Add `GOLIATH_AI` and `MENDER_AI` to the `--tune` roots~~ (done:
+   `tools/balance.ts`, `tools/pacing.ts`, `tools/beginner.ts`).
 7. Fix the `movement.ts` float tie so symmetry tests can cover any Goliath
    matchup.
