@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, INFANTRY as INF, LIFELINE, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
-import { buildingBlocker, producersOf, unitBlocker } from "../sim/economy";
+import { buildingBlocker, queuesOf, unitBlocker } from "../sim/economy";
 import { Vis } from "../sim/fog";
 import { anchorBlocker, modeProgress, unitCost, weaponReady } from "../sim/goliath";
 import { isTransport, squadAlive, squadSize, unitSeenBy } from "../sim/infantry";
@@ -397,7 +397,7 @@ export function createHud(api: HudApi): Hud {
     }
     const note = api.cardNote?.(kind) ?? null;
     const queuedHere = isUnit
-      ? producersOf(w, PLAYER, kind as UnitKind).reduce((n, p) => n + p.queue.filter((q) => q.kind === kind).length, 0)
+      ? queuesOf(w, PLAYER, kind as UnitKind).reduce((n, p) => n + p.queue.filter((q) => q.kind === kind).length, 0)
       : 0;
     cardEl.innerHTML = `
       <div class="ch"><img src="${icon(kind)}" alt="" /><div><b>${s.name}</b><p>${s.role}</p></div>
@@ -411,7 +411,7 @@ export function createHud(api: HudApi): Hud {
     layout.refresh(true); // (portrait: kept under the band at its real height)
     cardEl.querySelector("#card-x")!.addEventListener("click", () => (cardEl.hidden = true));
     cardEl.querySelector("#card-cancel")?.addEventListener("click", () => {
-      const p = producersOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind));
+      const p = queuesOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind));
       if (p) api.ctrl.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: kind as UnitKind });
       cardEl.hidden = true;
     });
@@ -429,7 +429,10 @@ export function createHud(api: HudApi): Hud {
   /** The class each chip was last given (so a refused tap's "nope" shake survives a label tick). */
   let chipCls: string[] = [];
   const chipClass = (c: Chip) => `chip ${c.cls ?? ""} ${c.active ? "active" : ""}`;
+  /** The chips as last rendered: a tap runs the current chip's action (one updated in place may now do something else). */
+  let chipList: Chip[] = [];
   function renderChips(list: Chip[]): void {
+    chipList = list;
     const key = list.map((c) => c.id + (c.active ? "*" : "") + (c.cls ?? "") + c.label).join("|");
     if (key === lastChipKey) return;
     lastChipKey = key;
@@ -448,17 +451,17 @@ export function createHud(api: HudApi): Hud {
     lastChipShape = shape;
     chipCls = list.map(chipClass);
     chipsEl.innerHTML = "";
-    for (const c of list) {
+    list.forEach((c, i) => {
       const b = document.createElement("button");
       b.className = chipClass(c);
       b.dataset.id = c.id;
       b.textContent = c.label;
       b.addEventListener("click", () => {
         sfx.play("click", 0.5);
-        c.on();
+        chipList[i]?.on();
       });
       chipsEl.appendChild(b);
-    }
+    });
   }
 
   /** Shake chip `id` with a buzz: that tap was refused. */
@@ -1038,10 +1041,10 @@ export function createHud(api: HudApi): Hud {
       const el = buttons.get(`u:${kind}`)!;
       const pt = parts.get(`u:${kind}`)!;
       const { prog, lock, badge } = pt;
-      // (anchored Goliaths' training queues count with the Assembly Bays')
+      // (Goliaths' training queues count with the Assembly Bays', paused ones too)
       let queued = 0;
       let headProg = -1;
-      for (const p of producersOf(w, PLAYER, kind))
+      for (const p of queuesOf(w, PLAYER, kind))
         p.queue.forEach((q, i) => {
           if (q.kind !== kind) return;
           queued++;

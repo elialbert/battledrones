@@ -1,12 +1,12 @@
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { producerCap, producersOf, type Producer } from "../sim/economy";
-import { anchorBlocker, canWalk } from "../sim/goliath";
+import { anchorBlocker, canWalk, goliathReachAt } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
 import type { BuildingKind, Command, Faction, Unit, UnitKind, World } from "../sim/types";
-import { buildingAtTile, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
+import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { Squads } from "./squads";
 
@@ -26,6 +26,18 @@ export const isArmyUnit = (u: Unit): boolean => u.faction === PLAYER && u.kind !
  * once it is free.
  */
 export const isRooted = (u: Unit): boolean => u.goliath?.mode === "anchoring" || u.goliath?.mode === "anchored";
+
+/**
+ * Can Goliath `u` fire on target `id` from where it stands (a weapon that can
+ * hit it reaches it)? An anchored one is only told to attack what it can: it
+ * would otherwise keep the order and walk off after the target once packed up.
+ */
+export function inReachFromHere(w: World, u: Unit, id: number): boolean {
+  const b = w.buildings.get(id);
+  if (b) return distToBuilding(b, u.x, u.y) <= goliathReachAt(u, "ground");
+  const t = w.units.get(id);
+  return !!t && Math.hypot(t.x - u.x, t.y - u.y) <= goliathReachAt(u, domainOf(t));
+}
 
 /** The lift a unit belongs to: the Goliath itself (hooked on or carried), or the Goliath its Condor is lifting. */
 export const liftOf = (w: World, u: Unit): Unit | null => (u.goliath?.lift ? u : liftedBy(w, u));
@@ -247,7 +259,7 @@ export class Controller {
       // only those that can get in range of it (not a tank at an enemy on an island; not a Goliath on a lift)
       const attackers = this.selectedAttackers(hit.targetsAir).filter((id) => {
         const u = w.units.get(id);
-        return !!u && !lifting.has(id) && engageable(w, u, hit.id);
+        return !!u && !lifting.has(id) && (isRooted(u) ? inReachFromHere(w, u, hit.id) : engageable(w, u, hit.id));
       });
       if (attackers.length > 0) {
         this.enqueue({ type: "attack", faction: PLAYER, unitIds: attackers, targetId: hit.id });
@@ -262,6 +274,11 @@ export class Controller {
         if (others.length > 0)
           this.enqueue({ type: "move", faction: PLAYER, unitIds: others, x: wx, y: wy });
         this.lastFeedback = { kind: drop.length > 0 ? "drop" : "attack", x: wx, y: wy };
+        return;
+      }
+      // only anchored Goliaths, and it's beyond their guns: they stay dug in (no rally point at the enemy)
+      if ([...this.selectedUnits].every((id) => this.rooted(id))) {
+        this.rootTip("Out of reach: pack up first (G) to go after it");
         return;
       }
       // none can: treat it as a tap on the ground there (an island drop, or a tip)
@@ -711,7 +728,7 @@ export function hitTest(
       best =
         u.faction === PLAYER
           ? { kind: "ownUnit", id: u.id }
-          : { kind: "enemy", id: u.id, targetsAir: UNITS[u.kind].domain === "air" };
+          : { kind: "enemy", id: u.id, targetsAir: domainOf(u) === "air" };
     }
   }
   if (best.kind !== "ground") return best;

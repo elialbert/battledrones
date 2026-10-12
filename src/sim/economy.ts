@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { anchoredGoliaths, goliathTrainer, hasGoliath, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
+import { anchoredGoliaths, goliathTrainer, goliathsOf, hasGoliath, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
 import { moveUnitToward } from "./movement";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
@@ -68,7 +68,10 @@ export function unitBlocker(w: World, faction: Faction, kind: UnitKind): string 
   const banned = bannedBy(w, kind, faction);
   if (banned) return banned;
   if (!hasBuilding(w, faction, stats.builtAt) && !(trainableAt(w, kind) && anchoredGoliaths(w, faction).length > 0))
-    return `Needs ${BUILDINGS[stats.builtAt].name}`;
+    // (with a Goliath on the move and no HQ, which can never be built: say how to get the button back)
+    return trainableAt(w, kind) && hasGoliath(w, faction) && stats.builtAt === "hq"
+      ? "Anchor a Goliath"
+      : `Needs ${BUILDINGS[stats.builtAt].name}`;
   if (stats.requires && !hasBuilding(w, faction, stats.requires))
     return `Needs ${BUILDINGS[stats.requires].name}`;
   return null;
@@ -225,6 +228,19 @@ export function producersOf(w: World, faction: Faction, kind: UnitKind): Produce
   for (const b of w.buildings.values())
     if (b.faction === faction && b.kind === UNITS[kind].builtAt) out.push({ id: b.id, queue: b.queue, goliath: null });
   if (trainableAt(w, kind)) for (const g of anchoredGoliaths(w, faction)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
+  return out;
+}
+
+/**
+ * Every queue holding `kind` for `faction`: producersOf's, plus a Goliath's
+ * that packed up with squads still queued (paused till it digs in again, and
+ * paid for, so the HUD still counts them and can cancel one).
+ */
+export function queuesOf(w: World, faction: Faction, kind: UnitKind): Producer[] {
+  const out = producersOf(w, faction, kind);
+  if (trainableAt(w, kind))
+    for (const g of goliathsOf(w, faction))
+      if (!isAnchored(g) && g.goliath!.queue.some((q) => q.kind === kind)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
   return out;
 }
 

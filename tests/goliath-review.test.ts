@@ -154,3 +154,86 @@ describe("review regressions", () => {
     expect(g.order.type).toBe("idle");
   });
 });
+
+describe("final review regressions", () => {
+  /** A flat 40×40 field with a blue HQ at (4,4) and a red HQ at (32,32). */
+  function field(): World {
+    const w = createWorld(40, 40);
+    spawnBuilding(w, "hq", "blue", 4, 4);
+    spawnBuilding(w, "hq", "red", 32, 32);
+    return w;
+  }
+
+  it("a tap on an enemy Goliath carried by Condors is a tap on an air target", async () => {
+    const { Controller, hitTest } = await import("../src/game/controller");
+    const w = field();
+    const { g } = carried(w, "red", 20, 20);
+    const flak = spawnUnit(w, "flak-crawler", "blue", 14, 14);
+    const stinger = spawnUnit(w, "stinger", "blue", 14, 15);
+    const hit = hitTest(w, g.x, g.y, 0.6);
+    expect(hit).toEqual({ kind: "enemy", id: g.id, targetsAir: true });
+    const c = new Controller(w);
+    c.selectUnits([flak.id, stinger.id]);
+    c.tapWorld(g.x, g.y, hit);
+    const cmds = c.drainCommands();
+    expect(cmds[0]).toMatchObject({ type: "attack", unitIds: [flak.id], targetId: g.id });
+    expect(cmds.find((x) => x.type === "attack" && x.unitIds.includes(stinger.id))).toBeUndefined();
+  });
+
+  it("an anchored Goliath is only told to attack what its guns reach from where it stands", async () => {
+    const { Controller } = await import("../src/game/controller");
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 13, 13);
+    g.goliath!.mode = "anchored";
+    const stinger = spawnUnit(w, "stinger", "blue", 15, 13);
+    const far = spawnBuilding(w, "turret", "red", 26, 26);
+    const near = spawnUnit(w, "stinger", "red", 18, 13);
+    const c = new Controller(w);
+    c.selectUnits([g.id, stinger.id]);
+    c.tapWorld(26.5, 26.5, { kind: "enemy", id: far.id, targetsAir: false });
+    const cmds = c.drainCommands();
+    expect(cmds.filter((x) => "unitIds" in x && x.unitIds.includes(g.id))).toEqual([]);
+    expect(cmds[0]).toMatchObject({ type: "attack", unitIds: [stinger.id] });
+    c.tapWorld(near.x, near.y, { kind: "enemy", id: near.id, targetsAir: false });
+    expect(c.drainCommands()[0]).toMatchObject({ type: "attack", unitIds: [g.id, stinger.id], targetId: near.id });
+    // on its own, out of reach: nothing at all (no rally point at the enemy)
+    c.selectUnits([g.id]);
+    c.tapWorld(26.5, 26.5, { kind: "enemy", id: far.id, targetsAir: false });
+    expect(c.drainCommands()).toEqual([]);
+  });
+
+  it("squads queued on a Goliath that packed up still count, and one can still be cancelled", async () => {
+    const { producersOf, queuesOf } = await import("../src/sim/economy");
+    const w = field();
+    const g = spawnUnit(w, "goliath", "blue", 13, 13);
+    g.goliath!.mode = "anchored";
+    w.factions.blue.scrap = 1000;
+    step(w, [
+      { type: "produce", faction: "blue", buildingId: g.id, unit: "trooper" },
+      { type: "produce", faction: "blue", buildingId: g.id, unit: "trooper" }
+    ]);
+    const count = () => queuesOf(w, "blue", "trooper").reduce((n, p) => n + p.queue.filter((q) => q.kind === "trooper").length, 0);
+    expect(count()).toBe(2);
+    step(w, [{ type: "packUp", faction: "blue", unitIds: [g.id] }]);
+    expect(producersOf(w, "blue", "trooper")).toEqual([]);
+    expect(count()).toBe(2);
+    const scrap = w.factions.blue.scrap;
+    const p = queuesOf(w, "blue", "trooper").find((p) => p.queue.some((q) => q.kind === "trooper"))!;
+    step(w, [{ type: "cancelProduce", faction: "blue", buildingId: p.id, unit: "trooper" }]);
+    expect(count()).toBe(1);
+    expect(w.factions.blue.scrap).toBeGreaterThan(scrap);
+  });
+
+  it("under Nomads, with the Goliath on the move, the Harvester's lock says to anchor it, not to build an HQ", async () => {
+    const { unitBlocker } = await import("../src/sim/economy");
+    const w = createMapWorld("riverlands", { mutators: ["nomads"] });
+    const g = goliathsOf(w, "blue")[0]!;
+    expect(unitBlocker(w, "blue", "harvester")).toBeNull();
+    step(w, [{ type: "packUp", faction: "blue", unitIds: [g.id] }]);
+    expect(unitBlocker(w, "blue", "harvester")).toBe("Anchor a Goliath");
+    // (an ordinary side that lost its HQ and has no Goliath is still told what it needs)
+    const plain = createWorld(40, 40);
+    spawnBuilding(plain, "hq", "red", 32, 32);
+    expect(unitBlocker(plain, "blue", "harvester")).toBe(`Needs HQ`);
+  });
+});

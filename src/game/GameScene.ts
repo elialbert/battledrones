@@ -8,7 +8,7 @@ import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
-import { buildingCenter } from "../sim/world";
+import { buildingCenter, domainOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
 import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
@@ -1188,7 +1188,7 @@ export class GameScene {
       const d = Math.hypot(s.x - sx, s.y - sy);
       if (d < r && d < bestD) {
         bestD = d;
-        best = u.faction === PLAYER ? { kind: "ownUnit", id: u.id } : { kind: "enemy", id: u.id, targetsAir: UNITS[u.kind].domain === "air" };
+        best = u.faction === PLAYER ? { kind: "ownUnit", id: u.id } : { kind: "enemy", id: u.id, targetsAir: domainOf(u) === "air" };
       }
     }
     if (best.kind !== "ground") return best;
