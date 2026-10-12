@@ -4874,26 +4874,146 @@ button {
     font-size: 12px;
     letter-spacing: 0.1px;
   }
-  /* the Base tab's eight buttons fit a 390 px row (narrower phones scroll it) */
+  /* the Base tab's nine buttons (Gantry last) fit a 390 px row: 9 × 38 + 8 × 3 ≤ 374 */
   .grid {
-    gap: 4px;
+    gap: 3px;
   }
+  /* (seven Vehicles: "Harvester" and "Mastodon" keep their last letters) */
   .bb {
-    flex-basis: 43px;
-  }
-  .bb .ic {
-    width: 40px;
-    height: 40px;
-  }
-}
-/* …and on 360–379 px phones too, just */
-@media (orientation: portrait) and (max-width: 379px) {
-  .bb {
-    flex-basis: 39px;
+    flex-basis: 38px;
+    padding-left: 1px;
+    padding-right: 1px;
   }
   .bb .ic {
     width: 36px;
     height: 36px;
+  }
+  .bb .nm {
+    font-size: 9.5px;
+    letter-spacing: -0.2px;
+  }
+}
+/* …and on 360–379 px phones too, just (9 × 35 + 8 × 3 ≤ 344) */
+@media (orientation: portrait) and (max-width: 379px) {
+  .bb {
+    flex-basis: 35px;
+  }
+  .bb .ic {
+    width: 32px;
+    height: 32px;
+  }
+  .bb .nm {
+    font-size: 9px;
+  }
+}
+/* landscape phones under 400 px tall: the Base tab's nine buttons (five rows) fit the sidebar unscrolled */
+@media (orientation: landscape) and (max-height: 400px) {
+  .grid {
+    gap: 4px;
+  }
+  .bb {
+    height: 58px;
+  }
+  .bb .ic {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* ============================================================ Goliath === */
+/* src/ui/hud.ts: the ⚓ Anchor / ⇡ Pack up chip, a Goliath's selection panel
+   (mode, weapon systems, training queue), outposts, a Condor's lift, and the
+   Gantry's prerequisites and the Goliath's weapons on the info card. */
+.chip.anchor.go {
+  color: #0d1a12;
+  background: #4fdc86;
+  border-color: #7ef29b;
+}
+.chip.anchor.go:active {
+  background: #3bbf70;
+}
+.chip.anchor.bad {
+  color: #ffb3a6;
+  border-color: rgba(255, 110, 90, 0.7);
+}
+.selpanel .gline {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+.selpanel .gmode {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd66e;
+  font-variant-numeric: tabular-nums;
+}
+.selpanel .gweap {
+  display: flex;
+  gap: 3px;
+  margin: 2px 0 1px;
+}
+.selpanel .gw {
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 6px;
+  border: 1px solid var(--line-hi);
+  white-space: nowrap;
+}
+/* firing; held (on a lift only the machine guns fire); rebooting; offline */
+.selpanel .gw.on {
+  color: #0d1a12;
+  background: #4fdc86;
+  border-color: #7ef29b;
+}
+.selpanel .gw.held {
+  color: var(--dim);
+  background: rgba(79, 220, 134, 0.12);
+}
+.selpanel .gw.boot {
+  color: #1a1408;
+  background: #ffd66e;
+  border-color: #ffe7a3;
+  animation: gwBoot 0.6s infinite alternate;
+}
+.selpanel .gw.off {
+  color: #ff9c8c;
+  background: rgba(255, 74, 58, 0.12);
+  border-color: rgba(255, 110, 90, 0.55);
+  text-decoration: line-through;
+}
+@keyframes gwBoot {
+  to { opacity: 0.55; }
+}
+.selpanel .outpost {
+  font-size: 12px;
+  color: #8fc2ff;
+}
+.selpanel .seat.lift {
+  width: 44px;
+  border-color: #6eb0ff;
+}
+.card .needs span {
+  margin-right: 6px;
+  color: var(--dim);
+  font-weight: 700;
+}
+.card .needs span.have {
+  color: var(--green);
+}
+.card tr.gw-head td {
+  padding-top: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--dim);
+}
+@media (prefers-reduced-motion: reduce) {
+  .selpanel .gw.boot {
+    animation: none;
   }
 }
 

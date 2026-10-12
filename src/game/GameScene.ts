@@ -1207,7 +1207,8 @@ export class GameScene {
         if (!released) return;
         // a long-press released without dragging (the degenerate box): an armed
         // calldown fires there (press and hold to aim), as a tap would; else, with
-        // loaded Condors selected, they fly there and drop their squads
+        // loaded Condors selected, they fly there and drop their squads (and a
+        // lift selected flies its Goliath there and sets it down)
         if (isHoldRelease(b.x0, b.y0, sx, sy)) {
           const p = this.worldAt(sx, sy);
           if (this.powerUi?.tapWorld(p.x, p.y)) return;
@@ -1250,7 +1251,8 @@ export class GameScene {
         }
         const p = this.worldAt(sx, sy);
         let hit = this.pick(sx, sy);
-        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it
+        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it,
+        // and on our own Goliath with two empty Condors selected lifts it
         if (hit.kind === "ownUnit" && this.ctrl.boardTap(hit.id)) return;
         // right-click never re-selects; own entities count as ground
         if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
@@ -1339,6 +1341,7 @@ export class GameScene {
         this.hud.togglePause();
       } else if (e.key === "q") this.ctrl.selectArmy();
       else if (e.key === "u") this.ctrl.unloadSelected();
+      else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
       else if (e.key === ".") this.aware.cycleSpeed();
       else if (e.key === "j") this.aware.jump();

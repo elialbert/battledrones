@@ -309,7 +309,7 @@ export class UnitVoices {
 
   /** The player's order went out: the selected units acknowledge (boarding and drops answer like a move). */
   order(
-    kind: "move" | "attack" | "harvest" | "rally" | "place" | "board" | "drop",
+    kind: "move" | "attack" | "harvest" | "rally" | "place" | "board" | "drop" | "anchor",
     selected: ReadonlySet<number>,
     world: World
   ): void {
