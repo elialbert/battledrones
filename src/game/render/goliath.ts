@@ -413,10 +413,11 @@ export class GoliathView {
     this.rig.update(p);
     for (const c of this.cables) c.visible = false;
     if (!visible || dtMs <= 0 || shy <= 0) return;
-    // hearts bubbling up out of it, faster as its arms reach out
+    // the pink eye glows; hearts bubble up out of it, faster as its arms reach out
+    if (p.love && Math.random() < dtMs / 120) this.host.fx.flash(p3(this.rig.muzzle("eye", tmp)), 0.55, 0xff5fa2, 0.7);
     s.heartT -= dtMs;
     if (s.heartT <= 0) {
-      s.heartT = (150 + Math.random() * 120) * (1 - reach * 0.5);
+      s.heartT = (110 + Math.random() * 90) * (1 - reach * 0.5);
       this.host.fx.hearts(p3(this.rig.point("head", [(Math.random() - 0.5) * 0.3, 0.38, 0], tmp)), 1 + (Math.random() < 0.4 ? 1 : 0));
       if (Math.random() < 0.5) this.host.fx.hearts(p3(this.rig.point("torso", [(Math.random() - 0.5) * 0.9, 0.8, 0.1], tmp)), 1);
     }

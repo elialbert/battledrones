@@ -124,7 +124,7 @@ const STEAM: EmitCfg = {
 };
 /** Hearts bubbling up out of a Goliath in love: pink and red, rising, rocking and fading. */
 const HEARTS: EmitCfg = {
-  tex: TEX.heart, life: [1500, 2300], speed: [0.08, 0.3], up: [0.45, 0.85], size: [0.2, 0.32], grow: [1.15, 1.5],
+  tex: TEX.heart, life: [1600, 2500], speed: [0.1, 0.35], up: [0.5, 0.9], size: [0.26, 0.4], grow: [1.15, 1.5],
   alpha: [1, 0], tints: [0xff5fa2, 0xff3b6b, 0xff8cc6, 0xe0245e], drag: 0.5, spin: 0.9, rot: 0.35, fadeIn: 0.08, easeOut: true
 };
 /** A welding arc's spatter: white-hot, cooling to amber, falling. */

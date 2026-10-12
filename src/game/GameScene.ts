@@ -707,7 +707,8 @@ export class GameScene {
     this.ctrl.clearSelection();
     this.ctrl.placing = null;
     const rig = this.stage.rig;
-    const zoom = finaleZoom(rig.zoom, DEFAULT_ZOOM);
+    // (Robot Love pushes in close: it's their eyes and the hearts you want to see)
+    const zoom = love ? Math.min(MAX_ZOOM, Math.max(rig.zoom * 1.5, 72)) : finaleZoom(rig.zoom, DEFAULT_ZOOM);
     const free = freeAreaOffset();
     this.finale = new Finale({
       view: this.view,

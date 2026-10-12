@@ -17,7 +17,8 @@
 // weapon down (pods sagging, eye dark, cannons limp), rebooting (eye relit, tubes cycling), lifted between two
 // Condors, toppled and burnt, in love (Robot Love) — then a Mastodon and an HQ for scale.
 // ?only=gantry shows the Gantry's six stages per faction: empty, foundation, frame, armament, finishing, rollout.
-// ?icon=goliath|gantry: one blue model alone, straight down on a transparent page (tools/icons.mjs shoots the HUD portraits).
+// ?icon=goliath|gantry: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
+// (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp).
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
@@ -108,6 +109,7 @@ facs.forEach((f, fi) => {
       stage.scene.add(g.root);
     } else goliath(f, 0, 0, Math.PI, { yaw: 0 });
     plate.visible = false;
+    stage.scene.background = new THREE.Color(q.get("bg") ?? "#000000");
     return;
   }
   if (only === "goliath") {
