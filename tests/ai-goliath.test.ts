@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { STRATEGIES, createAiState, tickAi, type AiState, type Difficulty, type StrategyName } from "../src/sim/ai/commander";
 import { canPlaceBuilding } from "../src/sim/economy";
-import { GOLIATH_AI, goliathPhases, goliathSite } from "../src/sim/ai/goliath";
+import { GOLIATH_AI, goliathPhases, goliathSite, liftCondors } from "../src/sim/ai/goliath";
 import { planMenders } from "../src/sim/ai/menders";
 import { BUILDINGS, GOLIATH, TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
@@ -500,3 +500,126 @@ describe("determinism", () => {
 });
 
 export type { Unit };
+
+describe("final review regressions", () => {
+  /** Red Boom on the Archipelago with an Airpad, a Goliath by its HQ and `condors` Condors, 2,000 scrap. */
+  function islands(condors: number, mutators: ("robotlove")[] = []) {
+    const w = createMapWorld("archipelago", { objectives: true, mutators });
+    const ai = createAiState("boom", "normal", 1);
+    const hq = hqOf(w, "red")!;
+    const c = buildingCenter(hq);
+    hqOf(w, "blue")!.hp = 1e9;
+    spawnBuilding(w, "airpad", "red", hq.tx - 3, hq.ty + 4);
+    const g = spawnUnit(w, "goliath", "red", c.x - 4, c.y + 6);
+    const cs = Array.from({ length: condors }, (_, i) => spawnUnit(w, "condor", "red", c.x + 3 + i, c.y + 4));
+    w.factions.red.scrap = 2000;
+    return { w, ai, g, cs, c };
+  }
+
+  it("a lift whose Condors the sim hooks on the other way round isn't called off for the wrong Condor's HP", () => {
+    const { w, ai, g, cs } = islands(3);
+    let issued = false;
+    const states: string[] = [];
+    for (let i = 0; i < 200 * TICK_RATE && !states.includes("setDown"); i++) {
+      // one Condor at full HP and two hurt ones, until the AI picks two
+      if (!issued) [cs[0]!.hp, cs[1]!.hp, cs[2]!.hp] = [UNITS.condor.hp, UNITS.condor.hp * 0.55, UNITS.condor.hp * 0.55];
+      const cmds = tickAi(w, "red", ai);
+      for (const cmd of cmds)
+        if (cmd.type === "lift") {
+          issued = true;
+          // the first-named Condor by the right hook point, the other off to the side: the sim swaps them
+          const [a, b] = cmd.unitIds.map((id) => w.units.get(id)!);
+          const r = { x: Math.cos(g.facing), y: Math.sin(g.facing) };
+          a!.x = g.x + r.x * 2;
+          a!.y = g.y + r.y * 2;
+          b!.x = g.x - r.y * 4;
+          b!.y = g.y + r.x * 4;
+        }
+      step(w, cmds);
+      for (const e of w.fx) if (e.type === "goliathLift" && e.faction === "red") states.push(e.state);
+    }
+    expect(issued).toBe(true);
+    expect(states[0]).toBe("hooked");
+    // flown all the way to its site and set down there, not dropped back where it started
+    expect(states).toContain("setDown");
+    expect(goliathSite(ai, g.id)?.lift).toBe(true);
+    expect(Math.hypot(g.x - goliathSite(ai, g.id)!.x, g.y - goliathSite(ai, g.id)!.y)).toBeLessThan(2);
+  }, 60000);
+
+  it("Robot Love: a lift never flies over an enemy Goliath, even one with its laser down", () => {
+    const { w, ai, g } = islands(3, ["robotlove"]);
+    for (let i = 0; i < w.scrap.length; i++) w.scrap[i] = Math.min(w.scrap[i]!, 20); // (no field worth a walk)
+    const relay = { x: 57.5, y: 54.5 };
+    const suitor = spawnUnit(w, "goliath", "blue", (g.x + relay.x) / 2, (g.y + relay.y) / 2);
+    suitor.hp = UNITS.goliath.hp * 0.45;
+    w.powers.stunned.set(suitor.id, 1e9);
+    step(w, []);
+    tickFog(w);
+    for (let i = 0; i < 120 * TICK_RATE && !w.winner; i++) step(w, tickAi(w, "red", ai));
+    expect(w.winner).toBeNull();
+  }, 60000);
+
+  it("a Goliath dug in at an island relay that starts losing stays dug in (it can't walk home)", () => {
+    const { w, ai, g, c } = islands(3);
+    const fields = Float64Array.from(w.scrap);
+    for (let i = 0; i < w.scrap.length; i++) w.scrap[i] = Math.min(w.scrap[i]!, 20);
+    const home = regionAt(w, Math.floor(c.x), Math.floor(c.y), "ground");
+    let at = -1;
+    for (let i = 0; i < 300 * TICK_RATE && (at < 0 || w.tick - at < 60 * TICK_RATE); i++) {
+      step(w, tickAi(w, "red", ai));
+      if (at < 0 && isAnchored(g) && regionAt(w, Math.floor(g.x), Math.floor(g.y), "ground") !== home) {
+        at = w.tick;
+        g.hp = UNITS.goliath.hp * 0.5;
+        for (let k = 0; k < w.scrap.length; k++) w.scrap[k] = fields[k]!;
+        // an enemy force lands on the island (frozen, sturdy)
+        for (let k = 0; k < 18; k++) {
+          const e = spawnUnit(w, "rocket-squad", "blue", g.x + 4 + (k % 2), g.y - 3 + Math.floor(k / 2));
+          e.hp = 1e6;
+          w.powers.stunned.set(e.id, 1e9);
+        }
+      }
+    }
+    expect(at).toBeGreaterThan(0);
+    expect(g.goliath!.mode).toBe("anchored");
+  }, 60000);
+
+  it("Robot Love: a Condor held for a lift is let go when love calls the lift off", () => {
+    const { w, ai, g, cs } = islands(1, ["robotlove"]);
+    const condor = cs[0]!;
+    let suitor: Unit | null = null;
+    let after = 0;
+    for (let i = 0; i < 400 * TICK_RATE && !w.winner && after < 30 * TICK_RATE; i++) {
+      for (const u of [...w.units.values()]) if (u.kind === "condor" && u.faction === "red" && u.id !== condor.id) w.units.delete(u.id);
+      step(w, tickAi(w, "red", ai));
+      if (suitor) after++;
+      else if (goliathPhases(ai).get(g.id) === "lift" && liftCondors(w, "red", ai).has(condor.id)) {
+        suitor = spawnUnit(w, "goliath", "blue", g.x - 8.5, g.y + 1);
+        w.powers.stunned.set(suitor.id, 1e9);
+      }
+    }
+    expect(suitor).not.toBeNull();
+    expect(goliathPhases(ai).get(g.id)).not.toBe("lift");
+    expect(liftCondors(w, "red", ai).has(condor.id)).toBe(false);
+  }, 60000);
+
+  it("Nomads + Robot Love: with its base not under attack, the AI doesn't uproot its only Goliath to court", () => {
+    const w = createMapWorld("riverlands", { mutators: ["nomads", "robotlove"] });
+    const ai = createAiState("balanced", "normal", 1);
+    const red = goliathsOf(w, "red")[0]!;
+    const blue = goliathsOf(w, "blue")[0]!;
+    // blue fields three Goliaths at home, far from red's base: red is "losing", but nothing threatens it
+    for (const [dx, dy] of [[0, 0], [6, -6], [6, -1]] as const) {
+      const u = dx === 0 ? blue : spawnUnit(w, "goliath", "blue", blue.x + dx, blue.y + dy);
+      w.powers.stunned.set(u.id, 1e9);
+    }
+    let packed = false;
+    for (let i = 0; i < 30 * TICK_RATE && !w.winner; i++) {
+      const cmds = tickAi(w, "red", ai);
+      if (cmds.some((c) => c.type === "packUp" && c.unitIds.includes(red.id))) packed = true;
+      step(w, cmds);
+    }
+    expect(packed).toBe(false);
+    expect(red.goliath!.mode).toBe("anchored");
+    expect(w.winner).toBeNull();
+  }, 60000);
+});

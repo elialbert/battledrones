@@ -1168,7 +1168,7 @@ function loveMood(w: World, ctx: GoliathContext, ours: readonly Unit[]): "shy" |
   if (!rulesOf(w).robotLove || !ctx.seen.some((e) => !!e.goliath)) return null;
   const mine = value(ctx.army) + ours.reduce((v, g) => v + threatValue(g), 0);
   const theirs = ctx.seen.reduce((v, e) => v + (UNITS[e.kind].dps > 0 || e.goliath ? threatValue(e) : 0), 0);
-  const losing = mine < GOLIATH_AI.loveLosing * theirs && (ctx.threatened || !ctx.hasHq);
+  const losing = mine < GOLIATH_AI.loveLosing * theirs && (ctx.threatened || (!ctx.hasHq && !rulesOf(w).nomads));
   return losing ? "court" : "shy";
 }
 
@@ -1185,7 +1185,16 @@ function loveStep(w: World, faction: Faction, g: Unit, plan: Plan, ctx: GoliathC
   const e = foes[0];
   if (!e) return false;
   const d = dist(e.x, e.y, g.x, g.y);
+  /** Taking its orders: a lift it was getting (a Condor held for it) is off. */
+  const leaveLift = () => {
+    if (plan.phase !== "lift") return;
+    plan.carriers = [];
+    plan.launchHp = [];
+    plan.lifting = false;
+    plan.waypoint = null;
+  };
   if (mood === "court") {
+    leaveLift();
     if (gs.mode === "anchored" || gs.mode === "anchoring") cmds.push({ type: "packUp", faction, unitIds: [g.id] });
     else if (gs.mode === "walking" && walkable(w, g, e)) {
       const o = g.order;
@@ -1197,6 +1206,7 @@ function loveStep(w: World, faction: Faction, g: Unit, plan: Plan, ctx: GoliathC
   }
   const gap = GOLIATH_AI.loveGap;
   if (d > gap + (gs.mode === "walking" ? 0 : GOLIATH.packTime * UNITS.goliath.speed)) return false;
+  leaveLift();
   if (gs.mode === "anchored" || gs.mode === "anchoring") {
     cmds.push({ type: "packUp", faction, unitIds: [g.id] });
     plan.next = "guard";
@@ -1245,7 +1255,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
     const threat = enemyNear(ctx.seen, g, GOLIATH_AI.danger);
     const local = UNITS.goliath.cost * hp + value(ctx.army.filter((u) => dist(u.x, u.y, g.x, g.y) <= 6)) +
       ownBuildingsNear(w, faction, g, 6).reduce((v, b) => v + (BUILDINGS[b.kind].dps > 0 ? BUILDINGS[b.kind].cost : 0), 0);
-    if (threat > GOLIATH_AI.loseEdge * local && hp < 0.6 && ctx.hasHq) {
+    if (threat > GOLIATH_AI.loseEdge * local && hp < 0.6 && ctx.hasHq && walkable(w, g, ctx.hqC)) {
       cmds.push({ type: "packUp", faction, unitIds: [g.id] });
       plan.next = "retreat";
       avoidSite(w, m, plan.site);
@@ -1476,8 +1486,10 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       // just short of home, toward where it is (the Menders come to it: ai/menders.ts)
       const k = d > 4 ? 4 / d : 0;
       const to = { x: home.x + (g.x - home.x) * k, y: home.y + (g.y - home.y) * k };
-      if (dist(g.x, g.y, to.x, to.y) > 1.5) move(to);
-      else if (!ctx.hasHq && anchorBlocker(w, g) === null) {
+      // (no walking home from an island: it digs in where it stands, and the Menders fly to it)
+      const stranded = !walkable(w, g, to);
+      if (dist(g.x, g.y, to.x, to.y) > 1.5 && !stranded) move(to);
+      else if ((!ctx.hasHq || stranded) && anchorBlocker(w, g) === null) {
         cmds.push({ type: "anchor", faction, unitIds: [g.id] }); // (no HQ: it dig in where it is safe and becomes the base)
         plan.site = { kind: "front", at: { x: g.x, y: g.y }, field: null, value: 0, score: 0, lift: false };
         setPhase(w, plan, "dig");
@@ -1624,7 +1636,10 @@ function keepEscorts(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan
 /** Anti-air (Flak-weighted) the lift reckons with along a straight leg: clear when nothing above GOLIATH_AI.liftAa covers it. */
 function liftAirspace(w: World, faction: Faction, seen: readonly Sighting[]) {
   const sources = aaSources(w, faction, seen);
-  const covered = (x: number, y: number) => aaStrengthAt(sources, x, y) > GOLIATH_AI.liftAa;
+  // (under Robot Love a lift never flies within loveGap of an enemy Goliath: a meeting is a draw)
+  const love = rulesOf(w).robotLove ? seen.filter((e) => e.kind === "goliath") : [];
+  const covered = (x: number, y: number) =>
+    aaStrengthAt(sources, x, y) > GOLIATH_AI.liftAa || love.some((e) => dist(e.x, e.y, x, y) < GOLIATH_AI.loveGap);
   const clear = (ax: number, ay: number, bx: number, by: number) => {
     const n = Math.max(1, Math.ceil(dist(ax, ay, bx, by)));
     for (let i = 1; i <= n; i++) if (covered(ax + ((bx - ax) * i) / n, ay + ((by - ay) * i) / n)) return false;
@@ -1755,8 +1770,11 @@ function liftStep(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, c
     setDownAt(plan.landing);
     return;
   }
-  const carriers = lift.carriers.map((id) => w.units.get(id));
-  const hurt = carriers.some((c, i) => !c || c.hp < (plan.launchHp[i] ?? UNITS.condor.hp) - UNITS.condor.hp * GOLIATH_AI.liftAbort);
+  // (each against its own HP at launch: the sim may hook the pair on the other way round)
+  const hurt = lift.carriers.some((id) => {
+    const c = w.units.get(id);
+    return !c || c.hp < (plan.launchHp[plan.carriers.indexOf(id)] ?? UNITS.condor.hp) - UNITS.condor.hp * GOLIATH_AI.liftAbort;
+  });
   const { covered, clear } = liftAirspace(w, faction, ctx.seen);
   const goal = site?.at ?? null;
   /** Call it off: down at `p` (or, nothing given, the nearest land) and think again. */

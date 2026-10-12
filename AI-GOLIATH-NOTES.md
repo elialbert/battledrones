@@ -133,6 +133,29 @@ probes no match ended in a draw: they were decided at 15–19 minutes.
   0.7). Repro: `npx vite-node .arena-builds/pt/mirror.ts ashlands boom 75
   --goliath` (scratch, gitignored), first asymmetry at 35.1 s.
 
+- **Dry-map standstill (Nomads).** In `tests/ai-goliath.test.ts`'s Nomads
+  match on Riverlands (Balanced v Ironclad, seeds 3 and 4), every field on
+  the map is mined out by about 14:00. A small change upstream (see the
+  next item) turns that match into a standstill to 25:00: each side keeps
+  a few hundred scrap of army parked as the escort of a walking Goliath
+  that has no field left to go to, and red's staged army stays under its
+  launch bar with nothing left to buy. A trial rule that launches whatever
+  is staged once the map is dry and the bank can't buy a squad made both
+  sides attack, but the escorts still stood by their Goliaths and the
+  match stayed level, so it was taken out. Fix: with no site left, a
+  Goliath should join the assault (siege) and free its escort.
+- **Wounded veteran escorts flip-flop** (final review, not fixed). A rank
+  2+ escort under 35% HP is sent home by `veteranRetreats` and back to its
+  post by `keepEscorts` on alternate passes until a Mender reaches it.
+  The fix (drop `isWoundedVeteran` units from `plan.escorts` in
+  `keepEscorts`) is one line, but it turns the Nomads match above into the
+  standstill, so it waits for that fix.
+- **An island relay's own Goliath can't re-pick it.** `chooseSite` skips a
+  relay on the island the Goliath already stands on, so one that packed up
+  there can't dig back in at it. A losing Goliath at an island relay now
+  stays dug in, and a retreat it can't walk digs in where it stands, so
+  this is rarer.
+
 ## Gaps against GOLIATH.md's AI list
 
 All five items are in, but thinly tested: "use the two-Condor lift" is
