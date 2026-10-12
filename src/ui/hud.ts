@@ -362,15 +362,16 @@ export function createHud(api: HudApi): Hud {
     // (a Goliath's price climbs with every one you have: the card shows today's)
     const cost = isUnit ? unitCost(w, PLAYER, kind as UnitKind) : s.cost;
     rows.push(`<tr><td>Cost</td><td>${cost}</td><td>HP</td><td>${s.hp}</td></tr>`);
+    /** A Goliath's four weapon systems, in a table of their own after the cost. */
+    let weapons = "";
     if (kind === "goliath") {
       rows.push(`<tr><td>Price</td><td colspan="3">+${Math.round(GOLIATH.costStep * 100)}% for each Goliath you have</td></tr>`);
       // four weapon systems instead of one: the longest reach goes first as it is hurt
-      rows.push(`<tr class="gw-head"><td>Weapon</td><td>Range</td><td colspan="2"></td></tr>`);
-      for (const { k } of GOLIATH_STRIP) {
+      weapons = `<table class="gwt"><tr class="gw-head"><td>Weapon</td><td>Range</td><td></td></tr>${GOLIATH_STRIP.map(({ k }) => {
         const ws = GOLIATH.weapons[k];
         const off = ws.lostBelow > 0 ? `offline below ${Math.round(ws.lostBelow * 100)}%` : "always on";
-        rows.push(`<tr class="gw-row"><td>${ws.name}</td><td>${ws.range}</td><td colspan="2">${off}${ws.targets === "both" ? " · hits air" : ""}</td></tr>`);
-      }
+        return `<tr><td>${ws.name}</td><td>${ws.range}</td><td>${off}${ws.targets === "both" ? " · air too" : ""}</td></tr>`;
+      }).join("")}</table>`;
     } else if (s.dps > 0) {
       const tgt = s.targets === "both" ? "Air + Ground" : s.targets === "air" ? "Air" : "Ground";
       rows.push(`<tr><td>DPS</td><td>${s.dps}</td><td>Range</td><td>${s.range}</td></tr>`);
@@ -401,7 +402,7 @@ export function createHud(api: HudApi): Hud {
     cardEl.innerHTML = `
       <div class="ch"><img src="${icon(kind)}" alt="" /><div><b>${s.name}</b><p>${s.role}</p></div>
       <button class="x" id="card-x">✕</button></div>
-      <table>${rows.join("")}</table>
+      ${weapons ? `<table>${rows.slice(0, 2).join("")}</table>${weapons}<table>${rows.slice(2).join("")}</table>` : `<table>${rows.join("")}</table>`}
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
       ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
@@ -474,9 +475,11 @@ export function createHud(api: HudApi): Hud {
    * The selected Goliaths' chip, one id through every state so it updates in
    * place: ⚓ Anchor (or ⚠ why it can't here, which says so and shakes), ⇡ Pack
    * up once anchored, and a progress readout while digging in or packing up
-   * (the G key does the same). Null with no Goliath on the ground selected.
+   * (the G key does the same). On a narrow phone the progress is short ("⚓
+   * 40%": the panel above says it in full) and a reason wraps onto two lines,
+   * so the row stays one row. Null with no Goliath on the ground selected.
    */
-  function goliathChip(gs: Unit[]): Chip | null {
+  function goliathChip(gs: Unit[], narrow: boolean): Chip | null {
     if (gs.length === 0) return null;
     const ctrl = api.ctrl;
     const walking = gs.filter((g) => g.goliath!.mode === "walking");
@@ -491,7 +494,8 @@ export function createHud(api: HudApi): Hud {
       return { id: "anchor", label: "⇡ Pack up", cls: "anchor", on: () => ctrl.toggleAnchor() };
     // digging in or packing up: progress only (the one furthest from done)
     const slow = gs.reduce((a, b) => (modeProgress(b) < modeProgress(a) ? b : a));
-    return { id: "anchor", label: goliathMode(slow), cls: "info", on: () => {} };
+    const short = `${slow.goliath!.mode === "packing" ? "⇡" : "⚓"} ${Math.floor(modeProgress(slow) * 20) * 5}%`;
+    return { id: "anchor", label: narrow ? short : goliathMode(slow), cls: "info", on: () => {} };
   }
 
   // ------------------------------------------------------ selection panel ---
@@ -610,7 +614,9 @@ export function createHud(api: HudApi): Hud {
               : `<span class="hint">Empty: tap a squad to load it</span>`;
           const how = u.faction === PLAYER && !ctrl.spectator;
           const hint = lifting
-            ? `<span class="hint">${lifting.goliath!.lift!.phase === "hooking" ? "Hooking onto a Goliath" : how ? "Carrying a Goliath: long-press to set it down" : "Carrying a Goliath"}</span>`
+            ? lifting.goliath!.lift!.phase === "hooking"
+              ? `<span class="hint">Hooking onto a Goliath</span>`
+              : `<span class="hint">Carrying a Goliath</span>${how ? `<span class="hint">Long-press the map to set it down</span>` : ""}`
             : transport
               ? (u.passengers?.length ?? 0) > 0 || ctrl.spectator ? "" : empty
               : `<span class="hint">${st.role}</span>`;
@@ -939,7 +945,7 @@ export function createHud(api: HudApi): Hud {
       const aboard = ctrl.aboardSelected();
       const lifts = ctrl.liftsSelected();
       const setDown = lifts.some((g) => g.goliath!.lift!.phase === "carrying");
-      const anchor = goliathChip(ctrl.goliathsSelected());
+      const anchor = goliathChip(ctrl.goliathsSelected(), narrow);
       const unload = aboard > 0 || setDown;
       chips.push({ id: "stop", label: narrow && (unload || anchor) ? "■" : "■ Stop", on: () => ctrl.stopSelected() });
       if (unload)
@@ -1139,16 +1145,18 @@ export function createHud(api: HudApi): Hud {
         mctx.arc(x, y, Math.max(7, (GOLIATH.buildRing + GOLIATH.footprint / 2) * k), 0, Math.PI * 2);
         mctx.stroke();
       }
+      // (the minimap shows at under half its canvas size on a phone: a unit blip is ~2 px there, this ~8)
+      const r = 9;
       mctx.beginPath();
-      mctx.moveTo(x, y - 6);
-      mctx.lineTo(x + 6, y);
-      mctx.lineTo(x, y + 6);
-      mctx.lineTo(x - 6, y);
+      mctx.moveTo(x, y - r);
+      mctx.lineTo(x + r, y);
+      mctx.lineTo(x, y + r);
+      mctx.lineTo(x - r, y);
       mctx.closePath();
       mctx.fillStyle = own ? "#cfe8ff" : "#ff7a66";
       mctx.fill();
       mctx.strokeStyle = own ? "#1d4f8f" : "#5a0f08";
-      mctx.lineWidth = 2;
+      mctx.lineWidth = 2.5;
       mctx.stroke();
     }
     api.minimapOverlay?.(mctx, k); // Uplinks and supply crates (render/objectives.ts)
