@@ -691,8 +691,8 @@ export function cleanupDeaths(w: World): void {
     if (b.kind === "hq" && w.winner === null && !hasGoliath(w, b.faction))
       w.winner = b.faction === "blue" ? "red" : "blue";
   }
-  // the last Goliath of a side whose HQ is already gone
+  // the last Goliath of a side whose HQ is already gone (not Last Stand's waves: they never had one)
   for (const { u } of deadUnits)
-    if (u.goliath && w.winner === null && !hqOf(w, u.faction) && !hasGoliath(w, u.faction))
+    if (u.goliath && w.winner === null && !hqOf(w, u.faction) && !hasGoliath(w, u.faction) && (!w.survival || u.faction === w.survival.defender))
       w.winner = u.faction === "blue" ? "red" : "blue";
 }

@@ -281,7 +281,8 @@ export const trainable = (kind: UnitKind): boolean => UNITS[kind].builtAt === "a
 /**
  * Per tick, after deaths are cleaned up: anchoring and packing count down
  * (an EMP pauses them), and weapon systems go offline below their line and
- * reboot back once repaired GOLIATH.restoreMargin above it.
+ * reboot back once repaired GOLIATH.restoreMargin above it (an EMP holds the
+ * reboot too).
  */
 export function tickGoliaths(w: World): void {
   const rebootTicks = Math.round(GOLIATH.reboot * TICK_RATE);
@@ -306,6 +307,8 @@ export function tickGoliaths(w: World): void {
         if (share < line) {
           ws.reboot = -1; // knocked back down mid-reboot
           ev("offline");
+        } else if (isStunned(w, u.id)) {
+          // an EMP holds the reboot (it blocks repair while it lasts)
         } else if (--ws.reboot <= 0) {
           ws.online = true;
           ws.reboot = -1;
