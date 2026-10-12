@@ -1,5 +1,5 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, GOLIATH, INFANTRY, OBJECTIVES, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
-import { GOLIATH_WEAPONS, canWalk, hasGoliath, repairUrgency, unplant, weaponReady } from "./goliath";
+import { GOLIATH_WEAPONS, canWalk, goliathReachAt, hasGoliath, repairUrgency, unplant, weaponReady } from "./goliath";
 import { dropLifts } from "./lift";
 import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
 import { IGNORE_TICKS, moveUnitToward } from "./movement";
@@ -84,10 +84,9 @@ export function findTarget(
  * hovering out over the sea, so it must not lock onto one (it would sit at
  * the shore with a dead order, deaf to enemies landing next to it).
  */
-export function engageable(w: World, u: Unit, id: number): boolean {
+export function engageable(w: World, u: Unit, id: number, range = UNITS[u.kind].range): boolean {
   const t = targetPosition(w, id);
   if (!t) return false;
-  const range = UNITS[u.kind].range;
   const b = w.buildings.get(id);
   if (b) return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, range, (px, py) => distToBuilding(b, px, py), BUILDINGS[b.kind].size);
   return canGetWithin(w, moveClassOf(u.kind), u.x, u.y, t.x, t.y, range);
@@ -478,9 +477,11 @@ function goliathWeapons(w: World, u: Unit, healers: Unit[], incidents: Incident[
   if (u.order.type === "attack") {
     const id = u.order.targetId;
     const t = targetPosition(w, id);
-    if (!t || hidden(w, u.faction, id) || !GOLIATH_WEAPONS.some((k) => canHit(GOLIATH.weapons[k].targets, t.domain))) {
+    // (the reach of the weapons it still has that can hit it: a Goliath's shrinks as they go)
+    const reach = t ? goliathReachAt(u, t.domain) : 0;
+    if (!t || hidden(w, u.faction, id) || reach === 0) {
       u.order = { type: "idle" }; // gone, out of reach, or vanished into the woods
-    } else if (distTo(w, id, u.x, u.y) > UNITS.goliath.range && !engageable(w, u, id)) {
+    } else if (distTo(w, id, u.x, u.y) > reach && !engageable(w, u, id, reach)) {
       u.order = { type: "idle" }; // across the water from us
     } else ordered = id;
   }

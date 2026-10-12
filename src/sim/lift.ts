@@ -4,7 +4,7 @@ import { isTransport } from "./infantry";
 import { isStunned } from "./powers";
 import { wreckRestingSpot } from "./salvage";
 import type { Command, Unit, World } from "./types";
-import { buildingAtTile, inBounds, passable, sideFrame, terrainAt } from "./world";
+import { inBounds, passable, sideFrame, terrainAt } from "./world";
 import { atan2, cos, hypot, sin } from "./fmath";
 
 /**
@@ -97,9 +97,10 @@ function release(w: World, g: Unit): void {
  */
 export function setDownPoint(w: World, g: Unit, x: number, y: number): { x: number; y: number } | null {
   const ok = (tx: number, ty: number) => passable(w, tx, ty, "ground");
-  if (ok(Math.floor(x), Math.floor(y))) return { x, y };
+  // (the tile under the point in the side's frame: on a tile edge, red's is blue's mirror)
   const fr = sideFrame(w, g.faction);
   const p = fr.pt({ x, y });
+  if (ok(...fr.tile(Math.floor(p.x), Math.floor(p.y), 1))) return { x, y };
   const R = Math.ceil(GOLIATH.lift.setDownSearch);
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
@@ -172,6 +173,7 @@ export function routeLiftCommand(w: World, c: Command): Set<number> {
       if (u.goliath) continue; // the Goliath waits for its Condors
       release(w, g); // called off before it left the ground
       handled.delete(id); // (this Condor takes the order as usual)
+      handled.delete(g.id); // (and so does the Goliath, if it was named before its Condors)
       continue;
     }
     // (kept over the map: a lift never flies off its edge)
@@ -287,19 +289,21 @@ export function dropLifts(w: World): void {
     release(w, g);
     if (phase === "hooking") continue;
     const killer = down?.lastAttackerId ?? g.lastAttackerId ?? 0;
-    const tx = Math.floor(g.x);
-    const ty = Math.floor(g.y);
+    // the tile under it in its side's frame (as canBailOut takes it for squads: mirror-fair on a tile edge)
+    const fr = sideFrame(w, g.faction);
+    const fp = fr.pt(g);
+    const [tx, ty] = fr.tile(Math.floor(fp.x), Math.floor(fp.y), 1);
     let lands = inBounds(w, tx, ty) && TERRAIN[terrainAt(w, tx, ty)].ground;
-    if (lands && buildingAtTile(w, tx, ty)) {
-      // onto a building: it slides off to the nearest open ground, if there is any close
-      const spot = wreckRestingSpot(w, g.x, g.y);
+    if (lands && w.occupancy[ty * w.width + tx] !== 0) {
+      // onto a building (or a dug-in Goliath): it slides off to the nearest open ground, if there is any close
+      const spot = wreckRestingSpot(w, g.x, g.y, g.faction);
       if (spot) {
         g.x = spot.x;
         g.y = spot.y;
       } else lands = false;
     }
     const damage = lands ? UNITS.goliath.hp * GOLIATH.lift.dropDamage : g.hp;
-    strikeDamage(w, [{ id: g.id, damage }], killer);
+    if (g.hp > 0) strikeDamage(w, [{ id: g.id, damage }], killer); // (already shot down itself: its own killer keeps the credit)
     if (!lands) g.hp = Math.min(g.hp, 0); // (destroyed whatever its armour)
     g.order = { type: "idle" };
     g.path = null;

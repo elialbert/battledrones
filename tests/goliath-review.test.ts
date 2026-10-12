@@ -1,0 +1,156 @@
+import { describe, expect, it } from "vitest";
+import { GOLIATH, UNITS } from "../src/sim/balance";
+import { goliathsOf } from "../src/sim/goliath";
+import { setDownPoint } from "../src/sim/lift";
+import { createMapWorld } from "../src/sim/maps";
+import { DEFAULT_RULES } from "../src/sim/rules";
+import { wreckRestingSpot } from "../src/sim/salvage";
+import { step } from "../src/sim/sim";
+import { Terrain, type Faction, type FxEvent, type Unit, type World } from "../src/sim/types";
+import { createWorld, hqOf, onHomeLand, regionAt, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
+
+// Regressions for the findings of the adversarial review of the Goliath sim.
+
+const mirror = (w: World, p: { x: number; y: number }) => ({ x: w.width - p.x, y: w.height - p.y });
+
+/** Paint a rectangle of terrain and its point mirror (inclusive). */
+function paintBoth(w: World, x0: number, y0: number, x1: number, y1: number, t: Terrain): void {
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++) {
+      setTerrain(w, x, y, t);
+      setTerrain(w, w.width - 1 - x, w.height - 1 - y, t);
+    }
+}
+
+/** A carried Goliath of `f` at (x, y), with its two Condors hooked on. */
+function carried(w: World, f: Faction, x: number, y: number): { g: Unit; a: Unit; b: Unit } {
+  const g = spawnUnit(w, "goliath", f, x, y);
+  const a = spawnUnit(w, "condor", f, x - 1, y);
+  const b = spawnUnit(w, "condor", f, x + 1, y);
+  for (const c of [a, b]) c.order = { type: "lift", goliathId: g.id };
+  g.goliath!.lift = { carriers: [a.id, b.id], phase: "carrying", dest: null, setDown: false };
+  return { g, a, b };
+}
+
+describe("review regressions", () => {
+  it("a harvester bound for the side's only Goliath waits, loaded, while it packs up and moves, then delivers", () => {
+    const w = createMapWorld("proving-grounds", { mutators: ["nomads"] });
+    const g = goliathsOf(w, "blue")[0]!;
+    const h = [...w.units.values()].find((u) => u.faction === "blue" && u.kind === "harvester")!;
+    h.cargo = 100;
+    h.order = { type: "harvest", fieldX: Math.floor(h.x), fieldY: Math.floor(h.y), phase: "toBase" };
+    // move the base 6 tiles: it packs up first (no drop site meanwhile), walks, and is told to dig in again
+    step(w, [{ type: "move", faction: "blue", unitIds: [g.id], x: g.x, y: g.y - 6 }]);
+    expect(h.order.type).toBe("harvest");
+    for (let i = 0; i < 40 * 10 && g.goliath!.mode !== "walking"; i++) step(w, []);
+    for (let i = 0; i < 40 * 10 && g.order.type !== "idle"; i++) step(w, []);
+    expect(h.order.type).toBe("harvest"); // still waiting with its load
+    const scrap = w.factions.blue.scrap;
+    step(w, [{ type: "anchor", faction: "blue", unitIds: [g.id] }]);
+    for (let i = 0; i < 60 * 10; i++) step(w, []);
+    expect(w.factions.blue.scrap).toBeGreaterThan(scrap + 50);
+  });
+
+  it("mirror-image lifts dropped on a tile edge fall the same way (side-frame tile)", () => {
+    const w = createWorld(60, 60);
+    w.rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], startUnits: [], mutators: [] };
+    spawnBuilding(w, "hq", "blue", 1, 1);
+    spawnBuilding(w, "hq", "red", 56, 56);
+    paintBoth(w, 20, 18, 29, 22, Terrain.Water);
+    const blue = carried(w, "blue", 30, 20.5); // exactly on the edge of the water's last column
+    const p = mirror(w, { x: 30, y: 20.5 });
+    const red = carried(w, "red", p.x, p.y);
+    blue.a.hp = 0;
+    red.a.hp = 0;
+    step(w, []);
+    expect(blue.g.hp > 0).toBe(red.g.hp > 0);
+    if (blue.g.hp > 0) expect(blue.g.hp).toBeCloseTo(red.g.hp, 6);
+  });
+
+  it("set-down points and building slide-offs are mirror images for the two sides", () => {
+    const w = createWorld(60, 60);
+    paintBoth(w, 20, 18, 29, 22, Terrain.Water);
+    spawnBuilding(w, "depot", "blue", 40, 40);
+    spawnBuilding(w, "depot", "red", 18, 18);
+    const gb = spawnUnit(w, "goliath", "blue", 10, 10);
+    const gr = spawnUnit(w, "goliath", "red", 50, 50);
+    for (const at of [{ x: 30, y: 20.5 }, { x: 25, y: 20 }, { x: 24.5, y: 22 }]) {
+      const b = setDownPoint(w, gb, at.x, at.y);
+      const r = setDownPoint(w, gr, ...(Object.values(mirror(w, at)) as [number, number]));
+      expect(r && mirror(w, r)).toEqual(b && { x: expect.closeTo(b.x, 6), y: expect.closeTo(b.y, 6) });
+    }
+    // a fall onto a building rests on the mirror side for red
+    const b = wreckRestingSpot(w, 41, 41, "blue")!;
+    const r = wreckRestingSpot(w, w.width - 41, w.height - 41, "red")!;
+    expect(mirror(w, r).x).toBeCloseTo(b.x, 6);
+    expect(mirror(w, r).y).toBeCloseTo(b.y, 6);
+    // (no faction: exactly the old world-frame answer)
+    expect(wreckRestingSpot(w, 41, 41)).toEqual(wreckRestingSpot(w, 41, 41, "blue"));
+  });
+
+  it("island home land outlives the HQ: no ordinary building or Drop Pod on an island once it falls", () => {
+    const w = createMapWorld("archipelago");
+    const hq = hqOf(w, "blue")!;
+    // an island tile: ground in a different ground region from the HQ's
+    const home = regionAt(w, hq.tx + 1, hq.ty + 1, "ground");
+    let island: { x: number; y: number } | null = null;
+    for (let y = 0; y < w.height && !island; y++)
+      for (let x = 0; x < w.width && !island; x++) {
+        const r = regionAt(w, x, y, "ground");
+        if (r && r !== home) island = { x, y };
+      }
+    expect(island).not.toBeNull();
+    expect(onHomeLand(w, "blue", island!.x, island!.y)).toBe(false);
+    spawnUnit(w, "goliath", "blue", hq.tx + 6, hq.ty + 6);
+    hq.hp = 0;
+    step(w, []);
+    expect(w.winner).toBeNull();
+    expect(hqOf(w, "blue")).toBeNull();
+    expect(onHomeLand(w, "blue", island!.x, island!.y)).toBe(false);
+    expect(onHomeLand(w, "blue", hq.tx + 1, hq.ty + 1)).toBe(true);
+    // and under Nomads, from the first tick (no HQ was ever built)
+    const n = createMapWorld("archipelago", { mutators: ["nomads"] });
+    expect(onHomeLand(n, "blue", island!.x, island!.y)).toBe(false);
+  });
+
+  it("a move naming a Goliath before its still-hooking Condors calls the lift off and still moves the Goliath", () => {
+    const w = createWorld(40, 40);
+    const g = spawnUnit(w, "goliath", "blue", 20, 20);
+    const a = spawnUnit(w, "condor", "blue", 10, 10);
+    const b = spawnUnit(w, "condor", "blue", 12, 10);
+    step(w, [{ type: "lift", faction: "blue", unitIds: [a.id, b.id], goliathId: g.id }]);
+    expect(g.goliath!.lift?.phase).toBe("hooking");
+    step(w, [{ type: "move", faction: "blue", unitIds: [g.id, a.id, b.id], x: 30, y: 30 }]);
+    expect(g.goliath!.lift).toBeNull();
+    expect(g.order).toMatchObject({ type: "move", x: 30, y: 30 });
+  });
+
+  it("a carried Goliath shot down on the same tick as one of its Condors is credited to its own killer", () => {
+    const w = createWorld(40, 40);
+    const { g, a } = carried(w, "blue", 20, 20);
+    const shooter = spawnUnit(w, "raptor", "red", 30, 30);
+    const flak = spawnUnit(w, "flak-crawler", "red", 32, 32);
+    g.hp = -5;
+    g.lastAttackerId = shooter.id;
+    a.hp = 0;
+    a.lastAttackerId = flak.id;
+    step(w, []);
+    const death = w.fx.find((e): e is Extract<FxEvent, { type: "death" }> => e.type === "death" && e.id === g.id);
+    expect(death?.killerId).toBe(shooter.id);
+  });
+
+  it("a Goliath whose mortars are down gives up an attack on a target across the water beyond its other guns", () => {
+    const w = createWorld(48, 48);
+    w.rules = { ...DEFAULT_RULES, bannedUnits: [], bannedBuildings: [], startUnits: [], mutators: [], fogOff: true };
+    spawnBuilding(w, "hq", "blue", 1, 1);
+    spawnBuilding(w, "hq", "red", 44, 44);
+    for (let y = 0; y < 48; y++) for (let x = 30; x <= 35; x++) setTerrain(w, x, y, Terrain.Water);
+    const g = spawnUnit(w, "goliath", "blue", 28.5, 30.5);
+    g.hp = UNITS.goliath.hp * (GOLIATH.weapons.mortars.lostBelow - 0.05);
+    const depot = spawnBuilding(w, "depot", "red", 36, 30);
+    step(w, []); // (the mortars go offline)
+    step(w, [{ type: "attack", faction: "blue", unitIds: [g.id], targetId: depot.id }]);
+    for (let i = 0; i < 50; i++) step(w, []);
+    expect(g.order.type).toBe("idle");
+  });
+});

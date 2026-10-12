@@ -74,6 +74,12 @@ export interface Rules {
   nomads?: boolean;
   /** Robot Love: two enemy Goliaths within GOLIATH.love.range fall in love and the match is a draw (goliath.ts tickLove). */
   robotLove?: boolean;
+  /**
+   * Island maps: the tile at the centre of each side's starting HQ, so home
+   * land is still known once the HQ has fallen (or, under Nomads, was never
+   * built) and the side plays on round a Goliath (world.ts onHomeLand).
+   */
+  homeTiles?: Record<Faction, [number, number]>;
 }
 
 export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({

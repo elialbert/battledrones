@@ -1,8 +1,8 @@
 import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { canWalk, isLifted } from "./goliath";
+import { canWalk, goliathReachAt, isLifted } from "./goliath";
 import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
-import { inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
+import { domainOf, inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
 import { atan2, cos, hypot, sin } from "./fmath";
 
 const ARRIVE_DIST = 0.25;
@@ -256,6 +256,13 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
   return false;
 }
 
+/** How close a unit needs to get to attack target `id` (a Goliath: its weapons still up that can hit it). */
+function reachFor(w: World, u: Unit, id: number): number {
+  if (!u.goliath) return UNITS[u.kind].range;
+  const t = w.units.get(id);
+  return goliathReachAt(u, t ? domainOf(t) : "ground");
+}
+
 /** Where to drive to reach a building: the nearest point of its footprint. */
 export function approachPoint(
   w: World,
@@ -313,7 +320,7 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
         // artillery: back off out of minimum range instead of closing in
         const k = (minRange + 0.8) / Math.max(d, 0.01);
         moveUnitToward(w, u, p.x + (u.x - p.x) * k, p.y + (u.y - p.y) * k);
-      } else if (moveUnitToward(w, u, p.x, p.y) && d > UNITS[u.kind].range) {
+      } else if (moveUnitToward(w, u, p.x, p.y) && d > reachFor(w, u, o.targetId)) {
         // (combat pauses it once in range.) Got as close as the ground allows and still out of
         // range of a target across the water: give it up, so the unit fights what it can reach
         const mc = moveClassOf(u.kind);
