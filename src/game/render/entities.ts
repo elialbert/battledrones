@@ -588,7 +588,7 @@ export class EntityRenderer {
       else this.fx.landing(at);
     };
     const def = unitDef(u.kind, u.faction);
-    const m: ModelInstance = { root: rig.root, body: rig.root, turret: null, rotors: [], cargo: null, ramp: null, def };
+    const m: ModelInstance = { root: rig.root, body: rig.root, turret: null, rotors: [], cargo: null, ramp: null, parts: {}, def };
     this.group.add(rig.root);
     const v: UnitView = {
       kind: "unit", m, air: false, hover: false,

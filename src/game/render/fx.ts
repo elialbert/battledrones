@@ -117,6 +117,16 @@ const HEAL: EmitCfg = {
   tex: TEX.spark, additive: true, life: [300, 600], speed: [0.1, 0.4], up: [0.4, 0.9], size: [0.22, 0.3], grow: [0, 0.1],
   alpha: [1, 0], tints: [0x7dff9a]
 };
+/** Steam venting off a Goliath's hydraulics (packing up, a Gantry finishing one): white, quick, rising and thinning downwind. */
+const STEAM: EmitCfg = {
+  tex: TEX.puff, tex2: TEX.puff2, life: [550, 950], speed: [0.15, 0.45], up: [0.6, 1.0], size: [0.16, 0.24], grow: [2.4, 3.2],
+  alpha: [0.6, 0], tints: [0xe8eef2, 0xdfe6ea], end: 0xf6f8fa, drag: 0.55, spin: 0.4, rot: 0.4, wind: [0.3, 0.12], fadeIn: 0.12, easeOut: true
+};
+/** A welding arc's spatter: white-hot, cooling to amber, falling. */
+const WELD: EmitCfg = {
+  tex: TEX.spark, additive: true, life: [180, 420], speed: [0.6, 2.2], up: [0.2, 1.6], size: [0.1, 0.16], grow: [0.2, 0.3],
+  alpha: [1, 0], tints: [0xffffff, 0xfff4d0], end: 0xffa040, gravity: -7
+};
 
 const tracerGeo = new THREE.BoxGeometry(0.035, 0.035, 1);
 let tracerMat: THREE.MeshBasicMaterial | null = null;
@@ -162,6 +172,12 @@ function shell(): THREE.BufferGeometry {
 export class Fx {
   /** Robot squads on show (set by the entity renderer). */
   squads: SquadFire | null = null;
+  /**
+   * Where a slow shell fired by unit `sourceId` leaves its barrel, if not
+   * from the usual low launch point (a Goliath's shoulder mortars, set by the
+   * entity renderer): read once, as the shell appears.
+   */
+  shellFrom: ((sourceId: number) => P3 | null) | null = null;
   private fliers: Flier[] = [];
   private shells = new Map<number, THREE.Mesh>();
   private rubbles: THREE.Object3D[] = [];
@@ -196,7 +212,8 @@ export class Fx {
     tracerMat ??= glowMat(0xffe2a0, 1);
   }
 
-  private sound(name: SfxName, x: number, y: number, vol = 1): void {
+  /** A sound at tile point (x, y): as loud as it is close to the view. */
+  sound(name: SfxName, x: number, y: number, vol = 1): void {
     sfx.play(name, vol * this.earshot(x, y));
   }
 
@@ -656,8 +673,9 @@ export class Fx {
    * it as it fades in. Not under the fog: a remembered enemy building is
    * drawn from memory, and a plume would give away how hurt it is now.
    */
-  buildingSmoke(p: P3, burning: boolean): void {
-    if (fogged(p.x, p.y)) return;
+  buildingSmoke(p: P3, burning: boolean, always = false): void {
+    // (`always`: smoke off something the enemy always sees, a Goliath's or a Gantry's)
+    if (!always && fogged(p.x, p.y)) return;
     const pt = this.v.particles;
     const cfg = burning ? BURN_SMOKE : DAMAGE_SMOKE;
     pt.emit(cfg, p.x, p.y, p.h + cfg.size[1] / 2, 1);
@@ -680,6 +698,61 @@ export class Fx {
       },
       true
     );
+  }
+
+  /**
+   * A ring of light racing out along the ground from radius `r0` to `r1`
+   * tiles over `ms` (a Goliath's build ring pulsing out as it anchors).
+   */
+  ring(x: number, y: number, tint: number, r0: number, r1: number, ms: number, alpha = 1): void {
+    tmpC.setHex(tint);
+    this.v.particles.spawn(
+      {
+        x, y: this.v.terrain.surfaceAt(x, y) + 0.08, z: y, life: ms, tex: TEX.ring, flat: true, easeOut: true,
+        size0: r0 * 2.3, size1: r1 * 2.3, alpha0: alpha, alpha1: 0, r: tmpC.r, g: tmpC.g, b: tmpC.b
+      },
+      true
+    );
+  }
+
+  /** Steam venting at `p` (a Goliath's hydraulics). */
+  steam(p: P3, n = 1): void {
+    this.emit(STEAM, p, n);
+  }
+
+  /** A welding arc at `p`: a white flicker and a spatter of sparks. */
+  weld(p: P3, n = 4): void {
+    this.flash(p, 0.32, 0xfff4e0, 0.9);
+    this.emit(WELD, p, n);
+  }
+
+  /**
+   * Something huge hits the ground at (x, y) — a toppled Goliath, one dropped
+   * off its lift: a blast front, dirt thrown out all round, shards, a dust
+   * cloud rolling out (spray on water), `size` tiles across.
+   */
+  slam(x: number, y: number, size: number): void {
+    const h = this.v.terrain.surfaceAt(x, y);
+    this.shock(x, y, size, 0xffe6c0, 0.55, 520);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + Math.random() * 0.4;
+      const r = size * (0.25 + Math.random() * 0.25);
+      this.kick(x + Math.cos(a) * r, y + Math.sin(a) * r, 1);
+    }
+    this.emit({ ...DEBRIS, speed: [1, 3], size: [0.12, 0.24] }, { x, y, h: h + 0.2 }, 12);
+    for (let i = 0; i < 6; i++) this.dust(x + (Math.random() - 0.5) * size, y + (Math.random() - 0.5) * size, 2);
+  }
+
+  /**
+   * A Goliath's death blast: its reactor going (a fireball no bigger than a
+   * Mastodon's, sparks and shards out of its chest at `at`) — the fall is
+   * the show, not the blast (render/goliath.ts topples it).
+   */
+  goliathBlast(at: P3): void {
+    this.boom(at, 1.2, false, false, 1, 0.85);
+    this.emit({ ...SPARKS, speed: [1, 3.4] }, at, 10);
+    this.emit(DEBRIS, at, 8);
+    this.sound("explosion", at.x, at.y, 0.9);
   }
 
   /** A command marker where the player tapped (move / attack). */
@@ -761,20 +834,27 @@ export class Fx {
         m = modelMesh(shell());
         m.userData.acc = 0;
         m.userData.fresh = true;
+        // (a Goliath's mortar shell leaves its shoulder pod: high up and off to one side)
+        const from = !p.fromAir ? this.shellFrom?.(p.sourceId) ?? null : null;
+        m.userData.dx = from ? from.x - p.sx : 0;
+        m.userData.dy = from ? from.y - p.sy : 0;
+        m.userData.lift = from ? Math.max(0.55, from.h - t.surfaceAt(p.sx, p.sy)) : 0.55;
         this.v.scene.add(m);
         this.shells.set(p.id, m);
       }
       m.userData.seen = true;
       const pp = prev.get(p.id) ?? p;
-      const x = pp.x + (p.x - pp.x) * alpha;
-      const y = pp.y + (p.y - pp.y) * alpha;
+      let x = pp.x + (p.x - pp.x) * alpha;
+      let y = pp.y + (p.y - pp.y) * alpha;
       const total = Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1;
       const k = Math.min(1, Math.hypot(x - p.sx, y - p.sy) / total);
       const g0 = t.surfaceAt(p.sx, p.sy);
       const g1 = t.surfaceAt(p.tx, p.ty);
       let h: number;
       if (p.fromAir) h = g0 + AIR_H * (1 - k) * (1 - k * 0.2) + (g1 - g0) * k;
-      else h = g0 + 0.55 * (1 - k) + (g1 - g0) * k + 4 * k * (1 - k) * Math.min(2.2, total * 0.32);
+      else h = g0 + (m.userData.lift as number) * (1 - k) + (g1 - g0) * k + 4 * k * (1 - k) * Math.min(2.2, total * 0.32);
+      x += (m.userData.dx as number) * (1 - k);
+      y += (m.userData.dy as number) * (1 - k);
       tmpV.copy(m.position);
       m.position.set(x, h, y);
       const fresh = m.userData.fresh as boolean;

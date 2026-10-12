@@ -1,7 +1,7 @@
 // Standalone vehicles page (vehicles.html): every unit with its stats, read
 // from balance.ts so the page never drifts from the game, plus hand-written
 // notes on what makes each one special, and the damage-type table.
-import { DAMAGE_VS, INFANTRY, TERRAIN, UNITS, shotDamage } from "./sim/balance";
+import { DAMAGE_VS, GOLIATH, INFANTRY, TERRAIN, UNITS, shotDamage, type GoliathWeaponStats } from "./sim/balance";
 import { COUNTERS } from "./game/advisor";
 import { Terrain, type ArmorClass, type DamageType, type UnitKind } from "./sim/types";
 
@@ -82,6 +82,12 @@ const FEATURES: Record<UnitKind, string[]> = {
     `Dropship: carries ${UNITS.condor.capacity} infantry squads over water, rock and anything else in the way. Unarmed.`,
     `Select squads and tap the Condor to load them (1 s each, once they reach it); long-press the map to fly there and drop them (it hovers ${INFANTRY.unloadHover} s), or tap Unload.`,
     `Shot down over land, its squads bail out with at most ${Math.round(INFANTRY.bailoutHp * 100)}% HP; over water or rock they are lost with it.`
+  ],
+  goliath: [
+    "A giant walking mech and a mobile base: shoulder mortars, an eye laser, arm cannons and machine guns that hit aircraft too.",
+    `Anchor it (${GOLIATH.anchorTime} s to dig in, ${GOLIATH.packTime} s to pack up) and it takes harvesters' scrap, trains infantry, and lets you build outposts within ${GOLIATH.buildRing} tiles of it, anywhere on the map.`,
+    `Loses its weapons as it is hurt: mortars below ${Math.round(GOLIATH.weapons.mortars.lostBelow * 100)}% HP, the laser below ${Math.round(GOLIATH.weapons.laser.lostBelow * 100)}%, the cannons below ${Math.round(GOLIATH.weapons.cannons.lostBelow * 100)}%. Only Menders repair it, and each weapon reboots once it is mended.`,
+    `Always visible to the enemy. Two empty Condors can carry it; while a side has a Goliath, losing its HQ doesn't lose the game. Each one costs ${Math.round(GOLIATH.costStep * 100)}% more for every Goliath you already have.`
   ]
 };
 
@@ -89,10 +95,11 @@ const GROUPS: { title: string; kinds: UnitKind[] }[] = [
   { title: "Built at the HQ", kinds: ["harvester"] },
   { title: "Fab Plant — ground vehicles", kinds: ["stinger", "flak-crawler", "mortar", "mastodon", "lancer"] },
   { title: "Assembly Bay — robot infantry", kinds: ["trooper", "rocket-squad", "sniper"] },
-  { title: "Airpad — flying drones", kinds: ["scout", "wasp", "raptor", "hornet", "mender", "condor"] }
+  { title: "Airpad — flying drones", kinds: ["scout", "wasp", "raptor", "hornet", "mender", "condor"] },
+  { title: "Gantry — Goliath", kinds: ["goliath"] }
 ];
 
-const BUILT_AT: Record<string, string> = { hq: "HQ", "fab-plant": "Fab Plant", airpad: "Airpad", "assembly-bay": "Assembly Bay" };
+const BUILT_AT: Record<string, string> = { hq: "HQ", "fab-plant": "Fab Plant", airpad: "Airpad", "assembly-bay": "Assembly Bay", gantry: "Gantry" };
 const TARGETS = { ground: "Ground", air: "Air", both: "Ground + air", none: "Unarmed" };
 
 type Threat = UnitKind | "turret" | "sam-site";
@@ -110,8 +117,23 @@ const stat = (value: string | number, label: string): string =>
 
 const fmt = (n: number): string => String(Math.round(n * 100) / 100);
 
+/** One of the Goliath's weapon systems: what it fires, how hard and how far, and when damage takes it offline. */
+function goliathWeapon(w: GoliathWeaponStats): string {
+  const bits = [
+    `<b>${w.name}</b> ${w.dmgType}`,
+    `${fmt(shotDamage(w))} every ${w.shotInterval ?? 0.5}s`,
+    `range ${w.range}${w.minRange ? ` (min ${w.minRange})` : ""}`,
+    w.targets === "both" ? "ground + air" : w.targets,
+    w.lostBelow > 0 ? `offline below ${Math.round(w.lostBelow * 100)}% HP` : "never offline"
+  ];
+  return bits.join(" · ");
+}
+
 function weaponLine(kind: UnitKind): string {
   const u = UNITS[kind];
+  // four weapon systems, the long-ranged first (damage takes them in that order)
+  if (kind === "goliath")
+    return (["mortars", "laser", "cannons", "mg"] as const).map((k) => goliathWeapon(GOLIATH.weapons[k])).join("<br />");
   if (u.heal) return `<b>Repair beam</b> · ${u.heal} HP/s · range ${u.range}`;
   if (u.targets === "none") return "<b>No weapon</b>";
   const strong = (Object.entries(DAMAGE_VS[u.dmgType!]) as [ArmorClass, number][])
