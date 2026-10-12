@@ -118,6 +118,8 @@ function orderText(w: World, fr: Frame, u: Unit): string {
       return `boarding #${o.carrierId}`;
     case "unload":
       return `dropping at ${p(o.x, o.y)}`;
+    case "lift":
+      return `lifting #${o.goliathId}`;
   }
 }
 
