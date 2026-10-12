@@ -581,6 +581,11 @@ export function waveUnitsLeft(w: World): number {
 export function tickSurvival(w: World): void {
   const s = w.survival;
   if (!s || w.winner) return;
+  // Last Stand is a base to hold: the run ends when the HQ falls, Goliath or not
+  if (!hqOf(w, s.defender)) {
+    w.winner = attacker(s);
+    return;
+  }
   const warnTicks = SURVIVAL.warn * TICK_RATE;
 
   // the field is clear: pay the bonus and bring the next wave forward

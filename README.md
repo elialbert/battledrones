@@ -50,7 +50,7 @@ whose server allows cross-origin reads (CORS), a file on GitHub or a Gist.
   radio shouts "Incoming artillery!", the music swells on impact, and
   kill streaks, hero toasts and the after-action report name the strike.
 - **15 units** across a real counter web: Stinger light tanks, Flak
-  Crawlers, long-range Mortars, super-heavy Titans, water-crossing Lancer
+  Crawlers, long-range Mortars, super-heavy Mastodons, water-crossing Lancer
   hover tanks, Scouts, Wasp strike drones, Raptor interceptors, Hornet
   bombers, Mender repair drones, Harvesters, three kinds of robot infantry
   squad (Troopers, Rocket Squads, Sniper Teams) and the Condor dropship.
@@ -58,11 +58,11 @@ whose server allows cross-origin reads (CORS), a file on GitHub or a Gist.
   Tech Lab, forward Depots, Turrets, SAM Sites and Radar.
 - **Robot infantry**: every side starts with a Trooper Squad beside its HQ,
   and an Assembly Bay trains more: Troopers (cheap rifles that hit air too),
-  Rocket Squads (Titan and Hornet killers) and, with a Tech Lab, Sniper
+  Rocket Squads (Mastodon and Hornet killers) and, with a Tech Lab, Sniper
   Teams that stay hidden in woods until they fire. A squad is one unit of
   several robots that fall one by one as it takes damage, and it shoots
   weaker with each loss. Squads cross woods and mud at full speed, take half
-  damage in woods and capture Uplinks twice as fast. Titans crush them.
+  damage in woods and capture Uplinks twice as fast. Mastodons crush them.
 - **The Condor dropship** flies two squads over water, rock and anything
   else. Select squads and tap the Condor to load them, then long-press the
   map to fly there and drop them, or tap ⇣ Unload (key U). If it's shot
@@ -152,12 +152,12 @@ whose server allows cross-origin reads (CORS), a file on GitHub or a Gist.
   on-screen-only camera shake, and gold "+100" pops with a rising coin
   chime when your harvesters deliver.
 - **Voices and a radio announcer.** Every unit class answers in its own
-  synthesized robot voice when selected, ordered, built or promoted. Titans
+  synthesized robot voice when selected, ordered, built or promoted. Mastodons
   growl, Wasps buzz, Menders ring and Troopers chatter. A radio commander
   calls out what matters: "Warning: our HQ is under attack", "Enemy
   aircraft detected", "Enemy troops landing!", "Squad lost", "Construction
   complete". Kill streaks get banners: First blood, Double kill, Triple
-  kill, Rampage, Titan down. Spectators get a neutral caster.
+  kill, Rampage, Mastodon down. Spectators get a neutral caster.
 - **Battle awareness and game speed.** Pulsing arrows at the screen edge
   point at off-screen fights (red when you're hit, amber when you attack);
   tap one, or ⚡, to glide there. "Enemy drones inbound — Flak, Raptors or a

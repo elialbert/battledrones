@@ -8,7 +8,7 @@ import {
 } from "./economy";
 import { ECONOMY, FOG } from "./balance";
 import { tickFog } from "./fog";
-import { applyGoliathCommand, orderedToMove, tickGoliaths } from "./goliath";
+import { applyGoliathCommand, orderedToMove, tickGoliaths, tickLove } from "./goliath";
 import { applyLiftCommand, routeLiftCommand, tickLift } from "./lift";
 import { tickLifeline } from "./lifeline";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
@@ -38,6 +38,7 @@ export function step(w: World, commands: Command[]): void {
   tickMovement(w, engaged, spots); // (then separation, and Mastodons crushing squads)
   cleanupDeaths(w);
   tickGoliaths(w); // anchoring and packing up, weapon systems going offline and rebooting (goliath.ts)
+  tickLove(w); // Robot Love: enemy Goliaths that meet fall in love, a draw (goliath.ts)
   if (w.lifeline) tickLifeline(w); // a side left with no Condor gets a free one (lifeline.ts)
   tickSalvage(w);
   tickObjectives(w); // Uplink capture bars and income, supply drops (objectives.ts)

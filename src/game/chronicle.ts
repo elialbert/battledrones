@@ -75,7 +75,12 @@ export interface HeroRec {
   diedAt: number | null;
 }
 
-export type MomentKind = "first-blood" | "battle" | "turn" | "lead";
+/**
+ * A story beat: first blood, the biggest battle, the turning point (or the
+ * moment one side pulled away), the first Goliath to walk off a Gantry, and
+ * an HQ that fell while its Goliath fought on (GOLIATH.md: the match goes on).
+ */
+export type MomentKind = "first-blood" | "battle" | "turn" | "lead" | "goliath" | "hq";
 
 export interface Moment {
   kind: MomentKind;
@@ -190,6 +195,7 @@ export class Chronicle {
       for (const p of u.passengers ?? []) army[p.faction] += (UNITS[p.kind].cost * Math.max(0, p.hp)) / UNITS[p.kind].hp;
     }
     for (const b of w.buildings.values()) {
+      // (no Gantry: it builds one Goliath at a time and idles between them by design)
       if (b.kind !== "fab-plant" && b.kind !== "airpad" && b.kind !== "assembly-bay") continue;
       const fc = this.factories[b.faction];
       fc.total++;
@@ -416,8 +422,30 @@ export const firstBlood = (deaths: DeathRec[]): DeathRec | null => deaths.find((
 const unitName = (k: UnitKind | null) => (k ? UNITS[k].name : "");
 const shortK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 
-/** The story beats, in time order, phrased for `pov` (null = spectator). */
-export function moments(c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRefs }, pov: Faction | null): Moment[] {
+/** An HQ that fell this long before the end of the match was fought on without (sim seconds). */
+const FOUGHT_ON_S = 5;
+
+/** The first Goliath of the match (either side), from the first-built log. */
+function firstGoliath(firstBuilt: Record<Faction, Record<string, number>> | undefined): { faction: Faction; t: number } | null {
+  let best: { faction: Faction; t: number } | null = null;
+  for (const f of FACTIONS) {
+    const t = firstBuilt?.[f]["goliath"];
+    if (t !== undefined && (!best || t < best.t)) best = { faction: f, t };
+  }
+  return best;
+}
+
+/**
+ * The story beats, in time order, phrased for `pov` (null = spectator). With
+ * `firstBuilt` (the chronicle has it) the Goliath beats join in: the first
+ * one to walk off a Gantry, and an HQ that fell while its Goliath fought on.
+ * One Goliath beat (the match's first, not one per side) and at most one HQ
+ * beat per side, so the chart's numbered marks stay readable.
+ */
+export function moments(
+  c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRefs; firstBuilt?: Record<Faction, Record<string, number>> },
+  pov: Faction | null
+): Moment[] {
   const out: Moment[] = [];
   const side = (f: Faction) => (pov === null ? (f === "blue" ? "Blue" : "Red") : f === pov ? "you" : "they");
   const yours = (f: Faction) => (pov === null ? `${f === "blue" ? "Blue" : "Red"}'s` : f === pov ? "your" : "their");
@@ -489,6 +517,30 @@ export function moments(c: { samples: Sample[]; deaths: DeathRec[]; refs: MapRef
       });
     }
   }
+
+  // the first Goliath to walk off a Gantry (the match's first: one beat, not one per side)
+  const fg = firstGoliath(c.firstBuilt);
+  if (fg) {
+    const f = fg.faction;
+    out.push({
+      kind: "goliath", t: fg.t, title: "First Goliath",
+      text: pov === null ? `${side(f)}'s Goliath took the field` : f === pov ? "Your Goliath walked off the Gantry" : "Their Goliath took the field",
+      tone: toneFor(f)
+    });
+  }
+
+  // an HQ that fell while the match went on: its Goliath fought on (a side that never fielded one isn't this story)
+  const end = c.samples.at(-1)?.t ?? 0;
+  for (const d of c.deaths) {
+    if (d.buildingKind !== "hq" || end - d.t < FOUGHT_ON_S) continue;
+    const had = c.firstBuilt?.[d.faction]["goliath"];
+    if (had === undefined || had > d.t) continue;
+    out.push({
+      kind: "hq", t: d.t, title: "HQ destroyed",
+      text: `${Cap(yours(d.faction))} HQ fell; ${yours(d.faction)} Goliath fought on for ${fmtTime(end - d.t)}`,
+      tone: toneFor(other(d.faction))
+    });
+  }
   return out.sort((a, b2) => a.t - b2.t);
 }
 
@@ -519,6 +571,14 @@ export function pickTip(i: TipInput): string {
     tips.push({
       score: 90,
       text: `The enemy fielded ${enemyAir} aircraft; you built ${myAA < 1 ? "almost no" : "barely any"} anti-air. Flak Crawlers, Raptors and SAM Sites shred them.`
+    });
+
+  // the Goliath's tuned answers (GOLIATH.md); its Menders keep it alive and its weapons coming back
+  const goliaths = n(them, "goliath");
+  if (goliaths >= 1 && n(me, "rocket-squad", "wasp", "lancer", "hornet") <= 2)
+    tips.push({
+      score: 80,
+      text: `They fielded ${goliaths === 1 ? "a Goliath" : `${goliaths} Goliaths`}. Rocket Squads, Wasps, Lancers and Hornets bring one down; shoot its Menders first.`
     });
 
   const mastodons = n(them, "mastodon");

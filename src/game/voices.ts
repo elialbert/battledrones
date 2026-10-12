@@ -322,13 +322,19 @@ export class UnitVoices {
     this.group(kind === "attack" ? "attack" : "move", units);
   }
 
-  /** This tick's sim events: units rolling off the line (or out of a Drop Pod or a Condor), promotions, deaths in view. */
+  /**
+   * This tick's sim events: units rolling off the line (or out of a Drop Pod
+   * or a Condor), promotions, deaths in view, and our Goliath reporting in
+   * once it has dug in where we can see it (it is a base now: "ready").
+   */
   events(list: readonly FxEvent[], h: VoiceHooks): void {
     if (!this.answers(h)) return;
     for (const ev of list) {
       if (ev.type === "built") {
         const u = h.world.units.get(ev.id);
         if (u && u.faction === h.player) this.say(u.kind, "ready", u.id);
+      } else if (ev.type === "goliathMode") {
+        if (ev.mode === "anchored" && ev.faction === h.player && h.inView(ev.x, ev.y)) this.say("goliath", "ready", ev.id);
       } else if (ev.type === "rankUp") {
         const u = h.world.units.get(ev.id);
         if (u && u.faction === h.player && h.inView(u.x, u.y)) this.say(u.kind, "rank", u.id);

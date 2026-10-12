@@ -321,6 +321,9 @@ function statsHtml(ctx: ReportContext): string {
     row("Units lost", st(p).unitsLost, st(q).unitsLost),
     row("Scrap harvested", st(p).scrapHarvested, st(q).scrapHarvested)
   ];
+  // Goliaths (only when someone fielded one: most matches never get that far)
+  const gol = goliathsFielded(ctx.chronicle);
+  if (gol.blue + gol.red > 0) rows.splice(3, 0, row("Goliaths fielded", gol[p], gol[q]));
   // battlefield salvage and calldowns (not every mode has them: rows only when something happened)
   const salv = (f: Faction) => st(f).scrapSalvaged ?? 0;
   if (salv(p) + salv(q) > 0) rows.push(row("Scrap salvaged", salv(p), salv(q)));
@@ -343,6 +346,11 @@ function statsHtml(ctx: ReportContext): string {
   return `<table class="aar-stats">
     <tr><th></th><th class="hb"><i class="${p}"></i>${sideName(p, ctx)}</th><th class="hb"><i class="${q}"></i>${sideName(q, ctx)}</th></tr>
     ${rows.join("")}</table>`;
+}
+
+/** Goliaths each side walked off a Gantry this match (the chronicle's built log). */
+export function goliathsFielded(c: Pick<Chronicle, "built">): Record<Faction, number> {
+  return { blue: c.built.blue["goliath"] ?? 0, red: c.built.red["goliath"] ?? 0 };
 }
 
 /** Calldowns fired per side (World.powers.fired), with the per-power counts. */
