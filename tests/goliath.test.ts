@@ -1076,10 +1076,7 @@ describe("repair", () => {
     expect(m.hp).toBe(m0);
   });
 
-  // BUG (unimplemented): GOLIATH.md says the Mender AI (src/sim/ai/menders.ts) favours a Goliath with a
-  // weapon offline or about to come back. planMenders scores only distance and HP share (and the
-  // commander's army list, COMBAT_KINDS in ai/commander.ts, doesn't even include the Goliath).
-  it.skip("the Mender AI sends a Mender to a Goliath with a weapon down before an equally far, slightly more hurt tank", () => {
+  it("the Mender AI sends a Mender to a Goliath with a weapon down before an equally far, slightly more hurt tank", () => {
     const w = field();
     const share = W.mortars.lostBelow - 0.02;
     const g = spawnUnit(w, "goliath", "red", 30, 40);
