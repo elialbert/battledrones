@@ -162,8 +162,15 @@ broad headlands and coves, and which leaves the necks as they are.
   but killing its garrison switches it off.
 - **Only by Condor**: the sea stops hover tanks too, and on a map with
   islands (`Rules.islands`) buildings, factory roll-outs and Drop Pods stay
-  on land joined to the side's own HQ (`onHomeLand`), so no turret, Assembly
-  Bay or pod crew ever reaches an island.
+  on land joined to the side's own HQ (`onHomeLand`; `Rules.homeTiles`
+  remembers where it stood, so this holds once the HQ has fallen, or under
+  Nomads was never built), so no turret, Assembly Bay or pod crew from home
+  ever reaches an island. The one exception is a Goliath: two Condors can
+  lift one onto an island, where it anchors like anywhere else, trains
+  squads that step out round its feet, and lets outposts go up in its
+  build ring, whose units roll out on the island too (see *The Goliath*).
+  Harvesters only count a Goliath or an outpost as a drop-off if they can
+  drive up to it.
 - **Scarce scrap**: a 9-tile home field (13,500) and two crystal tiles out
   by a bridge per side; HQ trickle 3/s instead of 2. Relays are the economy.
 - **Start**: each side gets a free **Condor** beside its HQ with its Trooper
@@ -239,10 +246,13 @@ broad headlands and coves, and which leaves the necks as they are.
 ### Economy
 
 - Single currency: **Scrap**. Harvesters haul 100 per trip from scrap piles
-  or glowing crystals back to the nearest **drop-off** (HQ or Depot).
-  Harvesters flee home when shot and auto-mine when built.
+  or glowing crystals back to the nearest **drop-off** (HQ, Depot or an
+  anchored Goliath; `nearestDropSite`). Harvesters flee home when shot and
+  auto-mine when built. One bound for a Goliath reroutes to the nearest
+  other drop-off the moment it starts packing up; with none left, a loaded
+  harvester waits for a Goliath to dig in again instead of going idle.
 - Each HQ also salvages a trickle of 2 scrap/second, so no side can be left
-  permanently broke.
+  permanently broke (a Goliath doesn't, so under Nomads there is none).
 - Starting stockpile: 600 scrap, one harvester and one Trooper Squad, plus
   the side's opener (below) — so in practice two or three harvesters and a
   factory.
@@ -269,6 +279,17 @@ the losing side has a way back in.
   within 2 tiles, else the wreck is lost. Wrecks never block movement or
   placement (a building placed on one clears it for its owner).
 - At most 60 wrecks at once (the oldest burns out first).
+- **A Goliath leaves no hull**: it scatters 30% of its list price
+  (`GOLIATH.salvage`: 480 scrap, scaled like any wreck) over 6–8 scrap
+  piles (`Wreck.pile`), each up to 2.5 tiles out, so collecting all of it
+  means holding the ground. Piles lie for 90 s (`GOLIATH.pileTtl`; a
+  wreck's 60) and cool like wrecks; one that would land where no tank can
+  reach slides to ground within 2 tiles, or is lost. A **Gantry** destroyed
+  with a Goliath on its cradle loses the build and strews 30% of what was
+  paid for it × the build's progress over up to 4 piles round it
+  (`GOLIATH.gantrySalvage`). A pile is a heap of metal and scrap lumps, not
+  a burnt hull, flung out of the Goliath as it slams down (or out of the
+  Gantry as it blows) to land in a puff of dust, seen even in the fog.
 - Looks: the dead unit's own sprite, charred, turret blown off its ring;
   embers and smoke while hot, then a gold glint and a faint warm glow that
   say "loot"; it fades over its last 10 s. Downed aircraft tumble from
@@ -581,19 +602,21 @@ still win, and Troopers (−0.46) and Stingers (−0.24) now do too.
   (kinetic, cannon, flak, missile, explosive, laser, precision) and every
   target an armor class (light, medium, heavy, structure, infantry);
   `DAMAGE_VS` in `balance.ts` is the multiplier table. Robot infantry
-  added the `infantry` column and the Sniper's `precision` row:
+  added the `infantry` column and the Sniper's `precision` row; the
+  Goliath (heavy armour) fires four of the types, one per weapon system:
 
   | Damage type (used by) | light | medium | heavy | structure | infantry |
   |---|---|---|---|---|---|
-  | kinetic (Stinger, Trooper, Turret, HQ gun) | 1.0 | 1.0 | 0.6 | 0.65 | 1.0 |
-  | cannon (Mastodon, Rocket Squad) | 0.8 | 1.0 | 1.3 | 1.0 | 0.4 |
+  | kinetic (Stinger, Trooper, Turret, HQ gun, Goliath machine guns) | 1.0 | 1.0 | 0.6 | 0.65 | 1.0 |
+  | cannon (Mastodon, Rocket Squad, Goliath arm cannons) | 0.8 | 1.0 | 1.3 | 1.0 | 0.4 |
   | flak (Flak Crawler) | 1.25 | 1.0 | 1.15 | 0.5 | 1.25 |
   | missile (Wasp, Raptor, SAM) | 1.15 | 1.0 | 0.9 | 0.6 | 0.7 |
-  | explosive (Mortar, Hornet) | 1.2 | 0.9 | 0.85 | 1.35 | 1.3 |
-  | laser (Lancer) | 1.0 | 1.0 | 1.55 | 0.8 | 0.7 |
+  | explosive (Mortar, Hornet, Goliath mortars) | 1.2 | 0.9 | 0.85 | 1.35 | 1.3 |
+  | laser (Lancer, Goliath eye laser) | 1.0 | 1.0 | 1.55 | 0.8 | 0.7 |
   | precision (Sniper Team) | 0.6 | 0.4 | 0.25 | 0.15 | **3.0** |
-- **Splash & projectiles.** Mortar shells and Hornet bombs are simulated
-  projectiles aimed at where the target *was* — fast units can dodge.
+- **Splash & projectiles.** Mortar shells (the Goliath's too) and Hornet
+  bombs are simulated projectiles aimed at where the target *was* — fast
+  units can dodge.
   Splash falls off from 100% to 50% at the edge.
 - **Cover.** Ground units in woods take 30% less damage; robot infantry
   take half (`INFANTRY.woodsCover` 0.5).
@@ -617,15 +640,17 @@ still win, and Troopers (−0.46) and Stingers (−0.24) now do too.
   don't see it, and neither do a Mender's heal beam, a rank-up pulse or a
   promotion title. Splash still hurts it.
 - **Veterancy.** Units earn XP from kills (in scrap value); three ranks,
-  each +15% damage, rank 3 self-repairs. Shown as gold chevrons. Ranked
-  units become heroes (see *Veteran heroes* below).
+  each +15% damage, rank 3 self-repairs (not a Goliath: only Menders
+  repair it). Shown as gold chevrons. Ranked units become heroes (see
+  *Veteran heroes* below).
 - **Fights you can play.** Combat units carry 1.5× their original HP
   (Hornets 1.3×, so Flak still beats them; Harvesters, Scouts and
   buildings unchanged): half of an 8-v-8 Stinger brawl now dies in 7.5 s
   instead of 5, Wasps vs Flak 4.7 s instead of 2.4 — time to select, retreat
   or focus-fire on a phone. The duel matrix keeps the counter web below.
 - **Retaliation.** Idle units hit by something out of reach go after the
-  attacker, and nearby idle allies join in.
+  attacker, and nearby idle allies join in (not a Goliath dug in or on a
+  lift: its guns answer from where it is).
 - Auto-acquire targets in range; attack-move is the default command, with
   a "Move only" chip for retreats.
 - **Menders are shot first.** Auto-targeting (units and turrets alike)
@@ -633,7 +658,10 @@ still win, and Troopers (−0.46) and Stingers (−0.24) now do too.
   hit one drops whatever it was auto-targeting for a Mender that comes into
   weapon range (back to the next best once it's down). An explicit attack
   order is never overridden. Otherwise a Mender parked behind a push kept
-  it alive while everything around it shot the tanks.
+  it alive while everything around it shot the tanks. Each of a Goliath's
+  weapon systems does the same. Menders, for their part, favour a Goliath
+  with a weapon down or about to come back (`repairUrgency` counts as up
+  to 3 tiles nearer), and can't mend one under an EMP.
 
 ### Combat readability & feedback ("juice")
 
@@ -650,7 +678,8 @@ being hit), and kills, losses and income must each feel distinct. Rules in
   drains at 1.5× max HP/s (a new burst only re-arms the hold once the trail
   has caught up). Enemy bars brighten as HP falls and blink at 2 Hz below
   25%. Bars snap to device pixels, keep a 22 CSS px minimum width, and stay
-  4 CSS px tall at every zoom.
+  4 CSS px tall at every zoom. A Goliath's is 60–120 px wide and 5 tall,
+  notched at 75 / 50 / 25%, where its weapons go offline.
 - **Team ground rings:** any unit that fired or was hit in the last 3 s
   sits on a thin blue/red ellipse (fading over its last second), so mixed
   clumps read even at the default zoom. Aircraft rings sit under the craft.
@@ -659,7 +688,9 @@ being hit), and kills, losses and income must each feel distinct. Rules in
   hiding the clump. An expanding ring in the victim's colour says whose
   unit just died. A robot squad has no fireball: its robots topple one at a
   time as it takes damage, each in a spray of sparks with a clank, and the
-  last ones fall the same way. Camera shake only for deaths the player can
+  last ones fall the same way. A Goliath has no hull fireball either: its
+  reactor blows and it topples (see *3D view*), seen through any fog.
+  Camera shake only for deaths the player can
   see inside the camera view, scaled by what died (stinger ≈ 1 px, HQ biggest).
 - **Sound:** a bright two-note *kill* "ting" on enemy deaths you can see; a
   low *lost* power-down for your own units (quieter and throttled when off
@@ -1131,8 +1162,19 @@ rules in `src/sim/objectives.ts`):
   follows the health it had then, and it shows no smoke, hit flash, health
   bar, EMP crackle or turning turret while out of sight. One destroyed in
   the fog stays standing (as on the minimap) until its footprint is seen
-  again. Enemy building blasts show only where seen; ours, and the HQ that
-  decides the match, always show.
+  again. Enemy building blasts show only where seen; ours, a Gantry's, and
+  the HQ that decides the match, always show.
+- **The Gantry and every Goliath are always visible to the enemy**
+  (`alwaysVisible`): they can't hide. An enemy Gantry is in the fog memory
+  from the moment it goes up and is forgotten the moment it falls, and it
+  is drawn live, not as a memory, with the Goliath taking shape on its
+  cradle and a red progress bar under it. An enemy Goliath is seen through
+  the fog and the shroud alike (`unitSeenBy`): on the minimap, by taps,
+  the AI, the advisor, the inbound warnings and the battle meter, and its
+  guns flash even from deep in the fog. Both are drawn with
+  a fog-free twin of the model material (`clearOfFog`), so they show in
+  full colour. Their news is public too (see *Voices & announcer*).
+  A Goliath sees 10 tiles, further than any other unit (Radar 13).
 - The AI does *not* cheat: it keeps its own visibility map and reacts only
   to what it has seen.
 - A Sniper Team hidden in woods (see *Combat*) stays hidden even on a tile
