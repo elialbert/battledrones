@@ -1040,7 +1040,7 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   set: pack up first (G) to move the Goliath"), and in a group the rest go
   without it ("The anchored Goliath stays put: pack up first (G)"); a tap
   on an enemy gives it an attack order without packing it up. ⚔ Select
-  army and 💤 Idle leave dug-in Goliaths out (they are neither the army
+  army and 💤 Idle leave anchored Goliaths out (they are neither the army
   nor idle). The **lift**: with Condors selected, a tap
   (or right-click) on your own walking Goliath has the two nearest empty
   ones hook on, and the selection becomes the lift (see *The two-Condor
@@ -2158,13 +2158,17 @@ accidental browser gestures:
 | Tap | Own unit | Select it |
 | Tap | Own Condor, infantry squads selected | Board it (as many as it has seats, nearest first) |
 | Tap | Own infantry squad, Condors selected | Board the nearest selected Condor with a seat |
+| Tap | Own walking Goliath, two empty Condors selected | Hook the two nearest on to lift it (the selection becomes the lift) |
 | Tap | Own building | Select it (production queue, sell, rally) |
 | Tap | Enemy / ground / scrap | With selection: attack / attack-move / harvest |
 | Tap | Ground, building selected | Set rally point |
+| Tap | Ground, only an anchored Goliath selected | Set the rally point for the squads it trains (it stays dug in) |
+| Tap | Ground, a lift selected | Fly the Goliath there and hover |
 | Double-tap | Own unit | Select all on-screen units of that type |
 | Drag (one finger) | Anywhere | Pan (with momentum) |
 | Long-press then drag | Anywhere | Box-select (prefers combat units over harvesters) |
 | Long-press, released without dragging | Map, loaded Condors selected | Fly there and drop the squads (the rest of the selection heads there too); with a calldown armed, fire it there instead |
+| Long-press, released without dragging | Map, a lift selected | Fly there and set the Goliath down (on the nearest ground it can stand on) |
 | Two-finger drag / pinch | Anywhere | Pan / zoom |
 | Tap / drag | Minimap | Jump / scrub the camera |
 | Long-press | Build button | Info card: stats, counters, cancel queued |
@@ -2176,7 +2180,7 @@ Disambiguation: a touch is a *tap* if it moves < 8 px and lasts < 250 ms;
 movement beyond the slop radius before the long-press timer fires commits
 to *pan*; after the timer fires it commits to *box-select*. A box
 released within the tap slop of where it began is a plain long-press: with
-loaded Condors selected it orders the drop there, otherwise it box-selects
+loaded Condors (or a lift) selected it orders the drop there, otherwise it box-selects
 as usual; a box cut short by a second finger or a pointercancel is not a
 release and does neither. Hit-testing
 uses an enlarged (≥ 24 CSS px) radius, and aircraft are tested where they
@@ -2184,12 +2188,17 @@ are drawn (lifted above their shadows).
 
 Context **chips** above the build bar, after the three squad chips: Stop /
 Move only / deselect for units, plus **⇣ Unload N** while loaded Condors
-are selected (Stop shrinks to ■ on narrow screens to make room); Sell
+are selected (**⇣ Set down** for a lift in the air), and with a Goliath
+selected **⚓ Anchor** (or "⚠ …", why it can't here), **⇡ Pack up**, or
+its progress while it digs in or packs up ("⚓ 40%" on a narrow phone)
+(Stop shrinks to ■ on narrow screens to make room, and there an Unload or
+anchor chip takes Move only's place; a selection of only Condors, lifts
+or anchored Goliaths has no Move only, since it has no fights to skip); Sell
 (+refund) for buildings (producers
 show "Tap the map to set a rally point" in the selection panel instead of a
 chip); "Select army" and "💤 Idle N" when nothing is selected (both
 leave out harvesters and the unarmed Condor, which would outrun the army
-and park alone in the enemy base);
+and park alone in the enemy base, and anchored Goliaths, which stay put);
 "✓ Place X" (or why not) + cancel while placing. Under 400 px wide the
 labels shorten ("Move", "Army") so everything stays on one row down to
 360 px.
@@ -2206,7 +2215,10 @@ ghost follows the mouse, a click builds and a right-click cancels. Hold
 the clock to fast-forward. Right-click a build button for its card, or a
 squad chip to save into it. Right-click your own Condor with infantry
 selected (or one of your squads with Condors selected) to load them; U
-unloads the selected Condors where they are.
+unloads the selected Condors where they are. G anchors the selected
+Goliaths, or packs them up; right-click your own walking Goliath with
+two empty Condors selected to lift it, and U sets a lift down where it
+hovers.
 
 ### HUD layout — portrait and landscape both first-class
 
@@ -2218,6 +2230,28 @@ DOM overlaid on the canvas, re-flowing by orientation:
   scrap, income rate and clock top-left. The selection panel shows a
   squad's robots still standing ("110 / 190 · 3/5 robots") and a Condor's
   seats: a portrait per squad aboard with its robots, dashed empty seats.
+- **Goliath and Gantry:** the Gantry sits at the end of the Base tab and
+  the Goliath on Vehicles, its button showing today's price ("Gantry
+  busy" while one is on the cradle). The Goliath's card has a table of its
+  four weapon systems (range, "offline below 75%", "air too"), "+25% for
+  each Goliath you have" and "Repair: Menders only"; the Gantry's ticks off
+  its four prerequisites as they stand and says "One per side". A
+  selected Goliath's panel (also an enemy's, for information) shows its
+  name, HP and mode ("Walking", "⚓ Anchoring 40%", "⚓ Anchored", "⇡
+  Packing up 60%", "⇡ On a lift"; on one line on short landscape screens),
+  a strip of its four systems — Mortars, Laser, Cannons, MG — each green
+  while firing, dim while held on a lift, pulsing amber through a reboot
+  and struck through in red when offline, and, ours anchored, its training
+  queue (cancel buttons) or
+  "Trains squads · tap the map to rally" ("Trains Harvesters and squads"
+  under Nomads). Selecting an anchored Goliath opens the Infantry tab,
+  whose buttons queue on it first (else on the shortest queue, Bays and
+  Goliaths alike), and its queue badges count Goliaths' queues with the
+  Bays'. A Condor on a lift shows the Goliath as its cargo ("Carrying a
+  Goliath · Long-press the map to set it down"). An outpost's panel says
+  "· Outpost" after its name and "Outpost: doesn't extend build range".
+  On the map, a training bar sits under our anchored Goliaths, and a red
+  progress bar under an enemy Gantry (its build is public).
 - **Landscape:** the build bar becomes a right-edge sidebar with a 2-column
   grid; selection panel and chips sit bottom-right beside it.
 - **The top band** grows by mode: pause + mute, the top bar (scrap; clock +
@@ -2268,7 +2302,9 @@ Painted-map thumbnail under the fog, resource fields, salvageable wrecks
 Sniper Team hidden in woods), Uplink diamonds in
 their holder's colour and blinking supply crates (public), calldown reticles
 (red = enemy, gold = yours, shown through the fog), attack pings and the
-camera frame.
+camera frame. Goliaths are big outlined diamonds drawn over the unit
+blips (pale blue ours, red theirs), an anchored one ringed by its build
+ring; an enemy Goliath and an enemy Gantry show through the fog.
 
 ## Art
 
@@ -2281,7 +2317,10 @@ Condor, Assembly Bay) were painted to the same style contracts, the
 squads straight overhead with every robot facing north, after the in-game
 models. They are portrait-only: no sprite-atlas frames, since the 3D game
 doesn't load the atlas (`process.py --icons-only` rebuilds just the
-portraits).
+portraits). The Goliath's and the Gantry's portraits weren't generated at
+all: they are their in-game 3D models, shot from the model gallery's
+`?icon=` view on black and on white (the pair gives the alpha) and fitted
+to the other portraits' size (see ART.md).
 
 ## 3D view
 
@@ -2394,6 +2433,48 @@ y up.
   low with the ramp down a moment before it lifts. Boarding squads hop up
   into the ramp. (The fans don't yet tilt between flight and hover; the
   body pitches nose-down at speed.)
+- **The Goliath** (`three/goliath.ts` builds and poses it,
+  `render/goliath.ts` drives it from the sim; screenshots in
+  `progress-shots/goliath/`): a two-legged mech in the vehicles' painted
+  style, half again as tall as an HQ — gunmetal armour on dark joints, big
+  team-colour pauldrons, shoulder mortar pods and a deck plate that read
+  from the tilted camera, one amber cyclops eye (the laser), an arm cannon
+  on each forearm, twin machine guns under the chest, and on its back a
+  scrap hopper and a folding crane, with four stabiliser spikes hanging at
+  its hips. Its joints are a plain scene graph posed each frame (a few
+  draw calls each, no skinning): a heavy walk on planted feet (the
+  infantry's two-bone leg IK) with dust at every footfall, a torso that
+  twists to its target, each weapon kicking from its own muzzle. Anchoring,
+  it sinks on its hydraulics, splays its legs and drives its spikes in
+  (dust, a thump, a small camera shake), then unfolds the hopper and crane
+  while its build ring pulses out in team colour; packing up runs it in
+  reverse, with steam. Damage shows per weapon — a burning, smoking
+  shoulder with the mortars down, a dark eye with the laser down, cannons
+  hanging limp — and a reboot relights the eye in flickers and cycles the
+  mortar tubes. Lifted, it hangs on four cables between its two Condors,
+  legs dangling. Destroyed, its reactor blows, it staggers, topples and
+  slams down in a cloud of dust and shards (flinging out its scrap piles),
+  smoulders and sinks away. Under Robot Love its eye glows pink and hearts
+  bubble up out of it. A Goliath, its Gantry and the mech on the cradle use
+  fog-free twins of the model material, so the enemy sees them in full
+  colour through any fog (`clearOfFog`).
+- **The Gantry** (`three/models.ts`, staged by `GANTRY_STAGES`): a 3×3
+  assembly pad open front and back, a cradle between two lattice scaffold
+  towers whose welding arms reach in over it, a luffing crane, floor
+  lights down the cradle and armour plates racked on the apron. Its build
+  shows in six stages, to both sides: **empty** (bare scaffold, crane
+  folded, lights off); **foundation**, 0–25% (legs bolted to the cradle
+  under welding sparks, the crane starting work); **frame**, 25–50% (hips
+  and torso skeleton, the crane lowering armour plates in); **armament**,
+  50–75% (torso plated, cannons and mortars on); **finishing**, 75–99%
+  (head on, eye still dark, team panels on, steam venting, beacons
+  blinking); and **rollout**, where the eye lights, the scaffold arms
+  swing clear and the Goliath walks off the cradle before they swing back
+  and the Gantry is empty again. The half-built mech at each stage is the
+  same parts the finished Goliath walks off with (`bake()`). The model
+  gallery lines them up: `tools/models.html?only=goliath` (walking,
+  standing, digging in, anchored, every weapon down, rebooting, lifted,
+  toppled, in love) and `?only=gantry` (the six stages per side).
 - **Materials** (`three/materials.ts`): one shared, flat-shaded model
   material with uniform variants — hit flash (warm light over the shaded
   model, barely bleaching the paint), building hit (fire light), damaged
@@ -2469,6 +2550,8 @@ src/
     combat.ts       # targeting, armor, splash projectiles, healing, veterancy
     infantry.ts     # robot squads: robots standing, firepower, Sniper concealment (unitSeenBy), Mastodon crushing
     transport.ts    # the Condor: boarding, drop points and unloading, bail-outs
+    goliath.ts      # the Goliath: walking ⇄ anchored, weapon systems offline/reboot, repair urgency, build ring, cost; Nomads, Robot Love
+    lift.ts         # the two-Condor lift: hook on, carry, set down, drop
     lifeline.ts     # the island map's free replacement Condor
     fog.ts          # per-side visibility maps + building memory
     placement.ts    # why a spot can't be built on, and a suggested spot
@@ -2488,9 +2571,11 @@ src/
     ai/airlift.ts   # island maps: Condors fly squads out to the relays, hold and retake them, intercept the enemy's
   game/       # three.js: scene, camera, input, rendering
     three/          # the 3D layer: stage (renderer, lights, adaptive quality), camera rig, builder + models,
-                    #   robot infantry rigs (infantry.ts), terrain (heightfield, water, props, fog of war),
-                    #   materials, particles, ground-gfx, screen overlay, tweens
-    render/         # entities, fx, juice-view, wrecks, powers (reticles, strikes), objectives
+                    #   robot infantry rigs (infantry.ts), the Goliath's rig and the Gantry's stages (goliath.ts),
+                    #   terrain (heightfield, water, props, fog of war), materials, particles, ground-gfx,
+                    #   screen overlay, tweens
+    render/         # entities, fx, juice-view, wrecks, powers (reticles, strikes), objectives,
+                    #   goliath (the Goliath and Gantry views: walk, anchor, damage, lift, topple, love; build stages)
     juice.ts        # hit flash / damage trail / combat ring / cue rules (tested)
     audio.ts        # AudioContext, sfx/music/voice buses, settings, procedural SFX
     score.ts        # music rules: harmony, patterns, stingers, battle mood (tested)
@@ -2508,7 +2593,7 @@ src/
     heroes.ts, hero-fx.ts  # callsigns; promotion titles and hero toasts
     chronicle.ts    # match recorder + story analysis for the report
     calldown-credit.ts # which deaths a calldown caused (kill credit for callouts, chronicle, toasts, hotspots; tested)
-    finale.ts       # the cinematic HQ kill
+    finale.ts       # the cinematic end: an HQ or last-Goliath kill, or Robot Love's meeting
     career.ts, daily.ts, meta.ts  # XP/ranks/stars storage, the Daily Op, match glue
     ops.ts          # Ops narration: briefing banner, countdowns, star notices
   ui/         # DOM HUD (hud.ts; layout.ts: measured top band → ticker/banner/calldown placement; awareness.ts: speed chip, edge arrows, meter; command.ts: squad chips, advisor badges; objectives.ts: Uplink/drop pill; powers.ts: calldown buttons), after-action report (report.ts), career UI (career.ts), Ops UI (ops.ts), menu styles
