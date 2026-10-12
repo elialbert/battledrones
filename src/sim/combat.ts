@@ -1,5 +1,5 @@
 import { BUILDINGS, COMBAT, DAMAGE_VS, GOLIATH, INFANTRY, OBJECTIVES, TERRAIN, TICK_RATE, UNITS, shotDamage, type ArmedStats } from "./balance";
-import { GOLIATH_WEAPONS, hasGoliath, repairUrgency, weaponReady } from "./goliath";
+import { GOLIATH_WEAPONS, canWalk, hasGoliath, repairUrgency, weaponReady } from "./goliath";
 import { dropLifts } from "./lift";
 import { concealedFrom, isInfantry, squadFirepower } from "./infantry";
 import { IGNORE_TICKS, moveUnitToward } from "./movement";
@@ -561,6 +561,7 @@ function retaliate(w: World, incidents: Incident[]): void {
     const faction = victim?.faction ?? vb?.faction;
     for (const u of w.units.values()) {
       if (u.faction !== faction || u.order.type !== "idle") continue;
+      if (u.goliath && !canWalk(u)) continue; // dug in (or on a lift): its guns answer on their own
       const stats = UNITS[u.kind];
       if (stats.targets === "none" || !canHit(stats.targets, attacker.domain)) continue;
       const self = u.id === victimId;
