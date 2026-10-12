@@ -673,10 +673,10 @@ export class GameScene {
       settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
       this.playFinale(() => {
         // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
-        // (Robot Love: a draw ends happily — its chime has already rung)
-        const love = this.world.winner === "draw";
-        const outcome = love ? "victory" : finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
-        if (!music.finale(outcome) && !gameMode.spectator && !love) sfx.play(outcome);
+        // (Robot Love: a draw resolves on its own sweet sting; its chime has already rung for music-off)
+        const draw = this.world.winner === "draw";
+        const outcome = draw ? "draw" : finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
+        if (!music.finale(outcome) && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
       });
     }
   }
@@ -733,8 +733,7 @@ export class GameScene {
       },
       onDone: () => {
         this.finale = null;
-        // (hud.showEnd takes a draw too: the UI's side of the merge)
-        this.hud.showEnd(winner as Faction);
+        this.hud.showEnd(winner);
       }
     });
     this.zoomBy(zoom / this.targetZoom);
