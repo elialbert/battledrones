@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { BuildingKind, Faction, UnitKind } from "../../sim/types";
-import { ModelBuilder, type Vec3 } from "./builder";
+import { ModelBuilder, type Section, type Vec3 } from "./builder";
 import { GANTRY_STAGES, GOLIATH_RIG, gantryStage, goliathStatic } from "./goliath";
 import { botStatic, botHeight, J, squadStatic, type BotKind } from "./infantry";
 import { modelMat } from "./materials";
@@ -148,6 +148,32 @@ function rotorGeo(r: number, axis: "y" | "z" = "y"): THREE.BufferGeometry {
   return b.build();
 }
 
+/** An outline drawn on the right (x ≥ 0), or mirrored to the left for `s` -1 (wound the same way). */
+function sided(pts: [number, number][], s: number): [number, number][] {
+  return s > 0 ? pts : pts.map(([x, z]): [number, number] => [-x, z]).reverse();
+}
+
+/** A tapered octagonal skirt, flat faces to the front, back and sides, `w` × `d` at its foot. */
+function skirt(b: ModelBuilder, w: number, d: number, h: number, taper: number, at: Vec3, hex: number, glow = 0): void {
+  const k = 1 / Math.cos(Math.PI / 8);
+  b.add(new THREE.CylinderGeometry(1 - taper, 1, h, 8, 1, false, Math.PI / 8), at, hex, { scale: [(w / 2) * k, 1, (d / 2) * k], glow });
+}
+
+/** A glowing jet nozzle pointing back (+Z) at `at`. */
+function nozzle(b: ModelBuilder, at: Vec3, r: number): void {
+  b.tube(r, 0.06, 8, at, GM_D);
+  b.sphere(r * 0.85, [at[0], at[1], at[2] + 0.03], EXHAUST, { glow: 1, w: 6, h: 4, scale: [1, 1, 0.7] });
+}
+
+/** An air-to-air missile along -Z: white body, team nose, dark cruciform tail fins. */
+function missile(b: ModelBuilder, at: Vec3, len: number, t: Team, r = 0.018): void {
+  const [x, y, z] = at;
+  b.tube(r, len, 6, at, WHITE);
+  b.cone(r, r * 2.6, 6, [x, y, z - len / 2 - r * 1.3], t.main, { rot: [-Math.PI / 2, 0, 0] });
+  b.box(r * 3.4, 0.004, r * 1.8, [x, y, z + len / 2 - r], GM_D);
+  b.box(0.004, r * 3.4, r * 1.8, [x, y, z + len / 2 - r], GM_D);
+}
+
 // -------------------------------------------------------------- units ---
 
 type UnitBuilder = (t: Team) => ModelDef;
@@ -260,28 +286,37 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
   },
 
   lancer: (t) => {
+    // a hover tank: a real tank hull riding on a dark armoured skirt, the lift field's amber glow
+    // leaking out round its foot (no tracks, no wheels), and a long laser lance with focusing coils
     const b = hullB();
-    b.prism([[0, -0.52], [0.38, 0.28], [0.22, 0.4], [-0.22, 0.4], [-0.38, 0.28]], 0.1, [0, 0.1, 0], GM);
-    b.prism([[0, -0.38], [0.25, 0.22], [-0.25, 0.22]], 0.06, [0, 0.2, 0], GM_L);
-    // team wing panels either side of the spine
-    b.prism([[0.055, -0.24], [0.22, 0.18], [0.07, 0.18]], 0.018, [0, 0.26, 0], t.main);
-    b.prism([[-0.055, -0.24], [-0.07, 0.18], [-0.22, 0.18]], 0.018, [0, 0.26, 0], t.main);
-    b.block(0.42, 0.024, 0.07, [0, 0.21, 0.34], t.main, { bevel: 0.01 });
-    // three hover fans, their glowing rings showing above the hull
-    for (const [x, z] of [[0.3, 0.3], [-0.3, 0.3], [0, -0.4]] as [number, number][]) {
-      b.drum(0.1, 0.085, 0.13, 10, [x, 0.165, z], GM_D, { bevel: 0.015 });
-      b.torus(0.06, 0.014, [x, 0.232, z], AMBER, { rot: [Math.PI / 2, 0, 0], seg: 12, glow: 0.9 });
-      b.cyl(0.07, 0.07, 0.02, 10, [x, 0.095, z], AMBER, { glow: 1 });
+    skirt(b, 0.66, 0.97, 0.022, 0, [0, 0.03, 0], AMBER, 1);
+    skirt(b, 0.58, 0.88, 0.09, 0.04, [0, 0.08, 0], TRACK);
+    b.block(0.56, 0.13, 0.82, [0, 0.19, 0.02], GM, { taper: 0.14, bevel: 0.035 });
+    b.block(0.46, 0.05, 0.16, [0, 0.19, -0.38], GM_D, { rot: [0.5, 0, 0], bevel: 0.015 });
+    // team deck plates either side of the turret and across the back (fenders would read as tracks)
+    b.pairBlock(0.1, 0.02, 0.5, [0.15, 0.265, 0.02], t.main, { bevel: 0.008 });
+    b.block(0.3, 0.02, 0.1, [0, 0.265, 0.34], t.main, { bevel: 0.008 });
+    // engine grilles glowing at the back, lift vents down the flanks
+    for (const s of [1, -1]) {
+      b.box(0.11, 0.04, 0.012, [s * 0.12, 0.19, 0.434], EXHAUST, { glow: 1 });
+      for (const z of [-0.2, 0, 0.2]) b.box(0.012, 0.025, 0.08, [s * 0.282, 0.19, z], 0x15171a);
     }
+    light(b, [0.15, 0.2, -0.47]);
+    light(b, [-0.15, 0.2, -0.47]);
     const hull = b.build();
     const tu = partB();
-    tu.drum(0.13, 0.1, 0.08, 6, [0, 0.04, 0], GM, { bevel: 0.015 });
-    tu.tube(0.022, 0.42, 6, [0, 0.05, -0.26], GM_L);
-    tu.tube(0.038, 0.05, 8, [0, 0.05, -0.12], t.main);
-    tu.tube(0.034, 0.035, 8, [0, 0.05, -0.36], GM_D);
-    tu.sphere(0.034, [0, 0.05, -0.48], AMBER, { glow: 1, w: 6, h: 4 });
-    tu.block(0.08, 0.035, 0.1, [0, 0.095, 0.03], t.main, { bevel: 0.01 });
-    return { hull, turret: tu.build(), mount: [0, 0.26, 0.06], muzzle: [0, 0.05, -0.5], rotors: [], height: 0.45 };
+    tu.drum(0.17, 0.13, 0.09, 6, [0, 0.045, 0.02], GM, { bevel: 0.02 });
+    tu.drum(0.11, 0.09, 0.025, 6, [0, 0.1, 0.04], t.main, { bevel: 0.01 });
+    // the lance: emitter block, barrel, three focusing coils, a glowing lens
+    tu.block(0.1, 0.07, 0.1, [0, 0.05, -0.13], GM_D, { bevel: 0.015 });
+    tu.tube(0.026, 0.46, 6, [0, 0.05, -0.33], BARREL);
+    for (const z of [-0.238, -0.33, -0.422]) tu.torus(0.042, 0.013, [0, 0.05, z], GM_L, { seg: 8 });
+    tu.tube(0.038, 0.04, 8, [0, 0.05, -0.57], GM_D);
+    tu.sphere(0.03, [0, 0.05, -0.595], AMBER, { glow: 1, w: 6, h: 4 });
+    // heat sinks at the back
+    tu.pairBlock(0.03, 0.06, 0.1, [0.09, 0.06, 0.13], GM_D, { bevel: 0.008 });
+    light(tu, [-0.08, 0.1, -0.05], 0.022);
+    return { hull, turret: tu.build(), mount: [0, 0.255, 0.04], muzzle: [0, 0.05, -0.6], rotors: [], height: 0.45 };
   },
 
   harvester: (t) => {
@@ -358,50 +393,83 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
   },
 
   raptor: (t) => {
+    // a twin-boom interceptor: a short cockpit pod between two engine booms, a straight wing
+    // across all three, a team tailplane bridging the booms' tails, a missile under each wing
     const b = partB();
-    // a two-skin delta: dark underside rim, gunmetal upper skin, team leading-edge bands
-    b.prism([[0, -0.5], [0.42, 0.3], [0.13, 0.26], [0, 0.34], [-0.13, 0.26], [-0.42, 0.3]], 0.03, [0, -0.035, 0], GM_D);
-    b.prism([[0, -0.47], [0.395, 0.282], [0.122, 0.244], [0, 0.32], [-0.122, 0.244], [-0.395, 0.282]], 0.02, [0, -0.005, 0], GM);
-    for (const s of [1, -1])
-      b.prism([[s * 0.113, -0.253], [s * 0.373, 0.243], [s * 0.306, 0.278], [s * 0.046, -0.218]], 0.012, [0, 0.015, 0], t.main);
-    b.block(0.14, 0.1, 0.74, [0, 0.03, -0.03], GM_L, { taper: 0.35, bevel: 0.02 });
-    b.cone(0.045, 0.1, 6, [0, 0.02, -0.45], GM_D, { rot: [-Math.PI / 2, 0, 0] });
-    b.sphere(0.045, [0, 0.085, -0.2], AMBER, { glow: 0.5, w: 8, h: 5, scale: [1, 0.6, 2.2] });
-    b.pairBlock(0.05, 0.05, 0.14, [0.085, 0.02, -0.06], GM_D, { bevel: 0.012 });
-    b.pair(0.015, 0.15, 0.15, [0.1, 0.1, 0.24], t.main, { rot: [0, 0, 0.28] });
+    b.fuselage([[-0.5, 0.01, 0.0, -0.02], [-0.4, 0.05, 0.04, -0.04], [-0.24, 0.075, 0.06, -0.05], [0.05, 0.08, 0.055, -0.05], [0.2, 0.05, 0.03, -0.03]], [0, 0, 0], GM, { chamfer: 0.025, edge: 1.35 });
+    b.sphere(0.042, [0, 0.06, -0.26], GLASS, { glow: 0.45, w: 8, h: 5, scale: [1, 0.65, 2.2] });
+    b.fuselage([[-0.12, 0.03, 0.066, 0.05], [0.15, 0.02, 0.045, 0.03]], [0, 0, 0], t.main, { chamfer: 0.008 });
+    nozzle(b, [0, 0, 0.21], 0.035);
+    const wing: [number, number][] = [[0, -0.08], [0.5, -0.04], [0.52, 0.05], [0, 0.1]];
+    b.prism([...wing, ...sided(wing, -1).slice(1, -1)], 0.024, [0, -0.03, 0], GM_D);
     for (const s of [1, -1]) {
-      b.tube(0.045, 0.12, 8, [s * 0.06, 0.0, 0.33], GM_D);
-      b.sphere(0.038, [s * 0.06, 0, 0.395], EXHAUST, { glow: 1, w: 6, h: 4 });
-      light(b, [s * 0.4, 0.0, 0.285], 0.022);
+      // team panels on the outer wings
+      b.prism(sided([[0.27, -0.065], [0.49, -0.035], [0.505, 0.04], [0.27, 0.075]], s), 0.01, [0, -0.008, 0], t.main);
+      // a boom: intake at the front, a team stripe along its top, a glowing nozzle, a fin over its tail
+      const x = s * 0.22;
+      b.fuselage([[-0.34, 0.035, 0.03, -0.035], [-0.26, 0.05, 0.045, -0.05], [0.2, 0.05, 0.045, -0.045], [0.42, 0.032, 0.03, -0.03]], [x, 0, 0], GM, { chamfer: 0.02, edge: 1.35 });
+      b.tube(0.03, 0.02, 8, [x, 0, -0.345], 0x15171a);
+      b.fuselage([[-0.22, 0.016, 0.054, 0.04], [0.3, 0.014, 0.046, 0.03]], [x, 0, 0], t.main, { chamfer: 0.006 });
+      nozzle(b, [x, 0, 0.43], 0.03);
+      b.prism([[0, 0.28], [0, 0.42], [0.13, 0.44], [0.13, 0.37]], 0.012, [x - 0.006, 0.03, 0], t.main, { rot: [0, 0, Math.PI / 2] });
+      missile(b, [s * 0.38, -0.055, -0.02], 0.2, t);
+      light(b, [s * 0.515, -0.02, 0], 0.022);
     }
-    return { hull: b.build(), mount: [0, 0, 0], muzzle: [0, -0.03, -0.45], rotors: [], height: 0.15 };
+    b.block(0.48, 0.02, 0.09, [0, 0.03, 0.37], t.main, { bevel: 0.008 });
+    return { hull: b.build(), mount: [0, 0, 0], muzzle: [0, -0.03, -0.5], rotors: [], height: 0.15 };
   },
 
   hornet: (t) => {
+    // an armoured airship: a big slow envelope banded in team colour, cruciform tail fins, a bomb
+    // gondola slung underneath and two pusher props on outriggers (no lift rotors: it isn't a drone)
     const b = partB();
-    b.block(0.26, 0.14, 0.82, [0, -0.02, 0], GM, { taper: 0.2, bevel: 0.03 });
-    b.sphere(0.07, [0, 0.03, -0.36], AMBER, { glow: 0.5, w: 8, h: 5, scale: [1, 0.6, 1.4] });
-    b.block(0.17, 0.022, 0.4, [0, 0.056, 0.06], t.main, { bevel: 0.01 });
-    b.box(0.16, 0.04, 0.32, [0, -0.1, 0.05], GM_D);
-    for (const z of [-0.04, 0.06, 0.16]) b.tube(0.03, 0.09, 6, [0, -0.13, z], BARREL, { rot: [0, Math.PI / 2, 0] });
-    // stub wings with rocket pods
-    b.pairBlock(0.2, 0.02, 0.09, [0.16, -0.03, -0.04], GM_D, { bevel: 0.008 });
+    const L = 0.62;
+    const RX = 0.25;
+    const RY = 0.21;
+    const Y = 0.05;
+    const r = (z: number) => Math.sqrt(Math.max(0, 1 - (z / L) ** 2));
+    b.sphere(1, [0, Y, 0], GM, { w: 16, h: 12, scale: [RX, L, RY], rot: [Math.PI / 2, 0, 0] });
+    // armour bands round it (team fore and aft, dark ribs between), a team stripe along the spine
+    for (const [z, hex, w] of [[-0.36, t.main, 1.8], [-0.12, GM_D, 0.8], [0.12, GM_D, 0.8], [0.36, t.main, 1.8]] as [number, number, number][])
+      b.torus(RX * r(z) + 0.004, 0.012, [0, Y, z], hex, { seg: 18, scale: [1, RY / RX, w] });
+    const spine = [-0.5, -0.36, -0.15, 0.05, 0.25, 0.42, 0.54].map((z): Section => {
+      const top = Y + RY * r(z) + 0.004;
+      return [z, 0.03, top, top - 0.03];
+    });
+    b.fuselage(spine, [0, 0, 0], t.main, { chamfer: 0.008, edge: 1.3 });
+    b.sphere(0.05, [0, Y, -L + 0.02], GM_D, { w: 8, h: 5 });
+    light(b, [0, Y, -L - 0.03], 0.024);
+    // cruciform tail fins: up, down and out to both sides
+    const fin: [number, number][] = [[0.1, 0.4], [0.3, 0.56], [0.3, 0.68], [0.02, 0.64]];
+    b.prism(fin, 0.014, [0.007, Y, 0], t.main, { rot: [0, 0, Math.PI / 2] });
+    b.prism(fin, 0.014, [-0.007, Y, 0], t.main, { rot: [0, 0, -Math.PI / 2] });
     for (const s of [1, -1]) {
-      b.tube(0.032, 0.16, 6, [s * 0.25, -0.05, -0.05], GM_D);
-      b.cone(0.032, 0.04, 6, [s * 0.25, -0.05, -0.15], WHITE, { rot: [-Math.PI / 2, 0, 0] });
+      b.prism(sided(fin, s), 0.014, [0, Y - 0.007, 0], t.main);
+      light(b, [s * 0.3, Y, 0.62], 0.02);
     }
-    const at: Vec3[] = [];
-    for (const [x, z] of [[0.38, -0.28], [-0.38, -0.28], [0.38, 0.3], [-0.38, 0.3]] as [number, number][]) {
-      const len = Math.hypot(x, z);
-      b.box(0.05, 0.035, len, [x / 2, 0, z / 2], GM_D, { rot: [0, Math.atan2(x, z), 0] });
-      b.torus(0.15, 0.03, [x, 0.01, z], z < 0 ? t.main : rearRing(t), { rot: [Math.PI / 2, 0, 0], seg: 16 });
-      b.cyl(0.04, 0.05, 0.06, 8, [x, 0.0, z], GM);
-      at.push([x, 0.035, z]);
+    // the bomb gondola: amber windows down its sides, bombs racked underneath
+    b.block(0.13, 0.07, 0.34, [0, Y - RY - 0.02, 0], GM_D, { bevel: 0.015 });
+    b.pair(0.004, 0.018, 0.24, [0.066, Y - RY - 0.01, 0], AMBER, { glow: 0.7 });
+    for (const z of [-0.1, 0, 0.1]) {
+      b.tube(0.022, 0.1, 8, [0, Y - RY - 0.075, z], GM_D);
+      b.sphere(0.022, [0, Y - RY - 0.075, z - 0.05], t.main, { w: 6, h: 4 });
     }
-    light(b, [0.08, 0.04, 0.4]);
-    light(b, [-0.08, 0.04, 0.4]);
-    const rg = rotorGeo(0.13);
-    return { hull: b.build(), mount: [0, 0, 0], muzzle: [0, -0.14, 0.05], rotors: at.map((p) => ({ geo: rg, at: p, axis: "y", speed: 30 })), height: 0.2 };
+    // two engine pods on outriggers, pusher props behind them
+    const props: Vec3[] = [];
+    for (const s of [1, -1]) {
+      const x = s * 0.35;
+      const y = Y - 0.07;
+      b.box(0.14, 0.016, 0.05, [s * 0.27, y, 0.14], GM_D);
+      b.tube(0.042, 0.17, 8, [x, y, 0.14], GM);
+      b.tube(0.045, 0.03, 8, [x, y, 0.08], t.main);
+      b.cone(0.03, 0.04, 6, [x, y, 0.24], GM_D, { rot: [Math.PI / 2, 0, 0] });
+      props.push([x, y, 0.262]);
+    }
+    const rg = rotorGeo(0.075, "z");
+    return {
+      hull: b.build(), mount: [0, 0, 0], muzzle: [0, Y - RY - 0.08, 0], height: 0.3,
+      rotors: props.map((at, i) => ({ geo: rg, at, axis: "z" as const, speed: i ? -26 : 26 }))
+    };
   },
 
   mender: (t) => {

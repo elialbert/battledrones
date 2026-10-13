@@ -5,8 +5,9 @@ scrap and crystals, explosions, the menu key art and the app icon — was
 generated with OpenAI's **`gpt-image-2.5-sunburst`** (released 2026-09-08,
 described by OpenAI as its most capable image generation and editing
 model), then processed deterministically in Python into the assets the
-engine loads. The one exception is the Goliath's and the Gantry's HUD
-portraits, which are shots of their in-game 3D models (end of section 1).
+engine loads. The exceptions are the HUD portraits of the Goliath, the
+Gantry and the redesigned Raptor, Lancer and Hornet, which are shots of
+their in-game 3D models (end of section 1).
 
 > **The battlefield is now 3D (three.js).** Units, buildings, objectives,
 > trees, rocks, scrap and crystals are procedural low-poly models built in
@@ -92,6 +93,21 @@ clean alpha, and the result is fitted to 112 px in a 128 px square like
 the other portraits. They have no raw, no `catalog.py` entry and no place
 in `PORTRAIT_ONLY`, so `generate.py` and `process.py` neither make them
 nor overwrite them, and no script in the repo re-shoots them.
+
+The **Raptor**, **Lancer** and **Hornet** were then redesigned in 3D so
+they no longer looked alike (the Raptor and Lancer were both team-edged
+deltas; the Hornet was a big four-rotor Scout): the Raptor is a twin-boom
+interceptor, the Lancer a skirted grav-tank and the Hornet an armoured
+airship (the candidates are in `progress-shots/unit-alts/`). Their painted
+portraits showed the old designs, so `raptor.webp`, `lancer.webp` and
+`hornet.webp` are now shots of the new models too: `node
+tools/model-portraits.mjs raptor lancer hornet` (with `npm run dev`
+running) loads the gallery's `?icon=<kind>` view (one blue unit, nose
+north, filling the view) from about the game camera's angle (`--pitch=60`),
+on black and on white, and writes the 128 px portraits. Their raws and
+`catalog.py` prompts are left as they were (they still make atlas frames,
+which the game doesn't load), but `process.py` skips their icons
+(`MODEL_PORTRAITS`) so it never paints the old look back over them.
 
 ## 2. Sprites — `art/process.py`
 
@@ -219,8 +235,10 @@ them as sprites so they visibly shrink as they're mined.
 - A kind that also needs atlas frames takes a size in `process.py`
   (`UNIT_SIZES` / `BUILDING_SIZES`) instead, and its frame names follow
   automatically.
-- The Goliath and the Gantry are the exception: their portraits are shots
-  of the 3D models (section 1), so changing one means changing the model
-  and shooting it again from `tools/models.html?icon=<kind>&bg=…`.
+- The Goliath, the Gantry, the Raptor, the Lancer and the Hornet are the
+  exception: their portraits are shots of the 3D models (section 1), so
+  changing one means changing the model and shooting it again, from
+  `tools/models.html?icon=<kind>&bg=…` (Goliath, Gantry) or with
+  `node tools/model-portraits.mjs <kind>` (any other unit).
 - Changing a map in `src/sim/maps.ts` requires re-exporting and re-painting
   its terrain (`npm run maps && npm run art:terrain -- <id>`).

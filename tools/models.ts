@@ -17,8 +17,10 @@
 // weapon down (pods sagging, eye dark, cannons limp), rebooting (eye relit, tubes cycling), lifted between two
 // Condors, toppled and burnt, in love (Robot Love) — then a Mastodon and an HQ for scale.
 // ?only=gantry shows the Gantry's six stages per faction: empty, foundation, frame, armament, finishing, rollout.
-// ?icon=goliath|gantry: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
-// (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp).
+// ?icon=<kind>: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
+// (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp). The Goliath
+// stands, the Gantry shows its armament stage; any other unit points north and fills the view
+// (tools/model-portraits.mjs shoots those, with ?pitch=60).
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
@@ -28,6 +30,7 @@ import { setVariant } from "../src/game/three/materials";
 import { ModelBuilder } from "../src/game/three/builder";
 import { UNIT_KINDS, BUILDING_KINDS } from "../src/game/assets";
 import { UNITS } from "../src/sim/balance";
+import type { UnitKind } from "../src/sim/types";
 
 const q = new URLSearchParams(location.search);
 const stage = new Stage(document.getElementById("game")!, Math.min(2, devicePixelRatio));
@@ -49,6 +52,8 @@ const box = new THREE.Box3();
 const yard: { rig: SquadRig; kind: BotKind; x: number; z: number }[] = [];
 const riders: { rig: SquadRig; ready: number }[] = [];
 const cface = -Number(q.get("cface") ?? 0.35);
+/** A unit portrait's zoom: its model fills most of the view. */
+let iconZoom: number | null = null;
 
 /** A Condor at (x, z), `y` up, riders aboard, its ramp `ramp` of the way open. */
 function condor(f: "blue" | "red", x: number, y: number, z: number, load: BotKind[], ramp: number, face = cface): void {
@@ -107,7 +112,15 @@ facs.forEach((f, fi) => {
       g.parts.cable!.position.set(0, 0, -1.5);
       g.parts.cable!.scale.set(1, 1.6, 1);
       stage.scene.add(g.root);
-    } else goliath(f, 0, 0, Math.PI, { yaw: 0 });
+    } else if (icon === "goliath") goliath(f, 0, 0, Math.PI, { yaw: 0 });
+    else {
+      // any other unit nose north, as the painted portraits are drawn, filling most of the view
+      const u = instance(unitDef(icon as UnitKind, f));
+      u.root.scale.setScalar(unitScale(icon as UnitKind));
+      stage.scene.add(u.root);
+      box.setFromObject(u.root);
+      iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+    }
     plate.visible = false;
     stage.scene.background = new THREE.Color(q.get("bg") ?? "#000000");
     return;
@@ -309,7 +322,7 @@ if (freeze !== null) at(Number(freeze));
 stage.rig.bounds = { x0: -100, y0: -100, x1: 100, y1: 100 };
 const pitch = q.get("pitch");
 if (pitch !== null) stage.rig.pitchFor = () => THREE.MathUtils.degToRad(Number(pitch));
-stage.rig.zoom = Number(q.get("zoom") ?? 46);
+stage.rig.zoom = Number(q.get("zoom") ?? iconZoom ?? 46);
 // (the Goliath and Gantry line-ups open centred on themselves; an icon on the model)
 const home = only === "goliath" ? [16, 2] : only === "gantry" ? [9, 1.5] : only === "icon" ? [0, 0] : [7, 4];
 stage.rig.centerOn(Number(q.get("x") ?? home[0]), Number(q.get("y") ?? home[1]));
