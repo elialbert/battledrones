@@ -128,6 +128,11 @@ The build bar and other "yours" places stay blue.
 opacity with `grayscale(1) brightness(.8)`. The padlock is an 11 px badge in
 the top-left corner; the queue badge uses the top right.
 
+**The Vehicles page** (`vehicles.html`) shows each portrait on the same navy
+card as the build buttons, which the finish is made for; before, it used a
+black square. Its nav pills no longer crop the portraits into circles
+(`09-vehicles-page.png`).
+
 **256 px portraits.** The Vehicles page shows portraits at 88 CSS px, which
 needs about 264 device pixels on a 3× phone. Each portrait is about 15 KB:
 the 54 come to 780 KB, up from 175 KB for the old 28.

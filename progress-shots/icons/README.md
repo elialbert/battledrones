@@ -10,7 +10,7 @@ models. Shots 01–05 are the mock-ups the design was chosen from:
   width.
 
 Shots 00, 06 and 07 are the real game, before and after, in skirmishes on
-Riverlands. Shot 08 shows the shipped portrait files. Everything was
+Riverlands, and 09 is the real Vehicles page. Shot 08 shows the shipped portrait files. Everything was
 rendered in Chromium headless with SwiftShader on 2026-10-13.
 
 | Image | What it shows |
@@ -24,3 +24,4 @@ rendered in Chromium headless with SwiftShader on 2026-10-13.
 | `06-build-bar-after-in-game.png` | After: the same four tabs in a real match with the shipped portraits and the new locked buttons. |
 | `07-red-selection-and-ace.png` | After: an enemy unit and building in the selection panel, and the report's MVP cards, with red portraits. |
 | `08-every-portrait-shipped.png` | After: every portrait before, as shipped, and as shipped in red. |
+| `09-vehicles-page.png` | The Vehicles page (`vehicles.html`) on a phone, before and after: the portraits on the build buttons' navy card in place of a black square, and uncropped in the nav. |
