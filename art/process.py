@@ -4,7 +4,6 @@
 Usage:
     python3 art/process.py            # everything (takes ~1-2 min)
     python3 art/process.py --no-preview
-    python3 art/process.py --icons-only     # only public/assets/icons/*.webp (no atlas/ui)
 
 Needs Python 3.10+, Pillow (>= 10.1), numpy, scipy (pip install scipy).
 Deterministic: same raws -> byte-identical output.
@@ -19,15 +18,11 @@ Inputs  (art/raw/*.webp, RGBA, blue team colours, everything "facing north"):
     sheets     rubble (2x2), decals (3x2), scrap (3x2), crystal (3x2),
                explosion (4x2 animation, row-major)
     menu       keyart-portrait, keyart-landscape, icon
-    portraits  trooper, rocket-squad, sniper (squads: several robots in one image),
-               condor, assembly-bay -- HUD icons only, no atlas frames (the 3D game
-               builds every model in code and no longer loads the atlas)
     (tex-* and doodads-* are handled elsewhere)
 
 Outputs:
     public/assets/sprites/game.json + game-N.webp  Phaser 3 multiatlas (POT pages)
     public/assets/sprites/meta.json                 pivots, turret mounts, sizes
-    public/assets/icons/<kind>.webp                 128px HUD icons (blue, composited)
     public/assets/ui/keyart-{portrait,landscape}.webp
     public/icons/icon-{192,512}.png                 PWA icons
     public/icons/apple-touch-icon.png               180px iOS Home Screen icon
@@ -76,7 +71,6 @@ from scipy import ndimage as ndi
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "art" / "raw"
 OUT_SPRITES = ROOT / "public" / "assets" / "sprites"
-OUT_ICONS = ROOT / "public" / "assets" / "icons"
 OUT_UI = ROOT / "public" / "assets" / "ui"
 OUT_PWA = ROOT / "public" / "icons"
 OUT_PREVIEW = ROOT / "art" / "previews"
@@ -122,12 +116,6 @@ BUILDING_SIZES = {
 SINGLE_BUILDINGS = ["hq", "fab-plant", "airpad", "tech-lab", "depot"]
 HEAD_BUILDINGS = ["turret", "sam-site", "radar"]
 BUILDING_INSET = 6  # content fits (size*128 - 6) px, centred in the size*128 frame
-# Added after the move to 3D: they only get a HUD portrait (all parts of the raw
-# composited, like any single-image unit), never atlas frames.
-PORTRAIT_ONLY = ["trooper", "rocket-squad", "sniper", "condor", "assembly-bay"]
-# Redesigned in 3D after these were painted: their HUD portraits are shots of the new models
-# (tools/model-portraits.mjs), so their raws still make atlas frames but no longer an icon.
-MODEL_PORTRAITS = {"raptor", "lancer", "hornet"}
 # Map objectives (neutral, drawn by the engine with the owner's ring): longest side in tiles.
 OBJECTIVE_SIZES = {"uplink": 2.25, "supply-crate": 0.85}
 
@@ -450,8 +438,6 @@ class Builder:
         self.frames: list[Frame] = []  # blue + neutral
         self.mounts: dict[str, list[float]] = {}
         self.sizes: dict[str, float] = {}
-        # raw-space data for icons / previews
-        self.icon_src: dict[str, list[tuple[Part, tuple[float, float] | None, tuple[float, float] | None]]] = {}
         self.composites: dict[str, dict] = {}  # kind -> hull/turret frame names
 
     def add(self, name: str, img: np.ndarray, origin=None) -> None:
@@ -468,7 +454,6 @@ class Builder:
             geo = fit_frame(part, s, part.bbox())
             self.add(f"u/blue/{nm}", resample(part, s, *geo), to_frame(part.centroid(), geo, s))
         self.sizes["harvester"] = UNIT_SIZES["harvester"]
-        self.icon_src["harvester"] = [(full, None, None)]
 
         for k in SINGLE_UNITS:
             (part,) = split_parts(k, "single", rot180=k in ROTATE_180)
@@ -476,7 +461,6 @@ class Builder:
             geo = fit_frame(part, s, part.bbox())
             self.add(f"u/blue/{k}", resample(part, s, *geo), to_frame(part.centroid(), geo, s))
             self.sizes[k] = UNIT_SIZES[k]
-            self.icon_src[k] = [(part, None, None)]
 
         for k in TURRET_UNITS:
             hull, tur = split_parts(k, "pair")
@@ -490,7 +474,6 @@ class Builder:
             self.add(f"u/blue/{k}-turret", resample(tur, s, *tgeo), to_frame(tp, tgeo, s))
             self.mounts[k] = [r4((rx - hc[0]) * s / PX_PER_TILE), r4((ry - hc[1]) * s / PX_PER_TILE)]
             self.sizes[k] = UNIT_SIZES[k]
-            self.icon_src[k] = [(hull, None, None), (tur, tp, (rx, ry))]
             self.composites[k] = dict(base=f"u/blue/{k}", top=f"u/blue/{k}-turret")
             print(f"  {k:13s} ring=({rx:.1f},{ry:.1f}) r={rr:.1f} turret pivot=({tp[0]:.1f},{tp[1]:.1f}) mount={self.mounts[k]}")
 
@@ -506,7 +489,6 @@ class Builder:
             s = (S - BUILDING_INSET) / max_side(base)
             geo = fit_frame(base, s, base.bbox(), size=(S, S))
             self.add(f"b/blue/{k}", resample(base, s, *geo))
-            self.icon_src[k] = [(base, None, None)]
             if head is None:
                 continue
             rx, ry, rr = detect_ring(base)
@@ -515,7 +497,6 @@ class Builder:
             self.add(f"b/blue/{k}-head", resample(head, s, *hgeo), to_frame(hp, hgeo, s))
             fx, fy = to_frame((rx, ry), geo, s)
             self.mounts[k] = [r4((fx - S / 2) / PX_PER_TILE), r4((fy - S / 2) / PX_PER_TILE)]
-            self.icon_src[k].append((head, hp, (rx, ry)))
             self.composites[k] = dict(base=f"b/blue/{k}", top=f"b/blue/{k}-head")
             print(f"  {k:13s} ring=({rx:.1f},{ry:.1f}) r={rr:.1f} head pivot=({hp[0]:.1f},{hp[1]:.1f}) mount={self.mounts[k]}")
 
@@ -532,20 +513,12 @@ class Builder:
         self.add("obj/uplink-head", resample(head, s, *hgeo), to_frame(hp, hgeo, s))
         fx, fy = to_frame((rx, ry), geo, s)
         self.mounts["uplink"] = [r4((fx - S / 2) / PX_PER_TILE), r4((fy - S / 2) / PX_PER_TILE)]
-        self.icon_src["uplink"] = [(base, None, None), (head, hp, (rx, ry))]
         print(f"  uplink        ring=({rx:.1f},{ry:.1f}) r={rr:.1f} head pivot=({hp[0]:.1f},{hp[1]:.1f}) mount={self.mounts['uplink']}")
         (crate,) = split_parts("supply-crate", "single")
         S = round(OBJECTIVE_SIZES["supply-crate"] * PX_PER_TILE)
         s = (S - 2 * FRAME_MARGIN) / max_side(crate)
         geo = fit_frame(crate, s, crate.bbox(), size=(S, S))
         self.add("obj/crate", resample(crate, s, *geo))
-        self.icon_src["supply-crate"] = [(crate, None, None)]
-
-    # ---- HUD portraits without atlas frames
-    def portraits(self) -> None:
-        for k in PORTRAIT_ONLY:
-            (part,) = split_parts(k, "single")
-            self.icon_src[k] = [(part, None, None)]
 
     # ---- neutral sheets
     def sheets(self) -> None:
@@ -764,38 +737,7 @@ def checker(w: int, h: int, s: int = 8, c1=(0.78, 0.78, 0.78), c2=(0.62, 0.62, 0
     return out
 
 
-# ------------------------------------------------------------------ icons / ui
-
-
-def make_icon(src: list, size: int = 128, fit: int = 112) -> np.ndarray:
-    """Composite raw parts (turret pivot on ring centre) and fit into a size^2 icon."""
-    base = src[0][0]
-    H, W = base.rgba.shape[:2]
-    acc = premul(base.rgba)
-    for part, pivot, mount in src[1:]:
-        dx, dy = mount[0] - pivot[0], mount[1] - pivot[1]
-        shifted = Image.fromarray(part.rgba, "RGBA").convert("RGBa").transform(
-            (W, H), Image.Transform.AFFINE, (1, 0, -dx, 0, 1, -dy), resample=Image.Resampling.BICUBIC
-        )
-        acc = over(acc, np.asarray(shifted).astype(np.float32) / 255.0)
-    comp = Part(unpremul(acc), "icon")
-    x0, y0, x1, y1 = comp.bbox()
-    s = fit / max(x1 - x0, y1 - y0)
-    geo = fit_frame(comp, s, (x0, y0, x1, y1), size=(size, size))
-    return resample(comp, s, *geo)
-
-
-def write_icons(b: Builder) -> list[Path]:
-    OUT_ICONS.mkdir(parents=True, exist_ok=True)
-    out = []
-    for k, src in b.icon_src.items():
-        if k in MODEL_PORTRAITS:
-            continue
-        img = make_icon(src)
-        p = OUT_ICONS / f"{k}.webp"
-        Image.fromarray(img, "RGBA").save(p, quality=90, method=6, exact=False)
-        out.append(p)
-    return out
+# ------------------------------------------------------------------ ui
 
 
 def write_ui() -> list[Path]:
@@ -920,7 +862,6 @@ def dump_meta(meta: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--no-preview", action="store_true")
-    ap.add_argument("--icons-only", action="store_true", help="write only the HUD icons")
     args = ap.parse_args()
 
     b = Builder()
@@ -930,11 +871,6 @@ def main() -> None:
     b.buildings()
     print("objectives")
     b.objectives()
-    print("portraits")
-    b.portraits()
-    if args.icons_only:
-        print(f"{len(write_icons(b))} icons")
-        return
     print("sheets")
     b.sheets()
 
@@ -961,8 +897,6 @@ def main() -> None:
         print(f"game-{i}.webp {w}x{h} {n / 1e6:.2f} MB")
     print(f"atlas total {sum(n for *_, n in info) / 1e6:.2f} MB, {len(frames)} frames")
 
-    icons = write_icons(b)
-    print(f"{len(icons)} icons")
     ui = write_ui()
     print("ui:", ", ".join(p.name for p in ui))
     if not args.no_preview:

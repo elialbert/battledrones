@@ -2395,18 +2395,13 @@ ring; an enemy Goliath and an enemy Gantry show through the fog.
 ## Art
 
 See **ART.md** for the generation pipeline (prompts, processing, terrain
-painting). Summary: the terrain materials, decorations, HUD portraits, the
-key art and the app icon were generated with OpenAI's
-`gpt-image-2.5-sunburst`; the battlefield itself is 3D (below). The five
-portraits robot infantry added (Trooper Squad, Rocket Squad, Sniper Team,
-Condor, Assembly Bay) were painted to the same style contracts, the
-squads straight overhead with every robot facing north, after the in-game
-models. They are portrait-only: no sprite-atlas frames, since the 3D game
-doesn't load the atlas (`process.py --icons-only` rebuilds just the
-portraits). The Goliath's and the Gantry's portraits weren't generated at
-all: they are their in-game 3D models, shot from the model gallery's
-`?icon=` view on black and on white (the pair gives the alpha) and fitted
-to the other portraits' size (see ART.md).
+painting). Summary: the terrain materials, decorations, the key art and the
+app icon were generated with OpenAI's `gpt-image-2.5-sunburst`; the
+battlefield itself is 3D (below). The HUD portraits are shots of the
+in-game 3D models (ICONS.md): `tools/model-portraits.mjs` shoots each from
+the model gallery's `?icon=` view on black and on white (the pair gives the
+alpha), in a ¾ view (a squad as one of its robots), finished with lifted
+colour and a light rim for the dark HUD, blue and red.
 
 ## 3D view
 

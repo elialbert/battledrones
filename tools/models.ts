@@ -18,14 +18,16 @@
 // Condors, toppled and burnt, in love (Robot Love) — then a Mastodon and an HQ for scale.
 // ?only=gantry shows the Gantry's six stages per faction: empty, foundation, frame, armament, finishing, rollout.
 // ?icon=<kind>: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
-// (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp). The Goliath
-// stands, the Gantry shows its armament stage; any other unit points north and fills the view
-// (tools/model-portraits.mjs shoots those, with ?pitch=60).
+// (tools/model-portraits.mjs shoots every one on black and on white, the two give the alpha: ICONS.md).
+// The Goliath stands, the Gantry shows its armament stage; any other unit, building or objective (uplink,
+// supply-crate) points north and fills the view. ?turn=rad turns the model clockwise from that pose,
+// ?head=rad a building's turret or head on its mount, ?faction=red paints it red, and ?solo with a
+// squad kind shows one of its robots, weapon up.
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
 import { GoliathRig, type GoliathPose } from "../src/game/three/goliath";
-import { baySeats, SquadRig, type BotKind } from "../src/game/three/infantry";
+import { J, baySeats, SquadRig, type BotKind } from "../src/game/three/infantry";
 import { setVariant } from "../src/game/three/materials";
 import { ModelBuilder } from "../src/game/three/builder";
 import { UNIT_KINDS, BUILDING_KINDS } from "../src/game/assets";
@@ -42,7 +44,11 @@ plate.receiveShadow = true;
 stage.scene.add(plate);
 
 const icon = q.get("icon");
-const facs = (icon ? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
+/** ?turn=rad: a portrait's model turned clockwise (seen from above) from its resting pose. */
+const turn = Number(q.get("turn") ?? 0);
+/** ?head=rad: a turret or radar head turned clockwise on its mount (the Radar's dish faces the viewer so). */
+const head = Number(q.get("head") ?? 0);
+const facs = (icon ? q.get("faction") ?? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
 const only = icon ? "icon" : q.get("only");
 const anim = q.get("anim") ?? "walk";
 const BOTS: BotKind[] = ["trooper", "rocket-squad", "sniper"];
@@ -52,8 +58,8 @@ const box = new THREE.Box3();
 const yard: { rig: SquadRig; kind: BotKind; x: number; z: number }[] = [];
 const riders: { rig: SquadRig; ready: number }[] = [];
 const cface = -Number(q.get("cface") ?? 0.35);
-/** A unit portrait's zoom: its model fills most of the view. */
-let iconZoom: number | null = null;
+/** A portrait's model: framed by frameIcon() once the camera is set up. */
+let iconRoot: THREE.Object3D | null = null;
 
 /** A Condor at (x, z), `y` up, riders aboard, its ramp `ramp` of the way open. */
 function condor(f: "blue" | "red", x: number, y: number, z: number, load: BotKind[], ramp: number, face = cface): void {
@@ -111,15 +117,35 @@ facs.forEach((f, fi) => {
       g.parts.hook!.position.set(0, -1.6, -1.5);
       g.parts.cable!.position.set(0, 0, -1.5);
       g.parts.cable!.scale.set(1, 1.6, 1);
+      g.root.rotation.y = -turn;
       stage.scene.add(g.root);
-    } else if (icon === "goliath") goliath(f, 0, 0, Math.PI, { yaw: 0 });
-    else {
-      // any other unit nose north, as the painted portraits are drawn, filling most of the view
+      iconRoot = g.root;
+    } else if (icon === "goliath") iconRoot = goliath(f, 0, 0, Math.PI + turn, { yaw: 0 }).root;
+    else if (BOTS.includes(icon as BotKind) && q.get("solo") !== null) {
+      // one robot of the squad, weapon up
+      const r = new SquadRig(icon as BotKind, f, 3, 1);
+      for (let i = 0; i < 40; i++) r.update({ dt: 16, speed: 0, aim: 1, pitch: 0, alive: 1 });
+      // (the others are shrunk to points at their slots: gather them into this one, out of its framing)
+      const up = r.bots.find((b) => !b.gone)!;
+      for (const b of r.bots) if (b.gone) b.b[J.root]!.position.copy(up.b[J.root]!.position);
+      r.root.rotation.y = -turn;
+      stage.scene.add(r.root);
+      iconRoot = r.root;
+    } else if ((BUILDING_KINDS as string[]).includes(icon!) || icon === "uplink" || icon === "supply-crate") {
+      // a building or objective as the map shows it
+      const d = icon === "uplink" ? uplinkDef() : icon === "supply-crate" ? crateDef() : buildingDef(icon as never, f);
+      const b = instance(d);
+      b.root.rotation.y = -turn;
+      if (b.turret) b.turret.rotation.y = -head;
+      stage.scene.add(b.root);
+      iconRoot = b.root;
+    } else {
+      // any other unit, nose north
       const u = instance(unitDef(icon as UnitKind, f));
       u.root.scale.setScalar(unitScale(icon as UnitKind));
+      u.root.rotation.y = -turn;
       stage.scene.add(u.root);
-      box.setFromObject(u.root);
-      iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+      iconRoot = u.root;
     }
     plate.visible = false;
     stage.scene.background = new THREE.Color(q.get("bg") ?? "#000000");
@@ -322,10 +348,40 @@ if (freeze !== null) at(Number(freeze));
 stage.rig.bounds = { x0: -100, y0: -100, x1: 100, y1: 100 };
 const pitch = q.get("pitch");
 if (pitch !== null) stage.rig.pitchFor = () => THREE.MathUtils.degToRad(Number(pitch));
-stage.rig.zoom = Number(q.get("zoom") ?? iconZoom ?? 46);
+stage.rig.zoom = Number(q.get("zoom") ?? 46);
 // (the Goliath and Gantry line-ups open centred on themselves; an icon on the model)
 const home = only === "goliath" ? [16, 2] : only === "gantry" ? [9, 1.5] : only === "icon" ? [0, 0] : [7, 4];
 stage.rig.centerOn(Number(q.get("x") ?? home[0]), Number(q.get("y") ?? home[1]));
+if (iconRoot && q.get("zoom") === null) frameIcon(iconRoot);
+
+/**
+ * Frame a portrait's model as the camera sees it: the middle of its bounds at
+ * the centre of the view, and their projection filling 80% of it. Framing it
+ * by its footprint on the ground let anything tall (the Radar's dish) rise off
+ * the top.
+ */
+function frameIcon(o: THREE.Object3D): void {
+  const rig = stage.rig;
+  o.updateMatrixWorld(true);
+  o.traverse((m) => (m as THREE.SkinnedMesh).isSkinnedMesh && (m as THREE.SkinnedMesh).computeBoundingBox());
+  const b = new THREE.Box3().setFromObject(o, true);
+  const c = b.getCenter(new THREE.Vector3());
+  // (the ground point the camera looks at to put the middle at the centre, at this zoom's pitch)
+  const look = () => rig.centerOn(c.x, c.z - c.y / Math.tan(rig.pitchFor(rig.zoom)));
+  for (let i = 0; i < 4; i++) {
+    look();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const x of [b.min.x, b.max.x])
+      for (const y of [b.min.y, b.max.y])
+        for (const z of [b.min.z, b.max.z]) {
+          const p = rig.project(x, z, y);
+          x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
+          y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+        }
+    rig.zoom *= (0.8 * Math.min(innerWidth, innerHeight)) / Math.max(x1 - x0, y1 - y0);
+  }
+  look();
+}
 let last = performance.now();
 const loop = () => {
   const t = performance.now();

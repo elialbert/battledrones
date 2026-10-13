@@ -71,7 +71,7 @@ export default defineConfig({
       // precache the shell, icons and menu art; painted map terrain
       // (a few MB per map) and each biome's rock material are cached on
       // first play instead
-      includeAssets: ["assets/icons/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
+      includeAssets: ["assets/icons/*", "assets/icons/red/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
       workbox: {
         // There are no client-side routes. Exact precached URLs still work
         // offline, but /v1/ etc. must reach their own game and service worker.

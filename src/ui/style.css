@@ -648,9 +648,10 @@ button {
 .bb.busy .ic {
   opacity: 0.55;
 }
+/* locked: the portrait stays readable (it's what you're working toward), greyed, with a small padlock */
 .bb.locked .ic {
-  opacity: 0.3;
-  filter: grayscale(1);
+  opacity: 0.6;
+  filter: grayscale(1) brightness(0.8) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
 }
 .bb.locked .nm,
 .bb.locked .cost {
@@ -658,10 +659,9 @@ button {
 }
 .bb .lock {
   position: absolute;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 18px;
+  top: 2px;
+  left: 3px;
+  font-size: 11px;
 }
 .bb.ready {
   border-color: #37d67a;
@@ -2878,10 +2878,6 @@ button {
   height: 44px;
   object-fit: contain;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
-}
-/* icons are drawn in blue: approximate red team paint */
-.mvp.red img {
-  filter: hue-rotate(140deg) saturate(1.15) drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
 }
 .mvp-t {
   display: flex;

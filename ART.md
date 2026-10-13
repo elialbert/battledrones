@@ -5,9 +5,8 @@ scrap and crystals, explosions, the menu key art and the app icon — was
 generated with OpenAI's **`gpt-image-2.5-sunburst`** (released 2026-09-08,
 described by OpenAI as its most capable image generation and editing
 model), then processed deterministically in Python into the assets the
-engine loads. The exceptions are the HUD portraits of the Goliath, the
-Gantry and the redesigned Raptor, Lancer and Hornet, which are shots of
-their in-game 3D models (end of section 1).
+engine loads. The exception is the HUD portraits: every one is a shot of
+its in-game 3D model (end of section 1, and ICONS.md).
 
 > **The battlefield is now 3D (three.js).** Units, buildings, objectives,
 > trees, rocks, scrap and crystals are procedural low-poly models built in
@@ -18,9 +17,9 @@ their in-game 3D models (end of section 1).
 > its albedo, and the five painted **rock materials** become small tileable
 > textures (`art/textures.py` → `public/assets/textures/rock-<biome>.webp`,
 > 512², seamless) that texture the outcrops' cliff walls and crags, so they
-> are the same stone as the painted tops. The generated **unit and building art** still provides the
-> HUD portraits (`public/assets/icons/`), and the key art and icons are
-> unchanged. The sprite atlas (`public/assets/sprites/`) is still produced
+> are the same stone as the painted tops. The generated **unit and building art** no longer
+> appears in the game: the HUD portraits (`public/assets/icons/`) are shots of the 3D models
+> too (end of section 1). The key art and icons are unchanged. The sprite atlas (`public/assets/sprites/`) is still produced
 > by `process.py` but is no longer loaded by the game.
 
 The pipeline lives in `art/` (Python 3.10+, Pillow ≥ 10.1, numpy, scipy,
@@ -30,8 +29,8 @@ and the `openai` package for generation):
 python3 art/generate.py            # generate any missing raws (needs OPENAI_API_KEY)
 python3 art/generate.py 'tex-*' --force   # regenerate matching assets
 python3 art/generate.py --list     # what exists
-python3 art/process.py             # raws -> sprite atlas, icons, key art, PWA icons
-python3 art/process.py --icons-only   # just the HUD portraits
+python3 art/process.py             # raws -> sprite atlas, key art, PWA icons
+node tools/model-portraits.mjs --all  # HUD portraits from the 3D models (with npm run dev running)
 npx vite-node tools/export-maps.ts # map grids -> art/maps/*.json
 python3 art/terrain.py [map ids]   # paint each map's terrain (and refresh the rock textures)
 python3 art/textures.py            # the biome rock textures alone (Pillow + numpy only)
@@ -73,41 +72,47 @@ STYLE — gunmetal with hazard-yellow stripes and amber lights, no blue or red
 at all — because they belong to no side: the engine draws the holder's
 colour as a ring, so they get no red variant.
 
-The robot infantry and its kit came after the move to 3D, so they exist only
-as HUD portraits, painted to match their in-game models (blocky robots with
-big blue shoulder pads and amber visors): `trooper` (five rifle robots in a
-wedge), `rocket-squad` (three heavy robots with shoulder tubes), `sniper` (two
-cloaked robots with rail rifles), all drawn from a shared **SQUAD** clause
+The robot infantry and its kit came after the move to 3D, so their raws were
+only ever HUD portraits, painted to match their in-game models (blocky robots
+with big blue shoulder pads and amber visors): `trooper` (five rifle robots in
+a wedge), `rocket-squad` (three heavy robots with shoulder tubes), `sniper`
+(two cloaked robots with rail rifles), all drawn from a shared **SQUAD** clause
 (straight overhead, every robot facing north); the `condor` dropship (open
-troop bay, two wingtip ducted fans); and the 2×2 `assembly-bay`.
+troop bay, two wingtip ducted fans); and the 2×2 `assembly-bay`. Since the
+portraits became model shots (below) nothing uses them, but they are kept.
 
-The **Goliath** and its **Gantry** (GOLIATH.md) came later still, and their
-portraits were not generated at all: `public/assets/icons/goliath.webp` and
-`gantry.webp` are rendered from the in-game 3D models. The model gallery's
-`?icon=goliath` / `?icon=gantry` view (`tools/models.html`, an `npm run
-dev` page) draws one blue model alone (the Goliath standing; the Gantry
-with its armament-stage mech on the cradle) on a flat `?bg=` colour under
-the gallery's camera; it was shot once on black and once on white, the
-pair gives a
-clean alpha, and the result is fitted to 112 px in a 128 px square like
-the other portraits. They have no raw, no `catalog.py` entry and no place
-in `PORTRAIT_ONLY`, so `generate.py` and `process.py` neither make them
-nor overwrite them, and no script in the repo re-shoots them.
+### HUD portraits: shots of the 3D models
 
-The **Raptor**, **Lancer** and **Hornet** were then redesigned in 3D so
-they no longer looked alike (the Raptor and Lancer were both team-edged
-deltas; the Hornet was a big four-rotor Scout): the Raptor is a twin-boom
-interceptor, the Lancer a skirted grav-tank and the Hornet an armoured
-airship (the candidates are in `progress-shots/unit-alts/`). Their painted
-portraits showed the old designs, so `raptor.webp`, `lancer.webp` and
-`hornet.webp` are now shots of the new models too: `node
-tools/model-portraits.mjs raptor lancer hornet` (with `npm run dev`
-running) loads the gallery's `?icon=<kind>` view (one blue unit, nose
-north, filling the view) from about the game camera's angle (`--pitch=60`),
-on black and on white, and writes the 128 px portraits. Their raws and
-`catalog.py` prompts are left as they were (they still make atlas frames,
-which the game doesn't load), but `process.py` skips their icons
-(`MODEL_PORTRAITS`) so it never paints the old look back over them.
+The painted portraits came from the 2D era and drifted from the 3D models
+(the Mender, Tech Lab, Airpad, Depot and others were different designs on the
+map), and painted top-down they read poorly at the HUD's 22–46 px. The
+Goliath and Gantry were the first portraits shot from their models instead,
+then the redesigned Raptor, Lancer and Hornet (`progress-shots/unit-alts/`);
+since ICONS.md every portrait is (the before and after are in
+`progress-shots/icons/`).
+
+`node tools/model-portraits.mjs --all` (with `npm run dev` running) shoots
+them all: for each kind the model gallery's `?icon=<kind>` view
+(`tools/models.html`) draws the model alone on a flat colour, once on black
+and once on white (the pair gives a clean alpha). The framing is a table at
+the top of the script: most kinds get a ¾ showroom view (50° pitch, nose
+turned 35° clockwise, close to the game camera's 47–62°); a squad shows one
+of its robots, weapon up, and robots and the Goliath are shot from 30° and
+turned to face the viewer; the Gantry shows its armament stage, and the
+Radar's and the Uplink's heads are turned so their dishes face the viewer.
+The gallery frames each model by its bounds as the camera sees them, so a tall
+part stays in the shot (the script warns if one touches the edge). Each shot is
+fitted to 224 px in a 256 px square, then finished for the HUD's navy
+buttons: colour lifted (gamma 0.82, gain 1.06) and a thin neutral light rim
+drawn round the silhouette. Every unit and building is shot red too, into
+`public/assets/icons/red/` (the objectives are neutral), for the enemy's
+units in the selection panel and the report's "Their ace" card. `npx vite`
+restarts when `vite.config.ts` changes, so leave it alone while a run is
+going.
+
+The raws and `catalog.py` prompts for units and buildings are left as they
+were (they still make atlas frames, which the game doesn't load), but
+`process.py` no longer makes portraits at all.
 
 ## 2. Sprites — `art/process.py`
 
@@ -135,7 +140,6 @@ Outputs and the contract the engine relies on:
 |---|---|
 | `public/assets/sprites/game.json` + `game-0.webp` | 2048² multiatlas (~1.3 MB WebP) |
 | `public/assets/sprites/meta.json` | `pxPerTile` (128), per-frame `origin` pivots, turret/head `mounts` (tiles, hull facing north), unit `sizes` |
-| `public/assets/icons/<kind>.webp` | 128 px HUD portraits (blue, turrets composited; content fit to 112 px) |
 | `public/assets/ui/keyart-{portrait,landscape}.webp` | Menu backgrounds |
 | `public/icons/icon-{192,512}.png` | PWA icons |
 | `public/icons/apple-touch-icon.png` | 180 px iOS Home Screen icon (opaque, square corners) |
@@ -228,17 +232,16 @@ them as sprites so they visibly shrink as they're mined.
 
 - Tweak a prompt in `catalog.py`, then `generate.py <name> --force`,
   `process.py`, and rebuild. View `art/previews/*` before shipping.
-- New kinds now only need a HUD portrait: add a catalog entry, add the kind to
-  `PORTRAIT_ONLY` in `process.py` (all parts of the raw are kept, so a squad
-  of separate robots works), then `generate.py <kind>` and
-  `process.py --icons-only`. These get no atlas frames.
-- A kind that also needs atlas frames takes a size in `process.py`
+- New kinds need no painted art: their HUD portraits are shots of the model
+  (section 1). Add the kind to the lists at the top of
+  `tools/model-portraits.mjs` (and to `FRAMING`, if the ¾ view doesn't suit
+  it), then `node tools/model-portraits.mjs <kind>` and again with
+  `--faction=red`.
+- A kind that needs atlas frames takes a size in `process.py`
   (`UNIT_SIZES` / `BUILDING_SIZES`) instead, and its frame names follow
   automatically.
-- The Goliath, the Gantry, the Raptor, the Lancer and the Hornet are the
-  exception: their portraits are shots of the 3D models (section 1), so
-  changing one means changing the model and shooting it again, from
-  `tools/models.html?icon=<kind>&bg=…` (Goliath, Gantry) or with
-  `node tools/model-portraits.mjs <kind>` (any other unit).
+- Changing a unit's or building's 3D model means shooting its portraits
+  again, blue and red: `node tools/model-portraits.mjs <kind>`, then
+  `node tools/model-portraits.mjs <kind> --faction=red`.
 - Changing a map in `src/sim/maps.ts` requires re-exporting and re-painting
   its terrain (`npm run maps && npm run art:terrain -- <id>`).
