@@ -96,8 +96,9 @@ the right. That is close to the game camera, which runs from 47° to 62°. Long
 hulls lie along the diagonal, so they fill the square. The ¾ angle also shows
 the side features that tell units apart: the Radar's dish, the SAM's missile
 rack, the Mortar's tube, the Flak's four barrels and the Lancer's skirt. The
-Gantry shows its armament stage. The Radar's dish faces north when idle, so the
-¾ turn would show its back; its head is turned to face the viewer instead.
+Gantry shows its armament stage. The Radar's and the Uplink's dishes face north
+when idle, so the ¾ turn would show their backs; their heads are turned to face
+the viewer instead.
 
 **Robots and the Goliath are characters.** They are shot from 30° and turned
 to face the viewer. A squad's portrait is one of its robots, weapon up: a
@@ -164,8 +165,12 @@ The view takes:
 - `?faction=red`;
 - `?solo`, one robot of a squad with its weapon up.
 
-Each kind is shot once on black and once on white; the pair gives a clean
-alpha.
+The view frames the model by its bounds as the camera sees them: their
+middle at the centre, their projection filling 80% of the shot. Framing by the
+footprint on the ground, as it first did, let a tall part such as the Radar's
+dish rise off the top. Each kind is shot once on black and once on white; the
+pair gives a clean alpha. The script warns if a model still touches the edge of
+its shot.
 
 Vite restarts the dev server when `vite.config.ts` changes, which breaks a
 run in progress, so don't edit it during a run. A new unit or building goes

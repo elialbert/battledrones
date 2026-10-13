@@ -27,8 +27,9 @@ const SHOWROOM = { pitch: 50, turn: 0.6, solo: false };
 const ROBOT = { pitch: 30, turn: 2.5, solo: true };
 const FRAMING = {
   trooper: ROBOT, "rocket-squad": ROBOT, sniper: ROBOT, goliath: { pitch: 30, turn: 0.6, solo: false },
-  // (the dish faces north at rest, so from the showroom angle we'd see its back: turn it to the viewer)
-  radar: { ...SHOWROOM, head: 2.6 }
+  // (their dishes face north at rest, so from the showroom angle we'd see their backs: turn them to the viewer)
+  radar: { ...SHOWROOM, head: 2.6 },
+  uplink: { ...SHOWROOM, head: 2.6 }
 };
 
 const SIZE = 256;
@@ -72,7 +73,7 @@ for (const { kind, faction } of jobs) {
     await page.waitForTimeout(500);
     shots.push(`data:image/png;base64,${(await page.screenshot()).toString("base64")}`);
   }
-  const webp = await page.evaluate(async ([black, white, P]) => {
+  const { webp, clipped } = await page.evaluate(async ([black, white, P]) => {
     const load = async (src) => {
       const img = new Image();
       img.src = src;
@@ -164,12 +165,13 @@ for (const { kind, faction } of jobs) {
       px[i * 4 + 3] = Math.round(oa * 255);
     }
     g.putImageData(img, 0, 0);
-    return dst.toDataURL("image/webp", 0.85);
+    // (a model touching the edge of the shot was cut off by the gallery's framing)
+    return { webp: dst.toDataURL("image/webp", 0.85), clipped: x0 === 0 || y0 === 0 || x1 === w - 1 || y1 === h - 1 };
   }, [...shots, { SIZE, FIT, GAMMA, GAIN, RIM_R, RIM, RIM_A }]);
   const dir = faction === "red" ? `${out}/red` : out;
   mkdirSync(dir, { recursive: true });
   const file = `${dir}/${kind}.webp`;
   writeFileSync(file, Buffer.from(webp.split(",")[1], "base64"));
-  console.log(file);
+  console.log(clipped ? `${file} — WARNING: the model touches the edge of the shot, so part of it is cut off` : file);
 }
 await browser.close();
