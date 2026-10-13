@@ -6,7 +6,8 @@
 //   ?view=close&d=<unit>       one model up close, blue and red (?face=rad ?pitch=deg ?zoom=)
 //   ?view=battle&lancer=<unit>&raptor=<unit>&hornet=<unit>   a mixed skirmish at play zoom
 //   ?view=duel&d=<unit>        Lancers on the ground with three of <unit> overhead
-// Screenshots: progress-shots/unit-alts/.
+// Screenshots: progress-shots/unit-alts/. Picked and now in models.ts: Raptor B (twin-boom), Lancer L1
+// (grav-tank), Hornet H3 (airship), so "today" here (a UnitKind) shows those; the candidates stay as drawn.
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { ModelBuilder, type Vec3 } from "../src/game/three/builder";

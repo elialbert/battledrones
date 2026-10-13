@@ -125,6 +125,9 @@ BUILDING_INSET = 6  # content fits (size*128 - 6) px, centred in the size*128 fr
 # Added after the move to 3D: they only get a HUD portrait (all parts of the raw
 # composited, like any single-image unit), never atlas frames.
 PORTRAIT_ONLY = ["trooper", "rocket-squad", "sniper", "condor", "assembly-bay"]
+# Redesigned in 3D after these were painted: their HUD portraits are shots of the new models
+# (tools/model-portraits.mjs), so their raws still make atlas frames but no longer an icon.
+MODEL_PORTRAITS = {"raptor", "lancer", "hornet"}
 # Map objectives (neutral, drawn by the engine with the owner's ring): longest side in tiles.
 OBJECTIVE_SIZES = {"uplink": 2.25, "supply-crate": 0.85}
 
@@ -786,6 +789,8 @@ def write_icons(b: Builder) -> list[Path]:
     OUT_ICONS.mkdir(parents=True, exist_ok=True)
     out = []
     for k, src in b.icon_src.items():
+        if k in MODEL_PORTRAITS:
+            continue
         img = make_icon(src)
         p = OUT_ICONS / f"{k}.webp"
         Image.fromarray(img, "RGBA").save(p, quality=90, method=6, exact=False)
