@@ -229,7 +229,8 @@ npx vite-node tools/pacing.ts run out.jsonl --with rush --tune '{…}' # one per
 npm run maps           # export map grids to art/maps/*.json (--ascii to preview)
                        # model gallery: npm run dev, then open /tools/models.html
                        #   (?only=units|buildings|condor|condor-ring|goliath|gantry, ?anim=walk|idle|aim|fall for
-                       #   the robots, ?icon=goliath|gantry for one model alone, as shot for its HUD portrait)
+                       #   the robots, ?icon=<kind> for one model alone, as shot for its HUD portrait)
+node tools/model-portraits.mjs --all  # reshoot every HUD portrait from the 3D models, blue and red (ICONS.md)
                        # vehicles reference page: /vehicles.html (built into dist/ too)
                        # battle record viewer: /record-viewer.html[?replay=<record>] (built into dist/ too,
                        #   with battles/showcase/; the game takes ?replay=<record> as well)
@@ -265,8 +266,7 @@ generation) — see **ART.md**:
 
 ```bash
 npm run art:generate   # call the OpenAI Images API for any missing raw art
-npm run art:process    # raw art → sprite atlas, icons, key art, PWA icons
-npm run art:process -- --icons-only   # just the HUD portraits
+npm run art:process    # raw art → sprite atlas, key art, PWA icons
 npm run art:terrain    # paint every map's terrain from its grid (then refreshes the rock textures)
 npm run art:textures   # just the biome rock textures the 3D cliffs and crags use
 ```
@@ -279,6 +279,8 @@ npm run art:textures   # just the biome rock textures the 3D cliffs and crags us
   tools, battle records, the LLM plugin and the viewer.
 - **`GOLIATH.md`** — the Goliath and Gantry spec, with how the shipped
   game differs from it.
+- **`ICONS.md`** — the HUD portraits: why they're shots of the 3D models,
+  and how they're framed and finished.
 
 ## Architecture
 

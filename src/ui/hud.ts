@@ -156,7 +156,8 @@ const SHORT: Partial<Record<UnitKind | BuildingKind, string>> = {
 
 const MINIMAP_PX = 256;
 
-const icon = (kind: string) => `assets/icons/${kind}.webp`;
+/** A portrait in a side's paint: the enemy's units and buildings (or either side's, to a spectator) show red. */
+const icon = (kind: string, f: Faction = "blue") => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
 
 export function createHud(api: HudApi): Hud {
   const root = document.getElementById("hud")!;
@@ -513,10 +514,10 @@ export function createHud(api: HudApi): Hud {
   let selModeEl: HTMLElement | null = null;
   type Live = { hp: string; head: string; mode?: string };
 
-  /** A producer's queue as cancel buttons (`p`: the building's or anchored Goliath's id). */
-  const queueHtml = (p: number, q: readonly QueueItem[]) =>
+  /** A producer's queue as cancel buttons (`p`: the building's or anchored Goliath's id, on side `f`). */
+  const queueHtml = (p: number, q: readonly QueueItem[], f: Faction) =>
     `<div class="queue">${q
-      .map((it) => `<button class="qi" data-p="${p}" data-kind="${it.kind}"><img src="${icon(it.kind)}" alt=""/><span class="qp" style="height:0%"></span></button>`)
+      .map((it) => `<button class="qi" data-p="${p}" data-kind="${it.kind}"><img src="${icon(it.kind, f)}" alt=""/><span class="qp" style="height:0%"></span></button>`)
       .join("")}</div>`;
   /** How far the head of a queue is (a CSS height). */
   const headShare = (q: readonly QueueItem[]) => {
@@ -548,13 +549,13 @@ export function createHud(api: HudApi): Hud {
     const train = !own
       ? ""
       : g.queue.length > 0
-        ? queueHtml(u.id, g.queue)
+        ? queueHtml(u.id, g.queue, u.faction)
         : g.mode === "anchored" && !g.lift
           ? `<span class="hint">${rulesOf(w).nomads ? "Trains Harvesters and squads" : "Trains squads"} · tap the map to rally</span>`
           : "";
     const live: Live = { hp: `${Math.ceil(u.hp)} / ${st.hp}`, head: headShare(g.queue), mode: goliathMode(u) };
     // (short landscape screens put the name and the HP line side by side: style.css)
-    const html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><div class="ghead"><b>${title}</b>
+    const html = `<img class="pi" src="${icon(u.kind, u.faction)}" alt=""/><div class="pt"><div class="ghead"><b>${title}</b>
       <span class="gline"><span class="hp">${live.hp}</span><span class="gmode">${live.mode}</span></span></div>
       <span class="gweap">${strip}</span>${train}</div>`;
     return { key, html, live };
@@ -579,21 +580,24 @@ export function createHud(api: HudApi): Hud {
         const note = b.outpost
           ? "Outpost: doesn't extend build range"
           : rally && !ctrl.spectator ? "Tap the map to set a rally point" : st.role;
-        html = `<img class="pi" src="${icon(b.kind)}" alt=""/><div class="pt"><b>${st.name}${b.outpost ? ' <span class="outpost">· Outpost</span>' : ""}</b>
+        html = `<img class="pi" src="${icon(b.kind, b.faction)}" alt=""/><div class="pt"><b>${st.name}${b.outpost ? ' <span class="outpost">· Outpost</span>' : ""}</b>
           <span class="hp">${Math.ceil(b.hp)} / ${st.hp}</span>
-          ${b.queue.length ? queueHtml(b.id, b.queue) : `<span class="hint">${note}</span>`}</div>`;
+          ${b.queue.length ? queueHtml(b.id, b.queue, b.faction) : `<span class="hint">${note}</span>`}</div>`;
       }
     } else if (ctrl.selectedUnits.size > 0) {
       const counts = new Map<UnitKind, number>();
       /** Squads riding in the selected Condors, by kind. */
       const aboard = new Map<UnitKind, number>();
+      /** Whose they are (a selection is one side's). */
+      let side: Faction = PLAYER;
       for (const id of ctrl.selectedUnits) {
         const u = w.units.get(id);
         if (!u) continue;
+        side = u.faction;
         counts.set(u.kind, (counts.get(u.kind) ?? 0) + 1);
         for (const p of u.passengers ?? []) aboard.set(p.kind, (aboard.get(p.kind) ?? 0) + 1);
       }
-      key = `u:${[...counts].map(([k, n]) => k + n).join(",")}|${[...aboard].map(([k, n]) => k + n).join(",")}`;
+      key = `u:${side}:${[...counts].map(([k, n]) => k + n).join(",")}|${[...aboard].map(([k, n]) => k + n).join(",")}`;
       if (ctrl.selectedUnits.size === 1) {
         const u = w.units.get([...ctrl.selectedUnits][0]!);
         if (u?.goliath) ({ key, html, live } = goliathPanel(u));
@@ -625,16 +629,16 @@ export function createHud(api: HudApi): Hud {
               ? (u.passengers?.length ?? 0) > 0 || ctrl.spectator ? "" : empty
               : `<span class="hint">${st.role}</span>`;
           const hold = lifting
-            ? `<div class="cargo"><span class="seat lift" title="Goliath"><img src="${icon("goliath")}" alt=""/></span></div>`
+            ? `<div class="cargo"><span class="seat lift" title="Goliath"><img src="${icon("goliath", u.faction)}" alt=""/></span></div>`
             : transport ? cargoHtml(u) : "";
-          html = `<img class="pi" src="${icon(u.kind)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
+          html = `<img class="pi" src="${icon(u.kind, u.faction)}" alt=""/><div class="pt"><b class="${u.rank >= NAMED_RANK ? "hero" : ""}">${title}</b>
             <span class="hp">${Math.ceil(u.hp)} / ${st.hp}${robots}</span>${hint}</div>${hold}`;
         }
       } else {
         html = `<div class="group">${[...counts]
-          .map(([k, n]) => `<span class="gi"><img src="${icon(k)}" alt=""/><b>${n}</b></span>`)
+          .map(([k, n]) => `<span class="gi"><img src="${icon(k, side)}" alt=""/><b>${n}</b></span>`)
           .join("")}${[...aboard]
-          .map(([k, n]) => `<span class="gi aboard" title="Aboard a Condor"><img src="${icon(k)}" alt=""/><b>${n}</b></span>`)
+          .map(([k, n]) => `<span class="gi aboard" title="Aboard a Condor"><img src="${icon(k, side)}" alt=""/><b>${n}</b></span>`)
           .join("")}</div>`;
       }
     }
@@ -1276,7 +1280,7 @@ export function createHud(api: HudApi): Hud {
 /** A Condor's seats for the selection panel: a portrait (and robots standing) per squad aboard, dashed empty seats. */
 function cargoHtml(c: Unit): string {
   const seats = (c.passengers ?? []).map(
-    (p) => `<span class="seat" title="${UNITS[p.kind].name}"><img src="${icon(p.kind)}" alt=""/><b>${squadAlive(p)}</b></span>`
+    (p) => `<span class="seat" title="${UNITS[p.kind].name}"><img src="${icon(p.kind, c.faction)}" alt=""/><b>${squadAlive(p)}</b></span>`
   );
   for (let i = seats.length; i < (UNITS[c.kind].capacity ?? 0); i++) seats.push(`<span class="seat empty"></span>`);
   return `<div class="cargo">${seats.join("")}</div>`;

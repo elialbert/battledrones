@@ -76,7 +76,8 @@ export function addReportSection(s: ReportSection): () => void {
   };
 }
 
-const icon = (kind: string) => `assets/icons/${kind}.webp`;
+/** A portrait in its side's paint (the red ones are shot from the red models). */
+const icon = (kind: string, f: Faction) => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
 const short = (n: number) => (n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 const sideName = (f: Faction, ctx: ReportOpts) =>
   ctx.spectator ? (f === "blue" ? "Blue" : "Red") : f === ctx.pov ? "You" : "Enemy";
@@ -255,7 +256,7 @@ export function mvpCard(w: World, h: HeroRec, tag: string, cls: string): string 
   const fate = h.alive ? `<span class="fate alive">Survived</span>` : `<span class="fate fell">✝ Fell at ${fmtTime(h.diedAt ?? 0)}</span>`;
   return `<div class="mvp ${h.faction} ${cls}">
     <span class="mvp-tag">${tag}</span>
-    <img src="${icon(h.kind)}" alt="" draggable="false"/>
+    <img src="${icon(h.kind, h.faction)}" alt="" draggable="false"/>
     <div class="mvp-t"><b>${h.rank > 0 ? `<span class="rank">${stars(h.rank)}</span> ` : ""}${name}</b>
       <span>${UNITS[h.kind].name} · ${killsLabel(h.kills)}</span>${fate}</div>
   </div>`;

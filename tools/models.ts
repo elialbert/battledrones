@@ -18,11 +18,10 @@
 // Condors, toppled and burnt, in love (Robot Love) — then a Mastodon and an HQ for scale.
 // ?only=gantry shows the Gantry's six stages per faction: empty, foundation, frame, armament, finishing, rollout.
 // ?icon=<kind>: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
-// (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp). The Goliath
-// stands, the Gantry shows its armament stage; any other unit, building or objective (uplink,
-// supply-crate) points north and fills the view (tools/model-portraits.mjs shoots those, with ?pitch=60).
-// ?turn=rad turns the model clockwise from that pose, ?faction=red paints it red, and ?solo with a squad
-// kind shows one of its robots, weapon up (the portrait proposal in ICONS.md uses all three).
+// (tools/model-portraits.mjs shoots every one on black and on white, the two give the alpha: ICONS.md).
+// The Goliath stands, the Gantry shows its armament stage; any other unit, building or objective (uplink,
+// supply-crate) points north and fills the view. ?turn=rad turns the model clockwise from that pose,
+// ?faction=red paints it red, and ?solo with a squad kind shows one of its robots, weapon up.
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
