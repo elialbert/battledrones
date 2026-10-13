@@ -21,7 +21,8 @@
 // (tools/model-portraits.mjs shoots every one on black and on white, the two give the alpha: ICONS.md).
 // The Goliath stands, the Gantry shows its armament stage; any other unit, building or objective (uplink,
 // supply-crate) points north and fills the view. ?turn=rad turns the model clockwise from that pose,
-// ?faction=red paints it red, and ?solo with a squad kind shows one of its robots, weapon up.
+// ?head=rad a building's turret or head on its mount, ?faction=red paints it red, and ?solo with a
+// squad kind shows one of its robots, weapon up.
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
@@ -45,6 +46,8 @@ stage.scene.add(plate);
 const icon = q.get("icon");
 /** ?turn=rad: a portrait's model turned clockwise (seen from above) from its resting pose. */
 const turn = Number(q.get("turn") ?? 0);
+/** ?head=rad: a turret or radar head turned clockwise on its mount (the Radar's dish faces the viewer so). */
+const head = Number(q.get("head") ?? 0);
 const facs = (icon ? q.get("faction") ?? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
 const only = icon ? "icon" : q.get("only");
 const anim = q.get("anim") ?? "walk";
@@ -134,6 +137,7 @@ facs.forEach((f, fi) => {
       const d = icon === "uplink" ? uplinkDef() : icon === "supply-crate" ? crateDef() : buildingDef(icon as never, f);
       const b = instance(d);
       b.root.rotation.y = -turn;
+      if (b.turret) b.turret.rotation.y = -head;
       stage.scene.add(b.root);
       box.setFromObject(b.root);
       iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.z - box.min.z);

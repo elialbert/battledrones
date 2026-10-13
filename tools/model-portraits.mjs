@@ -8,7 +8,8 @@
 //   node tools/model-portraits.mjs lancer hq      just these, blue
 //     [--faction=red] [--out=public/assets/icons] (a scratch folder, to try a look without touching
 //     the shipped portraits) [--pitch=50] (degrees below the horizon) [--turn=0.6] (rad, clockwise
-//     from nose north) [--solo] (one robot of a squad) [--url=http://localhost:5173/tools/models.html]
+//     from nose north) [--head=0] (rad, a building's turret or head turned on its mount)
+//     [--solo] (one robot of a squad) [--url=http://localhost:5173/tools/models.html]
 import { chromium } from "playwright-core";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
@@ -24,7 +25,11 @@ const OBJECTIVES = ["uplink", "supply-crate"];
 const SHOWROOM = { pitch: 50, turn: 0.6, solo: false };
 /** Robots are characters: one of the squad, weapon up, from lower down and turned to face the viewer. */
 const ROBOT = { pitch: 30, turn: 2.5, solo: true };
-const FRAMING = { trooper: ROBOT, "rocket-squad": ROBOT, sniper: ROBOT, goliath: { pitch: 30, turn: 0.6, solo: false } };
+const FRAMING = {
+  trooper: ROBOT, "rocket-squad": ROBOT, sniper: ROBOT, goliath: { pitch: 30, turn: 0.6, solo: false },
+  // (the dish faces north at rest, so from the showroom angle we'd see its back: turn it to the viewer)
+  radar: { ...SHOWROOM, head: 2.6 }
+};
 
 const SIZE = 256;
 const FIT = 224;
@@ -58,9 +63,10 @@ for (const { kind, faction } of jobs) {
   const pitch = opt.pitch ?? f.pitch;
   const turn = opt.turn ?? f.turn;
   const solo = "solo" in opt || f.solo;
+  const head = opt.head ?? f.head ?? 0;
   const shots = [];
   for (const bg of ["#000000", "#ffffff"]) {
-    const q = `icon=${kind}&bg=${encodeURIComponent(bg)}&pitch=${pitch}&turn=${turn}&faction=${faction}${solo ? "&solo" : ""}`;
+    const q = `icon=${kind}&bg=${encodeURIComponent(bg)}&pitch=${pitch}&turn=${turn}&head=${head}&faction=${faction}${solo ? "&solo" : ""}`;
     await page.goto(`${url}?${q}`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => window.ready, null, { timeout: 30000 });
     await page.waitForTimeout(500);

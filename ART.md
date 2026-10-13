@@ -98,7 +98,8 @@ and once on white (the pair gives a clean alpha). The framing is a table at
 the top of the script: most kinds get a ¾ showroom view (50° pitch, nose
 turned 35° clockwise, close to the game camera's 47–62°); a squad shows one
 of its robots, weapon up, and robots and the Goliath are shot from 30° and
-turned to face the viewer; the Gantry shows its armament stage. Each shot is
+turned to face the viewer; the Gantry shows its armament stage, and the
+Radar's head is turned so its dish faces the viewer. Each shot is
 fitted to 224 px in a 256 px square, then finished for the HUD's navy
 buttons: colour lifted (gamma 0.82, gain 1.06) and a thin neutral light rim
 drawn round the silhouette. Every unit and building is shot red too, into

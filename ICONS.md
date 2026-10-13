@@ -96,7 +96,8 @@ the right. That is close to the game camera, which runs from 47° to 62°. Long
 hulls lie along the diagonal, so they fill the square. The ¾ angle also shows
 the side features that tell units apart: the Radar's dish, the SAM's missile
 rack, the Mortar's tube, the Flak's four barrels and the Lancer's skirt. The
-Gantry shows its armament stage.
+Gantry shows its armament stage. The Radar's dish faces north when idle, so the
+¾ turn would show its back; its head is turned to face the viewer instead.
 
 **Robots and the Goliath are characters.** They are shot from 30° and turned
 to face the viewer. A squad's portrait is one of its robots, weapon up: a
@@ -154,6 +155,7 @@ Each run loads the model gallery's `?icon=<kind>` view (`tools/models.ts`).
 The view takes:
 - any unit, building or objective;
 - `?turn=rad`, the model turned clockwise from its resting pose;
+- `?head=rad`, a building's turret or head turned on its mount;
 - `?faction=red`;
 - `?solo`, one robot of a squad with its weapon up.
 
