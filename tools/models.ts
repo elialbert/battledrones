@@ -19,8 +19,10 @@
 // ?only=gantry shows the Gantry's six stages per faction: empty, foundation, frame, armament, finishing, rollout.
 // ?icon=<kind>: one blue model alone on a flat ?bg= colour (default black), for shooting HUD portraits
 // (shot on black and on white, the two give the alpha: see public/assets/icons/goliath.webp). The Goliath
-// stands, the Gantry shows its armament stage; any other unit points north and fills the view
-// (tools/model-portraits.mjs shoots those, with ?pitch=60).
+// stands, the Gantry shows its armament stage; any other unit, building or objective (uplink,
+// supply-crate) points north and fills the view (tools/model-portraits.mjs shoots those, with ?pitch=60).
+// ?turn=rad turns the model clockwise from that pose, ?faction=red paints it red, and ?solo with a squad
+// kind shows one of its robots, weapon up (the portrait proposal in ICONS.md uses all three).
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { buildingDef, crateDef, instance, pileDef, podDef, uplinkDef, unitDef, unitScale, chuteGeometry, modelMesh, rubbleGeometry, TRACK } from "../src/game/three/models";
@@ -42,7 +44,9 @@ plate.receiveShadow = true;
 stage.scene.add(plate);
 
 const icon = q.get("icon");
-const facs = (icon ? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
+/** ?turn=rad: a portrait's model turned clockwise (seen from above) from its resting pose. */
+const turn = Number(q.get("turn") ?? 0);
+const facs = (icon ? q.get("faction") ?? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
 const only = icon ? "icon" : q.get("only");
 const anim = q.get("anim") ?? "walk";
 const BOTS: BotKind[] = ["trooper", "rocket-squad", "sniper"];
@@ -111,12 +115,34 @@ facs.forEach((f, fi) => {
       g.parts.hook!.position.set(0, -1.6, -1.5);
       g.parts.cable!.position.set(0, 0, -1.5);
       g.parts.cable!.scale.set(1, 1.6, 1);
+      g.root.rotation.y = -turn;
       stage.scene.add(g.root);
-    } else if (icon === "goliath") goliath(f, 0, 0, Math.PI, { yaw: 0 });
-    else {
+    } else if (icon === "goliath") goliath(f, 0, 0, Math.PI + turn, { yaw: 0 });
+    else if (BOTS.includes(icon as BotKind) && q.get("solo") !== null) {
+      // one robot of the squad, weapon up, centred and filling the view
+      const r = new SquadRig(icon as BotKind, f, 3, 1);
+      for (let i = 0; i < 40; i++) r.update({ dt: 16, speed: 0, aim: 1, pitch: 0, alive: 1 });
+      r.root.rotation.y = -turn;
+      stage.scene.add(r.root);
+      r.root.updateMatrixWorld(true);
+      r.mesh.computeBoundingBox();
+      box.setFromObject(r.root, true);
+      const c = box.getCenter(new THREE.Vector3());
+      r.root.position.set(-c.x, 0, -c.z);
+      iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z);
+    } else if ((BUILDING_KINDS as string[]).includes(icon!) || icon === "uplink" || icon === "supply-crate") {
+      // a building or objective as the map shows it, filling most of the view
+      const d = icon === "uplink" ? uplinkDef() : icon === "supply-crate" ? crateDef() : buildingDef(icon as never, f);
+      const b = instance(d);
+      b.root.rotation.y = -turn;
+      stage.scene.add(b.root);
+      box.setFromObject(b.root);
+      iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
+    } else {
       // any other unit nose north, as the painted portraits are drawn, filling most of the view
       const u = instance(unitDef(icon as UnitKind, f));
       u.root.scale.setScalar(unitScale(icon as UnitKind));
+      u.root.rotation.y = -turn;
       stage.scene.add(u.root);
       box.setFromObject(u.root);
       iconZoom = (0.7 * Math.min(innerWidth, innerHeight)) / Math.max(box.max.x - box.min.x, box.max.z - box.min.z);

@@ -4,6 +4,8 @@
 // alpha), then fitted to 112 px in a 128 px square like the painted ones (art/process.py make_icon).
 // Usage: npx vite --port 5173, then node tools/model-portraits.mjs raptor lancer hornet
 //   [--url=http://localhost:5173/tools/models.html] [--pitch=60] (degrees below the horizon)
+//   [--turn=0] (rad, clockwise from nose north) [--faction=red] [--solo] (one robot of a squad)
+//   [--out=public/assets/icons] (a scratch folder, to try a look without touching the shipped portraits)
 import { chromium } from "playwright-core";
 import { existsSync, writeFileSync } from "node:fs";
 
@@ -12,6 +14,8 @@ const kinds = args.filter((a) => !a.startsWith("--"));
 const opt = Object.fromEntries(args.filter((a) => a.startsWith("--")).map((a) => a.slice(2).split("=")));
 const url = opt.url ?? "http://localhost:5173/tools/models.html";
 const pitch = opt.pitch ?? "60";
+const out = opt.out ?? "public/assets/icons";
+const extra = `${opt.turn ? `&turn=${opt.turn}` : ""}${opt.faction ? `&faction=${opt.faction}` : ""}${"solo" in opt ? "&solo" : ""}`;
 const exe = ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p));
 const browser = await chromium.launch({
   executablePath: exe,
@@ -22,7 +26,7 @@ const page = await browser.newPage({ viewport: { width: 512, height: 512 }, devi
 for (const kind of kinds) {
   const shots = [];
   for (const bg of ["#000000", "#ffffff"]) {
-    await page.goto(`${url}?icon=${kind}&bg=${encodeURIComponent(bg)}&pitch=${pitch}`, { waitUntil: "networkidle" });
+    await page.goto(`${url}?icon=${kind}&bg=${encodeURIComponent(bg)}&pitch=${pitch}${extra}`, { waitUntil: "networkidle" });
     await page.waitForFunction(() => window.ready, null, { timeout: 30000 });
     await page.waitForTimeout(500);
     shots.push(`data:image/png;base64,${(await page.screenshot()).toString("base64")}`);
@@ -72,7 +76,7 @@ for (const kind of kinds) {
     g.drawImage(src, x0, y0, x1 - x0 + 1, y1 - y0 + 1, (128 - dw) / 2, (128 - dh) / 2, dw, dh);
     return dst.toDataURL("image/webp", 0.9);
   }, shots);
-  const file = `public/assets/icons/${kind}.webp`;
+  const file = `${out}/${kind}.webp`;
   writeFileSync(file, Buffer.from(webp.split(",")[1], "base64"));
   console.log(file);
 }
