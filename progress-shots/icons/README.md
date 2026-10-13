@@ -9,9 +9,9 @@ models. Shots 01–05 are the mock-ups the design was chosen from:
 - The build-bar mocks use the game's own `.bb` CSS at 2× on a 390 px phone
   width.
 
-Shots 00 and 06 are the real game, in a skirmish on Riverlands, before and
-after. Everything was rendered in Chromium headless with SwiftShader on
-2026-10-13.
+Shots 00, 06 and 07 are the real game, before and after, in skirmishes on
+Riverlands. Shot 08 shows the shipped portrait files. Everything was
+rendered in Chromium headless with SwiftShader on 2026-10-13.
 
 | Image | What it shows |
 |---|---|
@@ -23,3 +23,4 @@ after. Everything was rendered in Chromium headless with SwiftShader on
 | `05-rim-baked-vs-css.png` | Mock-up: raw model shots, then the rim and lift baked in, then the same done with a CSS filter on the raw files. |
 | `06-build-bar-after-in-game.png` | After: the same four tabs in a real match with the shipped portraits and the new locked buttons. |
 | `07-red-selection-and-ace.png` | After: an enemy unit and building in the selection panel, and the report's MVP cards, with red portraits. |
+| `08-every-portrait-shipped.png` | After: every portrait before, as shipped, and as shipped in red. |
