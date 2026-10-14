@@ -73,3 +73,8 @@ export async function loadTerrainArt(
   await Promise.all(jobs);
   return { chunks, rock, pxPerTile: TERRAIN_PX, chunk: TERRAIN_CHUNK };
 }
+
+/** A map's overview image (map picker, minimap): the painted thumb, or for a generated map one painted now. CONTRACT STUB. */
+export function mapThumbUrl(mapId: string): string {
+  return `assets/maps/${mapId}/thumb.webp`;
+}
