@@ -1,11 +1,6 @@
 # Showcase battles
 
-Battle records from the first model battles (AGENT-BATTLES.md "First
-battles"). The site publishes them beside the game, so each one replays from
-its link (`/?replay=battles/showcase/<file>.json`) and opens in the record
-viewer (`/record-viewer.html?replay=…`): the links are in the table below and
-in the README. Or open the game, choose **🎬 Watch a replay** on the menu and
-paste the file's contents (or pick the file). From a checkout:
+Saved model battle records (see also AGENT-BATTLES.md "First battles"). The site publishes them beside the game, so each one replays from its link (`/?replay=battles/showcase/<file>.json`) and opens in the record viewer (`/record-viewer.html?replay=…`): the links are in the table below and in the README. Or open the game, choose **🎬 Watch a replay** on the menu and paste the file's contents (or pick the file). From a checkout:
 
 ```bash
 npx vite-node tools/arena.ts replay battles/showcase/<file>.json   # re-run it, check the hash trail
@@ -19,6 +14,7 @@ npx vite-node tools/arena.ts stats battles/showcase/*.json --detail
 | `2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json` | GPT-6 Luna (Blitz) | GPT-6 Luna (Industry) | blue wins at 6:23 | blue wins at 7:52 | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) |
 | `2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json` | GPT-6 Luna (Industry) | GPT-6 Astra (Industry) | red wins at 4:45 | red wins at 7:50 | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) |
 | `2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json` | GPT-5.6 Sol (Air Wing) | GPT-6.1 Sol (Air Wing) | red wins at 11:45 | (played on this sim) | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) |
+| `2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json` | GPT-6 Astra (Industry) | Gemini 4 Argon (Blitz) | blue wins at 5:35 | (played on this sim) | [replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) · [record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) |
 
 The first three were played on the sim before `src/sim/fmath.ts` made it give the same
 results in every browser engine, and brought up to date with
@@ -42,3 +38,5 @@ LLM 0.36 doesn't list `gpt-6.1-sol` yet, so it was added in LLM's
 true`, `reasoning: true`, `supports_tools: true`). The logs databases and tool
 transcripts that went with these records stayed local (a few MB each; 21 MB
 for the fourth).
+
+The Astra–Argon battle used Riverlands, seed 42, default model options, and equal budgets of 10 model responses and 12 tool calls per five-second round. Astra chose Industry; Argon chose Blitz. Astra won by destroying Argon's HQ at 5:35, and all 33 replay hash checks match. A process-local adapter sent Gemini's original tool schemas through `parametersJsonSchema` because the installed Gemini plugin's `parameters` conversion rejected the orders tool's free-form dictionaries. The aborted setup attempt is excluded; the successful battle's database and tool transcript remain local in `battles/` with the `2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon-2` stem.
