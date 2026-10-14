@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { Terrain, type Biome } from "../sim/types";
 import type { MapDef } from "../sim/maps";
 import type { TerrainArt } from "./three/terrain";
+import { bridgeRuns, type BridgeRun } from "./three/terrain-bridges";
 
 /**
  * Ground art for generated maps, painted at runtime: they have no pre-painted
@@ -188,6 +189,9 @@ interface Fields {
   amp: Float32Array;
   /** Bridge deck runs along x (1) or y (0). */
   horiz: Uint8Array;
+  /** The slanted bridge whose straight deck may reach over this tile (an index into `runs`), or −1. */
+  deck: Int32Array;
+  runs: BridgeRun[];
   /** The tile and its 8 neighbours are one terrain (nothing to blend). */
   same: Uint8Array;
   /** Bit 1: near a shore (the shore field varies); bit 2: rock up-left (it may cast a shadow). */
@@ -272,6 +276,20 @@ function fields(grid: Uint8Array, S: number, seed: number): Fields {
       horiz[y * S + x] = ax >= ay ? 1 : 0;
     }
   for (let i = 0; i < S * S; i++) if (grid[i] === BRIDGE) amp[i] = 0;
+  // a diagonal bridge is one straight deck, as the 3D one is, over its stair-stepped tiles and their
+  // corners (the river runs on round it)
+  const { runs } = bridgeRuns(grid, S, S);
+  const deck = new Int32Array(S * S).fill(-1);
+  runs.forEach((r, k) => {
+    if (!r.slant) return;
+    for (const i of r.tiles)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = (i % S) + dx;
+          const ny = Math.floor(i / S) + dy;
+          if (nx >= 0 && ny >= 0 && nx < S && ny < S && (deck[ny * S + nx]! < 0 || grid[ny * S + nx] === BRIDGE)) deck[ny * S + nx] = k;
+        }
+  });
   const same = new Uint8Array(S * S);
   const near = new Uint8Array(S * S);
   for (let y = 0; y < S; y++)
@@ -290,7 +308,7 @@ function fields(grid: Uint8Array, S: number, seed: number): Fields {
         for (let dx = -2; dx <= 1; dx++) if (at(x + dx, y + dy) === ROCK) nb |= 2;
       near[k] = nb;
     }
-  const f: Fields = { T: noiseTable(seed), sd, rh, amp, horiz, same, near };
+  const f: Fields = { T: noiseTable(seed), sd, rh, amp, horiz, deck, runs, same, near };
   m.set(key, f);
   return f;
 }
@@ -327,7 +345,7 @@ export function paintTerrainPixels(
   const out = new Uint8ClampedArray(w * h * 4);
   const S = size;
   const F = fields(grid, S, seed >>> 0);
-  const { T, sd: SD, rh: RH, amp: AMP, horiz: HZ, same: SAME, near: NEAR } = F;
+  const { T, sd: SD, rh: RH, amp: AMP, horiz: HZ, deck: DECK, runs: RUNS, same: SAME, near: NEAR } = F;
   const P = PAL[biome] ?? PAL.temperate;
   const lava = biome === "volcanic";
   const beach = biome === "tropical";
@@ -351,6 +369,9 @@ export function paintTerrainPixels(
     C[1] = C[1]! * k;
     C[2] = C[2]! * k;
   };
+  let du = 0;
+  let dv = 0;
+  let dhw = 0;
   const tt = new Int32Array(9);
   const ww = new Float64Array(9);
   const mm = new Float64Array(9);
@@ -434,7 +455,19 @@ export function paintTerrainPixels(
       const vt = Math.min(S - 1, Math.max(0, Math.floor(v)));
       const ck = cj * S + ci;
       n = 0;
-      if (grid[vt * S + ut] === BRIDGE) {
+      // on a slanted bridge's straight deck: where, in its frame (along, across from its centre)
+      const dk = DECK[vt * S + ut]!;
+      let onDeck = false;
+      if (dk >= 0) {
+        const r = RUNS[dk]!;
+        const ox = u - r.mx;
+        const oy = v - r.mz;
+        du = ox * r.ux + oy * r.uz - r.mid;
+        dv = oy * r.ux - ox * r.uz;
+        onDeck = Math.abs(du) <= r.hl && Math.abs(dv) <= r.hw;
+        dhw = r.hw;
+      }
+      if (onDeck || (dk < 0 && grid[vt * S + ut] === BRIDGE)) {
         // decks are crisp rectangles: no blending
         tt[0] = BRIDGE;
         mm[0] = ww[0] = 1;
@@ -584,10 +617,11 @@ export function paintTerrainPixels(
           case BRIDGE: {
             const k = Math.min(S - 1, Math.max(0, Math.floor(v))) * S + Math.min(S - 1, Math.max(0, Math.floor(u)));
             const hz = HZ[k] === 1;
-            const along = hz ? u : v;
-            const across = hz ? v : u;
+            // a slanted deck is one board wide, railed down its two sides; a square one, tile by tile
+            const along = onDeck ? du : hz ? u : v;
+            const across = onDeck ? dv + dhw : hz ? v : u;
             const fa = across - Math.floor(across);
-            const ti = Math.floor(across);
+            const ti = onDeck ? 0 : Math.floor(across);
             const ti2 = hz ? Math.floor(u) : ti;
             const tj2 = hz ? ti : Math.floor(v);
             const side = (dx: number, dy: number) => {
@@ -595,14 +629,14 @@ export function paintTerrainPixels(
               const ny = tj2 + dy;
               return nx < 0 || ny < 0 || nx >= S || ny >= S || grid[ny * S + nx] !== BRIDGE;
             };
-            const railLo = (hz ? side(0, -1) : side(-1, 0)) && fa < 0.13;
-            const railHi = (hz ? side(0, 1) : side(1, 0)) && fa > 0.87;
+            const railLo = onDeck ? dv < 0.13 - dhw : (hz ? side(0, -1) : side(-1, 0)) && fa < 0.13;
+            const railHi = onDeck ? dv > dhw - 0.13 : (hz ? side(0, 1) : side(1, 0)) && fa > 0.87;
             if (steel) {
               // riveted steel plates, one per tile, tread pattern
               const fl = along - Math.floor(along);
               mix3(P.deck, P.rail, 0.15 + vn(T, u * 3, v * 3) * 0.2);
               if (fl < 0.04 || fl > 0.96) mul(0.6);
-              else if ((Math.floor(u * 8) + Math.floor(v * 8)) % 2 === 0) mul(1.08);
+              else if ((onDeck ? Math.floor(along * 8) + Math.floor(across * 8) : Math.floor(u * 8) + Math.floor(v * 8)) % 2 === 0) mul(1.08);
               if (Math.abs(fl - 0.12) < 0.03 && Math.abs(fa - 0.25) < 0.03) toward(P.foam, 0.5);
             } else {
               // planks across the deck: dark seams, each plank its own tone and grain
@@ -611,7 +645,7 @@ export function paintTerrainPixels(
               const pf = pa - pi;
               const ph = ((Math.imul(pi, 0x9e3779b1) ^ Math.imul(ti, 0x85ebca6b)) >>> 0) / 4294967296;
               mix3(P.deck, P.rail, ph * 0.35);
-              mul(0.92 + vn(T, (hz ? v : u) * 9 + pi * 3.1, pa * 0.4) * 0.16);
+              mul(0.92 + vn(T, (onDeck ? across : hz ? v : u) * 9 + pi * 3.1, pa * 0.4) * 0.16);
               if (pf < 0.1) mul(0.55);
               if (arctic) toward(P.ground2, smooth(0.55, 0.7, vn(T, u * 2.4 + 1.1, v * 2.4 + 6.2)) * 0.8);
             }

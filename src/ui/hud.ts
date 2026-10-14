@@ -16,13 +16,14 @@ import { radioCue } from "../game/announcer";
 import { mountAudioToggles } from "./audio-panel";
 import { createSurvivalHud } from "./survival";
 import { NAMED_RANK, heroLine, killsLabel, stars } from "../game/heroes";
-import { showReport } from "./report";
+import { addReportSection, showReport } from "./report";
 import { markBanned, pauseRulesHtml } from "./career";
 import { rematchToken } from "../game/mode";
 import { createOpsHud } from "./ops";
 import { mountHudLayout } from "./layout";
 import { HINTS, HintQueue, type HintOffer } from "../game/hints";
 import { fullscreen } from "./fullscreen";
+import { mapById } from "../sim/maps";
 
 export interface HudApi {
   world: World;
@@ -47,6 +48,11 @@ export interface HudApi {
   busy?: () => boolean;
   /** Extra minimap marks (map objectives), drawn over the unit blips; k = minimap px per tile. */
   minimapOverlay?: (ctx: CanvasRenderingContext2D, k: number) => void;
+  /**
+   * Uncharted (mode.ts unchartedMatch, read once at the start): the map is played blind. The minimap
+   * shows only what's been scouted, the pause menu has no map reveal, and the end screen reveals it.
+   */
+  uncharted?: boolean;
 }
 
 export interface Hud {
@@ -155,6 +161,47 @@ const SHORT: Partial<Record<UnitKind | BuildingKind, string>> = {
 };
 
 const MINIMAP_PX = 256;
+/** Under Uncharted, unscouted ground on the minimap: solid (the usual shroud's colour, opaque). */
+const MINIMAP_SHROUD = "rgb(5,7,12)";
+
+/**
+ * Under Uncharted, the minimap's unexplored tiles as solid rects (x, y, w, h, … in px of an S-px
+ * minimap): a run per row, on whole pixels, covering every pixel an unexplored tile touches —
+ * translucent tiles meeting mid-pixel would let the map's thumbnail through at their seams.
+ */
+export function shroudRects(vis: ArrayLike<number>, W: number, H: number, S: number): number[] {
+  const k = S / W;
+  const out: number[] = [];
+  for (let ty = 0; ty < H; ty++) {
+    const y0 = Math.floor(ty * k);
+    const y1 = Math.ceil((ty + 1) * k);
+    for (let tx = 0; tx < W; ) {
+      if (vis[ty * W + tx] !== Vis.Unexplored) {
+        tx++;
+        continue;
+      }
+      const run = tx;
+      while (tx < W && vis[ty * W + tx] === Vis.Unexplored) tx++;
+      const x0 = Math.floor(run * k);
+      out.push(x0, y0, Math.ceil(tx * k) - x0, y1 - y0);
+    }
+  }
+  return out;
+}
+
+const escHtml = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]!);
+
+/** Uncharted's end-screen reveal: the map played blind, its name, share code and whole thumbnail. */
+export function revealHtml(mapId: string): string {
+  const def = mapById(mapId);
+  const code = def.random ? ` <small style="opacity:0.7">#${escHtml(def.random.code)}</small>` : "";
+  return `<div class="aar-tip reveal" style="flex-direction:row;align-items:center;gap:12px;text-align:left">
+    <img src="${mapThumbUrl(mapId)}" alt="" draggable="false" width="76" height="76" style="flex:none;border-radius:8px"/>
+    <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+      <b>Revealed</b><span>${escHtml(def.name)}${code}</span>
+      <small style="color:#c3cde0">Play it again from the 🎲 card</small>
+    </div></div>`;
+}
 
 /** A portrait in a side's paint: the enemy's units and buildings (or either side's, to a spectator) show red. */
 const icon = (kind: string, f: Faction = "blue") => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
@@ -211,6 +258,8 @@ export function createHud(api: HudApi): Hud {
   minimap.width = MINIMAP_PX;
   minimap.height = MINIMAP_PX;
   const mctx = minimap.getContext("2d")!;
+  const uncharted = !!api.uncharted;
+  // (under Uncharted it only ever shows through scouted tiles: drawMinimap)
   const thumb = new Image();
   thumb.src = mapThumbUrl(api.world.mapId);
   // the ticker and banner sit under whatever the top band really occupies (src/ui/layout.ts)
@@ -852,7 +901,7 @@ export function createHud(api: HudApi): Hud {
         <button class="cta" id="p-resume">▶ Resume</button>
         <div id="p-sound"></div>
         <button class="cta alt" id="p-help">How to play</button>
-        <button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>
+        ${uncharted ? "" : `<button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>`}
         <button class="cta alt" id="p-quit">Quit to menu</button>
         <div id="p-helptext" class="help" hidden>${HELP_HTML}</div>
       </div>`;
@@ -863,7 +912,7 @@ export function createHud(api: HudApi): Hud {
       const h = pauseEl.querySelector<HTMLElement>("#p-helptext")!;
       h.hidden = !h.hidden;
     });
-    pauseEl.querySelector("#p-fog")!.addEventListener("click", () => {
+    pauseEl.querySelector("#p-fog")?.addEventListener("click", () => {
       api.ctrl.showFog = !api.ctrl.showFog;
       togglePause();
     });
@@ -1099,10 +1148,15 @@ export function createHud(api: HudApi): Hud {
       for (let ty = 0; ty < w.height; ty++)
         for (let tx = 0; tx < w.width; tx++) {
           const v = vis[ty * w.width + tx];
-          if (v === Vis.Visible) continue;
+          if (v === Vis.Visible || (uncharted && v === Vis.Unexplored)) continue;
           mctx.fillStyle = v === Vis.Unexplored ? "rgba(5,7,12,0.96)" : "rgba(5,7,12,0.5)";
           mctx.fillRect(tx * k, ty * k, k + 0.5, k + 0.5);
         }
+      if (uncharted) {
+        mctx.fillStyle = MINIMAP_SHROUD;
+        const r = shroudRects(vis, w.width, w.height, S);
+        for (let i = 0; i < r.length; i += 4) mctx.fillRect(r[i]!, r[i + 1]!, r[i + 2]!, r[i + 3]!);
+      }
     }
     // resource fields that still hold anything
     mctx.fillStyle = "rgba(255,214,110,0.55)";
@@ -1218,22 +1272,29 @@ export function createHud(api: HudApi): Hud {
     // (Last Stand only ends one way; a draw anywhere goes to the report, titled DRAW)
     if (surv && !ops && winner !== "draw") {
       surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());
+      if (uncharted) endEl.querySelector(".panel > .time")?.insertAdjacentHTML("afterend", revealHtml(w.mapId));
       shield(endEl);
       return;
     }
+    // Uncharted: the map it was played blind on, revealed under the career block (this report only)
+    const offReveal = uncharted ? addReportSection({ id: "reveal", order: 6, col: "left", render: () => revealHtml(w.mapId) }) : null;
     // the after-action report (src/ui/report.ts)
-    showReport(endEl, {
-      world: w,
-      winner,
-      pov: PLAYER,
-      spectator: api.ctrl.spectator,
-      secs: Math.round(api.matchSeconds()),
-      strategies: api.strategies,
-      enemy: api.enemy,
-      onRematch: rematch,
-      onMenu: () => fullscreen.reload(),
-      ...(ops?.reportOpts() ?? {})
-    });
+    try {
+      showReport(endEl, {
+        world: w,
+        winner,
+        pov: PLAYER,
+        spectator: api.ctrl.spectator,
+        secs: Math.round(api.matchSeconds()),
+        strategies: api.strategies,
+        enemy: api.enemy,
+        onRematch: rematch,
+        onMenu: () => fullscreen.reload(),
+        ...(ops?.reportOpts() ?? {})
+      });
+    } finally {
+      offReveal?.();
+    }
     shield(endEl);
   }
 

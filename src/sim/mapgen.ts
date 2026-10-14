@@ -1,5 +1,5 @@
 import { BUILDINGS, TERRAIN } from "./balance";
-import { cos, hypot, sin } from "./fmath";
+import { atan2, cos, hypot, sin } from "./fmath";
 import { Painter, clearBase, valueNoise, type MapDef } from "./maps";
 import type { UplinkDef } from "./objectives";
 import { hash32, saltOf } from "./rand";
@@ -406,7 +406,10 @@ function grow(def: MapDef, layout: Layout, sub: number, force: boolean): Grown {
   const ends: Pt[] = [];
   const spans: [Pt, Pt][] = [];
   const bridgeAt = (c: Pt, dir: Pt, maxLen = 16) => {
-    const n: Pt = [-dir[1], dir[0]];
+    // squared to the grid or its diagonal: tiles lay those as clean straight bands (any other slant
+    // is a ragged staircase that no deck fits)
+    const q = Math.round(atan2(dir[0], -dir[1]) / (Math.PI / 4)) * (Math.PI / 4);
+    const n: Pt = [Math.round(cos(q) * 1e6) / 1e6, Math.round(sin(q) * 1e6) / 1e6];
     const reach = (sg: number) => {
       for (let d = 0; d < maxLen; d += 0.5) if (!WET.includes(terrainAt(w, Math.floor(c[0] + n[0] * d * sg), Math.floor(c[1] + n[1] * d * sg)))) return d;
       return -1;

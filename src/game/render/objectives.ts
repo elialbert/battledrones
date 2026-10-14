@@ -36,6 +36,8 @@ export interface ObjectiveRendererOpts {
   hint(msg: string, x?: number, y?: number): void;
   /** Does the player have a loaded Condor selected (island relays then show where a tap drops its troops)? */
   dropReady?(): boolean;
+  /** Has the local player scouted this tile? (Uncharted only: an unscouted Uplink stays off the minimap.) */
+  charted?(x: number, y: number): boolean;
 }
 
 const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
@@ -632,6 +634,7 @@ export class ObjectiveRenderer {
   minimap(ctx: CanvasRenderingContext2D, k: number): void {
     const t = this.time;
     for (const l of this.world.objectives.uplinks) {
+      if (this.opts.charted && !this.opts.charted(l.x, l.y)) continue;
       const x = l.x * k;
       const y = l.y * k;
       const d = 7;

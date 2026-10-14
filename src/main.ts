@@ -6,7 +6,7 @@ import { sfx } from "./game/audio";
 import { music } from "./game/music";
 import { loadTerrainArt, mapThumbUrl } from "./game/assets";
 import { GameScene, type MatchFeed } from "./game/GameScene";
-import { gameMode, loadSettings, saveSettings, type GameType } from "./game/mode";
+import { gameMode, loadSettings, saveSettings, unchartedMatch, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
 import { mountMenuCareer, starsText } from "./ui/career";
@@ -18,6 +18,7 @@ import { fullscreen } from "./ui/fullscreen";
 import { appUpdate, mountUpdatePill } from "./ui/update";
 import { scrollCue } from "./ui/hscroll";
 import { showReplayPicker } from "./ui/replay-picker";
+import { openMapPreview } from "./ui/map-preview";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -92,7 +93,8 @@ async function startGame(feed?: MatchFeed): Promise<void> {
   loading.id = "loading";
   loading.className = "screen";
   const def = mapById(gameMode.mapId);
-  const where = def.id === gameMode.mapId ? def.name : "battlefield";
+  // (Uncharted: not even the name gives the map away)
+  const where = unchartedMatch() ? "uncharted territory" : def.id === gameMode.mapId ? def.name : "battlefield";
   loading.innerHTML = `<div class="loadbox"><p>Deploying to ${where}…</p><div class="loadtrack"><div id="loadbar"></div></div></div>`;
   hud.appendChild(loading);
   const bar = loading.querySelector<HTMLElement>("#loadbar");
@@ -112,6 +114,8 @@ async function startGame(feed?: MatchFeed): Promise<void> {
 
 const BIOME_ICON: Record<Biome, string> = { temperate: "🌳", desert: "🏜️", arctic: "❄️", volcanic: "🌋", tropical: "🌴" };
 const RANDOM_KEY = "battledrones.randommaps";
+/** A transparent pixel: the Uncharted card keeps its image box (the fog sits on it) with nothing of the map in it. */
+const BLANK_IMG = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 const RECENT_MAX = 6;
 
 /** The menu's random-map picks: the biome rerolls keep to (null: any) and the last few maps seen, newest first. */
@@ -226,6 +230,8 @@ function showMenu(linkedMap?: string | null): void {
         ).join("")}
         <button class="mapcard rndcard" data-id="${randomId}" id="rndcard">
           <img src="" alt="" draggable="false" />
+          <span class="mfog" aria-hidden="true"><b>?</b></span>
+          <span class="mzoom" aria-hidden="true"><i>🔍</i></span>
           <span class="mn"></span>
           <span class="mb"></span>
           <span class="mbest" hidden></span>
@@ -242,6 +248,14 @@ function showMenu(linkedMap?: string | null): void {
           <label class="rndseed" title="Seed: type or paste a code to grow that map">#<input id="rndseed" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="40" /></label>
           <button class="cta alt" id="rndroll">🎲 Reroll</button>
           <button class="cta alt" id="rndcopy">🔗 Copy link</button>
+        </div>
+        <p class="rndhint"><b>Before you play</b> <span id="rndhint"></span></p>
+        <div class="rndrow">
+          <div class="seg rndview" id="rndview" role="radiogroup" aria-label="Before you play">
+            <button data-u="0" role="radio" title="See the whole map before the match">👁️ Preview</button>
+            <button data-u="1" role="radio" title="The map stays black until you scout it">🌫️ Uncharted</button>
+          </div>
+          <button class="cta alt" id="rndfull">🔍 View<span class="wide"> full</span> map</button>
         </div>
         <div class="rndrecent" id="rndrecent"></div>
       </div>
@@ -304,19 +318,38 @@ function showMenu(linkedMap?: string | null): void {
   scrollCue(menu.querySelector<HTMLElement>("#opcards")!);
   let revealed = "";
   let shownRandom = "";
-  /** The 🎲 card and the random-map panel follow randomId. */
+  /**
+   * The 🎲 card and the random-map panel follow randomId. Uncharted, the card
+   * wears fog over a "?" and goes by "Uncharted": only the biome and the code
+   * (to share or replay the seed) give anything away, and the thumbnail is
+   * never painted.
+   */
   function syncRandom(): void {
     const card = menu.querySelector<HTMLElement>("#rndcard")!;
     const def = mapById(randomId);
     const code = def.random?.code ?? seedCode(def.seed);
-    if (shownRandom !== randomId) {
-      shownRandom = randomId;
+    const blind = gameMode.uncharted;
+    const key = `${randomId}:${blind}`;
+    if (shownRandom !== key) {
+      shownRandom = key;
       card.dataset.id = randomId;
-      card.querySelector("img")!.src = mapThumbUrl(randomId);
-      card.querySelector(".mn")!.textContent = def.name;
+      card.dataset.biome = def.biome;
+      card.classList.toggle("uncharted", blind);
+      const img = card.querySelector("img")!;
+      img.src = blind ? BLANK_IMG : mapThumbUrl(randomId);
+      card.querySelector(".mn")!.textContent = blind ? "Uncharted" : def.name;
       card.querySelector(".mb")!.textContent = `${RANDOM_MAP_SIZE}×${RANDOM_MAP_SIZE} · ${def.biome} · #${code}`;
-      card.title = `${def.name} (${def.biome}, seed ${code})`;
+      card.title = blind ? `Uncharted (${def.biome}, seed ${code})` : `${def.name} (${def.biome}, seed ${code}) · tap again to view the whole map`;
     }
+    menu.querySelectorAll<HTMLElement>("#rndview button").forEach((el) => {
+      const on = (el.dataset.u === "1") === blind;
+      el.classList.toggle("on", on);
+      el.setAttribute("aria-checked", String(on));
+    });
+    menu.querySelector<HTMLElement>("#rndfull")!.hidden = blind;
+    menu.querySelector("#rndhint")!.textContent = blind
+      ? "Go in blind: scout to reveal the map."
+      : "Study the whole map first.";
     const box = menu.querySelector<HTMLInputElement>("#rndseed")!;
     if (document.activeElement !== box) box.value = code;
     menu.querySelectorAll<HTMLElement>("#rndbiome button").forEach((el) => el.classList.toggle("on", (el.dataset.b || null) === rnd.biome));
@@ -324,7 +357,10 @@ function showMenu(linkedMap?: string | null): void {
       .map((r) => {
         const p = parseRandomMapId(r.id)!;
         const on = r.id === randomId ? " on" : "";
-        return `<button class="rndchip${on}" data-id="${r.id}" title="${esc(r.name)} · ${p.biome}">${BIOME_ICON[p.biome]} ${esc(r.name)} <b>#${seedCode(p.seed)}</b></button>`;
+        // (uncharted: code and biome only, no names)
+        const name = blind ? "" : `${esc(r.name)} `;
+        const title = blind ? `Uncharted · ${p.biome}` : `${esc(r.name)} · ${p.biome}`;
+        return `<button class="rndchip${on}" data-id="${r.id}" title="${title}">${BIOME_ICON[p.biome]} ${name}<b>#${seedCode(p.seed)}</b></button>`;
       })
       .join("");
   }
@@ -374,7 +410,8 @@ function showMenu(linkedMap?: string | null): void {
     menu.querySelectorAll<HTMLElement>("#diff button").forEach((el) => el.classList.toggle("on", el.dataset.d === gameMode.difficulty));
     menu.querySelectorAll<HTMLElement>("#gmode button").forEach((el) => el.classList.toggle("on", el.dataset.m === gameMode.mode));
     const m = mapById(shown);
-    menu.querySelector("#blurb")!.textContent = m.blurb;
+    const blind = gameMode.uncharted && isRandomMapId(shown);
+    menu.querySelector("#blurb")!.textContent = blind ? "An unknown battlefield. Scout it to learn its shape." : m.blurb;
     menu.querySelector<HTMLElement>("#rndpanel")!.hidden = opsMode || !isRandomMapId(shown);
     menu.querySelector("#sub")!.textContent = opsMode
       ? "Short missions with a twist. Three stars each — can you take them all?"
@@ -385,7 +422,7 @@ function showMenu(linkedMap?: string | null): void {
     best.hidden = !survival;
     if (survival) {
       const rec = loadBest(shown, gameMode.difficulty);
-      const where = `${m.name} · ${DIFFICULTY[gameMode.difficulty].label}`;
+      const where = `${blind ? `Uncharted #${m.random?.code ?? ""}` : m.name} · ${DIFFICULTY[gameMode.difficulty].label}`;
       best.innerHTML = rec
         ? `🏆 Best on ${where}: <b>${rec.best} wave${rec.best === 1 ? "" : "s"}</b>`
         : `No record yet on ${where} — set one!`;
@@ -400,6 +437,8 @@ function showMenu(linkedMap?: string | null): void {
   sync();
   menu.querySelectorAll<HTMLElement>("#maps .mapcard").forEach((el) =>
     el.addEventListener("click", () => {
+      // a second tap on the picked 🎲 card opens the full-map preview
+      if (el.id === "rndcard" && el.classList.contains("on") && !gameMode.uncharted) return previewRandom();
       gameMode.mapId = el.dataset.id!;
       if (isRandomMapId(gameMode.mapId)) remember(gameMode.mapId);
       saveSettings();
@@ -448,6 +487,36 @@ function showMenu(linkedMap?: string | null): void {
         /* no clipboard (insecure context, denied): fail quietly */
       });
   });
+  // before you play: see the whole map (Preview), or go in blind (Uncharted)
+  menu.querySelectorAll<HTMLElement>("#rndview button").forEach((el) =>
+    el.addEventListener("click", () => {
+      const blind = el.dataset.u === "1";
+      if (blind === gameMode.uncharted) return;
+      gameMode.uncharted = blind;
+      saveSettings();
+      sfx.play("click", 0.5);
+      sync();
+    })
+  );
+  /** The full-map preview of the 🎲 card's map: Play starts it as Play does, Reroll keeps the menu in step. */
+  const previewRandom = () => {
+    if (gameMode.uncharted) return;
+    sfx.play("click", 0.5);
+    openMapPreview(mapById(randomId), {
+      host: menu,
+      playLabel: gameMode.mode === "survival" ? "▶ Start Last Stand" : "▶ Play this map",
+      onPlay: () => {
+        gameMode.mapId = randomId;
+        saveSettings(); // (a Rematch reloads the saved pick)
+        void begin(false);
+      },
+      onReroll: () => {
+        pickRandom(rollRandomMapId(rnd.biome ?? undefined));
+        return mapById(randomId);
+      }
+    });
+  };
+  menu.querySelector("#rndfull")!.addEventListener("click", previewRandom);
   menu.querySelector("#rndrecent")!.addEventListener("click", (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>("[data-id]")?.dataset.id;
     if (id && isKnownMapId(id)) pickRandom(id);
