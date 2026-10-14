@@ -147,6 +147,8 @@ describe("ranks and XP", () => {
     expect(starsFor({ ...base, secs: 600, buildingsLost: 0 })).toBe(0b101);
     expect(starsFor({ ...base, won: false })).toBe(0);
     expect(starsFor({ ...base, mutators: ["glass"] })).toBe(0);
+    // generated maps earn none: there are endlessly many
+    expect(starsFor({ ...base, mapId: "random-desert-k3x9a" })).toBe(0);
     expect(starsFor({ ...base, daily: 20000 })).toBe(0);
     expect(starCount(0b111)).toBe(3);
   });

@@ -83,18 +83,18 @@ const PAL: Record<Biome, Palette> = {
     wet: 0.12, grain: 0.045, low: 0.05
   },
   volcanic: {
-    ground: hex(0x574d45), ground2: hex(0x463c35), cover: 0.45,
-    rough: hex(0x7a4430), rough2: hex(0x5a3426),
+    ground: hex(0x504b47), ground2: hex(0x413c39), cover: 0.45,
+    rough: hex(0x6c4232), rough2: hex(0x523228),
     rockLit: hex(0x4a4240), rock: hex(0x2a2423), rockDark: hex(0x141010),
     scrap: hex(0x3f2d24), rust: hex(0x8a3e1c), metal: hex(0x6e6a66),
     // lava: crust at the banks, molten toward the middle (glow below)
     bank: hex(0x3a2a22), water: hex(0x6a2c14), abyss: hex(0x7a3014), foam: hex(0xffc050),
-    road: hex(0x463428), curb: hex(0x2a2018),
+    road: hex(0x3c3735), curb: hex(0x221e1c),
     forest: hex(0x3e3532), moss: hex(0x524842), needles: hex(0x1e1816),
     crystalBed: hex(0x3e3328), crystal: hex(0xe070ff), glint: hex(0xfff0ff),
     deck: hex(0x6c6660), rail: hex(0x34302c),
     shallows: hex(0x4a3226), stones: hex(0x2a2220),
-    wet: 0, grain: 0.07, low: 0.09
+    wet: 0, grain: 0.07, low: 0.06
   },
   tropical: {
     ground: hex(0x86a056), ground2: hex(0xe2d8b2), cover: 0.12,

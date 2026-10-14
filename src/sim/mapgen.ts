@@ -80,7 +80,7 @@ export const clearRandomMapCache = (): void => cache.clear();
 /** A fresh random map id (menu side: Math.random is fine there); biome omitted → any biome. */
 export function rollRandomMapId(biome?: Biome, rnd: () => number = Math.random): string {
   const b = biome ?? BIOMES[Math.floor(rnd() * BIOMES.length) % BIOMES.length]!;
-  return randomMapId(b, Math.floor(rnd() * 2 ** 32) >>> 0);
+  return randomMapId(b, Math.floor(rnd() * 4294967296) >>> 0);
 }
 
 // ------------------------------------------------------------ generator ---

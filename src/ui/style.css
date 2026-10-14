@@ -5138,7 +5138,15 @@ button {
   white-space: nowrap;
 }
 .rndbiome button span {
+  display: none;
   font-size: 12px;
+}
+/* six biome names don't fit the menu column: only the picked one spells its name */
+.rndbiome button.on {
+  flex: 2 1 auto;
+}
+.rndbiome button.on span {
+  display: inline;
 }
 .rndrow {
   display: flex;
@@ -5211,7 +5219,8 @@ button {
 }
 /* phones: the biome names drop to their icons */
 @media (max-width: 520px) {
-  .rndbiome button span {
+  .rndbiome button span,
+  .rndbiome button.on span {
     display: none;
   }
   .rndbiome button {
@@ -5219,7 +5228,8 @@ button {
   }
 }
 @media (orientation: landscape) and (max-height: 500px) {
-  .rndbiome button span {
+  .rndbiome button span,
+  .rndbiome button.on span {
     display: none;
   }
   .rndrecent {
