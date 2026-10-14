@@ -1,5 +1,5 @@
 import type { Difficulty } from "../sim/ai/commander";
-import { mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
+import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import { opById, type OpDef } from "../sim/ops";
 import type { DailyOp } from "./daily";
@@ -79,7 +79,8 @@ export function loadSettings(): void {
     const raw = localStorage.getItem(KEY);
     if (!raw) return;
     const s = JSON.parse(raw) as Partial<typeof gameMode>;
-    if (typeof s.mapId === "string") gameMode.mapId = s.mapId;
+    // (a map this build doesn't have, or a malformed random id: back to the default)
+    gameMode.mapId = typeof s.mapId === "string" && isKnownMapId(s.mapId) ? s.mapId : "riverlands";
     if (s.difficulty === "easy" || s.difficulty === "normal" || s.difficulty === "hard")
       gameMode.difficulty = s.difficulty;
     if (s.mode === "skirmish" || s.mode === "survival" || s.mode === "ops") gameMode.mode = s.mode;

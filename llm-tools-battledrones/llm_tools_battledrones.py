@@ -486,7 +486,7 @@ def _opts(pairs) -> dict:
 
 def battle_options(f):
     for opt in reversed([
-        click.option("--map", "map_", default="riverlands", show_default=True, help="Map id (riverlands, proving-grounds, dune-sea, frostbite, ashlands, archipelago)"),
+        click.option("--map", "map_", default="riverlands", show_default=True, help="Map id (riverlands, proving-grounds, dune-sea, frostbite, ashlands, archipelago), or a generated map: random-<biome>-<code>, e.g. random-volcanic-k3x9a"),
         click.option("--mutators", default="", help="Comma-separated mutators"),
         click.option("--round", "round_secs", type=float, default=5, show_default=True, help="Seconds of game time per round"),
         click.option("--max-minutes", type=float, default=20, show_default=True, help="Game minutes before the battle is a draw"),
@@ -537,7 +537,7 @@ def register_commands(cli):
     @click.option("--b", "b", required=True, help="Second player")
     @click.option("--a-option", "a_options", type=(str, str), multiple=True)
     @click.option("--b-option", "b_options", type=(str, str), multiple=True)
-    @click.option("--maps", default="riverlands", show_default=True, help="Comma-separated map ids, or all")
+    @click.option("--maps", default="riverlands", show_default=True, help="Comma-separated map ids (random-<biome>-<code> for generated maps), or all (the built-in maps)")
     @click.option("--seeds", type=int, default=3, show_default=True, help="Seeds per map; each is played twice, sides swapped")
     @click.option("--first-seed", type=int, default=1, show_default=True)
     @battle_options

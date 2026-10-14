@@ -8,7 +8,7 @@ import { goliathBase } from "../sim/rules";
 import type { BuildingKind, Faction, GoliathWeapon, QueueItem, Unit, UnitKind, World } from "../sim/types";
 import { hasBuilding } from "../sim/world";
 import { sfx } from "../game/audio";
-import { mapAssetBase } from "../game/assets";
+import { mapThumbUrl } from "../game/assets";
 import type { Controller } from "../game/controller";
 import { PLAYER, isArmyUnit, isProducer, isRooted, pickProducer } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
@@ -212,7 +212,7 @@ export function createHud(api: HudApi): Hud {
   minimap.height = MINIMAP_PX;
   const mctx = minimap.getContext("2d")!;
   const thumb = new Image();
-  thumb.src = `${mapAssetBase(api.world.mapId)}/thumb.webp`;
+  thumb.src = mapThumbUrl(api.world.mapId);
   // the ticker and banner sit under whatever the top band really occupies (src/ui/layout.ts)
   const layout = mountHudLayout(root);
 

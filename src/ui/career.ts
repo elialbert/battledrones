@@ -1,6 +1,7 @@
 import { DIFFICULTY, STRATEGIES, type Difficulty } from "../sim/ai/commander";
 import { AWARDS, MEDALS, MEDAL_IDS, type MedalId } from "../sim/awards";
 import { MAPS, mapById, mapBansMutator } from "../sim/maps";
+import { isRandomMapId } from "../sim/mapgen";
 import { MUTATORS, MUTATOR_IDS, bannedBy, rulesOf, toggleMutator, type MutatorId } from "../sim/rules";
 import type { BuildingKind, Faction, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
@@ -36,7 +37,11 @@ import { addReportSection, type ReportContext } from "./report";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]!);
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
-const mapName = (id: string) => MAPS.find((m) => m.id === id)?.name ?? id;
+/** A map's name (built-in or generated); an id this build doesn't know stays as is (mapById would fall back to the first map). */
+const mapName = (id: string) => {
+  const def = mapById(id);
+  return def.id === id ? def.name : id;
+};
 const diffName = (d: string) => DIFFICULTY[d as Difficulty]?.label ?? d;
 
 // --------------------------------------------------------------- insignia ---
@@ -248,7 +253,8 @@ export function showCareerSheet(host: HTMLElement, c: CareerData = loadCareer())
     const n = c.medals[id] ?? 0;
     return `<div class="medalcell${n ? " got" : ""}"><em>${m.icon}</em><b>${m.name}</b><small>${m.desc}</small>${n ? `<span class="cnt">×${n}</span>` : ""}</div>`;
   }).join("");
-  const totalStars = Object.values(c.stars).reduce((s, m) => s + starCount(m), 0);
+  // (built-in maps only: the total is out of MAPS.length × 9)
+  const totalStars = Object.entries(c.stars).reduce((s, [k, m]) => s + (isRandomMapId(k) ? 0 : starCount(m)), 0);
   // maps with their own ★★ time (the Archipelago: 12:00)
   const ownTimes = MAPS.filter((m) => m.starSecs !== undefined)
     .map((m) => ` (${starLabelsFor(m.id)[1]!.replace("Win in under ", "")} on ${m.name})`)
@@ -353,6 +359,7 @@ export function careerBlockHtml(s: Settlement, rules: string): string {
   if (res.kind === "skirmish") {
     const where = `${mapName(res.mapId)} · ${diffName(res.difficulty)}`;
     if (res.mutators.length > 0 || res.daily !== null) stars = `<p class="cr-stars dim">Mutated match: no map stars</p>`;
+    else if (isRandomMapId(res.mapId)) stars = `<p class="cr-stars dim">${esc(where)} · generated map: no map stars</p>`;
     else {
       const gained = s.starsAfter & ~s.starsBefore;
       const labels = starLabelsFor(res.mapId);

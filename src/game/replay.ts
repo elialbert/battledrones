@@ -16,7 +16,7 @@
  */
 import { setupWorld, worldHash, type BattleRecord, type RoundLog } from "../arena/record";
 import { TICK_RATE } from "../sim/balance";
-import { MAPS } from "../sim/maps";
+import { isKnownMapId } from "../sim/maps";
 import type { Command, Faction, World } from "../sim/types";
 import { replayPanel, type ReplayPanel } from "../ui/replay";
 import type { GameScene, MatchFeed } from "./GameScene";
@@ -155,7 +155,7 @@ export function parseRecord(text: string): BattleRecord {
   }
   if (!r || typeof r !== "object" || r.v !== 1 || !Array.isArray(r.turns) || !Array.isArray(r.hashes) || !r.seats)
     throw new Error("That isn't a battle record (tools/arena.ts and llm battledrones write them to battles/)");
-  if (!MAPS.some((m) => m.id === r.map)) throw new Error(`This battle was played on "${r.map}", a map this version of the game doesn't have`);
+  if (!isKnownMapId(r.map)) throw new Error(`This battle was played on "${r.map}", a map this version of the game doesn't have`);
   if (!r.end && !r.tick) throw new Error("This battle hasn't been played past its first round yet");
   return r;
 }

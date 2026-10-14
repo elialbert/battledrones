@@ -23,7 +23,7 @@ import { placementBlocker } from "../sim/placement";
 import type { MutatorId } from "../sim/rules";
 import { step } from "../sim/sim";
 import type { Command, Faction, World } from "../sim/types";
-import { MAPS, createMapWorld } from "../sim/maps";
+import { MAPS, createMapWorld, isKnownMapId } from "../sim/maps";
 import { tickFog } from "../sim/fog";
 import { applyOpener } from "../sim/openers";
 import { SideLog, type Urgent } from "./events";
@@ -110,7 +110,8 @@ export class Arena {
 
   constructor(opts: ArenaOptions) {
     // (mapById falls back to the first map for an unknown id: say so instead)
-    if (!MAPS.some((m) => m.id === opts.map)) throw new Error(`unknown map "${opts.map}": ${MAPS.map((m) => m.id).join(", ")}`);
+    if (!isKnownMapId(opts.map))
+      throw new Error(`unknown map "${opts.map}": ${MAPS.map((m) => m.id).join(", ")}, or random-<biome>-<code>`);
     this.roundTicks = opts.roundTicks ?? ROUND_TICKS;
     this.maxTicks = opts.maxTicks ?? MAX_TICKS;
     this.onRound = opts.onRound;
