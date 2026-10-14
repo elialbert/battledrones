@@ -11,6 +11,7 @@ import { setupLifeline } from "./lifeline";
 import { nomadStart } from "./goliath";
 import { armadaStart } from "./lift";
 import { hypot } from "./fmath";
+import { isRandomMapId, randomMapDef } from "./mapgen";
 
 /**
  * Skirmish maps, in map-picker order (the classic Proving Grounds first, to
@@ -61,6 +62,19 @@ export interface MapDef {
   lastStand?: boolean;
   /** Career ★★ "win within" time on this map, in seconds (default STAR_SECS). */
   starSecs?: number;
+  /** A generated map (mapgen.ts): its seed, layout and finished terrain grid. */
+  random?: RandomMapInfo;
+}
+
+/** What mapgen.ts records about a generated map. */
+export interface RandomMapInfo {
+  /** The 32-bit seed it was grown from, and that seed as the short code players share. */
+  seed: number;
+  code: string;
+  /** The layout archetype it rolled (mapgen.ts LAYOUTS), e.g. "crossing". */
+  layout: string;
+  /** The finished terrain (row-major size×size Terrain codes, HQ ground cleared), for runtime painting. */
+  terrain: Uint8Array;
 }
 
 /** Why a mutator can't be played on this map (null: it can). */
@@ -438,7 +452,12 @@ export const MAPS: MapDef[] = [
   }
 ];
 
-export const mapById = (id: string): MapDef => MAPS.find((m) => m.id === id) ?? MAPS[0]!;
+/** A map by id: a built-in one, or a generated one ("random-<biome>-<code>", mapgen.ts); else the first map. */
+export const mapById = (id: string): MapDef =>
+  MAPS.find((m) => m.id === id) ?? (isRandomMapId(id) ? randomMapDef(id) : null) ?? MAPS[0]!;
+
+/** Is this a map id the game can build: a built-in map, or a well-formed generated one? */
+export const isKnownMapId = (id: string): boolean => MAPS.some((m) => m.id === id) || (isRandomMapId(id) && randomMapDef(id) !== null);
 
 /** The original MVP map layout, tile for tile. */
 function createClassicTerrain(w: World): void {
@@ -507,6 +526,10 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   w.biome = def.biome;
   w.seed = (opts.seed ?? def.seed) >>> 0;
   if (def.id === "proving-grounds") createClassicTerrain(w);
+  else if (def.random) {
+    const g = def.random.terrain;
+    for (let i = 0; i < g.length; i++) setTerrain(w, i % def.size, Math.floor(i / def.size), g[i] as Terrain);
+  }
   else {
     def.paint(new Painter(w, def.seed));
     clearBase(w, def);
@@ -583,7 +606,7 @@ function applyMapRules(w: World, def: MapDef): void {
 }
 
 /** Guarantee open, buildable ground around each HQ. */
-function clearBase(w: World, def: MapDef): void {
+export function clearBase(w: World, def: MapDef): void {
   const [hx, hy] = def.hq;
   const cx = hx + 1.5;
   const cy = hy + 1.5;

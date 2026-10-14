@@ -4,6 +4,7 @@ import { wavesSurvived } from "../sim/modes/survival";
 import { isMutated, rulesOf, type MutatorId } from "../sim/rules";
 import { OPS, opById, opsUnlocked } from "../sim/ops";
 import { mapById } from "../sim/maps";
+import { isRandomMapId } from "../sim/mapgen";
 import type { Faction, World } from "../sim/types";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { today as todayIndex } from "./daily";
@@ -151,9 +152,9 @@ export function xpLines(r: MatchResult): XpLine[] {
   return lines;
 }
 
-/** Star bitmask (bit 0 win, bit 1 fast win, bit 2 no buildings lost) this result earns. */
+/** Star bitmask (bit 0 win, bit 1 fast win, bit 2 no buildings lost) this result earns (none on a generated map: there are endlessly many). */
 export function starsFor(r: MatchResult): number {
-  if (r.kind !== "skirmish" || !r.won || r.mutators.length > 0 || r.daily !== null) return 0;
+  if (r.kind !== "skirmish" || !r.won || r.mutators.length > 0 || r.daily !== null || isRandomMapId(r.mapId)) return 0;
   let s = 1;
   if (r.secs < starSecsFor(r.mapId)) s |= 2;
   if (r.buildingsLost === 0) s |= 4;

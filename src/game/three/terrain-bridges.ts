@@ -11,6 +11,9 @@ import { hash } from "./terrain-props";
  * bridge tile is decked and nothing past them is (hovercraft skim the water
  * right beside it). Kerbs and rails follow the run's outline where it meets
  * the water; piles and piers drop into the river, abutments meet the banks.
+ * A run slanted off the grid (a diagonal crossing) is only a staircase of
+ * tiles, so it's laid as the one straight deck those tiles approximate,
+ * railed down both sides, rather than decked tile by tile.
  */
 
 /** A bridge's main deck: a rectangle in its crossing's frame. */
@@ -34,22 +37,47 @@ const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 const _c = new THREE.Color();
 
-/** Every bridge on the map, one merged model geometry (null if none), and their main decks. */
-export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo: THREE.BufferGeometry | null; spans: DeckSpan[] } {
-  const W = w.width;
-  const H = w.height;
-  const T = (tx: number, ty: number) => (tx >= 0 && ty >= 0 && tx < W && ty < H ? w.terrain[ty * W + tx]! : -1);
-  // where a main deck may reach past its own run: open, dry bank — never over water (hovercraft ride
-  // there), nor into rock, trees or salvage
-  const dry = (t: number) => t === Terrain.Ground || t === Terrain.Road || t === Terrain.Rough;
+/** A connected run of bridge tiles, read as one crossing (see bridgeRuns). */
+export interface BridgeRun {
+  /** Its tiles (row-major indices). */
+  tiles: number[];
+  /** Its centroid. */
+  mx: number;
+  mz: number;
+  /** The crossing's angle and unit vector along it. */
+  ang: number;
+  ux: number;
+  uz: number;
+  /**
+   * Slanted off the grid (its diagonal, say): its tiles only approximate a straight deck in
+   * stair-steps, so it's laid as that one straight deck, not tile by tile. The deck: centred
+   * `mid` along the axis from the centroid, `hl` long and `hw` wide (halves).
+   */
+  slant: boolean;
+  mid: number;
+  hl: number;
+  hw: number;
+}
+
+/** Open, dry bank a deck may reach onto: never water (hovercraft ride there), rock, trees or salvage. */
+const dryBank = (t: number) => t === Terrain.Ground || t === Terrain.Road || t === Terrain.Rough;
+
+/**
+ * Every connected run of bridge tiles in a row-major W×H grid, with its crossing's axis: from bank
+ * to bank (not the run's own shape: a short run over a narrow river can be wider than it is long),
+ * to the nearest 45°. A slanted (diagonal) run's deck is as wide
+ * as √(12·var + 1) of its tiles' offsets across the axis — exact for a clean band of tiles at any
+ * angle, since a unit square's spread across any line has variance 1/12 — and reaches along the
+ * axis wherever its cross-section is mostly bridge or bank. The 3D bridges and the painted ground
+ * (terrain-paint.ts) both lay out their decks from this.
+ */
+export function bridgeRuns(g: ArrayLike<number>, W: number, H: number): { runOf: Int32Array; runs: BridgeRun[] } {
+  const T = (tx: number, ty: number) => (tx >= 0 && ty >= 0 && tx < W && ty < H ? g[ty * W + tx]! : -1);
   const runOf = new Int32Array(W * H).fill(-1);
-  const b = new ModelBuilder();
-  const spans: DeckSpan[] = [];
-  const base = new THREE.Color(colour);
-  const tone = (k: number) => _c.copy(base).multiplyScalar(k).getHex();
-  let id = 0;
+  const runs: BridgeRun[] = [];
   for (let start = 0; start < W * H; start++) {
-    if (runOf[start]! >= 0 || w.terrain[start] !== Terrain.Bridge) continue;
+    if (runOf[start]! >= 0 || g[start] !== Terrain.Bridge) continue;
+    const id = runs.length;
     // flood the connected run
     const tiles: number[] = [];
     const stack = [start];
@@ -66,8 +94,6 @@ export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo:
         stack.push(n);
       }
     }
-    const run = id++;
-    const mine = (tx: number, ty: number) => T(tx, ty) === Terrain.Bridge && runOf[ty * W + tx] === run;
     let mx = 0;
     let mz = 0;
     for (const i of tiles) {
@@ -76,28 +102,103 @@ export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo:
     }
     mx /= tiles.length;
     mz /= tiles.length;
-    // the bridge runs between its banks: the principal axis of the dry land touching the run
-    let cxx = 0;
-    let czz = 0;
-    let cxz = 0;
-    const bank = new Set<number>();
+    // the bridge runs between its banks, with the river either side: the axis along which the land
+    // touching the run spreads most, net of how the water touching it spreads
+    const bank = [0, 0, 0, 0];
+    const wet = [0, 0, 0, 0];
+    const seen = new Set<number>();
     for (const i of tiles)
       for (let dy = -1; dy <= 1; dy++)
         for (let dx = -1; dx <= 1; dx++) {
           const nx = (i % W) + dx;
           const ny = Math.floor(i / W) + dy;
           const t = T(nx, ny);
-          if (t < 0 || t === Terrain.Bridge || t === Terrain.Water || t === Terrain.Deep || t === Terrain.Rock || bank.has(ny * W + nx)) continue;
-          bank.add(ny * W + nx);
+          if (t < 0 || t === Terrain.Bridge || t === Terrain.Rock || t === Terrain.Shallows || seen.has(ny * W + nx)) continue;
+          seen.add(ny * W + nx);
+          const m = t === Terrain.Water || t === Terrain.Deep ? wet : bank;
           const ddx = nx + 0.5 - mx;
           const ddz = ny + 0.5 - mz;
-          cxx += ddx * ddx;
-          czz += ddz * ddz;
-          cxz += ddx * ddz;
+          m[0]! += ddx * ddx;
+          m[1]! += ddz * ddz;
+          m[2]! += ddx * ddz;
+          m[3]!++;
         }
-    const ang = bank.size > 1 ? 0.5 * Math.atan2(2 * cxz, cxx - czz) : 0;
+    const cov = (k: number) => bank[k]! / Math.max(1, bank[3]!) - wet[k]! / Math.max(1, wet[3]!);
+    // ...squared to the grid or its diagonal, the only ways tiles lay a clean straight band (a short
+    // run over a narrow river is too square to say more precisely, and the maps lay no other)
+    const fit = bank[3]! > 1 ? 0.5 * Math.atan2(2 * cov(2), cov(0) - cov(1)) : 0;
+    const ang = Math.round(fit / (Math.PI / 4)) * (Math.PI / 4);
     const ux = Math.cos(ang);
     const uz = Math.sin(ang);
+    const run: BridgeRun = { tiles, mx, mz, ang, ux, uz, slant: Math.abs(Math.sin(2 * ang)) > 0.5, mid: 0, hl: 0, hw: 0 };
+    runs.push(run);
+    if (!run.slant) continue;
+    let vv = 0;
+    let a0 = Infinity;
+    let a1 = -Infinity;
+    for (const i of tiles) {
+      const dx = (i % W) + 0.5 - mx;
+      const dz = Math.floor(i / W) + 0.5 - mz;
+      const v = -dx * uz + dz * ux;
+      vv += v * v;
+      a0 = Math.min(a0, dx * ux + dz * uz);
+      a1 = Math.max(a1, dx * ux + dz * uz);
+    }
+    const hw = Math.sqrt((12 * vv) / tiles.length + 1) / 2;
+    // the slices across the deck that are mostly this run, dry bank or the shallows by it, with some
+    // run in them; the deck is the longest unbroken stretch of them
+    const NV = 9;
+    let best0 = 0;
+    let best1 = -1;
+    let from = NaN;
+    let last = NaN;
+    for (let u = a0 - 1; u <= a1 + 1 + S / 2; u += S) {
+      let mine = 0;
+      let dry = 0;
+      for (let j = 0; j < NV; j++) {
+        const v = -hw + ((j + 0.5) * 2 * hw) / NV;
+        const tx = Math.floor(mx + u * ux - v * uz);
+        const ty = Math.floor(mz + u * uz + v * ux);
+        if (T(tx, ty) === Terrain.Bridge && runOf[ty * W + tx] === id) mine++;
+        else if (dryBank(T(tx, ty)) || T(tx, ty) === Terrain.Shallows) dry++;
+      }
+      const ok = mine > 0 && mine + dry >= NV * 0.5 && u <= a1 + 1;
+      if (ok && from !== from) from = u;
+      if (ok) last = u;
+      if ((!ok || u + S > a1 + 1 + S / 2) && from === from) {
+        if (last - from > best1 - best0) [best0, best1] = [from, last];
+        from = NaN;
+      }
+    }
+    if (best1 - best0 < 1) {
+      run.slant = false;
+      continue;
+    }
+    run.mid = (best0 + best1) / 2;
+    run.hl = (best1 - best0) / 2 + S / 2;
+    run.hw = hw;
+  }
+  return { runOf, runs };
+}
+
+/** Every bridge on the map, one merged model geometry (null if none), and their main decks. */
+export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo: THREE.BufferGeometry | null; spans: DeckSpan[] } {
+  const W = w.width;
+  const H = w.height;
+  const T = (tx: number, ty: number) => (tx >= 0 && ty >= 0 && tx < W && ty < H ? w.terrain[ty * W + tx]! : -1);
+  const dry = dryBank;
+  const { runOf, runs } = bridgeRuns(w.terrain, W, H);
+  const b = new ModelBuilder();
+  const spans: DeckSpan[] = [];
+  const base = new THREE.Color(colour);
+  const tone = (k: number) => _c.copy(base).multiplyScalar(k).getHex();
+  for (let run = 0; run < runs.length; run++) {
+    const { tiles, mx, mz, ang, ux, uz } = runs[run]!;
+    if (runs[run]!.slant) {
+      slantedBridge(b, runs[run]!, spans, tone, steel);
+      continue;
+    }
+    const mine = (tx: number, ty: number) => T(tx, ty) === Terrain.Bridge && runOf[ty * W + tx] === run;
     // the run's extent along and across the axis, over every tile corner
     let a0 = Infinity;
     let a1 = -Infinity;
@@ -254,4 +355,55 @@ export function bridgeGeometry(w: World, colour: number, steel: boolean): { geo:
     }
   }
   return { geo: b.empty ? null : b.build(), spans };
+}
+
+/**
+ * A slanted run's bridge: one straight deck of planks (or plates) across it, with kerbs and rails
+ * down both sides, abutments at the banks and piers into the river. Its tiles' stair-stepped
+ * corners past the deck are left to the river (a hovercraft skims them; anything else standing
+ * there stands on the deck's edge).
+ */
+function slantedBridge(b: ModelBuilder, r: BridgeRun, spans: DeckSpan[], tone: (k: number) => number, steel: boolean): void {
+  const { ux, uz, hl, hw } = r;
+  const cx = r.mx + ux * r.mid;
+  const cz = r.mz + uz * r.mid;
+  spans.push({ cx, cz, ux, uz, hl, hw });
+  const P = (u: number, y: number, v: number): Vec3 => [cx + u * ux - v * uz, y, cz + u * uz + v * ux];
+  const yaw: { rot: Vec3 } = { rot: [0, -r.ang, 0] };
+  // the slab, its top just under the planks
+  b.box(hl * 2, 0.13, hw * 2, P(0, 0.012 - 0.065, 0), tone(0.55), yaw);
+  // planks (or plates) right across it, each its own tone
+  const nP = Math.max(4, Math.round((hl * 2) / (steel ? 0.45 : 0.21)));
+  const pitch = (hl * 2) / nP;
+  const pw = pitch - (steel ? 0.04 : 0.035);
+  const KW = 0.09;
+  for (let k = 0; k < nP; k++) {
+    const shadeK = steel ? (k % 2 ? 0.9 : 1.02) : 0.86 + hash(k, 3) * 0.24;
+    b.box(pw, TOP - 0.012, hw * 2 - KW * 2, P(-hl + (k + 0.5) * pitch, (TOP + 0.012) / 2, 0), tone(shadeK), yaw);
+  }
+  for (const s of [-1, 1]) {
+    const v = s * (hw - KW / 2);
+    if (steel) {
+      // hazard-striped kerbs, a top rail and a mid rail
+      const nK = Math.max(2, Math.round((hl * 2) / 0.25));
+      for (let k = 0; k < nK; k++) b.box((hl * 2) / nK, 0.07, KW, P(-hl + (k + 0.5) * ((hl * 2) / nK), 0.035, v), k % 2 ? 0x2b2d30 : 0xc89a2a, yaw);
+      for (const y of [0.33, 0.19]) b.box(hl * 2, 0.04, 0.045, P(0, y, v), 0x5a5550, yaw);
+    } else {
+      b.box(hl * 2, 0.075, KW, P(0, 0.0375, v), tone(0.5), yaw);
+      b.box(hl * 2, 0.045, 0.05, P(0, 0.24, v), 0x5a4632, yaw);
+    }
+    // posts about a tile apart, one at each end
+    const nPost = Math.max(1, Math.round(hl * 2));
+    for (let k = 0; k <= nPost; k++)
+      b.box(0.09, steel ? 0.36 : 0.27, 0.09, P(-hl + 0.05 + (k * (hl * 2 - 0.1)) / nPost, steel ? 0.18 : 0.135, v), steel ? tone(0.8) : tone(0.5), yaw);
+    // abutments where it meets each bank (their tops under the deck, so nothing is coplanar)
+    b.box(0.4, 0.4, hw * 2 + 0.12, P(s * (hl + 0.1), -0.025 - 0.2, 0), steel ? 0x3a3634 : 0x6a655c, yaw);
+  }
+  // piers into the river, a cap beam across under each
+  const piers = Math.max(1, Math.round((hl * 2) / 1.8));
+  for (let k = 0; k < piers; k++) {
+    const u = -hl + (k + 0.5) * ((hl * 2) / piers);
+    b.box(0.24, 0.12, hw * 2 + 0.1, P(u, -0.2, 0), 0x34322f, yaw);
+    for (const s of [-0.7, 0.7]) b.box(0.26, 0.9, 0.26, P(u, -0.7, s * hw), steel ? 0x2a2a2c : 0x5d5850, yaw);
+  }
 }

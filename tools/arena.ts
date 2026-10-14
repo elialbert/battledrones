@@ -23,7 +23,7 @@ import { Arena, SIDES, parseSeat, type SeatSpec } from "../src/arena/match";
 import { replay, resimulate, type BattleEnd, type BattleRecord } from "../src/arena/record";
 import { DEFAULT_SCRIPT, playScripted, type Script } from "../src/arena/scripted";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
-import { MAPS } from "../src/sim/maps";
+import { MAPS, isKnownMapId } from "../src/sim/maps";
 import { isMutatorId, type MutatorId } from "../src/sim/rules";
 import type { Faction } from "../src/sim/types";
 import { ROOT, gitCommit, readRecord, recordPath, simHash, writeRecord } from "./arena/files";
@@ -67,7 +67,7 @@ function seatOf(s: string, outside: boolean): { spec: SeatSpec; script?: Script 
 
 function matchArgs() {
   const map = arg("map", "riverlands")!;
-  if (!MAPS.some((m) => m.id === map)) die(`unknown map "${map}": ${MAPS.map((m) => m.id).join(", ")}`);
+  if (!isKnownMapId(map)) die(`unknown map "${map}": ${MAPS.map((m) => m.id).join(", ")}, or random-<biome>-<code>`);
   const seed = Number(arg("seed", String(1 + Math.floor(Math.random() * 99999))));
   const mutators = (arg("mutators") ?? "").split(",").filter(Boolean);
   for (const m of mutators) if (!isMutatorId(m)) die(`unknown mutator "${m}"`);

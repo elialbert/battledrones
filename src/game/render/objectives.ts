@@ -36,6 +36,8 @@ export interface ObjectiveRendererOpts {
   hint(msg: string, x?: number, y?: number): void;
   /** Does the player have a loaded Condor selected (island relays then show where a tap drops its troops)? */
   dropReady?(): boolean;
+  /** Has the local player scouted this tile? (Uncharted only: an unscouted Uplink stays off the minimap.) */
+  charted?(x: number, y: number): boolean;
 }
 
 const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
@@ -418,6 +420,10 @@ export class ObjectiveRenderer {
     const col = owner ? TEAM[owner] : NEUTRAL;
     // an island relay with no troops on it is held but silent: dimmed, its dish barely turning
     // (the enemy's only while we can see it)
+    // Uncharted: an Uplink nobody has scouted isn't on the map yet (tower, glow and rings would show through the shroud)
+    const charted = !this.opts.charted || this.opts.charted(x, y);
+    v.m.root.visible = v.glow.visible = charted;
+    if (!charted) return;
     const seen = this.opts.visibleAt(l.x, l.y);
     const idle = !!(l.infantryOnly && owner && !l.crewed) && (this.opts.spectator || owner === this.opts.player || seen);
     this.watchCrew(v);
@@ -623,6 +629,9 @@ export class ObjectiveRenderer {
     const near = [...this.uplinks].sort(
       (a, b) => Math.hypot(a.l.x - home.x, a.l.y - home.y) - Math.hypot(b.l.x - home.x, b.l.y - home.y)
     )[0]!;
+    // (Uncharted: no pointing at one nobody has scouted)
+    if (this.opts.charted && !this.opts.charted(near.l.x, near.l.y))
+      return this.opts.hint("Park units on a 📡 Uplink to take it: scrap, vision, ⚡ charge. Scout to find them.");
     this.opts.hint("Park units on a 📡 Uplink to take it: scrap, vision, ⚡ charge. Tap to look.", near.l.x, near.l.y);
   }
 
@@ -632,6 +641,7 @@ export class ObjectiveRenderer {
   minimap(ctx: CanvasRenderingContext2D, k: number): void {
     const t = this.time;
     for (const l of this.world.objectives.uplinks) {
+      if (this.opts.charted && !this.opts.charted(l.x, l.y)) continue;
       const x = l.x * k;
       const y = l.y * k;
       const d = 7;

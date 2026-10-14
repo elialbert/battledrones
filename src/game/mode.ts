@@ -1,5 +1,6 @@
 import type { Difficulty } from "../sim/ai/commander";
-import { mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
+import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
+import { isRandomMapId } from "../sim/mapgen";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import { opById, type OpDef } from "../sim/ops";
 import type { DailyOp } from "./daily";
@@ -21,8 +22,18 @@ export const gameMode = {
   /** Set while playing an op (never saved: the op fixes map, enemy and rules). */
   op: null as OpDef | null,
   /** The op card picked on the menu (saved). */
-  opId: ""
+  opId: "",
+  /**
+   * Uncharted (saved): a generated map is played blind — no thumbnail, name
+   * or preview on the menu, and nothing of it shows in the match until it's
+   * scouted. Render/UI only: the sim and replays don't change.
+   */
+  uncharted: false
 };
+
+/** Is the coming match on a generated map played Uncharted (not when watching AI vs AI, an op or the Daily)? */
+export const unchartedMatch = (): boolean =>
+  gameMode.uncharted && isRandomMapId(gameMode.mapId) && !gameMode.spectator && !gameMode.op && !gameMode.daily;
 
 /**
  * The mutators the next match runs with (Last Stand runs classic rules),
@@ -79,12 +90,14 @@ export function loadSettings(): void {
     const raw = localStorage.getItem(KEY);
     if (!raw) return;
     const s = JSON.parse(raw) as Partial<typeof gameMode>;
-    if (typeof s.mapId === "string") gameMode.mapId = s.mapId;
+    // (a map this build doesn't have, or a malformed random id: back to the default)
+    gameMode.mapId = typeof s.mapId === "string" && isKnownMapId(s.mapId) ? s.mapId : "riverlands";
     if (s.difficulty === "easy" || s.difficulty === "normal" || s.difficulty === "hard")
       gameMode.difficulty = s.difficulty;
     if (s.mode === "skirmish" || s.mode === "survival" || s.mode === "ops") gameMode.mode = s.mode;
     if (typeof s.opId === "string" && opById(s.opId)) gameMode.opId = s.opId;
     if (Array.isArray(s.mutators)) gameMode.mutators = s.mutators.filter(isMutatorId);
+    gameMode.uncharted = s.uncharted === true;
   } catch {
     /* storage unavailable — defaults are fine */
   }
@@ -93,7 +106,7 @@ export function loadSettings(): void {
 export function saveSettings(): void {
   if (gameMode.daily || gameMode.op) return; // the Daily Op's / an op's map and difficulty are not the player's picks
   try {
-    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId }));
+    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted }));
   } catch {
     /* ignore */
   }

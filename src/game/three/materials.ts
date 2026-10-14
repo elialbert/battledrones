@@ -87,7 +87,7 @@ uniform vec3 uCloudTint;
 uniform float uTime;
 float fowAt( vec2 p ) { return texture2D( uFowMap, ( p + 1.0 ) / uFowSize ).r; }
 `;
-// fog texels: 0 visible, 0.5 explored, 0.94 unexplored (blurred between)
+// fog texels: 0 visible, 0.5 explored, 0.94 unexplored, 1 under Uncharted (blurred between; terrain.ts FOG_TARGET)
 const fragCode = (clouds: boolean) => /* glsl */ `
   {
     vec2 fp = vFowW.xz;

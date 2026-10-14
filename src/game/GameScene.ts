@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/commander";
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
 import { canPlaceBuilding, nearestReachableResource } from "../sim/economy";
-import { isVisible, tickFog } from "../sim/fog";
+import { isExplored, isVisible, tickFog } from "../sim/fog";
 import { unitSeenBy } from "../sim/infantry";
 import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
@@ -13,7 +13,7 @@ import { sfx } from "./audio";
 import { Controller, PLAYER, type TapHit } from "./controller";
 import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
 import { announce } from "./announce";
-import { gameMode, matchOptions } from "./mode";
+import { gameMode, matchOptions, unchartedMatch } from "./mode";
 import { music } from "./music";
 import { BattleMood } from "./score";
 import { voices, type VoiceHooks } from "./voices";
@@ -162,11 +162,13 @@ export class GameScene {
     document.getElementById("loading")?.remove();
     this.world = feed ? feed.world : createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    // Uncharted: a generated map played blind, decided once here (a fed match or replay never is)
+    const uncharted = !feed && unchartedMatch();
 
     // ---- the 3D view
     this.stage = new Stage(parent, dpr);
     this.stage.setBiome(this.world.biome);
-    this.terrain = new Terrain3D(this.world, PLAYER, art);
+    this.terrain = new Terrain3D(this.world, PLAYER, art, { uncharted });
     this.stage.scene.add(this.terrain.group);
     const particles = new Particles();
     this.stage.scene.add(particles.group);
@@ -280,6 +282,7 @@ export class GameScene {
       player: PLAYER,
       spectator: gameMode.spectator,
       visibleAt: (x, y) => this.tileVisible(x, y),
+      ...(uncharted ? { charted: (x: number, y: number) => isExplored(this.world, PLAYER, Math.floor(x), Math.floor(y)) } : {}),
       seesUnit: (u) => this.unitVisible(u),
       earshot: (x, y) => this.earshot(x, y),
       alert: (msg, x, y) => this.hud.alert(msg, x, y),
@@ -348,7 +351,8 @@ export class GameScene {
         : null,
       enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
-      busy: () => this.holdStart || !!this.finale
+      busy: () => this.holdStart || !!this.finale,
+      uncharted
     });
 
     this.aware = new Awareness({
@@ -393,11 +397,12 @@ export class GameScene {
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
       const picker = showOpenerPicker({
-        context: `${mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
+        context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
         onPick: (id) => this.startWithOpener(id),
         blocked: (id) => openerBlocked(this.world, PLAYER, id),
         // islands are taken by troops and defended from the air: the Airpad matters most there
-        recommended: (id) => (mapById(gameMode.mapId).islands && id === "airwing" ? "Good here: an Airpad for more Condors" : null)
+        // (not on an Uncharted map: that would tell what it is)
+        recommended: (id) => (!uncharted && mapById(gameMode.mapId).islands && id === "airwing" ? "Good here: an Airpad for more Condors" : null)
       });
       this.teardown.push(() => picker.destroy());
     }

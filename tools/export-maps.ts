@@ -1,19 +1,26 @@
 // Export every skirmish map's terrain grid to art/maps/<id>.json for the
 // offline terrain renderer (art/terrain.py), and print ASCII previews.
-// Usage: npx vite-node tools/export-maps.ts [--ascii]
+// Usage: npx vite-node tools/export-maps.ts [--ascii] [<map id>…]
+// Map ids (built-in, or generated: random-<biome>-<code>) export just those maps; none exports every built-in one.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILDINGS } from "../src/sim/balance";
-import { MAPS, createMapWorld } from "../src/sim/maps";
+import { MAPS, createMapWorld, isKnownMapId, mapById } from "../src/sim/maps";
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "../art/maps");
 mkdirSync(OUT, { recursive: true });
 const ascii = process.argv.includes("--ascii");
+const ids = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+for (const id of ids)
+  if (!isKnownMapId(id)) {
+    console.error(`unknown map "${id}": ${MAPS.map((m) => m.id).join(", ")}, or random-<biome>-<code>`);
+    process.exit(1);
+  }
 // terrain enum -> char: Ground . Rock # Scrap $ Water ~ Road = Rough : Forest T Crystal * Bridge H Shallows , Deep (space)
 const CH = ".#$~=:T*H, ";
 
-for (const def of MAPS) {
+for (const def of ids.length ? ids.map(mapById) : MAPS) {
   const w = createMapWorld(def.id);
   const rows: string[] = [];
   for (let ty = 0; ty < w.height; ty++) {

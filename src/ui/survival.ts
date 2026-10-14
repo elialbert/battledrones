@@ -2,7 +2,7 @@ import { survivalStatus, type SurvivalStatus } from "../sim/modes/survival";
 import type { Faction, World } from "../sim/types";
 import { PLAYER, type Controller } from "../game/controller";
 import { THEME_ICONS, finishRun, fmtSecs, loadBest } from "../game/survival";
-import { MAPS } from "../sim/maps";
+import { mapById } from "../sim/maps";
 import { chronicleOf } from "../game/chronicle";
 import { mvpCard } from "./report";
 import { careerBlockHtml, mountCareerBlock } from "./career";
@@ -115,7 +115,8 @@ export function createSurvivalHud(
   }
 
   function showEnd(endEl: HTMLElement, _winner: Faction, secs: number, onAgain: () => void, onMenu: () => void): void {
-    const mapName = MAPS.find((m) => m.id === w.mapId)?.name ?? w.mapId;
+    const def = mapById(w.mapId); // (falls back to the first map for an unknown id: keep the id then)
+    const mapName = def.id === w.mapId ? def.name : w.mapId;
     const diff = DIFF_LABEL[s.difficulty] ?? s.difficulty;
     const r = finishRun(w, w.mapId, s.difficulty, !opts.spectator);
     const st = w.factions[s.defender].stats;

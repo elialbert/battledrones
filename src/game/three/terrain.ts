@@ -39,6 +39,11 @@ const NEAR = 6;
 const FLAT = 4;
 /** Near-skirt grid lines past the lattice-fine first tile: coarser as it flattens. */
 const NEAR_LINES = [1.5, 2, 2.5, 3, FLAT, 5, NEAR];
+/**
+ * Fog texel targets (see the fog shader in materials.ts). Unexplored is already a full shroud at a
+ * tile's heart; Uncharted's 1 also pushes it right up to the explored edge, past the edge's mist bank.
+ */
+export const FOG_TARGET = { visible: 0, explored: 0.5, unexplored: 0.94, uncharted: 1 };
 
 const TILE_H: Record<number, number> = {
   [Terrain.Ground]: 0,
@@ -209,6 +214,8 @@ export class Terrain3D {
   private fogBlur: Float32Array;
   private fogData: Uint8Array;
   private fogAcc = 0;
+  /** The shroud over unexplored ground (and past the map's edge, which mirrors it): FOG_TARGET. */
+  private shroud: number;
   private piles: Pile[] = [];
   /** The trees, thinned over squads in the woods (null: no woods). */
   private canopy: Canopy | null = null;
@@ -231,7 +238,13 @@ export class Terrain3D {
    */
   private stone: { walls: RockUniforms; crags: RockUniforms; tints: Float32Array } | null;
 
-  constructor(private world: World, private player: Faction, art: TerrainArt | null) {
+  /**
+   * `uncharted`: the map is played blind (mode.ts unchartedMatch), so its unexplored ground is shrouded
+   * outright. Everything here (trees, crags, piles, bridges, water) is fogged by where it stands, and the
+   * skirt past the edge by the map tile it mirrors (terrain-glsl.ts), so the shroud hides all of it.
+   */
+  constructor(private world: World, private player: Faction, art: TerrainArt | null, opts: { uncharted?: boolean } = {}) {
+    this.shroud = opts.uncharted ? FOG_TARGET.uncharted : FOG_TARGET.unexplored;
     this.W = world.width;
     this.H = world.height;
     this.look = LOOK[world.biome];
@@ -986,7 +999,7 @@ export class Terrain3D {
         const ty = y - 1;
         const inside = tx >= 0 && ty >= 0 && tx < this.W && ty < this.H;
         const v = inside ? vis[ty * this.W + tx] : Vis.Unexplored;
-        const target = v === Vis.Visible ? 0 : v === Vis.Explored ? 0.5 : 0.94;
+        const target = v === Vis.Visible ? FOG_TARGET.visible : v === Vis.Explored ? FOG_TARGET.explored : this.shroud;
         const i = y * FW + x;
         const cur = this.fogCur[i]!;
         this.fogCur[i] = cur + (target - cur) * step;
