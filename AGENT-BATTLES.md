@@ -280,11 +280,15 @@ through filters (an enemy death shows only if it was in sight), and the
 |---|---|
 | Move, attack-move, attack, stop | `{ "move": [97, 83], "to": [30, 25] }`, `{ "attack": [97], "target": 23 }` |
 | Harvest | `{ "harvest": [3, 14], "at": [14, 43] }` |
-| Build a unit | `{ "produce": "flak-crawler" }` (at any building that makes it), or `{ "produce": "wasp", "at": 24 }` |
+| Build a unit | `{ "produce": "flak-crawler" }` (at any eligible producer), or `{ "produce": "wasp", "at": 24 }`; an anchored Goliath id can train infantry, and harvesters under Nomads or Armada |
 | Build a building | `{ "build": "sam-site" }` places it at the spot the game would suggest (`suggestPlacement`), or `{ "build": "sam-site", "at": [9, 42] }` |
 | Cancel, sell, rally | `{ "cancel": "flak-crawler", "at": 10 }`, `{ "sell": 72 }`, `{ "rally": 10, "to": [12, 40] }` |
 | Calldowns | `{ "calldown": "barrage", "at": [44, 9] }` |
 | Condor | `{ "board": [91, 133], "condor": 103 }`, `{ "unload": [103], "at": [11, 11] }` |
+| Goliath base | `{ "anchor": [97] }`, `{ "pack_up": [97] }`; `produce`, `cancel`, and `rally` also accept a Goliath's id |
+| Goliath lift | `{ "lift": [103, 104], "goliath": 97 }`; move, stop, or unload the Goliath or either carrying Condor to control the whole lift |
+
+The `armada` mutator starts each side with four airborne Goliaths and eight Condors, without HQs, harvesters, infantry, or opener cards. Round 0 only asks commanders to submit their plans. Landing and anchoring a Goliath enables its training queue, harvester drop-off, and building placement ring. Observations show each side's own Goliath mode, lift, available weapons, queue, and rally; enemy Goliaths show only their visible position, health, rank, and airborne status. A side loses when its HQ and all its Goliaths are gone.
 
 Unit lists also take shortcuts: `"idle army"`, `"all stinger"`, `"army near
 30,25"`. The same rules that grey out the HUD's buttons explain refusals

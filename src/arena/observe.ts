@@ -11,15 +11,16 @@
  * leaks); `renderObservation` turns it into the text an agent reads, and
  * nothing else goes into that text.
  */
-import { BUILDINGS, DAMAGE_VS, ECONOMY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
+import { BUILDINGS, DAMAGE_VS, ECONOMY, GOLIATH, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../sim/balance";
 import { seenEnemies } from "../sim/ai/intel";
 import { isExplored, isVisible, knownBuildings } from "../sim/fog";
 import { mapById } from "../sim/maps";
 import { CRATE_NAMES } from "../sim/objectives";
-import { OPENERS, OPENER_IDS } from "../sim/openers";
+import { OPENERS, OPENER_IDS, allowedOpener } from "../sim/openers";
+import { GOLIATH_WEAPONS, isLifted, weaponReady } from "../sim/goliath";
 import { unitSeenBy } from "../sim/infantry";
 import { POWER_KINDS, POWER_NAMES, isStunned, powerBlocker } from "../sim/powers";
-import { rulesOf } from "../sim/rules";
+import { goliathBase, rulesOf } from "../sim/rules";
 import type { BuildingKind, Faction, Unit, UnitKind, World } from "../sim/types";
 import { Terrain } from "../sim/types";
 import { hqOf } from "../sim/world";
@@ -54,6 +55,7 @@ export interface SeenEnemy {
   y: number;
   hp: number;
   rank: number;
+  airborne?: boolean;
 }
 
 export interface KnownEnemyBuilding {
@@ -148,6 +150,17 @@ export function observeState(w: World, side: Faction): Observation {
     const extra: string[] = [];
     if (u.kind === "harvester" && u.cargo >= 1) extra.push(`cargo ${Math.round(u.cargo)}`);
     if (u.passengers?.length) extra.push(`carrying ${u.passengers.map((p) => `${p.kind} #${p.id}`).join(", ")}`);
+    if (u.goliath) {
+      const g = u.goliath;
+      extra.push(`mode ${g.mode}${g.modeTicks ? ` (${secs(g.modeTicks)}s)` : ""}`);
+      if (g.lift) {
+        const l = g.lift;
+        extra.push(`${l.phase === "carrying" ? "airborne" : "hooking"} with ${l.carriers.map((id) => `#${id}`).join(",")}${l.dest ? ` to ${own(l.dest.x, l.dest.y).join(",")}` : " hovering"}${l.setDown ? " (landing)" : ""}`);
+      }
+      extra.push(`weapons ready: ${GOLIATH_WEAPONS.filter((k) => weaponReady(u, k)).join(",") || "none"}`);
+      if (g.queue.length) extra.push(`queue ${g.queue.map((q, i) => i === 0 ? `${q.kind}(${secs(q.remaining)}s)` : q.kind).join(",")}${g.mode !== "anchored" || g.lift ? " (paused until anchored)" : ""}`);
+      if (g.rally) extra.push(`rally ${own(g.rally.x, g.rally.y).join(",")}`);
+    }
     if (isStunned(w, u.id)) extra.push("EMP-stunned");
     units.push({ id: u.id, kind: u.kind, x, y, hp: pct(u.hp, UNITS[u.kind].hp), order: orderText(w, fr, u), rank: u.rank, extra });
   }
@@ -155,7 +168,7 @@ export function observeState(w: World, side: Faction): Observation {
 
   const enemies: SeenEnemy[] = seenEnemies(w, side).map((u) => {
     const [x, y] = own(u.x, u.y);
-    return { id: u.id, kind: u.kind, x, y, hp: pct(u.hp, UNITS[u.kind].hp), rank: u.rank };
+    return { id: u.id, kind: u.kind, x, y, hp: pct(u.hp, UNITS[u.kind].hp), rank: u.rank, ...(u.goliath ? { airborne: isLifted(u) } : {}) };
   });
   enemies.sort(byPos);
 
@@ -276,7 +289,7 @@ export function renderObservation(o: Observation, x: ObserveExtras): string {
         us.map((u) => [`#${u.id} ${u.x},${u.y} ${u.hp}% ${u.order}`, u.rank ? `★${u.rank}` : "", ...u.extra].filter(Boolean).join(" ")).join("; ")
     );
   L.push("ENEMY SEEN" + (o.enemies.length ? "" : " none"));
-  for (const e of o.enemies) L.push(`  #${e.id} ${e.kind} ${e.x},${e.y} ${e.hp}%${e.rank ? ` ★${e.rank}` : ""}`);
+  for (const e of o.enemies) L.push(`  #${e.id} ${e.kind} ${e.x},${e.y} ${e.hp}%${e.rank ? ` ★${e.rank}` : ""}${e.airborne === undefined ? "" : e.airborne ? " airborne" : " grounded"}`);
   L.push("ENEMY BUILDINGS (as last seen)" + (o.enemyBuildings.length ? "" : " none"));
   for (const b of o.enemyBuildings) L.push(`  #${b.id} ${b.kind} ${b.x},${b.y}${b.hp !== null ? ` ${b.hp}% in sight` : ""}`);
   if (o.uplinks.length) {
@@ -500,7 +513,7 @@ export function unitTable(): string {
       u.airMult && u.airMult !== 1 ? `×${u.airMult} vs air` : "",
       u.role
     ].filter(Boolean).join("; ");
-    return [k, u.cost, u.hp, u.speed, u.sight, u.range || "-", u.dps || "-", u.targets, u.armor, u.dps ? u.dmgType ?? "kinetic" : "-", u.builtAt, u.requires ?? "-", notes].join(" | ");
+    return [k, u.cost, u.hp, u.speed, u.sight, k === "goliath" ? "see weapons" : u.range || "-", k === "goliath" ? "see weapons" : u.dps || "-", u.targets, u.armor, k === "goliath" ? "see weapons" : u.dps ? u.dmgType ?? "kinetic" : "-", u.builtAt, u.requires ?? "-", notes].join(" | ");
   });
   return [head, ...rows].join("\n");
 }
@@ -537,28 +550,29 @@ export function briefing(w: World, side: Faction, opts: BriefingOptions): string
   const def = mapById(w.mapId);
   const hq = hqOf(w, side);
   const enemyHq = hqOf(w, enemyOf(side));
-  const [hx, hy] = hq ? fr.topLeft("hq", hq.tx, hq.ty) : [0, 0];
-  const [ex, ey] = enemyHq ? fr.topLeft("hq", enemyHq.tx, enemyHq.ty) : [w.width - 3, 0];
+  const hqPosition = hq ? `Your HQ is in the lower left at ${fr.topLeft("hq", hq.tx, hq.ty).join(",")} (its top-left tile; the HQ is 3x3).` : "You have no HQ; your units' current positions are in the observation.";
+  const enemyHqPosition = enemyHq ? `The enemy HQ is in the upper right at ${fr.topLeft("hq", enemyHq.tx, enemyHq.ty).join(",")}.` : "The enemy has no HQ.";
   const map = asciiMap(w, side);
   const rules = rulesOf(w);
+  const noOpeners = allowedOpener(w, side, "industry") === null;
   const roundSecs = opts.roundTicks / TICK_RATE;
   const lastRound = Math.ceil(opts.maxTicks / opts.roundTicks);
   const L = [
     `BATTLE DRONES: briefing for the ${side.toUpperCase()} commander`,
     ``,
     `You command one side of a 1v1 real-time strategy battle on ${def.name} (${w.width}x${w.height} tiles, ${w.biome}).`,
-    `Win by destroying the enemy HQ. If neither HQ falls by ${clock(opts.maxTicks)} of game time (round ${lastRound}) the battle is a draw.`,
+    `Win by destroying the enemy HQ and all of its Goliaths. A side without an HQ loses when its last Goliath is destroyed. If neither side wins by ${clock(opts.maxTicks)} of game time (round ${lastRound}) the battle is a draw.`,
     rules.mutators.length ? `Mutators in play: ${rules.mutators.join(", ")}.` : "",
     ``,
-    `COORDINATES. Everything you see and every order you give uses your own coordinates: x runs west to east (0 to ${w.width - 1}), y runs north to south (0 to ${w.height - 1}), one unit per tile. Your HQ is in the lower left at ${hx},${hy} (its top-left tile; the HQ is 3x3). The enemy HQ is in the upper right at ${ex},${ey}: the map is point-symmetric, so the enemy's base is yours turned 180 degrees about the centre. A building's position is its top-left tile; units are at the tile they stand on.`,
+    `COORDINATES. Everything you see and every order you give uses your own coordinates: x runs west to east (0 to ${w.width - 1}), y runs north to south (0 to ${w.height - 1}), one unit per tile. ${hqPosition} ${enemyHqPosition} The map is point-symmetric, so the enemy's start is yours turned 180 degrees about the centre. A building's position is its top-left tile; units are at the tile they stand on.`,
     ``,
     `TIME. The game runs at ${TICK_RATE} ticks a second and stops every ${roundSecs} s (a round). Each round both commanders see the same moment and give orders without seeing each other's; then both sides' orders apply at once and the next ${roundSecs} s play out. Units keep following their last orders between rounds: idle units shoot back at anything that shoots them, attack-moving units fight whatever they meet, harvesters keep mining on their own.`,
     ``,
     `FOG OF WAR. You see only what your units and buildings see. Enemy units are listed only while in sight (a Sniper Team hiding in woods stays hidden until something gets within 3 tiles or it fires). Enemy buildings are remembered where you last saw them. You never see the enemy's scrap, queues or orders.`,
     ``,
     `RULES IN BRIEF`,
-    `- Economy: harvesters (${UNITS.harvester.cost}) mine scrap ($) and richer crystal (*) fields and haul it to your HQ or a depot (${ECONOMY.harvesterCapacity} per trip). Your HQ also trickles ${rules.hqTrickle ?? ECONOMY.hqTrickle} scrap/s. Fields run dry; build a depot near a distant field.`,
-    `- Construction: one building at a time. It costs its price when you start it and takes its build time; when it's ready the arena places it for you: at the "at" tile you gave or, without one, a sensible spot (production near the HQ, defences toward the enemy, a depot by the nearest unclaimed field). New buildings must be within ${ECONOMY.buildRadius} tiles of one of yours, on ground (.) or road (=). Selling refunds ${ECONOMY.sellRefund * 100}% of the cost, scaled by health.`,
+    `- Economy: harvesters (${UNITS.harvester.cost}) mine scrap ($) and richer crystal (*) fields and haul it to your HQ, a depot, or an anchored Goliath (${ECONOMY.harvesterCapacity} per trip). ${hq ? `Your HQ also trickles ${rules.hqTrickle ?? ECONOMY.hqTrickle} scrap/s.` : "Without an HQ there is no HQ scrap trickle."} Fields run dry; build a depot near a distant field.`,
+    `- Construction: one building at a time. It costs its price when you start it and takes its build time; when it's ready the arena places it for you: at the "at" tile you gave or, without one, a sensible spot near your base. New buildings must be within ${ECONOMY.buildRadius} tiles of one of your non-outpost buildings, or within ${GOLIATH.buildRing} tiles of an anchored Goliath, on ground (.) or road (=). Buildings outside regular base range use a Goliath's ring and become outposts, which do not extend build range. Selling refunds ${ECONOMY.sellRefund * 100}% of the cost, scaled by health.`,
     `- Production: each building queues up to ${ECONOMY.maxQueue} units, paid when queued; new units roll out next to it, then go to its rally point if it has one (attack-moving there).`,
     `- Combat: units auto-fire at enemies in range. Damage depends on damage type vs armor (table below); woods give ground units cover. Units gain veterancy ranks (★1-★3, +${15}% damage each) from kills. Destroyed combat units leave wrecks worth 30% of their cost for the first ground unit (either side) that drives over them.`,
     w.objectives.uplinks.length
@@ -570,6 +584,9 @@ export function briefing(w: World, side: Faction, opts: BriefingOptions): string
     `- Calldowns: a charge meter (0-${POWERS.meterMax}) fills slowly, from Uplinks and mostly from your own losses. Barrage (${POWERS.barrage.cost}: three heavy shells, radius ${POWERS.barrage.radius}), EMP (${POWERS.emp.cost}: stuns everything in radius ${POWERS.emp.radius} for ${POWERS.emp.stun} s), Drop Pod (${POWERS.droppod.cost}: 2 Stingers and a Flak Crawler, or 2 Lancers and a Flak with a Tech Lab, onto ground you can see), and the Sky Hammer (free, online at ${clock(POWERS.hammer.unlock * TICK_RATE)} then every ${POWERS.hammer.cooldown} s: a huge strike, radius ${POWERS.hammer.radius}). Each has a cooldown. Every calldown is telegraphed to both sides before it lands, so move out of enemy strike circles.`,
     `- Infantry (Trooper, Rocket and Sniper squads from the Assembly Bay) fight best in woods. A Condor (Airpad) carries 2 squads anywhere: "board" then "unload". Mastodons crush infantry they drive over.`,
     `- Aircraft fly over everything. Only units and buildings whose "hits" column says air or both can shoot them.`,
+    `- Goliaths: giant mechs visible to both sides even through fog. Walking and anchored Goliaths fight with four weapons: mortars, eye laser, arm cannons, and machine guns. Damage disables the mortars below 75% HP, laser below 50%, and cannons below 25%; Mender repairs restore them above those thresholds plus ${GOLIATH.restoreMargin * 100}%, after a ${GOLIATH.reboot}s reboot. The next Goliath costs its list price plus ${GOLIATH.costStep * 100}% of that price for each one you own or have queued.`,
+    `- Anchor / pack up: "anchor" takes ${GOLIATH.anchorTime}s on a clear ${GOLIATH.footprint}x${GOLIATH.footprint} ground footprint; an anchored Goliath cannot move, but receives harvested scrap, trains infantry${goliathBase(w) ? " and harvesters" : ""}, and provides a build ring. Use its id as "at" for produce/cancel and as the rally id. "pack_up" takes ${GOLIATH.packTime}s before it can walk or be lifted again; its training queue pauses until anchored again.`,
+    `- Goliath transport: two empty Condors can "lift" a walking Goliath. Address "move", "attack_move", "stop", or "unload" to the Goliath or either carrier to control the whole lift. "unload" lands it at "at" (or its current position), using nearby walkable ground if necessary. While airborne it is an air target and only its machine guns fire. If a carrier dies it drops: ${GOLIATH.lift.dropDamage * 100}% max-HP damage on land, destroyed over impassable terrain or sea.`,
     ``,
     `TOOLS. observe() shows your state each round (the arena also hands it to you at the start of each round). look(x, y, r) shows a close-up map. orders([...]) gives orders; each comes back "ok" or with the reason it was refused. end_round(notes, radio) ends your turn: notes (up to 2000 characters) are your memory and come back to you next round; radio (up to 120 characters) is heard by spectators only, never by the enemy. wait(rounds) ends your turn and skips the next rounds-1 rounds unless something urgent happens (your HQ attacked, an enemy strike called, enemies near your base).`,
     ``,
@@ -579,26 +596,36 @@ export function briefing(w: World, side: Faction, opts: BriefingOptions): string
     `  {"attack": ["#97", "#83"], "target": "#23"}  attack an enemy unit in sight or a known enemy building`,
     `  {"stop": ["#97"]}                            stop and stand (still shooting back)`,
     `  {"harvest": ["#3", "#14"], "at": [14, 43]}   harvesters mine a field ("at" optional: the nearest)`,
-    `  {"produce": "stinger", "count": 2}           queue units at a building that makes them ("at": "#10" to choose the building)`,
-    `  {"cancel": "stinger", "at": "#10"}           take the last stinger off building #10's queue (refunded)`,
+    `  {"produce": "stinger", "count": 2}           queue units at an eligible producer ("at": "#10" to choose a building or Goliath)`,
+    `  {"cancel": "stinger", "at": "#10"}           take the last stinger off producer #10's queue (refunded)`,
     `  {"build": "turret", "at": [9, 42]}           start a building; "at" (its top-left tile) optional`,
     `  {"cancel": "building"}                       cancel the building under construction (refunded)`,
     `  {"sell": "#72"}                              sell a building`,
-    `  {"rally": "#10", "to": [12, 40]}             where building #10's new units go`,
+    `  {"rally": "#10", "to": [12, 40]}             where building or Goliath #10's new units go`,
     `  {"calldown": "barrage", "at": [44, 9]}       barrage, emp, droppod or hammer`,
     `  {"board": ["#91", "#133"], "condor": "#103"} infantry squads climb into a Condor`,
-    `  {"unload": ["#103"], "at": [11, 11]}         Condors fly there and drop their squads`,
+    `  {"unload": ["#103"], "at": [11, 11]}         land a carried Goliath or drop a Condor's infantry ("at" optional)`,
+    `  {"anchor": ["#97"]}                         anchor a grounded Goliath`,
+    `  {"pack_up": ["#97"]}                        pack up an anchored Goliath`,
+    `  {"lift": ["#103", "#104"], "goliath": "#97"} two empty Condors lift a walking Goliath`,
     `Selector strings: "army" (every combat unit), "all", "stinger" (all stingers), "idle army", "idle stinger", "army near 30,25" (within 6 tiles); they can be mixed with ids: ["#97", "wasp"]. A "to" may also be "enemy-hq" or an id like "#23" (that unit or building's position). Ids of units that have died stop working: use the ids in this round's observation.`,
     ``,
-    `OPENERS. Before the first round each side picks one opener card (both picks are revealed together). Choose with orders([{"opener": "blitz"}]) then end_round.`,
-    ...OPENER_IDS.map((id) => {
+    noOpeners ? `OPENERS. Disabled by this match's mutators. In round 0 call end_round with your plan; unit orders begin in round 1.` : `OPENERS. Before the first round each side picks one opener card (both picks are revealed together). Choose with orders([{"opener": "blitz"}]) then end_round.`,
+    ...(noOpeners ? [] : OPENER_IDS.map((id) => {
       const o = OPENERS[id];
       return `  ${id}: ${o.name}. ${o.tagline} A ${o.building}${o.units.length ? ` and ${o.units.length} ${o.units[0]}s` : ""}, ${o.harvesters} harvesters in all, ${o.scrap >= 0 ? "+" : ""}${o.scrap} scrap.`;
-    }),
-    `Everyone also starts with an HQ, ${ECONOMY.startingScrap} scrap and a Trooper Squad${def.startUnits?.length ? `, plus ${def.startUnits.join(", ")}` : ""}.`,
+    })),
+    rules.armada ? `GOLIATH ARMADA. Each side starts with four airborne Goliaths carried by eight Condors, ${ECONOMY.startingScrap} scrap, no HQ, no harvesters, and no infantry. Land and anchor Goliaths to train harvesters and infantry and construct outposts. Regular openers are disabled.` : goliathBase(w) ? `Your anchored Goliath replaces your HQ and can also train harvesters. Starting units and scrap are shown in the observation.` : `Everyone also starts with an HQ, ${ECONOMY.startingScrap} scrap and a Trooper Squad${def.startUnits?.length ? `, plus ${def.startUnits.join(", ")}` : ""}.`,
     ``,
     `UNITS`,
     unitTable(),
+    ``,
+    `GOLIATH WEAPONS (only machine guns fire while airborne)`,
+    `weapon | range | min range | dps | hits | damage | multiplier vs air | disabled below HP`,
+    ...GOLIATH_WEAPONS.map((k) => {
+      const s = GOLIATH.weapons[k];
+      return [s.name, s.range, s.minRange ?? 0, s.dps, s.targets, s.dmgType, s.targets === "ground" ? "-" : s.airMult ?? 1, s.lostBelow ? `${s.lostBelow * 100}%` : "never"].join(" | ");
+    }),
     ``,
     `BUILDINGS`,
     buildingTable(),

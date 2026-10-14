@@ -13,21 +13,28 @@
  * come out carry the side's faction and true map coordinates; the arena
  * applies them at the first tick of the next stretch of play.
  */
-import { BUILDINGS, ECONOMY, UNITS } from "../sim/balance";
+import { BUILDINGS, ECONOMY, GOLIATH, UNITS } from "../sim/balance";
 import {
   applyEconomyCommand,
   buildingBlocker,
   canPlaceBuilding,
   nearestReachableResource,
-  unitBlocker
+  producerCap,
+  producersOf,
+  queuesOf,
+  trainBlocker,
+  unitBlocker,
+  type Producer
 } from "../sim/economy";
+import { anchorBlocker, anchoredGoliaths, applyGoliathCommand, goliathReachAt, orderedToMove, packUpBlocker, unitCost } from "../sim/goliath";
 import { unitSeenBy, isInfantry, isTransport } from "../sim/infantry";
+import { applyLiftCommand, liftBlocker, liftedBy, routeLiftCommand } from "../sim/lift";
 import { OPENER_IDS, isOpenerId, openerBlocked, type OpenerId } from "../sim/openers";
 import { placementBlocker } from "../sim/placement";
 import { POWER_KINDS, applyCalldown, calldownBlocker } from "../sim/powers";
-import { freeSeats, isLoaded } from "../sim/transport";
+import { applyTransportCommand, freeSeats, isLoaded } from "../sim/transport";
 import type { Building, BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
-import { buildingCenter, distToBuilding, hqOf, inBounds, isResource, tileIndex } from "../sim/world";
+import { buildingCenter, distToBuilding, domainOf, hqOf, inBounds, isResource, tileIndex } from "../sim/world";
 import { enemyOf, frameOf, type Frame } from "./frame";
 
 export const UNIT_KINDS = Object.keys(UNITS) as UnitKind[];
@@ -61,7 +68,7 @@ const refuse = (why: string): never => {
 /** Accept "attack_move", "attackMove", "attack-move"… */
 const norm = (k: string) => k.toLowerCase().replace(/[-_\s]/g, "");
 
-const VERBS = ["opener", "attackmove", "move", "attack", "stop", "harvest", "produce", "cancel", "build", "sell", "rally", "calldown", "board", "unload"] as const;
+const VERBS = ["opener", "attackmove", "move", "attack", "stop", "harvest", "produce", "cancel", "build", "sell", "rally", "calldown", "board", "unload", "anchor", "packup", "pack", "lift"] as const;
 type Verb = (typeof VERBS)[number];
 
 /** The kind named by a word ("stingers", "Flak Crawler", "flak"). */
@@ -114,8 +121,11 @@ export function parseOrders(staged: World, side: Faction, orders: unknown, phase
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) refuse(`expected an object like {"move": [12], "to": [30, 25]}`);
       const o = Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([k, v]) => [norm(k), v]));
       const verb = VERBS.find((v) => v in o) as Verb | undefined;
-      if (!verb) refuse(`unknown order ${JSON.stringify(raw).slice(0, 80)}: use one of move, attack_move, attack, stop, harvest, produce, cancel, build, sell, rally, calldown, board, unload`);
-      if (phase === "opener" && verb !== "opener") refuse(`the battle hasn't started: pick an opener first with {"opener": "blitz" | "industry" | "airwing"}`);
+      if (!verb) refuse(`unknown order ${JSON.stringify(raw).slice(0, 80)}: use one of move, attack_move, attack, stop, harvest, produce, cancel, build, sell, rally, calldown, board, unload, anchor, pack_up, lift`);
+      if (phase === "opener" && verb !== "opener") {
+        if (OPENER_IDS.every((id) => openerBlocked(staged, side, id))) refuse("the deployment round hasn't ended: call end_round to begin play (openers are disabled by these match rules)");
+        refuse(`the battle hasn't started: pick an opener first with {"opener": "blitz" | "industry" | "airwing"}`);
+      }
       const msg = one(staged, fr, side, verb!, o, out);
       out.results.push(`${n}. ok: ${msg}`);
     } catch (e) {
@@ -145,8 +155,9 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       const p = point(w, fr, side, o.to ?? o.at, "to");
       const type = verb === "move" ? "move" : "attackMove";
       const unitIds = units.map((u) => u.id);
-      out.commands.push({ type, faction, unitIds, x: p.x, y: p.y });
-      for (const u of units) u.order = { type, x: p.x, y: p.y };
+      const command: Extract<Command, { type: "move" | "attackMove" }> = { type, faction, unitIds, x: p.x, y: p.y };
+      out.commands.push(command);
+      stageUnitCommand(w, command);
       return `${describe(units)} ${verb === "move" ? "move" : "attack-move"} to ${fr.tile(p.x, p.y).join(",")}`;
     }
     case "attack": {
@@ -155,17 +166,20 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       if (targetId === null) refuse(`attack needs a "target": an enemy id`);
       const target = enemyTarget(w, side, targetId!);
       const domain = target.domain;
-      const able = units.filter((u) => canHit(u.kind, domain));
-      const skipped = units.filter((u) => !canHit(u.kind, domain));
+      const able = units.filter((u) => canHit(u, domain));
+      const skipped = units.filter((u) => !canHit(u, domain));
+      if (able.length === 0 && units.some((u) => u.goliath?.lift)) refuse("carried Goliaths fire automatically: move or attack-move the lift, then unload to land before giving an attack order");
       if (able.length === 0) refuse(`none of ${describe(units)} can hit a ${domain === "air" ? "flying" : "ground"} target like ${target.label}`);
-      out.commands.push({ type: "attack", faction, unitIds: able.map((u) => u.id), targetId: targetId! });
-      for (const u of able) u.order = { type: "attack", targetId: targetId! };
+      const command: Command = { type: "attack", faction, unitIds: able.map((u) => u.id), targetId: targetId! };
+      out.commands.push(command);
+      stageUnitCommand(w, command);
       return `${describe(able)} attack ${target.label}${skipped.length ? ` (skipped ${describe(skipped)}: can't hit it)` : ""}`;
     }
     case "stop": {
       const units = selectUnits(w, fr, side, o.stop);
-      out.commands.push({ type: "stop", faction, unitIds: units.map((u) => u.id) });
-      for (const u of units) u.order = { type: "idle" };
+      const command: Command = { type: "stop", faction, unitIds: units.map((u) => u.id) };
+      out.commands.push(command);
+      stageUnitCommand(w, command);
       return `${describe(units)} stop`;
     }
     case "harvest": {
@@ -189,37 +203,47 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       const kind = unitKindOf(String(o.produce));
       if (!kind) refuse(`no unit "${o.produce}": one of ${UNIT_KINDS.join(", ")}`);
       const count = Math.max(1, Math.min(ECONOMY.maxQueue * 4, Math.floor(Number(o.count ?? 1)) || 1));
-      const why = unitBlocker(w, side, kind!);
-      if (why) refuse(why);
       const st = UNITS[kind!];
-      let at: Building[];
+      let at: Producer[];
       if (o.at !== undefined) {
-        const b = ownBuilding(w, side, o.at);
-        if (b.kind !== st.builtAt) refuse(`${kind} is built at a ${st.builtAt}, not at ${b.kind} #${b.id}`);
-        at = [b];
-      } else at = [...w.buildings.values()].filter((b) => b.faction === side && b.kind === st.builtAt);
+        const p = ownProducer(w, side, o.at);
+        if (!p.goliath) {
+          const b = w.buildings.get(p.id)!;
+          if (b.kind !== st.builtAt) refuse(`${kind} is built at a ${st.builtAt}, not at ${b.kind} #${b.id}`);
+        }
+        const why = p.goliath ? trainBlocker(w, p.goliath, kind!) : unitBlocker(w, side, kind!);
+        if (why) refuse(why);
+        at = [p];
+      } else {
+        const why = unitBlocker(w, side, kind!);
+        if (why) refuse(why);
+        at = producersOf(w, side, kind!);
+      }
       const queued: number[] = [];
+      const before = w.factions[side].scrap;
+      const cap = producerCap(kind!);
       let stop = "";
       for (let i = 0; i < count; i++) {
         const f = w.factions[side];
-        if (f.scrap < st.cost) {
-          stop = `Not enough scrap (have ${Math.floor(f.scrap)}, need ${st.cost})`;
+        const cost = unitCost(w, side, kind!);
+        if (f.scrap < cost) {
+          stop = `Not enough scrap (have ${Math.floor(f.scrap)}, need ${cost})`;
           break;
         }
-        // the building with the shortest queue (ties: the one listed first in your frame)
-        const open = at.filter((b) => b.queue.length < ECONOMY.maxQueue).sort((a, b) => a.queue.length - b.queue.length || pos(fr, a) - pos(fr, b));
+        // The producer with the shortest queue (ties: the one listed first in your frame).
+        const open = at.filter((p) => p.queue.length < cap).sort((a, b) => a.queue.length - b.queue.length || producerPos(w, fr, a) - producerPos(w, fr, b));
         const b = open[0];
         if (!b) {
-          stop = `Queue full (${ECONOMY.maxQueue} per building)`;
+          stop = `Queue full (${cap} per producer)`;
           break;
         }
         applyEconomyCommand(w, { type: "produce", faction, buildingId: b.id, unit: kind! });
         queued.push(b.id);
       }
       if (queued.length === 0) refuse(stop);
-      const where = [...new Set(queued)].map((id) => `${w.buildings.get(id)!.kind} #${id}`).join(", ");
+      const where = [...new Set(queued)].map((id) => producerLabel(w, id)).join(", ");
       for (const id of queued) out.commands.push({ type: "produce", faction, buildingId: id, unit: kind! });
-      return `queued ${queued.length} ${kind} at ${where} (-${queued.length * st.cost} scrap)${queued.length < count ? `; ${count - queued.length} not queued: ${stop}` : ""}`;
+      return `queued ${queued.length} ${kind} at ${where} (-${before - w.factions[side].scrap} scrap)${queued.length < count ? `; ${count - queued.length} not queued: ${stop}` : ""}`;
     }
     case "cancel": {
       const what = String(o.cancel);
@@ -234,12 +258,13 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
         return `cancelled the ${kind} (+${BUILDINGS[kind].cost} scrap)`;
       }
       const kind = unitKindOf(what);
-      if (!kind) refuse(`cancel what? a unit kind (with "at": building id) or "building"`);
-      const b = o.at !== undefined ? ownBuilding(w, side, o.at) : [...w.buildings.values()].filter((x) => x.faction === side && x.queue.some((q) => q.kind === kind)).sort((a, c) => pos(fr, a) - pos(fr, c))[0];
-      if (!b || !b.queue.some((q) => q.kind === kind)) refuse(`no ${kind} queued${b ? ` at ${b.kind} #${b.id}` : ""}`);
+      if (!kind) refuse(`cancel what? a unit kind (with "at": building or Goliath id) or "building"`);
+      const b = o.at !== undefined ? ownProducer(w, side, o.at) : queuesOf(w, side, kind!).filter((p) => p.queue.some((q) => q.kind === kind)).sort((a, c) => producerPos(w, fr, a) - producerPos(w, fr, c))[0];
+      if (!b || !b.queue.some((q) => q.kind === kind)) refuse(`no ${kind} queued${b ? ` at ${producerLabel(w, b.id)}` : ""}`);
+      const before = f.scrap;
       applyEconomyCommand(w, { type: "cancelProduce", faction, buildingId: b!.id, unit: kind! });
       out.commands.push({ type: "cancelProduce", faction, buildingId: b!.id, unit: kind! });
-      return `cancelled ${an(kind!)} at ${b!.kind} #${b!.id} (+${UNITS[kind!].cost} scrap)`;
+      return `cancelled ${an(kind!)} at ${producerLabel(w, b!.id)} (+${f.scrap - before} scrap)`;
     }
     case "build": {
       const kind = buildingKindOf(String(o.build));
@@ -278,11 +303,11 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       return `sold ${b.kind} #${b.id} (+${Math.round(w.factions[side].scrap - before)} scrap)`;
     }
     case "rally": {
-      const b = ownBuilding(w, side, o.rally);
+      const b = ownProducer(w, side, o.rally);
       const p = point(w, fr, side, o.to ?? o.at, "to");
       applyEconomyCommand(w, { type: "rally", faction, buildingId: b.id, x: p.x, y: p.y });
       out.commands.push({ type: "rally", faction, buildingId: b.id, x: p.x, y: p.y });
-      return `${b.kind} #${b.id} rallies to ${fr.tile(p.x, p.y).join(",")}`;
+      return `${producerLabel(w, b.id)} rallies to ${fr.tile(p.x, p.y).join(",")}`;
     }
     case "calldown": {
       const power = String(o.calldown).toLowerCase().replace(/[^a-z]/g, "").replace("skyhammer", "hammer") as PowerKind;
@@ -300,6 +325,7 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       const id = idOf(o.condor ?? o.into ?? o.carrier);
       const c = id === null ? undefined : w.units.get(id);
       if (!c || c.faction !== side || !isTransport(c.kind)) refuse(`board needs "condor": the id of one of your Condors`);
+      if (liftedBy(w, c!)) refuse(`Condor #${c!.id} is lifting a Goliath: unload the Goliath before boarding infantry`);
       const seats = freeSeats(c!);
       if (seats <= 0) refuse(`Condor #${c!.id} is full: unload it first`);
       const going = squads.slice(0, seats);
@@ -308,27 +334,103 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       return `${describe(going)} board Condor #${c!.id}${going.length < squads.length ? ` (only ${seats} seat${seats > 1 ? "s" : ""} free)` : ""}`;
     }
     case "unload": {
-      const condors = selectUnits(w, fr, side, o.unload).filter((u) => isTransport(u.kind));
-      if (condors.length === 0) refuse("only Condors unload");
-      const loaded = condors.filter((c) => isLoaded(c));
-      if (loaded.length === 0) refuse(`${describe(condors)} carrying nobody`);
+      const units = selectUnits(w, fr, side, o.unload);
+      const loaded = units.filter((u) => isLoaded(u) || (u.goliath?.lift ?? liftedBy(w, u)?.goliath?.lift)?.phase === "carrying");
+      if (loaded.length === 0) refuse(`${describe(units)} carrying nobody: unload a loaded Condor or an airborne Goliath (or one of its carriers)`);
       const p = o.at !== undefined || o.to !== undefined ? point(w, fr, side, o.at ?? o.to, "at") : null;
-      out.commands.push(p ? { type: "unload", faction, unitIds: loaded.map((u) => u.id), x: p.x, y: p.y } : { type: "unload", faction, unitIds: loaded.map((u) => u.id) });
-      return `${plural(loaded.length, "Condor")} drop their squads ${p ? `at ${fr.tile(p.x, p.y).join(",")}` : "where they are"}`;
+      const command: Command = p ? { type: "unload", faction, unitIds: loaded.map((u) => u.id), x: p.x, y: p.y } : { type: "unload", faction, unitIds: loaded.map((u) => u.id) };
+      out.commands.push(command);
+      stageUnitCommand(w, command);
+      return `${describe(loaded)} unload ${p ? `at ${fr.tile(p.x, p.y).join(",")}` : "where they are"}`;
+    }
+    case "anchor":
+    case "packup":
+    case "pack": {
+      const units = selectUnits(w, fr, side, o[verb]).filter((u) => u.goliath);
+      if (units.length === 0) refuse("only Goliaths anchor or pack up");
+      const type = verb === "anchor" ? "anchor" : "packUp";
+      const accepted: Unit[] = [];
+      const skipped: string[] = [];
+      for (const u of units) {
+        const why = type === "anchor" ? anchorBlocker(w, u) : packUpBlocker(u);
+        if (why) skipped.push(`#${u.id}: ${why}`);
+        else {
+          applyGoliathCommand(w, { type, faction, unitIds: [u.id] });
+          accepted.push(u);
+        }
+      }
+      if (!accepted.length) refuse(skipped.join("; "));
+      out.commands.push({ type, faction, unitIds: accepted.map((u) => u.id) });
+      return `${describe(accepted)} ${type === "anchor" ? "anchoring" : "packing up"}${skipped.length ? ` (skipped ${skipped.join("; ")})` : ""}`;
+    }
+    case "lift": {
+      const condors = selectUnits(w, fr, side, o.lift).filter((u) => isTransport(u.kind));
+      const id = idOf(o.goliath ?? o.target ?? o.at);
+      const g = id === null ? undefined : w.units.get(id);
+      if (!g || g.faction !== side || !g.goliath) refuse(`lift needs "goliath": the id of one of your Goliaths`);
+      const why = liftBlocker(condors, g!);
+      if (why) refuse(why);
+      const command: Command = { type: "lift", faction, unitIds: condors.map((u) => u.id), goliathId: g!.id };
+      applyLiftCommand(w, command);
+      out.commands.push(command);
+      return `Condors ${g!.goliath!.lift!.carriers.map((id) => `#${id}`).join(", ")} hooking onto Goliath #${g!.id}`;
     }
   }
 }
 
 // ---------------------------------------------------------------- helpers ---
 
+/** Stage unit orders with the same lift routing as the live sim; a carrier keeps its lift order while flying the group. */
+function stageUnitCommand(w: World, c: Extract<Command, { type: "move" | "attackMove" | "attack" | "stop" | "unload" }>): void {
+  const handled = routeLiftCommand(w, c);
+  if (c.type === "unload") {
+    applyTransportCommand(w, { ...c, unitIds: c.unitIds.filter((id) => !handled.has(id)) });
+    return;
+  }
+  for (const id of c.unitIds) {
+    const u = w.units.get(id);
+    if (!u || u.faction !== c.faction || handled.has(id)) continue;
+    u.path = null;
+    if (c.type === "attack") u.order = { type: "attack", targetId: c.targetId };
+    else {
+      u.autoTargetId = null;
+      if (c.type === "stop") u.order = { type: "idle" };
+      else {
+        u.order = { type: c.type, x: c.x, y: c.y };
+        orderedToMove(w, u);
+      }
+    }
+  }
+}
+
 const pos = (fr: Frame, b: Building) => {
   const [x, y] = fr.topLeft(b.kind, b.tx, b.ty);
   return y * 4096 + x;
 };
 
-function canHit(kind: UnitKind, domain: "ground" | "air"): boolean {
-  const t = UNITS[kind].targets;
-  return UNITS[kind].dps > 0 && (t === "both" || t === domain);
+function canHit(u: Unit, domain: "ground" | "air"): boolean {
+  if (u.goliath) return !u.goliath.lift && goliathReachAt(u, domain) > 0;
+  const t = UNITS[u.kind].targets;
+  return UNITS[u.kind].dps > 0 && (t === "both" || t === domain);
+}
+
+function producerPos(w: World, fr: Frame, p: Producer): number {
+  if (!p.goliath) return pos(fr, w.buildings.get(p.id)!);
+  const [x, y] = fr.tile(p.goliath.x, p.goliath.y);
+  return y * 4096 + x;
+}
+
+function producerLabel(w: World, id: number): string {
+  return `${w.buildings.get(id)?.kind ?? "goliath"} #${id}`;
+}
+
+function ownProducer(w: World, side: Faction, v: unknown): Producer {
+  const id = idOf(v);
+  const b = id === null ? undefined : w.buildings.get(id);
+  if (b?.faction === side) return { id: b.id, queue: b.queue, goliath: null };
+  const g = id === null ? undefined : w.units.get(id);
+  if (g?.faction === side && g.goliath) return { id: g.id, queue: g.goliath.queue, goliath: g };
+  return refuse(`${JSON.stringify(v)} is not one of your buildings or Goliaths`);
 }
 
 /** An id from 23, "23" or "#23". */
@@ -392,7 +494,7 @@ function enemyTarget(w: World, side: Faction, id: number): { domain: "ground" | 
   const u = w.units.get(id);
   if (u && u.faction === enemyOf(side)) {
     if (!unitSeenBy(w, side, u)) refuse(`enemy #${id} is not in sight`);
-    return { domain: UNITS[u.kind].domain, label: `${u.kind} #${id}` };
+    return { domain: domainOf(u), label: `${u.kind} #${id}` };
   }
   const kb = w.fog[side].known.get(id);
   if (kb) return { domain: "ground", label: `${kb.kind} #${id}` };
@@ -501,9 +603,15 @@ export function suggestSpot(w: World, side: Faction, kind: BuildingKind, near?: 
   const hq = hqOf(w, side);
   const size = BUILDINGS[kind].size;
   const own = [...w.buildings.values()].filter((b) => b.faction === side);
-  if (own.length === 0) return null;
+  const bases = own.filter((b) => !b.outpost);
   const framed = (p: { x: number; y: number }) => fr.pt(p.x, p.y);
-  const home = framed(buildingCenter(hq ?? own[0]!));
+  const goliaths = anchoredGoliaths(w, side).sort((a, b) => {
+    const ap = framed(a);
+    const bp = framed(b);
+    return ap.y - bp.y || ap.x - bp.x || a.id - b.id;
+  });
+  if (bases.length === 0 && goliaths.length === 0) return null;
+  const home = framed(hq || bases[0] ? buildingCenter(hq ?? bases[0]!) : goliaths[0]!);
   const toward = (d: number) => {
     const cx = w.width / 2;
     const cy = w.height / 2;
@@ -524,6 +632,7 @@ export function suggestSpot(w: World, side: Faction, kind: BuildingKind, near?: 
           const [tx, ty] = fr.worldTile(fx, fy);
           if (!isResource(w, ty * w.width + tx)) continue;
           if (drops.some((b) => distToBuilding(b, tx + 0.5, ty + 0.5) < 7)) continue;
+          if (goliaths.some((g) => Math.hypot(g.x - tx - 0.5, g.y - ty - 0.5) < 7)) continue;
           const d = Math.hypot(fx + 0.5 - home.x, fy + 0.5 - home.y);
           if (d < bestD) [best, bestD] = [{ x: fx + 0.5, y: fy + 0.5 }, d];
         }
@@ -532,9 +641,9 @@ export function suggestSpot(w: World, side: Faction, kind: BuildingKind, near?: 
   }
   let spot: [number, number] | null = null;
   let bestScore = Infinity;
-  const r = ECONOMY.buildRadius + size;
-  for (const b of own) {
-    const c = framed(buildingCenter(b));
+  const r = Math.max(ECONOMY.buildRadius, goliaths.length ? GOLIATH.buildRing : 0) + size;
+  for (const root of [...bases.map(buildingCenter), ...goliaths]) {
+    const c = framed(root);
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
         const fx = Math.round(c.x + dx - size / 2);

@@ -218,10 +218,15 @@ export class Arena {
   observe(side: Faction): string {
     const s = this.seats[side];
     if (this.round === 0) {
+      const noOpeners = allowedOpener(this.w, side, DEFAULT_OPENER) === null;
       return [
-        `ROUND 0: CHOOSE YOUR OPENER. The battle starts once both sides have picked (the picks are revealed together).`,
-        `Pick with orders([{"opener": "blitz"}]) (or "industry", or "airwing"), then end_round with your plan in the notes.${s.opener ? ` You picked ${s.opener}.` : ""}`,
-        `Options: ${OPENER_IDS.join(", ")} (details in the briefing). If you don't pick, you get ${DEFAULT_OPENER}.`,
+        ...(noOpeners ? [
+          `ROUND 0: READY. Openers are disabled by this match's mutators. Call end_round with your plan in the notes; unit orders begin in round 1.`
+        ] : [
+          `ROUND 0: CHOOSE YOUR OPENER. The battle starts once both sides have picked (the picks are revealed together).`,
+          `Pick with orders([{"opener": "blitz"}]) (or "industry", or "airwing"), then end_round with your plan in the notes.${s.opener ? ` You picked ${s.opener}.` : ""}`,
+          `Options: ${OPENER_IDS.join(", ")} (details in the briefing). If you don't pick, you get ${DEFAULT_OPENER}.`
+        ]),
         "",
         renderObservation(observeState(this.w, side), { round: 0, lastRound: this.lastRound, roundSecs: this.roundTicks / TICK_RATE, notes: s.notes })
       ].join("\n");
@@ -276,7 +281,8 @@ export class Arena {
     s.ended = true;
     s.endedHow = how;
     const cut = typeof notes === "string" && notes.length > NOTES_MAX ? ` (notes cut to ${NOTES_MAX} characters)` : "";
-    return `Round ${this.round} submitted${cut}. ${this.round === 0 ? `Opener: ${s.opener ?? `${DEFAULT_OPENER} (default)`}.` : ""}`.trim();
+    const opener = allowedOpener(this.w, side, s.opener ?? DEFAULT_OPENER);
+    return `Round ${this.round} submitted${cut}. ${this.round === 0 ? opener ? `Opener: ${opener}${s.opener ? "" : " (default)"}.` : "Openers are disabled." : ""}`.trim();
   }
 
   /** End this turn and skip the next `rounds - 1`, unless something urgent happens. */
@@ -311,12 +317,12 @@ export class Arena {
     const e = this.record.end;
     if (!e) return "The battle is still on.";
     const how =
-      e.reason === "hq" ? "the enemy HQ fell"
+      e.reason === "hq" ? "the enemy has no HQ or Goliaths left"
       : e.reason === "time" ? `time ran out at ${clock(e.tick)}`
       : e.reason === "love" ? "two Goliaths fell in love"
       : "the battle was stopped";
     const verdict = e.winner === null ? "DRAW" : e.winner === side ? "YOU WON" : "YOU LOST";
-    const hq = e.reason === "hq" && e.winner !== side ? "your HQ fell" : how;
+    const hq = e.reason === "hq" && e.winner !== side ? "you have no HQ or Goliaths left" : how;
     return `THE BATTLE IS OVER at ${clock(e.tick)}: ${verdict} (${hq}). No more orders are needed.`;
   }
 
@@ -452,6 +458,6 @@ export class Arena {
   }
 }
 
-const urgentText = (u: Urgent) => ({ hq: "your HQ is under attack", strike: "an enemy strike was called", inbound: "enemies are near your base" })[u];
+const urgentText = (u: Urgent) => ({ hq: "your HQ is under attack", goliath: "your Goliath is under attack", strike: "an enemy strike was called", inbound: "enemies are near your base" })[u];
 
 export { enemyOf };

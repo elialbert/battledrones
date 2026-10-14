@@ -15,7 +15,7 @@ import { unitSeenBy } from "../sim/infantry";
 import type { Faction, FxEvent, UnitKind, World } from "../sim/types";
 import { enemyOf, frameOf, type Frame } from "./frame";
 
-/** Visible armed enemies this close (tiles) to our buildings or harvesters are "near the base" (awareness.ts uses 12). */
+/** Visible armed enemies this close (tiles) to our buildings, harvesters or Goliaths are "near the base" (awareness.ts uses 12). */
 export const NEAR_BASE = 12;
 
 interface Attacked {
@@ -24,8 +24,8 @@ interface Attacked {
   by: Set<string>;
 }
 
-/** Why a `wait` should end early: our HQ hit, an enemy calldown telegraphed, enemies near the base. */
-export type Urgent = "hq" | "strike" | "inbound";
+/** Why a `wait` should end early: our HQ or a Goliath hit, an enemy calldown telegraphed, enemies near the base. */
+export type Urgent = "hq" | "goliath" | "strike" | "inbound";
 
 export class SideLog {
   private readonly side: Faction;
@@ -72,6 +72,8 @@ export class SideLog {
       case "death": {
         const what = ev.unitKind ?? ev.buildingKind!;
         if (ev.faction === side) {
+          // A lethal hit has already removed the unit before this log sees its hit event.
+          if (ev.unitKind === "goliath") this.urgent.add("goliath");
           if (ev.buildingKind) this.lostAt.push(`${what} #${ev.id} at ${at(ev.x, ev.y)}`);
           else push(this.lost, what, ev.id);
         } else {
@@ -95,10 +97,11 @@ export class SideLog {
         if (ev.faction !== side) break;
         const b = ev.building ? w.buildings.get(ev.id) : null;
         const u = ev.building ? null : w.units.get(ev.id);
-        // the alerts the announcer gives: the HQ, any building, harvesters (fights between armies are in the unit list)
-        if (!b && u?.kind !== "harvester") break;
+        // Goliaths are bases too, including the airborne bases under Armada.
+        if (!b && u?.kind !== "harvester" && !u?.goliath) break;
         if (b?.kind === "hq") this.urgent.add("hq");
-        const label = b ? `${b.kind} #${b.id} at ${fr.topLeft(b.kind, b.tx, b.ty).join(",")}` : `harvester #${ev.id} at ${at(ev.x, ev.y)}`;
+        if (u?.goliath) this.urgent.add("goliath");
+        const label = b ? `${b.kind} #${b.id} at ${fr.topLeft(b.kind, b.tx, b.ty).join(",")}` : `${u!.kind} #${ev.id} at ${at(ev.x, ev.y)}`;
         const a = this.attacked.get(ev.id) ?? { label, hits: 0, by: new Set<string>() };
         a.hits++;
         const attacker = w.units.get(ev.attackerId);
@@ -214,11 +217,11 @@ export class SideLog {
   }
 }
 
-/** Visible armed enemy units within NEAR_BASE tiles of `side`'s buildings or harvesters. */
+/** Visible armed enemy units within NEAR_BASE tiles of `side`'s buildings, harvesters or Goliaths. */
 export function nearBase(w: World, side: Faction) {
   const guards: { x: number; y: number }[] = [];
   for (const b of w.buildings.values()) if (b.faction === side) guards.push({ x: b.tx + 1, y: b.ty + 1 });
-  for (const u of w.units.values()) if (u.faction === side && u.kind === "harvester") guards.push(u);
+  for (const u of w.units.values()) if (u.faction === side && (u.kind === "harvester" || u.goliath)) guards.push(u);
   const out = [];
   for (const u of w.units.values()) {
     if (u.faction === side || u.faction !== enemyOf(side)) continue;
@@ -245,4 +248,3 @@ const clockOf = (tick: number) => {
   const s = Math.ceil(tick / 10);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
-
