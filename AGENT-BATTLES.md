@@ -672,15 +672,28 @@ the working tree's. If they differ, they make a `git worktree` at the
 record's commit (cached in `.arena-builds/`) and run there. Old battles keep
 working without any build archive.
 
-The public game only has its own sim, so a record pasted into it must match
-that. `tools/arena.ts upgrade <records>` brings records up to the current
+The public game only has its own sim. A record from other sim code often
+still replays exactly (most sim changes don't touch a given battle), so the
+viewer plays it through in a worker as it starts (`checkAhead` in
+`src/game/replay.ts`, a second or a few) and, if it drifts, says from when
+before the playhead gets there. **Pinning** skips that: `tools/arena.ts pin
+--version v11 <records>` replays each record on this checkout's sim and, if
+it replays exactly, writes `"version": "v11"` into it. A version tag's build
+knows its tag (`tools/build-pages.mjs` sets `VERSION_TAG`), and plays a record
+pinned to it unchecked; any other build links a drifting pinned record to
+its version, `/v11/?replay=…`. The showcase battles are pinned, and their
+links go to their version (`battles/showcase/README.md`), so they keep
+replaying as the game changes.
+
+`tools/arena.ts upgrade <records>` brings records up to the current
 sim: it re-runs their commands (`resimulate` in `src/arena/record.ts`) and
 writes the new hash trail and ending, keeping what the record said before in
 `upgraded`. The commands were chosen against the old sim's world, so a
 re-simulated battle drifts: a unit that died a moment sooner ignores its last
 order. If no HQ has fallen by the original ending it plays on with the
 standing orders until one does (or the time limit), and the viewer shows the
-ending as played when the new one differs.
+ending as played when the new one differs. An upgraded record loses its pin:
+its new hash trail hasn't been checked on that version.
 
 ## Watching
 
@@ -773,20 +786,22 @@ limits.
 | `src/arena/match.ts` | The arena: rounds, seats (agent and built-in AI), openers, waits, auto-placement, the record |
 | `src/arena/record.ts` | The record format, world hashing, setting a recorded match up, replaying it |
 | `src/arena/scripted.ts` | Scripted seats (fixed orders per round, for tests) |
-| `tools/arena.ts` | The CLI: `run`, `serve`, `series`, `replay`, `stats`, `watch` |
+| `tools/arena.ts` | The CLI: `run`, `serve`, `series`, `replay`, `stats`, `watch`, `upgrade`, `pin` |
 | `tools/arena/server.ts` | The loopback seats: HTTP for LLM, MCP for coding agents, control calls for the driver |
 | `tools/arena/files.ts` | Record files, the sim hash, the commit |
 | `tools/arena-viewer-check.mjs` | The Playwright check: a record played in the dev viewer, hash trail checked in Chromium |
 | `llm-tools-battledrones/` | The LLM plugin: the `BattleDrones` toolbox and the `llm battledrones` command (Python), with its tests |
-| `src/game/replay.ts`, `src/ui/replay.ts` | The viewer and its panel: a chunk of its own (10 KB, 4 KB gzipped) that loads only when a replay is chosen |
+| `src/game/replay.ts`, `src/ui/replay.ts` | The viewer and its panel: a chunk of its own (12 KB, 5 KB gzipped) that loads only when a replay is chosen |
+| `src/game/replay-check.worker.ts` | The viewer's check ahead, for a record from other sim code: a worker with its own copy of the sim (143 KB, 50 KB gzipped), not precached, loaded only when a record needs checking |
 | `src/ui/replay-picker.ts` | The menu's "Watch a replay" sheet: paste a record or pick its file |
 | `record-viewer.html` | The record viewer: one standalone page, no game code |
 
 `src/arena` reads the sim and changes nothing in it. In the browser only the
 viewer imports it (`record.ts`), and nothing imports the viewer statically:
 `main.ts` loads it when a replay is chosen (a test checks the imports). Each
-build carries its sim hash (`__SIM_HASH__`, from `vite.config.ts`), and the
-viewer warns when a record was played by other sim code.
+build carries its sim hash (`__SIM_HASH__`, from `vite.config.ts`) and, a
+version tag's build, its tag (`__VERSION_TAG__`); the viewer checks a record
+from other sim code ahead, unless it's pinned to this build's tag.
 `GameScene` gained a small generic hook, `MatchFeed`, that a fed match plays
 through instead of the AI commanders, and a fog side for the viewer's
 "through X's eyes".

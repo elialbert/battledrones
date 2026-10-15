@@ -7,7 +7,7 @@
  */
 import type { GameScene } from "../game/GameScene";
 import type { ReplayFeed } from "../game/replay";
-import { BUILD_SIM, clock, otherSim } from "../game/replay";
+import { clock, pinnedLink } from "../game/replay";
 import type { Faction } from "../sim/types";
 
 export interface ReplayPanel {
@@ -29,6 +29,7 @@ const CSS = `
 #replay-panel .rp-time { font-variant-numeric: tabular-nums; }
 #replay-panel .rp-status, #replay-panel .rp-warn { margin-top: 4px; padding: 3px 10px; border-radius: 8px; background: rgba(12, 18, 26, 0.75); width: fit-content; }
 #replay-panel .rp-warn { background: rgba(140, 30, 20, 0.85); }
+#replay-panel .rp-warn a { pointer-events: auto; color: inherit; font-weight: 600; }
 #replay-panel .rp-notes { pointer-events: auto; margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 38vh; overflow: auto; }
 #replay-panel .rp-side { background: rgba(12, 18, 26, 0.8); border-radius: 10px; padding: 6px 8px; overflow-wrap: anywhere; }
 #replay-panel .rp-side h4 { margin: 0 0 3px; font-size: 12px; }
@@ -56,7 +57,6 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     <div class="rp-status" hidden></div>
     <div class="rp-warn" hidden></div>
     ${asPlayed(r) ? `<div class="rp-status rp-upgraded">${esc(asPlayed(r)!)}</div>` : ""}
-    <div class="rp-warn rp-sim"${otherSim(r) ? "" : " hidden"}>Recorded by other game code (sim ${esc(r.sim ?? "?")}, this game ${esc(BUILD_SIM ?? "?")}): if it drifts, this page says so. <code>tools/arena.ts watch</code> replays it with its own code.</div>
     <div class="rp-notes" hidden><div class="rp-side" data-side="blue"></div><div class="rp-side" data-side="red"></div></div>`;
   document.body.appendChild(root);
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
@@ -85,6 +85,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
   });
 
   let shownRound = -1;
+  let shownDrift: number | null = null;
   const sideHtml = (side: Faction, round: number) => {
     // the latest round this side actually played, at or before the one on screen
     let l = null;
@@ -111,8 +112,16 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
       const waiting = feed.follow && !feed.record.end && t >= end;
       status.hidden = !waiting;
       if (waiting) status.textContent = `Round ${feed.roundAt(t)}: the commanders are thinking… ${clock(((performance.now() - feed.grewAt) / 1000) * 10)}`;
-      warn.hidden = feed.divergedAt === null;
-      if (feed.divergedAt !== null) warn.textContent = `⚠ This replay diverged at ${clock(feed.divergedAt)}: what you see after that didn't happen`;
+      // where this version of the game plays the battle differently: found ahead (checkAhead), or as it played
+      const drift = feed.divergedAt ?? feed.driftsAt;
+      warn.hidden = drift === null;
+      if (drift !== null && drift !== shownDrift) {
+        shownDrift = drift;
+        const pinned = pinnedLink(feed);
+        warn.innerHTML =
+          `⚠ This replay diverges at ${clock(drift)}: what you see after that didn't happen` +
+          (pinned ? ` · <a href="${esc(pinned)}">▶ Watch it in ${esc(feed.record.version!)}</a>` : "");
+      }
       const round = feed.roundAt(Math.max(0, t - 1));
       if (!notes.hidden && round !== shownRound) {
         shownRound = round;

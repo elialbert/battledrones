@@ -19,21 +19,25 @@ every order, note and radio line, in the
 
 | Battle | Map | Winner | | |
 |---|---|---|---|---|
-| GPT-6 Luna vs GPT-6 Luna | Riverlands | Blue at 4:31 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) |
-| GPT-6 Luna (Blitz) vs GPT-6 Luna (Industry) | Dune Sea | Blue at 7:52 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) |
-| GPT-6 Luna vs GPT-6 Astra | Riverlands | Red (Astra) at 7:50 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) |
-| GPT-5.6 Sol vs GPT-6.1 Sol | Archipelago | Red (GPT-6.1 Sol) at 11:45 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) |
-| GPT-6 Astra vs Gemini 4 Argon | Riverlands | Blue (Astra) at 5:35 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) |
-| Claude Opus 5.5 vs Gemini 4 Argon | Archipelago | Blue (Opus) at 4:12 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gemini-4-argon.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gemini-4-argon.json) |
-| Claude Opus 5.5 vs GPT-6 Astra | Archipelago (Goliath Armada) | Red (Astra) at 4:41 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gpt-6-astra-2.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gpt-6-astra-2.json) |
-| Claude Opus 5.5 vs GPT-6 Astra | Frostbite | Red (Astra) at 4:14 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-frostbite-42-claude-opus-5.5-vs-gpt-6-astra.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-frostbite-42-claude-opus-5.5-vs-gpt-6-astra.json) |
-| Claude Haiku 5.5 vs GPT-6 Luna | Frostbite | Blue (Haiku) at 7:48 | [▶ Watch the replay](https://simonw.github.io/battledrones/?replay=battles/showcase/2026-10-14-frostbite-42-claude-haiku-5.5-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-frostbite-42-claude-haiku-5.5-vs-gpt-6-luna.json) |
+| GPT-6 Luna vs GPT-6 Luna | Riverlands | Blue at 4:31 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-luna.json) |
+| GPT-6 Luna (Blitz) vs GPT-6 Luna (Industry) | Dune Sea | Blue at 7:52 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-dune-sea-7-gpt-6-luna-vs-gpt-6-luna.json) |
+| GPT-6 Luna vs GPT-6 Astra | Riverlands | Red (Astra) at 7:50 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-riverlands-42-gpt-6-luna-vs-gpt-6-astra.json) |
+| GPT-5.6 Sol vs GPT-6.1 Sol | Archipelago | Red (GPT-6.1 Sol) at 11:45 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-11-archipelago-42-gpt-5.6-sol-vs-gpt-6.1-sol.json) |
+| GPT-6 Astra vs Gemini 4 Argon | Riverlands | Blue (Astra) at 5:35 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-riverlands-42-gpt-6-astra-vs-gemini-4-argon.json) |
+| Claude Opus 5.5 vs Gemini 4 Argon | Archipelago | Blue (Opus) at 4:12 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gemini-4-argon.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gemini-4-argon.json) |
+| Claude Opus 5.5 vs GPT-6 Astra | Archipelago (Goliath Armada) | Red (Astra) at 4:41 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gpt-6-astra-2.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-archipelago-42-claude-opus-5.5-vs-gpt-6-astra-2.json) |
+| Claude Opus 5.5 vs GPT-6 Astra | Frostbite | Red (Astra) at 4:14 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-14-frostbite-42-claude-opus-5.5-vs-gpt-6-astra.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-frostbite-42-claude-opus-5.5-vs-gpt-6-astra.json) |
+| Claude Haiku 5.5 vs GPT-6 Luna | Frostbite | Blue (Haiku) at 7:48 | [▶ Watch the replay](https://simonw.github.io/battledrones/v11/?replay=battles/showcase/2026-10-14-frostbite-42-claude-haiku-5.5-vs-gpt-6-luna.json) | [Read the record](https://simonw.github.io/battledrones/record-viewer.html?replay=battles/showcase/2026-10-14-frostbite-42-claude-haiku-5.5-vs-gpt-6-luna.json) |
 
 The Dune Sea and Astra battles ended sooner as played (6:23 and 4:45). Their records were
 re-simulated on newer game code, and the models' last orders played on
 (`battles/showcase/README.md`). The game and the viewer both open any battle
 record from its link, `?replay=`. The link can be relative to the site, any URL
 whose server allows cross-origin reads (CORS), a file on GitHub or a Gist.
+Each replay link above opens the tagged version of the game its record is
+pinned to (`/v11/`), where it is known to replay exactly. Another version
+plays the record through in the background as it starts, and if it plays
+the battle differently, says from when and links to the pinned version.
 
 ## Features
 
@@ -254,6 +258,7 @@ npm run arena run -- --blue scripted --red ai:rush:hard    # built-in seats, no 
 npm run arena serve -- --blue seat --red ai:balanced:easy  # seat URLs for any agent (HTTP or MCP)
 npm run arena replay battles/<file>.json                   # re-run a record, check its hash trail
 npm run arena upgrade battles/<file>.json                  # bring a record from older sim code up to this one
+npm run arena pin -- --version v11 battles/<file>.json     # replays exactly on this sim? pin it to that version tag
 npm run arena watch battles/<file>.json                    # the 3D viewer on the dev server (&follow: live)
                                                            # (any build: /?replay=<record>, or /record-viewer.html?replay=<record>)
 npm run arena stats -- battles/*.json --detail             # results by model, side, map, opener

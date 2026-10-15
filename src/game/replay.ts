@@ -10,9 +10,13 @@
  *   /?replay=battles/<file>.json&follow                      (dev builds) a live battle: re-read every second
  *
  * It checks the world hash every 100 ticks as it plays, and says so if the
- * replay drifts from the battle; it keeps a copy of the world every 30 s so
- * the seek bar can jump back; the commanders' radio lines go to the ticker
- * and the announcer; a panel shows each side's orders and notes round by round.
+ * replay drifts from the battle. A record from other sim code, unless it's
+ * pinned to this build's version (BattleRecord.version), is also played
+ * through in a worker as it starts (checkAhead), so a drift shows before the
+ * playhead gets there, with a link to the version the record is pinned to.
+ * It keeps a copy of the world every 30 s so the seek bar can jump back; the
+ * commanders' radio lines go to the ticker and the announcer; a panel shows
+ * each side's orders and notes round by round.
  */
 import { setupWorld, worldHash, type BattleRecord, type RoundLog } from "../arena/record";
 import { TICK_RATE } from "../sim/balance";
@@ -24,6 +28,9 @@ import type { GameScene, MatchFeed } from "./GameScene";
 declare const __SIM_HASH__: string | undefined;
 /** The sim this build plays (vite.config.ts; tools/arena/files.ts simHash), or null outside a Vite build. */
 export const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
+declare const __VERSION_TAG__: string | null | undefined;
+/** The version tag this build is (v11: tools/build-pages.mjs), or null (main, and local builds). */
+export const BUILD_TAG: string | null = typeof __VERSION_TAG__ === "undefined" ? null : __VERSION_TAG__;
 
 /** A keyframe every 30 s of game time. */
 const KEYFRAME_TICKS = 30 * TICK_RATE;
@@ -39,6 +46,8 @@ export class ReplayFeed implements MatchFeed {
   record: BattleRecord;
   /** The first tick whose hash didn't match, if any. */
   divergedAt: number | null = null;
+  /** The same, found ahead of the playhead by checkAhead (null: not found, or not looked for). */
+  driftsAt: number | null = null;
   scene: GameScene | null = null;
   /** Wall-clock time (ms) the record last grew, for "thinking…" in follow mode. */
   grewAt = performance.now();
@@ -50,6 +59,7 @@ export class ReplayFeed implements MatchFeed {
   private fetchIn = 1000;
   private fetching = false;
 
+  /** `url`: where the record came from, if it has a link (follow: re-read it from there). */
   constructor(record: BattleRecord, readonly url: string | null, readonly follow: boolean) {
     this.record = record;
     this.world = setupWorld(record);
@@ -94,6 +104,19 @@ export class ReplayFeed implements MatchFeed {
     this.panel = replayPanel(this, scene);
     // (for tools/arena-viewer-check.mjs and the console)
     (window as unknown as Record<string, unknown>).__replay = this;
+    if (!this.follow && !knownToMatch(this.record)) this.checkAhead();
+  }
+
+  /** Play the whole record through in a worker (a few seconds at most), to find where this build drifts from it, if anywhere. */
+  private checkAhead(): void {
+    const worker = new Worker(new URL("./replay-check.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (e: MessageEvent<number | null>) => {
+      this.driftsAt = e.data;
+      worker.terminate();
+    };
+    // (the check as it plays still works)
+    worker.onerror = () => worker.terminate();
+    worker.postMessage(this.record);
   }
 
   afterTick(w: World, seeking: boolean): void {
@@ -142,8 +165,18 @@ export class ReplayFeed implements MatchFeed {
   }
 }
 
-/** Was this record played by other sim code than this build's? (A replay may then drift: the hash check says so if it does.) */
-export const otherSim = (r: BattleRecord): boolean => !!r.sim && !!BUILD_SIM && r.sim !== BUILD_SIM;
+/** Is this record known to replay exactly in this build: played by its sim, or pinned to its version? (If not, checkAhead looks.) */
+export const knownToMatch = (r: BattleRecord): boolean => r.sim === BUILD_SIM || (!!r.version && r.version === BUILD_TAG);
+
+/** The replay's link in the version of the game its record is pinned to (null: not pinned, it's this one, or no link). */
+export function pinnedLink(feed: ReplayFeed): string | null {
+  const v = feed.record.version;
+  // (the record's own word: only a version tag, as tools/build-pages.mjs publishes them)
+  if (!v || v === BUILD_TAG || !feed.url || !/^v[0-9][A-Za-z0-9.+-]*$/.test(v)) return null;
+  // the site's root: a version's build is a folder in it (/battledrones/v11/)
+  const root = new URL(BUILD_TAG ? "../" : "./", new URL(import.meta.env.BASE_URL, location.href));
+  return `${new URL(`${v}/`, root).href}?replay=${encodeURIComponent(feed.url)}`;
+}
 
 /** A battle record from its JSON, checked enough to play: throws a message a person can act on. */
 export function parseRecord(text: string): BattleRecord {
@@ -225,7 +258,7 @@ async function fetchText(url: string): Promise<string> {
  * every second as it grows.
  */
 export async function loadReplay(ref: string, follow: boolean): Promise<ReplayFeed> {
-  if (!follow) return new ReplayFeed(parseRecord(await fetchLinkedRecord(ref)), null, false);
+  if (!follow) return new ReplayFeed(parseRecord(await fetchLinkedRecord(ref)), new URL(ref.trim(), location.href).href, false);
   const url = new URL(ref, location.href).href;
   return new ReplayFeed(await fetchRecord(url), url, true);
 }

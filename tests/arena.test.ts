@@ -335,7 +335,7 @@ describe("the loopback seat server", () => {
 describe("the battle viewer costs the game nothing until it's wanted", () => {
   // every module under src/, as text
   const sources = import.meta.glob("../src/**/*.ts", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-  const viewer = ["../src/game/replay.ts", "../src/ui/replay.ts"];
+  const viewer = ["../src/game/replay.ts", "../src/ui/replay.ts", "../src/game/replay-check.worker.ts"];
 
   it("nothing outside the viewer imports it or the arena statically: main.ts loads it on demand", () => {
     for (const [path, src] of Object.entries(sources)) {
@@ -415,6 +415,22 @@ describe("a battle record linked by URL (?replay=)", () => {
   });
 });
 
+describe("the showcase battles", () => {
+  const records = import.meta.glob("../battles/showcase/*.json", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+  const readme = Object.values(import.meta.glob("../README.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>)[0]!;
+
+  it("are pinned to a version, and the README's replay links go to it", () => {
+    const links = new Map([...readme.matchAll(/\(https:\/\/simonw\.github\.io\/battledrones\/(?:(v[^/]+)\/)?\?replay=battles\/showcase\/([^)]+)\)/g)].map((m) => [m[2]!, m[1]]));
+    expect(Object.keys(records).length).toBeGreaterThan(0);
+    for (const [path, json] of Object.entries(records)) {
+      const f = path.split("/").pop()!;
+      const r = JSON.parse(json) as BattleRecord;
+      expect(r.version, f).toMatch(/^v[0-9]/);
+      expect(links.get(f), `README's replay link for ${f}`).toBe(r.version);
+    }
+  });
+});
+
 describe("upgrading a record to newer sim code", () => {
   const record = (): BattleRecord => {
     const a = new Arena({ map: "proving-grounds", seed: 11, seats: { blue: parseSeat("scripted"), red: parseSeat("ai:rush:easy") }, maxTicks: 8 * 600 });
@@ -428,7 +444,7 @@ describe("upgrading a record to newer sim code", () => {
   it("re-simulates the commands: a new hash trail that replays, the old one kept in the history", () => {
     const r = record();
     // as if older sim code had played it: a different hash trail
-    const old: BattleRecord = { ...r, sim: "0ld", commit: "abc", hashes: r.hashes.map(([t]) => [t, "deadbeef"]) };
+    const old: BattleRecord = { ...r, sim: "0ld", commit: "abc", version: "v1", hashes: r.hashes.map(([t]) => [t, "deadbeef"]) };
     expect(replay(old).divergedAt).toBe(100);
     const u = resimulate(old, { commit: "def", sim: "n3w" });
     expect(u.hashes).toEqual(r.hashes);
@@ -436,6 +452,8 @@ describe("upgrading a record to newer sim code", () => {
     expect(replay(u).divergedAt).toBeNull();
     expect(u).toMatchObject({ sim: "n3w", commit: "def", turns: r.turns, log: r.log, radio: r.radio });
     expect(u.upgraded).toEqual([{ from: { commit: "abc", sim: "0ld" }, end: r.end, at: expect.any(String) }]);
+    // (v1 played the old hash trail: the new one isn't pinned to anything yet)
+    expect(u.version).toBeUndefined();
   });
 
   it("plays on with the standing orders when no HQ has fallen by the old ending", () => {
