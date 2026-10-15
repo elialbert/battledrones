@@ -9,7 +9,8 @@
 //   ?view=battle&lancer=<unit>&raptor=<unit>&hornet=<unit>   a mixed skirmish at play zoom (&flak=, &mortar=<unit> add those)
 //   ?view=duel&d=<unit>        Lancers on the ground with three of <unit> overhead
 // Screenshots: progress-shots/unit-alts/. Picked and now in models.ts: Raptor B (twin-boom), Lancer L1
-// (grav-tank), Hornet H3 (airship), so "today" here (a UnitKind) shows those; the candidates stay as drawn.
+// (grav-tank), Hornet H3 (airship), Flak Crawler F3 (spider, its legs walking there) and Mortar M2 (siege
+// mortar), so "today" here (a UnitKind) shows those; the candidates stay as drawn (F3's legs static).
 import * as THREE from "three";
 import { Stage } from "../src/game/three/stage";
 import { ModelBuilder, type Vec3 } from "../src/game/three/builder";

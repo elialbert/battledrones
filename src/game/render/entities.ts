@@ -5,7 +5,7 @@ import { liftedBy } from "../../sim/lift";
 import type { Building, BuildingKind, Faction, FxEvent, Unit, UnitKind, WeaponFx, World } from "../../sim/types";
 import { baySeats, RIDER_SCALE, SquadRig, type BotKind, type Footprint } from "../three/infantry";
 import { discMat, eliteUniform, setVariant, type Variant } from "../three/materials";
-import { buildingDef, instance, unitDef, unitScale, type ModelDef, type ModelInstance } from "../three/models";
+import { CRAWLER_LEGS, buildingDef, instance, unitDef, unitScale, type ModelDef, type ModelInstance } from "../three/models";
 import { AIR_H, HOVER_H, type P3, type View } from "../three/view";
 import { Ease } from "../three/tween";
 import type { Fx } from "./fx";
@@ -49,7 +49,14 @@ interface UnitView {
   /** Sim position at the last sync (a squad's death blast is matched against it). */
   sx: number;
   sy: number;
+  /** The Flak Crawler's walk: where its legs are in the stride, and how far they swing (0 standing, 1 walking). */
+  gait?: { phase: number; amp: number };
 }
+
+/** The Flak Crawler's stride (models.ts CRAWLER_LEGS): ground covered per full step cycle (tiles), swing about the hip (rad), foot lift (model units). */
+const LEG_CYCLE = 0.6;
+const LEG_SWING = 0.32;
+const LEG_LIFT = 0.07;
 
 interface CondorView {
   /** Riders' group in the body, undoing the model scale (tiles). */
@@ -833,6 +840,7 @@ export class EntityRenderer {
       const base = (hF + hB + hR + hL) / 4;
       v.bh = hover ? base + HOVER_H + Math.sin(this.time / 300 + v.phase) * 0.02 : base;
       body.rotation.set(v.pitch, -v.face, v.roll);
+      if (v.m.parts[CRAWLER_LEGS[0]!.name]) this.walk(v, moved, angleDelta(prevFace, v.face), dtMs);
     }
     root.position.set(gx, v.bh, gy);
 
@@ -943,6 +951,26 @@ export class EntityRenderer {
       this.v.tweens.add({ dur: 450, ease: Ease.backOut, update: (k) => (v.chevronPop = k) });
     }
     v.rank = u.rank;
+  }
+
+  /**
+   * The Flak Crawler's legs (models.ts CRAWLER_LEGS): an alternating tripod
+   * gait whose phase follows the ground covered (and turning on the spot), so
+   * the feet keep pace with the body; the legs ease back to stand when it stops.
+   */
+  private walk(v: UnitView, moved: number, turned: number, dtMs: number): void {
+    const g = (v.gait ??= { phase: v.phase, amp: 0 });
+    const sec = dtMs / 1000;
+    const step = moved + Math.abs(turned) * 0.15;
+    g.amp += ((sec > 0 && step / sec > 0.15 ? 1 : 0) - g.amp) * (1 - Math.exp(-sec * 8));
+    g.phase += (step / LEG_CYCLE) * Math.PI * 2;
+    for (const leg of CRAWLER_LEGS) {
+      const p = v.m.parts[leg.name]!;
+      const ph = g.phase + leg.tripod * Math.PI;
+      // each foot swings forward and back about its hip, lifting on the way forward
+      p.rotation.y = leg.side * Math.sin(ph) * LEG_SWING * g.amp;
+      p.position.y = v.m.def.parts![leg.name]!.at[1] + Math.max(0, Math.cos(ph)) * LEG_LIFT * g.amp;
+    }
   }
 
   /**
