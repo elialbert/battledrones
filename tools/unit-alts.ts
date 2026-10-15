@@ -947,7 +947,8 @@ if (view === "lineup") {
   if (F) units.push([F, 0.6, 5.5], [F, 3.7, 4.3]);
   // and Mortars (today's or a candidate) at the back
   const M = q.get("mortar");
-  if (M) units.push([M, -2.0, 3.1], [M, 3.5, 4.7]);
+  // (beside the Flak Crawlers, when they're out too)
+  if (M) units.push([M, -2.0, 3.1], F ? [M, 4.8, 5.2] : [M, 3.5, 4.7]);
   for (const [id, x, z] of units) {
     place(id, "blue", x, z, 0.75, 0.15);
     place(id, "red", 11 - x, 5.2 - z, 0.75 + Math.PI, -0.15);
