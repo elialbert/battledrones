@@ -1,10 +1,11 @@
 // Scratch gallery: candidate new models for the Raptor (too like the Lancer: both were team-edged
-// deltas), the Lancer (should read as a hover tank) and the Hornet (a big Scout: four rotors).
+// deltas), the Lancer (should read as a hover tank), the Hornet (a big Scout: four rotors) and the
+// Flak Crawler (the same tracked hull as the Stinger and Mastodon: only the turret tells them apart).
 // `npm run dev`, then /tools/unit-alts.html. A unit is a design id below, or a UnitKind for today's model.
-//   ?view=lineup&kind=<k>      today's model and every candidate for raptor|lancer|hornet, its neighbours behind
+//   ?view=lineup&kind=<k>      today's model and every candidate for raptor|lancer|hornet|flak-crawler, its neighbours behind
 //   ?view=roster&kind=<k>      one row per candidate, among the units it must not be mistaken for
 //   ?view=close&d=<unit>       one model up close, blue and red (?face=rad ?pitch=deg ?zoom=)
-//   ?view=battle&lancer=<unit>&raptor=<unit>&hornet=<unit>   a mixed skirmish at play zoom
+//   ?view=battle&lancer=<unit>&raptor=<unit>&hornet=<unit>   a mixed skirmish at play zoom (&flak=<unit> adds Flak)
 //   ?view=duel&d=<unit>        Lancers on the ground with three of <unit> overhead
 // Screenshots: progress-shots/unit-alts/. Picked and now in models.ts: Raptor B (twin-boom), Lancer L1
 // (grav-tank), Hornet H3 (airship), so "today" here (a UnitKind) shows those; the candidates stay as drawn.
@@ -82,10 +83,50 @@ function propGeo(r: number, n = 3): THREE.BufferGeometry {
   return b.build();
 }
 
+/** A barrel of length `len` from base point `at`, pitched up by `pitch`, along -Z (as models.ts). */
+function barrel(b: ModelBuilder, at: Vec3, r: number, len: number, pitch: number, hex: number, seg = 6): void {
+  const dy = Math.sin(pitch);
+  const dz = -Math.cos(pitch);
+  b.tube(r, len, seg, [at[0], at[1] + (dy * len) / 2, at[2] + (dz * len) / 2], hex, { rot: [pitch, 0, 0] });
+}
+
+/** End of a pitched barrel. */
+const barrelTip = (at: Vec3, len: number, pitch: number): Vec3 => [at[0], at[1] + Math.sin(pitch) * len, at[2] - Math.cos(pitch) * len];
+
+/** Paired road wheels at ±x (as models.ts). */
+function wheels(b: ModelBuilder, x: number, y: number, r: number, w: number, zs: number[]): void {
+  for (const z of zs)
+    for (const s of [1, -1]) {
+      b.cyl(r, r, w, 10, [s * x, y, z], TRACK, { rot: [0, 0, Math.PI / 2] });
+      b.cyl(r * 0.45, r * 0.45, w + 0.01, 6, [s * x, y, z], GM_L, { rot: [0, 0, Math.PI / 2] });
+    }
+}
+
+/** Tracked running gear at ±x: track block, road wheels and, given a colour, a fender (as models.ts). */
+function tracks(b: ModelBuilder, x: number, w: number, h: number, len: number, z = 0, fender?: number): void {
+  for (const s of [1, -1]) {
+    b.block(w, h, len, [s * x, h / 2 + 0.01, z], TRACK, { bevel: h * 0.3, edge: 1.8 });
+    const n = Math.max(3, Math.round(len / 0.16));
+    for (let i = 0; i < n; i++) {
+      const wz = z - len / 2 + (len * (i + 0.5)) / n;
+      b.cyl(h * 0.32, h * 0.32, w + 0.012, 8, [s * x, h * 0.42, wz], GM_D, { rot: [0, 0, Math.PI / 2] });
+    }
+    if (fender !== undefined) b.block(w + 0.03, 0.03, len * 0.86, [s * x, h + 0.025, z + len * 0.03], fender, { bevel: 0.012, edge: 1.35 });
+  }
+}
+
+/** A round strut from `a` to `b` (legs). */
+function strut(m: ModelBuilder, a: Vec3, c: Vec3, r: number, hex: number): void {
+  const d = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  const len = d.length();
+  const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()));
+  m.cyl(r, r, len, 6, [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2], hex, { rot: [e.x, e.y, e.z] });
+}
+
 /** Mirror a 2D outline (points with x ≥ 0) to the left side. */
 const mirror = (pts: [number, number][]): [number, number][] => pts.map(([x, z]) => [-x, z] as [number, number]).reverse();
 
-type Kind = "raptor" | "lancer" | "hornet";
+type Kind = "raptor" | "lancer" | "hornet" | "flak-crawler";
 type Design = { kind: Kind; id: string; name: string; blurb: string; make: (t: Team) => ModelDef };
 
 const DESIGNS: Design[] = [
@@ -464,6 +505,148 @@ const DESIGNS: Design[] = [
         rotors: props.map((at, i) => ({ geo: pg, at, axis: "z" as const, speed: i ? -26 : 26 }))
       };
     }
+  },
+  // ------------------------------------------------- Flak Crawler (anti-air tank) candidates ---
+  // Today it shares the Stinger's and the Mastodon's tracked hull and team fenders: only the turret
+  // differs, and at play zoom its upright barrels foreshorten to nothing. Only F4 keeps the fenders.
+  {
+    kind: "flak-crawler",
+    id: "gepard",
+    name: "F1 · Radar gun tank",
+    blurb: "Plain dark tracks, twin cannons on the turret's flanks, a big team-coloured search dish on its back",
+    make: (t) => {
+      const b = hullB();
+      tracks(b, 0.25, 0.18, 0.16, 0.84, 0);
+      b.block(0.4, 0.15, 0.8, [0, 0.2, 0], GM, { taper: 0.12, bevel: 0.035 });
+      b.block(0.36, 0.06, 0.1, [0, 0.2, -0.42], GM_D, { rot: [0.45, 0, 0], bevel: 0.015 });
+      b.block(0.3, 0.04, 0.14, [0, 0.29, 0.33], GM_D, { bevel: 0.012 });
+      light(b, [0.13, 0.22, -0.45]);
+      light(b, [-0.13, 0.22, -0.45]);
+      const hull = b.build();
+      const tu = partB();
+      tu.block(0.26, 0.15, 0.32, [0, 0.075, 0.02], GM, { taper: 0.1, bevel: 0.03 });
+      // a cannon on each flank, in a team-coloured cradle, pitched well up
+      const pitch = 0.95;
+      for (const s of [1, -1]) {
+        tu.block(0.07, 0.11, 0.22, [s * 0.165, 0.08, -0.02], t.main, { bevel: 0.012 });
+        barrel(tu, [s * 0.165, 0.09, -0.1], 0.02, 0.44, pitch, BARREL, 6);
+        barrel(tu, barrelTip([s * 0.165, 0.09, -0.1], 0.4, pitch), 0.03, 0.06, pitch, GM_D, 6);
+      }
+      // the tracking radar ball between the guns
+      tu.sphere(0.05, [0, 0.13, -0.13], GM_L, { w: 8, h: 5 });
+      // the search radar: a big dish on a mast at the back, tipped skyward
+      tu.cyl(0.016, 0.016, 0.14, 5, [0, 0.2, 0.15], GM_D);
+      tu.cyl(0.17, 0.12, 0.035, 14, [0, 0.29, 0.17], t.main, { rot: [0.45, 0, 0] });
+      tu.torus(0.17, 0.014, [0, 0.302, 0.178], GM_D, { rot: [Math.PI / 2 + 0.45, 0, 0], seg: 14 });
+      tu.cone(0.022, 0.07, 5, [0, 0.34, 0.19], GM_L, { rot: [0.45, 0, 0] });
+      light(tu, [0, 0.38, 0.21], 0.022);
+      return { hull, turret: tu.build(), mount: [0, 0.28, 0.02], muzzle: barrelTip([0.165, 0.09, -0.1], 0.46, pitch), rotors: [], height: 0.65 };
+    }
+  },
+  {
+    kind: "flak-crawler",
+    id: "halftrack",
+    name: "F2 · Half-track quad",
+    blurb: "An armoured cab on wheels up front, tracks behind, an open team-railed bed with a quad gun on a ring",
+    make: (t) => {
+      const b = hullB();
+      wheels(b, 0.21, 0.09, 0.09, 0.07, [-0.3]);
+      tracks(b, 0.23, 0.17, 0.15, 0.46, 0.17);
+      b.block(0.36, 0.1, 0.86, [0, 0.15, 0], GM_D, { bevel: 0.02 });
+      // the cab: amber visor slit, team roof, mudguards over the front wheels
+      b.block(0.34, 0.15, 0.24, [0, 0.27, -0.26], GM, { taper: 0.12, bevel: 0.03 });
+      b.block(0.28, 0.025, 0.17, [0, 0.355, -0.27], t.main, { bevel: 0.01 });
+      b.box(0.26, 0.03, 0.012, [0, 0.3, -0.385], AMBER, { glow: 0.6 });
+      b.block(0.3, 0.06, 0.08, [0, 0.19, -0.42], GM_D, { rot: [0.5, 0, 0], bevel: 0.015 });
+      b.pairBlock(0.1, 0.02, 0.18, [0.21, 0.2, -0.3], GM, { bevel: 0.008 });
+      // the open gun bed, railed in team colour
+      b.block(0.44, 0.04, 0.5, [0, 0.22, 0.15], GM, { bevel: 0.012 });
+      b.pairBlock(0.03, 0.08, 0.5, [0.205, 0.28, 0.15], t.main, { bevel: 0.01 });
+      b.block(0.44, 0.08, 0.03, [0, 0.28, 0.4], t.main, { bevel: 0.01 });
+      light(b, [0.12, 0.23, -0.44]);
+      light(b, [-0.12, 0.23, -0.44]);
+      const hull = b.build();
+      const tu = partB();
+      tu.drum(0.14, 0.13, 0.04, 12, [0, 0.02, 0], GM_D, { bevel: 0.01 });
+      tu.torus(0.14, 0.014, [0, 0.042, 0], t.main, { rot: [Math.PI / 2, 0, 0], seg: 16 });
+      // the quad mount: breech, ammo drums either side, four barrels in a square pitched steeply up
+      const pitch = 0.95;
+      tu.block(0.14, 0.1, 0.13, [0, 0.1, 0.02], GM, { bevel: 0.015 });
+      tu.cyl(0.04, 0.04, 0.05, 8, [0.1, 0.1, 0.03], GM_L, { rot: [0, 0, Math.PI / 2] });
+      tu.cyl(0.04, 0.04, 0.05, 8, [-0.1, 0.1, 0.03], GM_L, { rot: [0, 0, Math.PI / 2] });
+      for (const x of [-0.035, 0.035]) for (const y of [0.08, 0.13]) barrel(tu, [x, y, -0.03], 0.014, 0.34, pitch, BARREL, 5);
+      // the gunner's seat behind, a shield plate in front
+      tu.block(0.08, 0.05, 0.06, [0, 0.07, 0.11], GM_D, { bevel: 0.01 });
+      tu.block(0.22, 0.09, 0.015, [0, 0.11, -0.07], GM, { rot: [-0.35, 0, 0], bevel: 0.005 });
+      return { hull, turret: tu.build(), mount: [0, 0.24, 0.15], muzzle: barrelTip([0, 0.105, -0.03], 0.34, pitch), rotors: [], height: 0.6 };
+    }
+  },
+  {
+    kind: "flak-crawler",
+    id: "spider",
+    name: "F3 · Spider crawler",
+    blurb: "A Crawler that crawls: a hexagonal body on six jointed legs, team carapace, quad guns on top (legs stay still for now)",
+    make: (t) => {
+      const b = hullB();
+      // six legs: a thigh up and out to the knee, a shin down to the foot
+      for (const s of [1, -1])
+        for (const a of [-0.8, 0, 0.8]) {
+          const dx = s * Math.cos(a);
+          const dz = Math.sin(a);
+          const hip: Vec3 = [dx * 0.17, 0.22, dz * 0.22];
+          const knee: Vec3 = [dx * 0.34, 0.34, dz * 0.4];
+          const foot: Vec3 = [dx * 0.45, 0.01, dz * 0.5];
+          strut(b, hip, knee, 0.032, GM_D);
+          strut(b, knee, foot, 0.026, GM);
+          b.sphere(0.04, knee, t.main, { w: 6, h: 4 });
+          b.cone(0.03, 0.04, 5, [foot[0], 0.02, foot[2]], TRACK);
+        }
+      // the body: a dark belly, a hex hull, a team carapace on top
+      b.drum(0.2, 0.17, 0.08, 6, [0, 0.13, 0], GM_D, { scale: [1, 1, 1.3], bevel: 0.015 });
+      b.drum(0.24, 0.2, 0.12, 6, [0, 0.19, 0], GM, { scale: [1, 1, 1.3], bevel: 0.03 });
+      b.drum(0.19, 0.15, 0.03, 6, [0, 0.31, 0], t.main, { scale: [1, 1, 1.3], bevel: 0.012 });
+      // a head with amber eyes
+      b.block(0.16, 0.08, 0.1, [0, 0.22, -0.32], GM_D, { bevel: 0.015 });
+      light(b, [0.045, 0.24, -0.37], 0.025);
+      light(b, [-0.045, 0.24, -0.37], 0.025);
+      const hull = b.build();
+      const tu = partB();
+      tu.drum(0.12, 0.1, 0.08, 8, [0, 0.04, 0.02], GM, { bevel: 0.02 });
+      const pitch = 0.85;
+      tu.block(0.18, 0.06, 0.06, [0, 0.07, -0.07], GM_D, { rot: [pitch, 0, 0], bevel: 0.01 });
+      for (const x of [-0.065, -0.025, 0.025, 0.065]) barrel(tu, [x, 0.07, -0.07], 0.014, 0.3, pitch, BARREL, 5);
+      light(tu, [0, 0.09, 0.08], 0.02);
+      return { hull, turret: tu.build(), mount: [0, 0.32, 0.04], muzzle: barrelTip([0, 0.07, -0.07], 0.32, pitch), rotors: [], height: 0.55 };
+    }
+  },
+  {
+    kind: "flak-crawler",
+    id: "radome",
+    name: "F4 · Radome",
+    blurb: "Today's hull and team fenders, but a big pale radar dome with a team band for a turret, a six-barrel rotary cannon out of its face",
+    make: (t) => {
+      const b = hullB();
+      tracks(b, 0.25, 0.18, 0.16, 0.84, 0, t.main);
+      b.block(0.4, 0.15, 0.8, [0, 0.2, 0], GM, { taper: 0.12, bevel: 0.035 });
+      b.block(0.36, 0.06, 0.1, [0, 0.2, -0.42], GM_D, { rot: [0.45, 0, 0], bevel: 0.015 });
+      b.block(0.3, 0.02, 0.12, [0, 0.285, 0.33], t.main, { bevel: 0.008 });
+      light(b, [0.13, 0.22, -0.45]);
+      light(b, [-0.13, 0.22, -0.45]);
+      const hull = b.build();
+      const tu = partB();
+      tu.sphere(0.2, [0, 0.03, 0.03], WHITE, { w: 16, h: 8, phi: Math.PI / 2 });
+      tu.cyl(0.205, 0.205, 0.05, 16, [0, 0.03, 0.03], t.main);
+      // the rotary cannon: six barrels round a hub, a clamp halfway along
+      const pitch = 0.6;
+      const at: Vec3 = [0, 0.1, -0.13];
+      tu.tube(0.05, 0.08, 8, [0, 0.1 + Math.sin(pitch) * 0.03, -0.13 - Math.cos(pitch) * 0.03], GM_D, { rot: [pitch, 0, 0] });
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        barrel(tu, [Math.cos(a) * 0.025, at[1] + Math.sin(a) * 0.025 * Math.cos(pitch), at[2] + Math.sin(a) * 0.025 * Math.sin(pitch)], 0.009, 0.36, pitch, BARREL, 4);
+      }
+      tu.tube(0.04, 0.025, 8, [0, at[1] + Math.sin(pitch) * 0.24, at[2] - Math.cos(pitch) * 0.24], GM_D, { rot: [pitch, 0, 0] });
+      return { hull, turret: tu.build(), mount: [0, 0.27, 0.03], muzzle: barrelTip(at, 0.38, pitch), rotors: [], height: 0.55 };
+    }
   }
 ];
 
@@ -488,7 +671,7 @@ const AIR_H = 1.35;
 const HOVER_H = 0.12;
 const AIR = new Set<string>(["scout", "wasp", "raptor", "hornet", "mender", "condor"]);
 /** Each candidate at its unit's size on the map: longest side in tiles (models.ts UNIT_SIZE), with the 1.12 bump. */
-const SIZE: Record<Kind, number> = { raptor: 1.15, lancer: 1.05, hornet: 1.5 };
+const SIZE: Record<Kind, number> = { raptor: 1.15, lancer: 1.05, hornet: 1.5, "flak-crawler": 1.0 };
 const design = (id: string) => DESIGNS.find((d) => d.id === id);
 const defs = new Map<string, ModelDef>();
 function designDef(id: string, f: "blue" | "red"): ModelDef {
@@ -548,7 +731,10 @@ const raptorPick = q.get("raptor") ?? "lightning";
 const face = Number(q.get("face") ?? 0.35);
 if (view === "lineup") {
   // its neighbours today behind, then today's model and every candidate
-  const NEIGHBOURS: Record<Kind, string[]> = { raptor: ["lancer", "wasp"], lancer: ["stinger", "flak-crawler", "mastodon"], hornet: ["scout", "condor", "mender"] };
+  const NEIGHBOURS: Record<Kind, string[]> = {
+    raptor: ["lancer", "wasp"], lancer: ["stinger", "flak-crawler", "mastodon"], hornet: ["scout", "condor", "mender"],
+    "flak-crawler": ["stinger", "mastodon", "lancer"]
+  };
   const f = factions[0]!;
   const sp = kind === "hornet" ? 2.7 : 2.4;
   const mid = ((cands.length - 1) * sp) / 2;
@@ -566,16 +752,18 @@ if (view === "lineup") {
   const ROSTER: Record<Kind, string[]> = {
     raptor: ["lancer", "scout", "wasp", "*", "hornet", "mender", "condor"],
     lancer: ["stinger", "flak-crawler", "mortar", "mastodon", "*", "harvester", "@raptor"],
-    hornet: ["scout", "wasp", "@raptor", "*", "mender", "condor"]
+    hornet: ["scout", "wasp", "@raptor", "*", "mender", "condor"],
+    "flak-crawler": ["stinger", "*", "mastodon", "lancer", "mortar", "harvester"]
   };
   const cols = ROSTER[kind];
-  const sp = kind === "hornet" ? 1.95 : kind === "lancer" ? 1.6 : 1.75;
+  const ground = kind === "lancer" || kind === "flak-crawler";
+  const sp = kind === "hornet" ? 1.95 : ground ? 1.6 : 1.75;
   const rowH = kind === "hornet" ? 2.3 : 2.1;
   const f = factions[0]!;
   cands.forEach((id, r) => {
     const z = r * rowH;
     cols.forEach((c, i) => place(c === "*" ? id : c === "@raptor" ? raptorPick : c, f, i * sp, z, 0.3));
-    label(design(id) ? nameOf(id) : `${nameOf(id)} — today`, "", new THREE.Vector3(-sp * 0.95, kind === "lancer" ? 0 : AIR_H, z + 0.1));
+    label(design(id) ? nameOf(id) : `${nameOf(id)} — today`, "", new THREE.Vector3(-sp * 0.95, ground ? 0 : AIR_H, z + 0.1));
   });
   cols.forEach((c, i) => {
     const id = c === "*" ? kind : c === "@raptor" ? raptorPick : c;
@@ -610,6 +798,9 @@ if (view === "lineup") {
     [L, 0.0, 3.6], [L, 1.4, 4.2], [L, 0.8, 2.6], ["stinger", 2.6, 3.4], ["stinger", -1.0, 4.4], ["mastodon", 2.3, 5.1],
     [R, 2.8, 1.4], [R, 4.2, 2.0], [H, 0.4, 0.7], ["scout", 4.7, 0.5], ["condor", -1.5, 1.8]
   ];
+  // Flak Crawlers (today's or a candidate) behind the tanks, when asked for
+  const F = q.get("flak");
+  if (F) units.push([F, 0.6, 5.5], [F, 3.7, 4.3]);
   for (const [id, x, z] of units) {
     place(id, "blue", x, z, 0.75, 0.15);
     place(id, "red", 11 - x, 5.2 - z, 0.75 + Math.PI, -0.15);
