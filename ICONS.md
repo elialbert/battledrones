@@ -95,7 +95,7 @@ are shot at a 50° pitch, turned 35° clockwise so the nose points up and to
 the right. That is close to the game camera, which runs from 47° to 62°. Long
 hulls lie along the diagonal, so they fill the square. The ¾ angle also shows
 the side features that tell units apart: the Radar's dish, the SAM's missile
-rack, the Mortar's tube, the Flak's four barrels and the Lancer's skirt. The
+rack, the Mortar's huge barrel, the Flak Crawler's legs and the Lancer's skirt. The
 Gantry shows its armament stage. The Radar's and the Uplink's dishes face north
 when idle, so the ¾ turn would show their backs; their heads are turned to face
 the viewer instead.
@@ -140,11 +140,14 @@ the 54 come to 780 KB, up from 175 KB for the old 28.
 
 ### What portraits can't fix
 
-The Stinger, the Flak Crawler and the Mastodon have the same kind of hull: a
-blue slab on tracks. At 44 px the turret is the only difference. The ¾ view
-helps: the Flak's quad guns and the Mastodon's twin barrels show. A stronger
-fix is a model pass like the one the Raptor, Lancer and Hornet just had,
-giving each of the three its own hull shape and team-panel pattern.
+The Stinger, the Flak Crawler and the Mastodon had the same kind of hull: a
+blue slab on tracks, so at 44 px the turret was the only difference, and the
+Mortar's blue mudguards read the same way. Portraits couldn't fix that; a
+model pass did, like the Raptor's, Lancer's and Hornet's before it: the Flak
+Crawler is now a six-legged spider and the Mortar a siege mortar with one huge
+barrel (candidates in `tools/unit-alts.html`, sheets in
+`progress-shots/unit-alts/`). The Stinger and the Mastodon still share a hull,
+but the Mastodon is half as big again, with two tracks a side.
 
 ## Making them
 

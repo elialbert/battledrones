@@ -174,6 +174,36 @@ function missile(b: ModelBuilder, at: Vec3, len: number, t: Team, r = 0.018): vo
   b.box(0.004, r * 3.4, r * 1.8, [x, y, z + len / 2 - r], GM_D);
 }
 
+/** A round strut from `a` to `c` (legs, stabilisers). */
+function strut(m: ModelBuilder, a: Vec3, c: Vec3, r: number, hex: number): void {
+  const d = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  const len = d.length();
+  const e = new THREE.Euler().setFromQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()));
+  m.cyl(r, r, len, 6, [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2], hex, { rot: [e.x, e.y, e.z] });
+}
+
+/** A standing shell: grey case, amber tip. */
+function shell(b: ModelBuilder, at: Vec3, r = 0.016): void {
+  b.cyl(r, r, r * 4, 6, at, GM_L);
+  b.cone(r, r * 2, 6, [at[0], at[1] + r * 3, at[2]], AMBER, { glow: 0.4 });
+}
+
+/**
+ * The Flak Crawler's six legs (its ModelDef.parts, each pivoting at its hip),
+ * as the walk needs them (render/entities.ts): the side (+1 right), which
+ * tripod it steps with (front and back on one side, the middle on the other)
+ * and its angle out from the side (front legs negative, toward -Z).
+ */
+export interface CrawlerLeg {
+  name: string;
+  side: 1 | -1;
+  tripod: 0 | 1;
+  angle: number;
+}
+export const CRAWLER_LEGS: readonly CrawlerLeg[] = ([1, -1] as const).flatMap((side) =>
+  [-0.8, 0, 0.8].map((angle, i): CrawlerLeg => ({ name: `leg${side > 0 ? "R" : "L"}${i}`, side, tripod: (side > 0) === (i !== 1) ? 0 : 1, angle }))
+);
+
 // -------------------------------------------------------------- units ---
 
 type UnitBuilder = (t: Team) => ModelDef;
@@ -204,57 +234,66 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
   },
 
   "flak-crawler": (t) => {
+    // a Crawler that crawls: a hex body on six jointed legs (moving parts: they walk, render/entities.ts),
+    // a team carapace, four guns pitched at the sky. No tracks, no fenders: nothing like the tanks.
     const b = hullB();
-    tracks(b, 0.25, 0.18, 0.16, 0.84, 0, t.main);
-    b.block(0.4, 0.16, 0.78, [0, 0.21, 0], GM, { taper: 0.12, bevel: 0.035 });
-    b.block(0.36, 0.06, 0.1, [0, 0.21, -0.41], GM_D, { rot: [0.45, 0, 0], bevel: 0.015 });
-    b.block(0.17, 0.02, 0.1, [-0.04, 0.298, 0.27], t.main, { bevel: 0.01 });
-    // search radar on the rear deck
-    b.cyl(0.012, 0.012, 0.14, 4, [0.13, 0.36, 0.32], GM_D);
-    b.cyl(0.075, 0.02, 0.025, 8, [0.13, 0.44, 0.32], GM_L, { rot: [0.6, 0, 0] });
-    light(b, [0.13, 0.46, 0.3], 0.02);
-    light(b, [0.13, 0.23, -0.44]);
-    light(b, [-0.13, 0.23, -0.44]);
+    b.drum(0.2, 0.17, 0.08, 6, [0, 0.13, 0], GM_D, { scale: [1, 1, 1.3], bevel: 0.015 });
+    b.drum(0.24, 0.2, 0.12, 6, [0, 0.19, 0], GM, { scale: [1, 1, 1.3], bevel: 0.03 });
+    b.drum(0.19, 0.15, 0.03, 6, [0, 0.31, 0], t.main, { scale: [1, 1, 1.3], bevel: 0.012 });
+    // a head with amber eyes
+    b.block(0.16, 0.08, 0.1, [0, 0.22, -0.32], GM_D, { bevel: 0.015 });
+    light(b, [0.045, 0.24, -0.37], 0.025);
+    light(b, [-0.045, 0.24, -0.37], 0.025);
     const hull = b.build();
-    const tu = partB();
-    tu.block(0.3, 0.13, 0.3, [0, 0.065, 0.03], GM, { taper: 0.15, bevel: 0.03 });
-    tu.block(0.2, 0.025, 0.18, [0, 0.14, 0.06], t.main, { bevel: 0.012 });
-    tu.pairBlock(0.04, 0.08, 0.18, [0.165, 0.065, 0.05], t.dark, { bevel: 0.01 });
-    const pitch = 0.42;
-    for (const x of [-0.11, -0.05, 0.05, 0.11]) {
-      barrel(tu, [x, 0.08, -0.08], 0.018, 0.34, pitch, BARREL, 5);
-      barrel(tu, barrelTip([x, 0.08, -0.08], 0.3, pitch), 0.025, 0.05, pitch, GM_D, 6);
+    // each leg about its hip: a thigh up and out to a team-coloured knee, a shin down to the foot
+    const parts: NonNullable<ModelDef["parts"]> = {};
+    for (const leg of CRAWLER_LEGS) {
+      const dx = leg.side * Math.cos(leg.angle);
+      const dz = Math.sin(leg.angle);
+      const hip: Vec3 = [dx * 0.17, 0.22, dz * 0.22];
+      const knee: Vec3 = [dx * 0.34 - hip[0], 0.34 - hip[1], dz * 0.4 - hip[2]];
+      const foot: Vec3 = [dx * 0.45 - hip[0], 0.01 - hip[1], dz * 0.5 - hip[2]];
+      const lb = partB();
+      strut(lb, [0, 0, 0], knee, 0.032, GM_D);
+      strut(lb, knee, foot, 0.026, GM);
+      lb.sphere(0.04, knee, t.main, { w: 6, h: 4 });
+      lb.cone(0.03, 0.04, 5, [foot[0], foot[1] + 0.01, foot[2]], TRACK);
+      parts[leg.name] = { geo: lb.build(), at: hip };
     }
-    tu.block(0.3, 0.07, 0.05, [0, 0.085, -0.12], GM_D, { rot: [pitch, 0, 0], bevel: 0.012 });
-    light(tu, [0, 0.12, -0.13], 0.025);
-    return { hull, turret: tu.build(), mount: [0, 0.29, 0.02], muzzle: barrelTip([0, 0.08, -0.08], 0.36, pitch), rotors: [], height: 0.6 };
+    const tu = partB();
+    tu.drum(0.12, 0.1, 0.08, 8, [0, 0.04, 0.02], GM, { bevel: 0.02 });
+    const pitch = 0.85;
+    tu.block(0.18, 0.06, 0.06, [0, 0.07, -0.07], GM_D, { rot: [pitch, 0, 0], bevel: 0.01 });
+    for (const x of [-0.065, -0.025, 0.025, 0.065]) barrel(tu, [x, 0.07, -0.07], 0.014, 0.3, pitch, BARREL, 5);
+    light(tu, [0, 0.09, 0.08], 0.02);
+    return { hull, turret: tu.build(), mount: [0, 0.32, 0.04], muzzle: barrelTip([0, 0.07, -0.07], 0.32, pitch), rotors: [], parts, height: 0.55 };
   },
 
   mortar: (t) => {
+    // a siege mortar: a squat carriage on four big wheels, team-coloured cradle cheeks and one huge,
+    // fat, banded barrel (the tanks' blue fenders and its own old mudguards read alike from above)
     const b = hullB();
-    b.block(0.34, 0.1, 0.84, [0, 0.15, 0], GM_D, { bevel: 0.02 });
-    wheels(b, 0.21, 0.1, 0.1, 0.08, [-0.28, 0, 0.28]);
-    b.block(0.34, 0.13, 0.58, [0, 0.26, 0.1], GM, { taper: 0.15, bevel: 0.03 });
-    b.block(0.3, 0.13, 0.2, [0, 0.27, -0.3], GM, { bevel: 0.03 });
-    b.box(0.24, 0.05, 0.02, [0, 0.3, -0.405], AMBER, { glow: 0.5 });
-    b.block(0.26, 0.03, 0.16, [0, 0.345, -0.3], t.main, { bevel: 0.012 });
-    // team mudguards over the wheels
-    b.pairBlock(0.1, 0.025, 0.16, [0.21, 0.215, -0.28], t.main, { bevel: 0.01 });
-    b.pairBlock(0.1, 0.025, 0.44, [0.21, 0.215, 0.14], t.main, { bevel: 0.01 });
-    b.pair(0.015, 0.06, 0.4, [0.172, 0.26, 0.1], t.main);
-    b.pair(0.06, 0.03, 0.14, [0.22, 0.08, 0.36], GM_L);
-    light(b, [0.11, 0.25, -0.41], 0.025);
-    light(b, [-0.11, 0.25, -0.41], 0.025);
+    b.block(0.4, 0.1, 0.72, [0, 0.16, 0.02], GM_D, { bevel: 0.02 });
+    wheels(b, 0.25, 0.13, 0.13, 0.1, [-0.22, 0.24]);
+    // a front armour box with an amber slit, a shell locker at the back
+    b.block(0.36, 0.13, 0.18, [0, 0.27, -0.26], GM, { taper: 0.12, bevel: 0.03 });
+    b.box(0.24, 0.03, 0.012, [0, 0.29, -0.352], AMBER, { glow: 0.55 });
+    b.block(0.3, 0.08, 0.12, [0, 0.24, 0.32], GM, { bevel: 0.015 });
+    for (const x of [-0.09, -0.03, 0.03, 0.09]) shell(b, [x, 0.28, 0.32], 0.014);
+    light(b, [0.12, 0.25, -0.36], 0.025);
+    light(b, [-0.12, 0.25, -0.36], 0.025);
     const hull = b.build();
     const tu = partB();
-    tu.drum(0.15, 0.13, 0.06, 8, [0, 0.03, 0], GM, { bevel: 0.015 });
-    tu.pairBlock(0.035, 0.13, 0.11, [0.085, 0.1, 0.0], GM_D, { bevel: 0.01 });
-    const pitch = 0.85;
-    barrel(tu, [0, 0.1, 0.02], 0.06, 0.34, pitch, BARREL, 8);
-    barrel(tu, [0, 0.1, 0.02], 0.068, 0.12, pitch, t.main, 8);
-    const tip = barrelTip([0, 0.1, 0.02], 0.34, pitch);
-    tu.tube(0.074, 0.045, 8, [tip[0], tip[1] - 0.015, tip[2] + 0.012], GM_D, { rot: [pitch, 0, 0] });
-    return { hull, turret: tu.build(), mount: [0, 0.33, 0.14], muzzle: tip, rotors: [], height: 0.6 };
+    tu.block(0.28, 0.05, 0.24, [0, 0.025, 0.02], GM_D, { bevel: 0.012 });
+    tu.pairBlock(0.05, 0.17, 0.2, [0.16, 0.09, 0.02], t.main, { bevel: 0.015 });
+    const pitch = 0.9;
+    const at: Vec3 = [0, 0.13, 0.06];
+    barrel(tu, at, 0.11, 0.34, pitch, BARREL, 10);
+    for (const k of [0.1, 0.22]) barrel(tu, barrelTip(at, k, pitch), 0.12, 0.05, pitch, t.main, 10);
+    barrel(tu, barrelTip(at, 0.3, pitch), 0.128, 0.05, pitch, GM_D, 10);
+    const tip = barrelTip(at, 0.345, pitch);
+    tu.cyl(0.085, 0.085, 0.006, 10, tip, TRACK, { rot: [pitch - Math.PI / 2, 0, 0] });
+    return { hull, turret: tu.build(), mount: [0, 0.22, 0.02], muzzle: tip, rotors: [], height: 0.6 };
   },
 
   mastodon: (t) => {
@@ -1280,6 +1319,8 @@ export function unitScale(kind: UnitKind): number {
     const d = unitDef(kind, "blue");
     const box = d.hull.boundingBox!.clone();
     if (d.turret) box.union(d.turret.boundingBox!.clone().translate(new THREE.Vector3(...d.mount)));
+    // (moving parts count too: the Flak Crawler's legs are most of its footprint)
+    for (const p of Object.values(d.parts ?? {})) if (!p.parent) box.union(p.geo.boundingBox!.clone().translate(new THREE.Vector3(...p.at)));
     const size = Math.max(box.max.x - box.min.x, box.max.z - box.min.z);
     s = (UNIT_SIZE[kind] / size) * UNIT_BUMP;
     scales.set(kind, s);
