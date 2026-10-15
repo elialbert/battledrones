@@ -50,8 +50,11 @@ export default defineConfig({
   server: { host: true },
   define: {
     __TERRAIN_REVS__: JSON.stringify(terrainRevisions()),
-    // the sim this build plays: the battle viewer warns when a record was played by other code
-    __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url))))
+    // the sim this build plays: the battle viewer checks a record played by other code before it vouches for it
+    __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url)))),
+    // the version tag this build is (v11), from tools/build-pages.mjs; null for main and local builds.
+    // A record pinned to it (BattleRecord.version) is known to replay exactly, with nothing to check
+    __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null)
   },
   build: {
     target: "es2022",
@@ -77,6 +80,9 @@ export default defineConfig({
         // offline, but /v1/ etc. must reach their own game and service worker.
         navigateFallback: null,
         globPatterns: ["**/*.{js,css,html}"],
+        // the battle viewer's check ahead (game/replay-check.worker.ts) carries a copy of the sim, 50 KB
+        // gzipped and new with every sim change: fetched only when a replay needs checking
+        globIgnores: ["**/replay-check.worker-*.js"],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [
           {

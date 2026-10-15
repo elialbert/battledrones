@@ -8,6 +8,7 @@
 //   npx vite-node tools/arena.ts stats battles/*.json [--detail]
 //   npx vite-node tools/arena.ts watch battles/<file>.json
 //   npx vite-node tools/arena.ts upgrade battles/<file>.json [...] [--commit <sha>]
+//   npx vite-node tools/arena.ts pin --version v11 battles/<file>.json [...]
 //
 // Seats: `ai:<personality>:<difficulty>` (the built-in commander),
 // `scripted` or `scripted:<file.json>` (a fixed script, for tests), and in
@@ -329,7 +330,56 @@ function upgrade() {
   }
 }
 
-const commands: Record<string, () => unknown> = { run, serve, series, replay: replayCmd, stats, watch, upgrade };
+/**
+ * Pin records to a version of the game (in place): replay each on this
+ * checkout's sim, and if it replays exactly (every hash check, and the same
+ * ending), write the version tag into it (BattleRecord.version). That
+ * version's build then plays it with nothing to check, and its links go
+ * there. The tag must hold this checkout's sim: one that exists is checked,
+ * and a new one must be cut from a commit with it.
+ */
+function pin() {
+  const files = positional();
+  const version = arg("version");
+  if (!files.length || !version) die("pin --version <tag> <record.json> [...]");
+  if (!/^v[0-9][A-Za-z0-9.+-]*$/.test(version)) die(`${version} isn't a version tag (v11, v9.1.0…)`);
+  const git = (...a: string[]) => execFileSync("git", a, { cwd: ROOT, stdio: "ignore" });
+  const tagged = (() => {
+    try {
+      git("rev-parse", "--quiet", "--verify", `refs/tags/${version}`);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  if (tagged) {
+    try {
+      git("diff", "--quiet", version, "--", "src/sim");
+    } catch {
+      die(`${version} has other sim code than this checkout: check ${version} out to pin records to it`);
+    }
+  } else console.log(`${version} isn't tagged yet: tag a commit with this sim (${simHash()})`);
+  for (const f of files) {
+    const r = readRecord(f);
+    const res = replay(r);
+    const w = res.world;
+    const won = w.winner === "draw" ? null : w.winner;
+    const why =
+      res.divergedAt !== null ? `diverges at ${clock(res.divergedAt)}`
+      : !res.checked ? "no hash checks"
+      : r.end && (w.tick !== r.end.tick || won !== r.end.winner) ? `ends differently (${verdict(r)}; here ${won ?? "no winner"} at ${clock(w.tick)})`
+      : null;
+    if (why) {
+      console.log(`${basename(f)}: ${why}: not pinned`);
+      process.exitCode = 2;
+      continue;
+    }
+    writeRecord(f, { ...r, version });
+    console.log(`${basename(f)}: ${res.checked} hash checks, all match: pinned to ${version}`);
+  }
+}
+
+const commands: Record<string, () => unknown> = { run, serve, series, replay: replayCmd, stats, watch, upgrade, pin };
 const fn = cmd ? commands[cmd] : undefined;
 if (!fn) die(`usage: npx vite-node tools/arena.ts <${Object.keys(commands).join("|")}> [options]\nsee the header of tools/arena.ts and AGENT-BATTLES.md`);
 await fn();

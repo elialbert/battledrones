@@ -21,9 +21,10 @@ for (const tag of tags) {
   if (!/^v[0-9][A-Za-z0-9.+-]*$/.test(tag)) throw new Error(`Unsupported version tag: ${tag}`);
 }
 
-function build(cwd, destination, publicBase) {
+// A tag's build knows its tag (VERSION_TAG: vite.config.ts), so battle records pinned to it play unchecked.
+function build(cwd, destination, publicBase, tag = null) {
   execFileSync("npm", ["run", "build", "--", "--base", publicBase,
-    "--outDir", destination, "--emptyOutDir"], { cwd, stdio: "inherit" });
+    "--outDir", destination, "--emptyOutDir"], { cwd, stdio: "inherit", env: { ...process.env, VERSION_TAG: tag ?? "" } });
   if (!existsSync(join(destination, "index.html"))) throw new Error(`Missing build: ${destination}`);
 }
 
@@ -48,7 +49,7 @@ for (const tag of tags) {
     execFileSync("git", ["archive", "--format=tar", "--output", archive, `refs/tags/${tag}`], { cwd: root });
     execFileSync("tar", ["-xf", archive, "-C", source]);
     execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: source, stdio: "inherit" });
-    build(source, destination, version.path);
+    build(source, destination, version.path, tag);
     createVersionArchive(destination, version);
   } finally {
     rmSync(temporary, { recursive: true, force: true });

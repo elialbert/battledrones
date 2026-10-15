@@ -87,6 +87,8 @@ export interface BattleRecord {
   usage: Partial<Record<Faction, Usage>>;
   /** Re-simulated on newer sim code (resimulate), oldest first: what it was before each time. */
   upgraded?: Upgrade[];
+  /** A version tag of the game (v11) this record replays exactly on, checked (tools/arena.ts pin): its links go there. */
+  version?: string;
 }
 
 /** One re-simulation: the code the record had been played (or last re-simulated) by, and how it ended then. */
@@ -236,6 +238,8 @@ export function resimulate(r: BattleRecord, code: { commit: string | null; sim: 
     ...r,
     commit: code.commit,
     sim: code.sim,
+    // (new hashes: the version it was pinned to no longer plays them)
+    version: undefined,
     hashes,
     tick: w.tick,
     end,

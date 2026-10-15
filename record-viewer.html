@@ -637,6 +637,7 @@ function renderHeader() {
   if (d.created) parts.push(`<span>created <b>${esc(new Date(d.created).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }))}</b></span>`);
   if (d.commit) parts.push(`<span>commit <b class="mono">${esc(String(d.commit).slice(0, 10))}</b></span>`);
   if (d.sim) parts.push(`<span>sim <b class="mono">${esc(d.sim)}</b></span>`);
+  if (d.version) parts.push(`<span>replays on <b class="mono">${esc(d.version)}</b></span>`);
   parts.push(`<span><b class="mono">${(end ? end.tick : num(d.tick)).toLocaleString()}</b> of ${num(d.maxTicks).toLocaleString()} ticks · <b class="mono">${M.per}</b> per round</span>`);
   parts.push(`<span>map <b class="mono">${M.frame.W}×${M.frame.H}</b></span>`);
   const played = asPlayed();
