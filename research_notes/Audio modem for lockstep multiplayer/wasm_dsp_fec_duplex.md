@@ -288,8 +288,8 @@ The other options all fall short:
 **(c) TDD**
 
 - **Guard time.** Guard = propagation (≤3 ms at 1 m) + output/input latency jitter + the time for the own transmission's room tail to decay below the peer's level.
-- **Why the tail dominates.** Computed from the patent formula with V=60 m³ and T=0.5 s, Dc ≈ 0.62 m for Q=1 and about 0.88 m for Q=2. The search tool's summary stated about 1.2 m, which appears to be an arithmetic error. At peer distances of 0.1–1 m, the peer's direct sound is only about 0–15 dB above the room's reverberant field. The own transmission's reverberant tail starts at that same reverberant-field level.
-- **Resulting guard.** With RT60 = 0.5 s (120 dB/s decay), getting the own tail 10–20 dB below the peer takes about 80–170 ms.
+- **Why the tail dominates.** Computed from the patent formula with V=60 m³ and T=0.5 s, Dc ≈ 0.62 m for Q=1 and about 0.88 m for Q=2. The search tool's summary stated about 1.2 m, which appears to be an arithmetic error. With Dc ≈ 0.62 m, the peer's direct sound relative to the room's reverberant field is 20·log10(Dc/d): about +16 dB at 0.1 m, +2 dB at 0.5 m and −4 dB at 1 m. The own transmission's reverberant tail starts at that same reverberant-field level.
+- **Resulting guard.** With RT60 = 0.5 s (120 dB/s decay), getting the own tail 10–20 dB below the peer takes almost no time at 0.1 m, about 100–180 ms at 0.5 m, and about 120–200 ms at 1 m.
 - **Conclusion.** Pure same-band TDD therefore wastes most of a 100 ms frame unless the tail is cancelled per (b), or the slots also alternate bands (TDD plus FDD hybrid).
 - **Latency itself is not a guard problem.** Both phones' output and input latencies are fixed offsets that can be calibrated once by loopback. It only becomes a problem if it jitters. Bluetooth output adds 100+ ms and should be detected and refused.
 
