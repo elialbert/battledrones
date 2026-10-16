@@ -244,6 +244,8 @@ node tools/model-portraits.mjs --all  # reshoot every HUD portrait from the 3D m
                        # vehicles reference page: /vehicles.html (built into dist/ too)
                        # battle record viewer: /record-viewer.html[?replay=<record>] (built into dist/ too,
                        #   with battles/showcase/; the game takes ?replay=<record> as well)
+                       # radio probe: /radio-probe.html (built into dist/ too) measures a phone-to-phone
+                       #   sound link, for multiplayer over audio (reports/Audio modem for lockstep multiplayer.md)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
