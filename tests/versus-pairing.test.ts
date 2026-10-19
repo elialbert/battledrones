@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PacketAir, type PacketAirOptions } from "../src/link/packet-air";
 import { RoomLink } from "../src/link/room-transport";
+import type { RoomSide } from "../src/link/sim/room";
 import type { BandPlan, BandRole, LinkPacket, LinkTransport } from "../src/link/transport";
 import { worldHash } from "../src/sim/checksum";
 import { BIOMES, randomMapId } from "../src/sim/mapgen";
@@ -14,7 +15,7 @@ import { BitWriter, CodecError } from "../src/versus/codec";
 import { rxqOf } from "../src/versus/lockstep";
 import {
   FAILED_MESSAGE, LOBBY_FRAME_MAX, LOBBY_PROTO, NOTHING_HEARD_MESSAGE, NOTHING_HEARD_MS, PICK_TIMEOUT_MS, Pairing,
-  VERSION_MESSAGE, confHash, delayFor, matchSeed, readLobbyFrame, readLobbyHeader, writeLobbyFrame,
+  VERSION_MESSAGE, confHash, delayFor, matchSeed, packetMs, readLobbyFrame, readLobbyHeader, writeLobbyFrame,
   type DuelConfig, type HostOffer, type LobbyFrame, type PairingPhase, type PairingResult, type PairingState
 } from "../src/versus/pairing";
 
@@ -310,7 +311,11 @@ describe("the lobby frame", () => {
     expect(BIOMES.length).toBeLessThanOrEqual(8);
     expect(MUTATOR_IDS.length).toBeLessThanOrEqual(12);
     for (const m of MAPS) expect(() => writeLobbyFrame({ ...randomFrame(rng(1)), role: "host", config: { mapId: m.id, mutators: [...MUTATOR_IDS], delay: 3, hostSide: "blue", fast: true } })).not.toThrow();
-    expect([0, 100, 200, 400, 500, 501, 1000, 1100, 1101, 9999].map(delayFor)).toEqual([3, 3, 3, 4, 4, 5, 7, 7, 8, 8]);
+    // D = clamp(ceil((rtt / 2 + P + 50 ms) / 100 ms), 3, 8), P the starting mode's packet period on the plan
+    expect([packetMs("high", "fast"), packetMs("high", "robust"), packetMs("low", "fast"), packetMs("low", "robust")]).toEqual([100, 200, 200, 400]);
+    expect([0, 300, 301, 500, 501, 1100, 1101, 9999].map((rtt) => delayFor(rtt, 100))).toEqual([3, 3, 4, 4, 5, 7, 8, 8]);
+    expect([0, 100, 101, 500, 501, 900, 901].map((rtt) => delayFor(rtt, 200))).toEqual([3, 3, 4, 5, 6, 7, 8]);
+    expect([0, 100, 101, 9999].map((rtt) => delayFor(rtt, 400))).toEqual([5, 5, 6, 8]);
     expect(matchSeed(1, 2)).toBe(hash32(1, 2, 1));
     const c: DuelConfig = { mapId: "riverlands", mutators: [], delay: 4, hostSide: "blue", fast: false };
     const h = confHash(c, "high", 10, 20);
@@ -338,7 +343,7 @@ describe("two phones pairing over PacketAir", () => {
       const d = duel({ offer, seed: 10 + i, air: { phaseMs: [30, 170] }, host: { pickAfterMs: 500 }, guest: { pick: (s) => s.offered[0]!, pickAfterMs: 1200 } });
       const [h, g] = pairUp(d);
       expectAgreed(d, h, g, offer);
-      expect(h.delay).toBe(delayFor(500));
+      expect(h.delay).toBe(delayFor(500, packetMs("high", "fast")));
       expect(d.host.pairing.state().rtt.median).toBe(500);
       expect(h.fast).toBe(true); // (30 dB both ways)
       if (offer.mutators.includes("armada")) expect(h.setup.openers).toEqual({});
@@ -359,27 +364,73 @@ describe("two phones pairing over PacketAir", () => {
         const [h] = pairUp(d, 60_000);
         const rtt = d.host.pairing.state().rtt;
         expect(rtt.samples.length).toBe(5);
+        // (30 dB both ways: the match starts fast, whose packet period D allows for)
+        expect(h.fast).toBe(true);
+        const P = packetMs("high", "fast");
         if (phaseMs) {
           expect(rtt.median).toBe(2 * latencyMs);
-          expect(h.delay).toBe(delayFor(2 * latencyMs));
+          expect(h.delay).toBe(delayFor(2 * latencyMs, P));
         } else {
           expect(Math.abs(rtt.median! - 2 * latencyMs)).toBeLessThanOrEqual(5);
-          expect([delayFor(2 * latencyMs - 5), delayFor(2 * latencyMs + 5)]).toContain(h.delay);
+          expect([delayFor(2 * latencyMs - 5, P), delayFor(2 * latencyMs + 5, P)]).toContain(h.delay);
         }
         // the guest measures the same round trip
         const gm = d.guest.pairing.state().rtt.median!;
         expect(Math.abs(gm - 2 * latencyMs)).toBeLessThanOrEqual(5);
       }
     }
-    expect([100, 250, 500].map((l) => delayFor(2 * l))).toEqual([3, 4, 7]);
+    expect([100, 250, 500].map((l) => delayFor(2 * l, packetMs("high", "fast")))).toEqual([3, 4, 7]);
+    // and a robust start allows for its packets, twice as long
+    expect([100, 250, 500].map((l) => delayFor(2 * l, packetMs("high", "robust")))).toEqual([4, 5, 8]);
   });
 
-  it("starts fast only when both phones' last 10 frames heard well", { timeout: 60_000 }, () => {
-    for (const [snrDb, fast] of [[30, true], [15, true], [14.9, false], [6, false]] as const) {
+  it("starts fast only when both phones' last 10 frames heard well (12 dB), with D for the starting mode's packets", { timeout: 60_000 }, () => {
+    // (at 250 ms each way: D = 4 with fast's 100 ms packets to wait for, 5 with robust's 200)
+    for (const [snrDb, fast, D] of [[30, true, 4], [12, true, 4], [11.9, false, 5], [6, false, 5]] as const) {
       const d = duel({ seed: 60, air: { snrDb } });
       const [h, g] = pairUp(d);
-      expect([h.fast, g.fast]).toEqual([fast, fast]);
+      expect([h.fast, g.fast], `${snrDb} dB`).toEqual([fast, fast]);
+      expect([h.delay, g.delay], `${snrDb} dB`).toEqual([D, D]);
     }
+    // one way is enough to keep it robust
+    for (const way of ["ab", "ba"] as const) {
+      const d = duel({ seed: 61, air: { snrDb: 30 } });
+      d.air.setSnr(11.9, way);
+      const [h] = pairUp(d);
+      expect(h.fast, way).toBe(false);
+    }
+    // a phone that hears its friend last counts only frames built since: the one on the air as it first heard was
+    // built before, saying rxq 0, and would make the host's first offer robust (which the guest echoes at once, and the
+    // host freezes on). Robust packets (the lobby's), so its ten frames fill before the round trips' wait has passed
+    for (const [way, seed] of [["ba", 62], ["ab", 63]] as const) {
+      const d = duel({ seed, air: { snrDb: 30, latencyMs: 250 } });
+      d.air.outage(3000, way);
+      const [h, g] = pairUp(d);
+      expect([h.fast, g.fast], way).toEqual([true, true]);
+    }
+  });
+
+  it("waits out a receiver's warm-up: fast at once, robust only once the windows have said so for 8 more frames", { timeout: 60_000 }, () => {
+    // a receiver's first packets after lock read low while its clock tracker converges (the modem at ±300 ppm): here
+    // one way's first 6 packets read 6 dB, then 30. Without the wait, the host's offer as its windows filled held them
+    // (its own frames, or the guest's): robust, which the guest echoed and the host froze on
+    const warmUp = (pks: LinkPacket[], ph: Phone): LinkPacket[] =>
+      pks.map((p, i) => (ph.heard.length - pks.length + i < 6 ? { ...p, snrDb: 6 } : p));
+    for (const way of ["host", "guest"] as const) {
+      const d = duel({ seed: 64, air: { phaseMs: [30, 170] }, [way]: { hear: warmUp } });
+      const [h, g] = pairUp(d);
+      expect([h.fast, g.fast], `${way} warming up`).toEqual([true, true]);
+      expect(h.delay).toBe(delayFor(d.host.pairing.state().rtt.median!, packetMs("high", "fast")));
+    }
+    // a link that stays poor starts robust, its offer 8 frames (1.6 s of robust packets) after a fast one would have gone
+    const firstOffer = (snrDb: number) => {
+      const d = duel({ seed: 65, air: { snrDb, phaseMs: [30, 170] } });
+      const [h] = pairUp(d);
+      return { fast: h.fast, at: d.host.said.find((f) => readLobbyFrame(f.bits, f.nbits).config)!.at };
+    };
+    const [good, poor] = [firstOffer(30), firstOffer(6)];
+    expect([good.fast, poor.fast]).toEqual([true, false]);
+    expect(poor.at - good.at).toBe(8 * 200);
   });
 
   for (const loss of [0.1, 0.3])
@@ -938,8 +989,12 @@ describe("a pairing under way", () => {
 describe("two phones pairing over the modem", () => {
   it("pair over RoomLink (the real modem in a simulated room), and meet a reset at GO", { timeout: 180_000 }, () => {
     const offer: HostOffer = { map: "riverlands", mutators: [] };
-    for (const [seed, b, resetAtGo] of [[5, { sampleRate: 44100, ppm: 100 }, false], [6, {}, false], [7, {}, true]] as const) {
-      const link = new RoomLink({ seed, distanceCm: 20, b });
+    // (the last two at the modem's clock tolerance, ±300 ppm a phone: each receiver's first packets after lock read
+    // 6–14 dB, and before ROBUST_WAIT_FRAMES the host offered robust off them, at D = 6)
+    const cases: [number, RoomSide, RoomSide, boolean][] = [[5, {}, { sampleRate: 44100, ppm: 100 }, false], [6, {}, {}, false], [7, {}, {}, true],
+      [8, { ppm: 300 }, { ppm: -300 }, false], [7, { ppm: -300 }, { ppm: 300 }, false]];
+    for (const [seed, a, b, resetAtGo] of cases) {
+      const link = new RoomLink({ seed, distanceCm: 20, a, b });
       const host = phone(link.a, { role: "host", host: offer, seed: 11, pickAfterMs: resetAtGo ? 2000 : 300 });
       const guest = phone(link.b, { role: "guest", seed: 12 });
       const d: Pair = {
@@ -961,12 +1016,15 @@ describe("two phones pairing over the modem", () => {
       }
       const [h, g] = pairUp(d, 30_000);
       expectAgreed(d, h, g, offer);
-      // the room's round trip: two speaker-to-microphone paths and the modem's decoding, about 170 ms
+      // the room's round trip, packet start to fully received both ways: two speaker-to-microphone paths (75 ms each)
+      // and two of the lobby's robust packets (200 ms each), about 550 ms; so D = 5 for a fast start (4 at 500 ms or
+      // less, 6 for a robust one)
       const rtt = host.pairing.state().rtt;
       expect(rtt.samples.length).toBe(5);
-      expect(rtt.median!).toBeGreaterThan(120);
-      expect(rtt.median!).toBeLessThan(250);
-      expect([h.delay, h.fast]).toEqual([delayFor(rtt.median!), true]);
+      expect(rtt.median!).toBeGreaterThan(520);
+      expect(rtt.median!).toBeLessThan(600);
+      expect([h.fast, h.delay], `room ${seed}, ${a.ppm ?? 0}/${b.ppm ?? 0} ppm`).toEqual([true, 5]);
+      expect(h.delay).toBe(delayFor(rtt.median!, packetMs("high", "fast")));
       expect(host.pairing.state().restarts).toBe(resetAtGo ? 1 : 0);
     }
   });

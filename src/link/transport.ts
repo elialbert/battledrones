@@ -39,15 +39,15 @@ export interface LinkPacket {
   snrDb: number | null;
   /**
    * When the packet finished arriving at this phone, on this link's clock
-   * (ms): its last sample, as this phone's receiver places it. Nothing can
-   * decode a packet earlier, so every transport stamps the same instant — the
-   * modem's (RoomLink, WorkletTransport) its first DFT window plus the rest of
-   * the packet, PacketAir its delivery — and never later than now() when
-   * polled. A slot is a packet's start on the sender's clock, so the pairing's
-   * round trip (a ping's slot to its echo's arrival, less the hold) is packet
-   * start to fully received both ways, both packets' air time included; and a
-   * turn reaches the peer that, plus its wait for the next packet start, plus
-   * decoding, after it was sealed.
+   * (ms): its last sample, as this phone's receiver places it, the earliest
+   * anything could decode it. Every transport stamps that instant, the
+   * modem's (RoomLink, WorkletTransport) as its first DFT window plus the
+   * rest of the packet, PacketAir and a relay as its delivery, and never
+   * later than now() when polled. A slot is a packet's start on the sender's
+   * clock, so the pairing's round trip (a ping's slot to its echo's arrival,
+   * less the hold) runs from packet start to fully received both ways, both
+   * packets' air time included; a sealed turn also waits for the next packet
+   * start (pairing.ts delayFor).
    */
   at: number;
   /**
@@ -92,13 +92,14 @@ export interface LinkTransport {
    * protection"). The session drops every game frame whose `session` is
    * false, whatever the transport, so a game frame of another pairing (or of
    * none) can't get into a match. The modem enforces it with the CRC itself.
-   * A transport without a CRC (PacketAir, a relay carrying bare frames) must
-   * emulate it: carry the sender's key with each game frame and drop the
-   * frame at a receiver whose key differs, as PacketAir does, or report
-   * `session` true only for game frames the sender sent under the receiver's
-   * key. Lobby frames always pass, with `session` false. One that reports
-   * `session` false for every game frame plays no match at all: both phones
-   * stall at tick D. No transport can unset a key: a new one replaces it.
+   * A transport without the modem's CRC (PacketAir, a relay) must emulate it:
+   * carry the sender's key with each game frame and drop the frame at a
+   * receiver whose key differs, as PacketAir does (RelayTransport carries the
+   * modem's keyed CRC itself), or report `session` true only for game frames
+   * the sender sent under the receiver's key. Lobby frames always pass, with
+   * `session` false. One that reports `session` false for every game frame
+   * plays no match at all: both phones stall at tick D. No transport can
+   * unset a key: a new one replaces it.
    */
   setSessionKey(hostNonce: number, guestNonce: number): void;
   stats(): LinkStats;

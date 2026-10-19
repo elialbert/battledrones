@@ -8,7 +8,8 @@
 // the rule that the worklet's import graph uses only the AudioWorklet's
 // globals. (tools/worklet-smoke.mjs runs the built worklet in Chromium.)
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { ModemCore, type ModemConfig, type ModemStats } from "../src/link/modem/core";
+import { ModemCore, type ModemConfig, type ModemStats, type RxPacket } from "../src/link/modem/core";
+import { PACKET_SYMBOLS, timing } from "../src/link/modem/params";
 import { Room, type RoomEndpoint, type RoomOptions } from "../src/link/sim/room";
 import { PAYLOAD_BITS, type LinkPacket, type OutFrame } from "../src/link/transport";
 import { loadWorklet, WorkletTransport } from "../src/link/worklet-transport";
@@ -213,7 +214,9 @@ describe("WorkletTransport", () => {
     );
     const [p, ...more] = tr.poll();
     expect(more).toEqual([]);
-    expect(p).toEqual({ bits: new Uint8Array([0x80, 1]), nbits: 188, snrDb: 20, at: 1134, session: false });
+    // (a packet is stamped at its last sample: a fast packet of the high plan ends 91 ms after its first DFT window
+    // starts, the back-off, a symbol and a useful part, so 9 ms before the frame the context has reached)
+    expect(p).toEqual({ bits: new Uint8Array([0x80, 1]), nbits: 188, snrDb: 20, at: 1225, session: false });
     expect(tr.slots()).toEqual([1184, 1234]);
     expect(tr.slots()).toEqual([]);
     expect(tr.takeGaps()).toEqual([
@@ -223,7 +226,7 @@ describe("WorkletTransport", () => {
     // now() runs on while the context's clock stands still (suspended), and sinceRx with it
     clock.t += 500;
     expect(tr.now()).toBe(1734);
-    expect(tr.stats().sinceRx).toBe(600);
+    expect(tr.stats().sinceRx).toBe(509);
     // a transport replacing this one (a rebuilt context) carries its clock on
     const next = new WorkletTransport(asCtx(fakeContext()), cfgOf(), {
       clock: () => clock.t,
@@ -737,14 +740,17 @@ describe("two phones through their worklets", () => {
       expect(keys.slice(1)).toEqual(rotation([10, 20, 30], keys[0]!, keys.length - 1));
       expect(w.got[0].map(keyOf).filter((k) => k !== 77)).toEqual([]);
       expect(w.got[0].length).toBeGreaterThan(30);
-      // each packet's `at` is its first DFT window on the receiver's clock, within the block it was rendered in
+      // each packet's `at` is its last sample on the receiver's clock (its first DFT window, the back-off, P − 1
+      // whole symbols and a useful part), within the block it was rendered in
       for (const side of [0, 1] as const) {
         const ph = side ? w.guest : w.host;
-        const rx = kinds(ph.worker, "rx") as ({ t: "rx" } & { sample: number })[];
+        const rx = kinds(ph.worker, "rx") as ({ t: "rx" } & RxPacket)[];
         const pk = w.got[side];
+        const t = timing(w.sr[side]);
         expect(pk.length).toBe(rx.length);
         pk.forEach((p, i) => {
-          const ms = (rx[i]!.sample / w.sr[side]) * 1000;
+          const r = rx[i]!;
+          const ms = ((r.sample + t.backoff + (PACKET_SYMBOLS[r.plan][r.mode] - 1) * t.ts + t.N) / w.sr[side]) * 1000;
           expect(p.at).toBeLessThanOrEqual(ms + 1e-6);
           expect(p.at).toBeGreaterThan(ms - (128 / w.sr[side]) * 1000 - 1e-6);
         });

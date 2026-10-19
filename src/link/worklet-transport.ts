@@ -16,7 +16,10 @@
  * context's currentFrame domain, and is stamped on arrival as
  * `now() − max(0, (ctx.currentTime × sr − sample) / sr × 1000)`: when that
  * frame was on this clock, as nearly as the main thread can tell. A packet's
- * `at` is its first DFT window, a slot its first symbol, a gap its start.
+ * `at` is its last sample (transport.ts): the frame of its first DFT window,
+ * as the worklet reports it, plus the back-off, P − 1 whole symbols and a
+ * useful part for its plan and mode. A slot is its first symbol, a gap its
+ * start.
  *
  * Skips. A context that stops rendering for a while (suspended, interrupted,
  * an audio thread that stalls) carries its currentFrame on from where it
@@ -74,7 +77,7 @@
  *    one's t0 (options.t0), so now() runs on across it.
  */
 import { detectPlan, payloadProblem, type ModemConfig, type ModemStats } from "./modem/core";
-import { rateProblem } from "./modem/params";
+import { PACKET_SYMBOLS, rateProblem, timing, type Timing } from "./modem/params";
 import { PAYLOAD_BITS, type BandPlan, type LinkPacket, type LinkStats, type LinkTransport, type ModemMode, type OutFrame } from "./transport";
 import workletUrl from "./worklet.ts?worker&url";
 import { MODEM_PROCESSOR, type FromWorklet, type ToWorklet } from "./worklet-protocol";
@@ -148,6 +151,7 @@ export class WorkletTransport implements LinkTransport {
   onError: ((message: string) => void) | null = null;
   private readonly ctx: BaseAudioContext;
   private readonly sr: number;
+  private readonly t: Timing;
   private readonly clock: () => number;
   private readonly port: MessagePort;
   /** The config as last set from here, and the plan the modem starts on with it (Join's detection starts on high where the rate allows). */
@@ -183,6 +187,7 @@ export class WorkletTransport implements LinkTransport {
     if (problem) throw new RangeError(problem);
     this.ctx = ctx;
     this.sr = ctx.sampleRate;
+    this.t = timing(ctx.sampleRate);
     this.clock = opts.clock ?? (() => performance.now());
     this.t0 = opts.t0 ?? this.clock();
     this.cfg = { ...cfg };
@@ -379,7 +384,9 @@ export class WorkletTransport implements LinkTransport {
     this.watchClock();
     switch (msg.t) {
       case "rx": {
-        const at = this.stamp(msg.sample);
+        // (the packet's last sample: its first DFT window, the back-off, P − 1 whole symbols and a useful part)
+        const t = this.t;
+        const at = this.stamp(msg.sample + t.backoff + (PACKET_SYMBOLS[msg.plan][msg.mode] - 1) * t.ts + t.N);
         push(this.inbox, { bits: msg.bits, nbits: msg.nbits, snrDb: msg.snrDb, at, session: msg.session });
         this.lastRxAt = at;
         break;

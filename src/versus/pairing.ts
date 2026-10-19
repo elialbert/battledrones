@@ -7,12 +7,13 @@
  * config, seed, input delay and openers whatever the air does in between.
  *
  * The host (the phone that tapped Host) owns the config: the menu's map and
- * mutators, its side (a rematch flips it), and two things it measures — the
- * input delay D from the median round trip, and fast mode from both phones'
- * receive quality. It offers the config once the guest hears it, and freezes
- * it the first time it hears the guest hash the same thing. The confHash
- * covers both nonces, so an equal hash also proves the peer heard this
- * phone's fresh nonce: a recording of another session can't produce one.
+ * mutators, its side (a rematch flips it), and two things it measures — fast
+ * mode from both phones' receive quality, and the input delay D from the
+ * median round trip and the starting mode's packet period (delayFor). It
+ * offers the config once the guest hears it, and freezes it the first time
+ * it hears the guest hash the same thing. The confHash covers both nonces,
+ * so an equal hash also proves the peer heard this phone's fresh nonce: a
+ * recording of another session can't produce one.
  * Then both phones pick openers, set GO once they hold the peer's equal hash
  * and final pick, and start once they've sent GO and heard the peer's GO (or
  * any game frame under the session CRC: the peer started first).
@@ -84,10 +85,13 @@
  *    starts the match the other checked;
  *  - the host offers a config once the guest hears it and it holds 3 round
  *    trips and 10 frames each way since it first heard the guest, so D has a
- *    median and fast a full window. It freezes on a guest hash (from a frame
- *    that hears it) equal to any of its offers since the last restart, not
- *    only the newest: the guest held that one, and D near a boundary can't
- *    then keep the two apart;
+ *    median and fast a full window: a fast one at once, a robust one only
+ *    once the windows have also said robust for 8 more of its frames in a row
+ *    (ROBUST_WAIT_FRAMES: a receiver's first packets after lock read low at
+ *    the modem's ±300 ppm, and would start a good link robust). It freezes on
+ *    a guest hash (from a frame that hears it) equal to any of its offers
+ *    since the last restart, not only the newest: the guest held that one,
+ *    and D near a boundary can't then keep the two apart;
  *  - only the newest frame from the peer moves the echo, takes a round trip,
  *    counts toward the rxq window, updates the guest's copy of the config, or
  *    says where the peer stands: its pick, and whether it is ready under this
@@ -122,7 +126,17 @@
  *    friend started, and waiting for it to load;
  *  - round trips and the rxq windows measure the link, not the pairing: they
  *    survive restarts and resets. The echo and what "on time" is start over
- *    with each new peer nonce (it may be another phone, on another clock).
+ *    with each new peer nonce (it may be another phone, on another clock);
+ *  - this phone's own rxq window takes the frames built since it heard a
+ *    peer, not every frame on the air since: the one that goes out as it
+ *    first hears was built before, saying rxq 0. A host that hears its guest
+ *    last (the guest hearing it already, the round trips quick to come) made
+ *    its first offer as its tenth frame went out, with that 0 in the window:
+ *    robust, which the guest echoed and the host froze on. Over RoomLink (both
+ *    plans, 20 and 40 cm, 12 rooms each, at most ±100 ppm) 10 of 48 pairings
+ *    started robust with it, 2 without: a link at 9 dB, and one at 13 whose
+ *    first frames, while the SNR's running mean settled, read under 12 (which
+ *    ROBUST_WAIT_FRAMES now waits out);
  *
  * Deviation: `hold` is 7 bits (127: too old), not 5 (31), so the longest
  * frame is 157 bits rather than 155 (the low plan carries 186). The frame for
@@ -137,7 +151,8 @@
  * 410–800 ms with 400 ms packets, where none of 80 did.) Seven bits hold
  * 1,260 ms.
  */
-import type { BandPlan, BandRole, LinkPacket } from "../link/transport";
+import { PACKET_SYMBOLS, TS } from "../link/modem/params";
+import type { BandPlan, BandRole, LinkPacket, ModemMode } from "../link/transport";
 import { BIOMES, parseRandomMapId, randomMapId } from "../sim/mapgen";
 import { MAPS, mapBansMutator } from "../sim/maps";
 import { OPENER_IDS, allowedOpener, openerBlocked, type OpenerId } from "../sim/openers";
@@ -157,8 +172,35 @@ export const RTT_KEPT = 5;
 export const RTT_MIN = 3;
 /** Fast mode needs both phones' last this many frames … */
 export const FAST_FRAMES = 10;
-/** … to report at least this rxq (15 dB). */
-export const FAST_RXQ = 5;
+/**
+ * … to report at least this rxq (12 dB): one step above the lowest at which
+ * fast delivers 98% everywhere. Over RoomLink (both plans, 48/48 and 48/44.1
+ * kHz, 20 and 40 cm, noise swept, both directions; 20 s of fast per point)
+ * fast delivered every packet wherever the receiver reported rxq 3 (9–12 dB),
+ * while the worst point reporting 2 (6–9 dB) delivered 50–100% by plan, rate
+ * and distance, and at 1 13–50%. The rxq the lobby reports is of robust
+ * packets; at the same noise it read as fast's within 1.5 dB (the same rxq
+ * at 127 of 136 points). The session returns to fast at the same rxq.
+ */
+export const FAST_RXQ = 4;
+/**
+ * The host offers fast as soon as both windows qualify, robust only once they
+ * have failed to at the frame they filled and at this many of its frames
+ * after it, in a row. A receiver's SNR reads low for its first packets after
+ * lock while its clock tracker converges, at a relative clock offset of
+ * 500–600 ppm (the modem's ±300 per phone), and the session's running mean
+ * lags it further. Over RoomLink (both plans, 10–50 cm, 48 and 44.1 kHz,
+ * ±300 and ±250 ppm) those first frames read rxq 1–3 on links that settled
+ * at 15–29 dB, and it took the host's window up to 6 frames to clear of them,
+ * the low plan's guest's up to 2. The host freezes on the first offer the
+ * guest echoes, so without this wait a window that still held them started
+ * such a match robust, at robust's longer D: 27 of 45 high-plan pairings at
+ * 500–600 ppm, against 6 with it (each on a link under 14 dB one way); on the
+ * low plan 8 against 6, and at 0 ppm the same either way. It costs a robust
+ * start these frames (1.6 s on the high plan, 3.2 s on the low) and a fast
+ * one nothing.
+ */
+export const ROBUST_WAIT_FRAMES = 8;
 /** Picking times out after this long (from the config being agreed on this phone). */
 export const PICK_TIMEOUT_MS = 20_000;
 /** Nothing heard for this long: the lobby suggests one phone taps Host and the other Join. */
@@ -166,6 +208,14 @@ export const NOTHING_HEARD_MS = 8_000;
 /** The input delay's range (ticks). */
 export const DELAY_MIN = 3;
 export const DELAY_MAX = 8;
+/**
+ * The input delay's margin over half the round trip and a packet period (ms):
+ * decoding, the gap a superframe's sync symbol (50 ms) leaves every 10–20
+ * packets, the feed's frame quantization and the tick phase between the
+ * phones. The smallest multiple of 10 that keeps stalls at 0.5% of the match
+ * or less wherever D ≤ 8 can (see delayFor).
+ */
+export const DELAY_MARGIN_MS = 50;
 
 export const VERSION_MESSAGE = "These phones run different versions: reload both";
 export const FAILED_MESSAGE = "Pairing failed: tap to retry";
@@ -375,9 +425,53 @@ export function readLobbyFrame(bits: Uint8Array, nbits: number): LobbyFrame {
 
 // ------------------------------------------------------------ the rules ---
 
-/** D = clamp(ceil((rtt / 2 + 150 ms) / 100 ms), 3, 8): the round trip's median, in ms. */
-export const delayFor = (rttMs: number): number =>
-  Math.max(DELAY_MIN, Math.min(DELAY_MAX, Math.ceil((rttMs / 2 + 150) / 100)));
+/** A packet's period in a mode on a plan (ms): its symbols back to back (100 and 200 ms; 200 and 400 on the low plan). */
+export const packetMs = (plan: BandPlan, mode: ModemMode): number => Math.round(PACKET_SYMBOLS[plan][mode] * TS * 1000);
+
+/**
+ * D = clamp(ceil((rtt / 2 + P + M) / 100 ms), 3, 8): rtt the round trip's
+ * median (packet start to fully received, both ways: transport.ts
+ * LinkPacket.at), P the starting mode's packet period on the plan (packetMs:
+ * a sealed turn waits up to a packet for the next one to start), M
+ * DELAY_MARGIN_MS.
+ *
+ * M by measurement: two Sessions over RoomLink through pairing into a match,
+ * AIs on both sides, 1200 ticks, no added loss, mode adaptation off; stall
+ * counted on the phone that stalled more. What binds is a robust start on the
+ * high plan: its lobby packets are the match's, so a turn has M and what
+ * ceil() rounds up beyond rtt / 2 + P, and nothing more. With D forced to 5
+ * or 6 and both phones' audio path stepped from 10 to 180 ms (10–50 cm, 48
+ * and 44.1 kHz, up to ±300 ppm; 102 runs), so that this margin, 100·D −
+ * rtt / 2 − P, ran from 0 to 90 ms: under 15 ms every run stalled over 0.5%
+ * (0.65–1.76%), at 15–35 ms 4 of 10, at 35–40 ms 1 of 7 (0.55%), at 40–46
+ * none of 9 (0.48% at most; another review's run at 41 ms stalled 0.54%), at
+ * 46–57 ms none of 35 (0.49% at most, three over 0.4%) and from 57 ms none of
+ * 33 (0.22%). No packet was lost in any of them: the stall is the sync
+ * symbol's gap and the phase of packets against ticks. M = 50.
+ *
+ * With it, at the room's 75 ms audio path (the round trip 546–557 ms on the
+ * high plan, 947–956 on the low), D came out 5 for a fast start and 6 for a
+ * robust one on the high plan (at most 0.17% in 6 and 0.08% in 6 runs, ±300
+ * ppm among them), 4 or 5 for a fast start at 50 ms (0.08%), and 8 for both
+ * on the low plan: fast 0.00% in 4, robust 5.4–7.6% in 4. The low plan's
+ * robust turns need about a second (D = 10, past DELAY_MAX): its 400 ms
+ * packets alone take two fifths of it. Over PacketAir with the margin exactly
+ * 50 ms (latencies 150–450 ms, six phases each), no run of fast or robust on
+ * either plan stalled after its first 50 ticks, and none more than 0.34% in
+ * all. A latency shorter than the packet's own period (PacketAir's is start
+ * to fully received) is no link, and says nothing: robust on the low plan's
+ * 400 ms packets at 350 ms stalled 0.71%, at 150 ms up to 0.76%.
+ *
+ * The round trip holds two of the lobby's robust packets, not the match's, so
+ * a fast start gets more delay than fast needs over the modem (100 ms more on
+ * the high plan, 200 on the low: 5 where 4 sufficed, 8 where 6 did); over
+ * PacketAir, whose latency is the same in either mode, it is what the formula
+ * assumes. And a match keeps its D when the session falls back to robust,
+ * so from a fast start robust's turns get 100 ms (the low plan's 200) less
+ * than this would give them (session.ts).
+ */
+export const delayFor = (rttMs: number, periodMs: number): number =>
+  Math.max(DELAY_MIN, Math.min(DELAY_MAX, Math.ceil((rttMs / 2 + periodMs + DELAY_MARGIN_MS) / 100)));
 
 /** The hash both phones compare: the config, the band plan and both nonces, in 16 bits (never 0, which means none). */
 export function confHash(c: DuelConfig, plan: BandPlan, hostNonce: number, guestNonce: number): number {
@@ -548,8 +642,8 @@ export class Pairing {
   private readonly slots: number[] = [];
   /** When each ping value last went out (a slot's start), NaN: never. */
   private readonly sentAt = new Float64Array(256).fill(NaN);
-  /** The newest frame built: its ping and rxq, whether it said GO, and whether a slot has carried it yet. */
-  private built: { ping: number; rxq: number; go: boolean; carried: boolean } | null = null;
+  /** The newest frame built: its ping and rxq, whether it said GO, whether this phone had heard a peer then, and whether a slot has carried it yet. */
+  private built: { ping: number; rxq: number; go: boolean; heard: boolean; carried: boolean } | null = null;
   /** The newest peer ping heard, and when (cleared with each new peer nonce). */
   private echo: { ping: number; at: number } | null = null;
   /** The (arrival − 10 × ping) of the peer's last pings, each at its first arrival, mod the ping's wrap. */
@@ -559,9 +653,11 @@ export class Pairing {
   private readonly rtts: number[] = [];
   private rxq = 0;
   private peerRxq: number | null = null;
-  /** The rxq of this phone's last frames on the air (since it first heard a peer), and the peer's last frames that heard this phone. */
+  /** The rxq of this phone's last frames on the air (built since it first heard a peer), and the peer's last frames that heard this phone. */
   private readonly ownRxqs: number[] = [];
   private readonly peerRxqs: number[] = [];
+  /** This phone's frames in a row at which both windows were full and didn't qualify for fast. */
+  private slowRun = 0;
 
   // the pairing (a restart clears it)
   /** The peer's nonce, from its HELLO (0: none). */
@@ -629,7 +725,10 @@ export class Pairing {
       this.sentAt[b.ping] = at;
     }
     if (b) {
-      if (this.heardAny) pushKept(this.ownRxqs, b.rxq, FAST_FRAMES);
+      if (b.heard) {
+        pushKept(this.ownRxqs, b.rxq, FAST_FRAMES);
+        if (this.windowsFull()) this.slowRun = this.windowsFast() ? 0 : this.slowRun + 1;
+      }
       if (b.go && this.go) this.goSent = true;
     }
     this.update();
@@ -666,7 +765,7 @@ export class Pairing {
       go: this.go,
       theirs: this.go ? this.theirs : null
     };
-    this.built = { ping, rxq: this.rxq, go: this.go, carried: false };
+    this.built = { ping, rxq: this.rxq, go: this.go, heard: this.heardAny, carried: false };
     return writeLobbyFrame(f);
   }
 
@@ -1041,16 +1140,29 @@ export class Pairing {
   private offerNow(): void {
     const h = this.host!;
     const rtt = median(this.rtts);
-    if (!this.peer || !this.hearsMe || this.rtts.length < RTT_MIN || rtt === null) return;
-    if (this.ownRxqs.length < FAST_FRAMES || this.peerRxqs.length < FAST_FRAMES) return;
-    const fast = this.ownRxqs.every((q) => q >= FAST_RXQ) && this.peerRxqs.every((q) => q >= FAST_RXQ);
-    const config: DuelConfig = { mapId: h.map, mutators: h.mutators.slice(), delay: delayFor(rtt), hostSide: h.hostSide, fast };
+    if (!this.peer || !this.hearsMe || this.rtts.length < RTT_MIN || rtt === null || !this.windowsFull()) return;
+    const fast = this.windowsFast();
+    // (a receiver's first packets after lock read low: robust waits for them to leave the windows, see ROBUST_WAIT_FRAMES)
+    if (!fast && this.slowRun <= ROBUST_WAIT_FRAMES) return;
+    const config: DuelConfig = {
+      mapId: h.map, mutators: h.mutators.slice(), delay: delayFor(rtt, packetMs(this.plan, fast ? "fast" : "robust")), hostSide: h.hostSide, fast
+    };
     const hash = this.hashOf(config);
     this.offer = { config, hash };
     if (!this.offers.some((o) => o.hash === hash)) {
       this.offers.push(this.offer);
       if (this.offers.length > OFFERS_KEPT) this.offers.shift();
     }
+  }
+
+  /** Both rxq windows hold FAST_FRAMES frames. */
+  private windowsFull(): boolean {
+    return this.ownRxqs.length >= FAST_FRAMES && this.peerRxqs.length >= FAST_FRAMES;
+  }
+
+  /** Every frame in both windows reports FAST_RXQ or better. */
+  private windowsFast(): boolean {
+    return this.ownRxqs.every((q) => q >= FAST_RXQ) && this.peerRxqs.every((q) => q >= FAST_RXQ);
   }
 
   private sideOf(c: DuelConfig): Faction {

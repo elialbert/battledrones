@@ -245,13 +245,17 @@ when the input delay leaves room for it:
   also needs the peer's slack to cover one more packet of delay: the lowest
   slack in the peer's newest 16 frames (a full window; the window starts over
   when either phone pauses or this phone stalls) must exceed what one more
-  packet costs at this phone's own transmit period. Without the gate, rotation
+  packet costs at this phone's own transmit period (`setPacketMs`: modes are
+  per direction, and it is this phone's rotation that holds its turns back; a
+  new period starts the window over too). Without the gate, rotation
   stalled the peer for seconds even at 0% loss (robust: 16 ms at K = 1 against
   11.7 s). With it, stall at 0% loss equals K = 1 in every case measured,
   while order delay improves where D leaves room (D = 6 fast: 9.4 → 6.9 ticks
   mean, worst queue age 42 → 15 ticks; a 30-unit order at D = 7 lands in 5
   ticks against 17). At the D pairing usually picks, the gate rarely opens and
   matches play exactly as K = 1.
+- **Receive quality.** A change of `setRxq` rebuilds the frames, so a
+  stalled phone's friend hears its current receive quality.
 - **One strike.** A lost packet costs the newest turns a whole rotation, and
   no sender-side gate sees loss coming. So the first time the peer stalls
   during a rotation (or within 2D ticks of one), no new segment is started
@@ -457,8 +461,24 @@ The longest frame is 157 bits, which fits a packet. (`hold` is 7 bits: with
   `activeMutators()` at the moment of the Duel tap. A random map sends its own
   32-bit seed, so the map shown is the map played. The match seed is
   `hash32(hostNonce, guestNonce, 1)` (`src/sim/rand.ts`).
-  - `D = clamp(ceil((median rtt / 2 + 150 ms) / 100 ms), 3, 8)`.
-  - `fast` is set when both phones' last 10 frames report `rxq ≥ 5`.
+  - `D = clamp(ceil((median rtt / 2 + P_start + 50 ms) / 100 ms), 3, 8)`,
+    where `P_start` is the starting mode's packet period on the plan (fast /
+    robust: 100 / 200 ms high, 200 / 400 ms low). A turn waits up to one
+    packet period for the air, which the round trip doesn't contain. Measured
+    over the room model (two sessions with AIs, 1,200 ticks), the least D
+    with stall ≤ 0.5% is 4 (high fast), 6 (high robust), 6 (low fast); the
+    margin is set by high robust (40 ms sometimes stalled over 0.5%, 46 ms or
+    more never did). Low robust can't get under 5–7% at D = 8. The lobby
+    measures the round trip with its own (robust) packets, so a fast start
+    gets about a tick of spare delay, which covers a later fallback to robust
+    in most cases (0.1–1.0% stall at a 75 ms audio path, 1.5–6.8% at 50 ms).
+  - `fast` is set when both phones' last 10 frames report `rxq ≥ 4` (12 dB:
+    fast delivered 100% at every rxq-3 reading in the room model, and 50–100%
+    at rxq 2). A phone's own window counts only frames built after it first
+    heard its friend. The host offers fast as soon as both windows qualify,
+    and robust only once they have failed to for 8 more of its frames in a
+    row: a receiver's first packets after locking read low while its clock
+    tracker settles.
   - The host freezes its config when it first hears a guest frame whose
     `confHash` equals its own, and never changes it afterwards.
 - **Picks.** Once the config is agreed, both phones show the opener cards.
@@ -535,12 +555,14 @@ in detail; the main ones:
 - **Mode adaptation.** During the match each phone picks its own transmit
   mode from what its friend says of it, so a link that is poor one way slows
   only that way. It goes robust when the friend's rxq of it is at or below
-  `ROBUST_RXQ` for 2 s, or when the friend's frames keep arriving (not
+  `ROBUST_RXQ = 1` (6 dB, where fast starts to fail) for 2 s, or when the friend's frames keep arriving (not
   paused) but acknowledge nothing new for `max(1.5 s, rtt + 0.5 s)`. It goes
-  back to fast once the friend's rxq has been at or above `FAST_RXQ` for 10 s
+  back to fast once the friend's rxq has been at or above `FAST_RXQ = 4` for 10 s
   (doubling after a fallback the rxq didn't explain, up to 80 s, until fast
   has held for a minute). A switch holds for at least one superframe. Every
-  rule needs the friend's game frames to be arriving.
+  rule needs the friend's game frames to be arriving. The lockstep gets this
+  phone's own packet period (`setPacketMs`, from the mode on the air) for
+  its rotation.
 - **Stall reasons.** `waiting.why` is "load" while the friend's newest packet
   is its own lobby frame (its role and nonce), "paused" while its newest frame
   says paused, either only while that packet is under 2.5 s old, and "link"
@@ -794,6 +816,7 @@ export class ModemCore {
 ## Link layer (`src/link/`)
 
 ```ts
+/** at: when the packet finished arriving at this phone (its last sample; it can't be decoded earlier). */
 export interface LinkPacket { bits: Uint8Array; nbits: number; snrDb: number | null; at: number; session: boolean }
 export interface LinkStats {
   locked: boolean; snrDb: number | null; rxOk: number; rxBad: number; txMode: ModemMode; rxMode: ModemMode | null;
@@ -818,17 +841,23 @@ export interface LinkTransport {
   (`advance(ms)` in tests, a real timer in `?duel=loop`).
   - Packets go out every 100 ms (fast) or 200 ms (robust), with independent
     phases per end.
-  - Each is delivered after `latencyMs` (default 250), with seeded Bernoulli
-    or Gilbert–Elliott loss.
+  - Each is delivered after `latencyMs` (default 250, packet start to fully
+    received), with seeded Bernoulli or Gilbert–Elliott loss.
   - Capacity is 188 unless overridden.
   - It honours `setSessionKey` by dropping game frames between ends whose keys
     differ.
 - **`RoomLink`** runs two `ModemCore`s through a `Room` in 128-frame blocks.
+- **Transports without the modem's CRC** (PacketAir, RelayTransport) must
+  emulate the session key: carry the key with each game frame and drop
+  mismatches, or report `session: true` only for game frames sent under the
+  receiver's key.
 - **`WorkletTransport`.**
   - `now() = performance.now() − t0`: monotonic, and it keeps running while
     the link context is suspended or rebuilt.
   - Each worklet message carries `sample`. A packet's
-    `at = now() − max(0, (ctx.currentTime × sr − sample) / sr × 1000)`.
+    `at = now() − max(0, (ctx.currentTime × sr − sample) / sr × 1000)` plus
+    the rest of the packet after its first DFT window (backoff + (P − 1)·TS +
+    TU), so `at` is when it finished arriving, as for every transport.
   - `loadWorklet(ctx)` runs `addModule` once per context (a WeakMap).
   - `stats()` and `modemStats()` go stale once the newest report is over 1 s
     old, or after a fatal error: unlocked, no SNR.

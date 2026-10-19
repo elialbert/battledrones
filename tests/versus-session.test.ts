@@ -9,7 +9,7 @@ import { setupWorld } from "../src/sim/setup";
 import { step } from "../src/sim/sim";
 import type { Command, Faction, World } from "../src/sim/types";
 import { readGameFrame } from "../src/versus/lockstep";
-import { delayFor, readLobbyFrame, type HostOffer } from "../src/versus/pairing";
+import { delayFor, packetMs, readLobbyFrame, type HostOffer } from "../src/versus/pairing";
 import {
   ACK_RTT_SPARE_MS, ACK_STALL_MS, END_FRAMES_MS, FAST_AFTER_MAX_MS, FAST_AFTER_MS, PEER_HEARD_MS, ROBUST_AFTER_MS, SWITCH_HOLD_MS, Session, type SessionPhase,
   type SessionStatus
@@ -307,8 +307,8 @@ describe("a session from the lobby to the end of the match", () => {
     const r = duel({ seed: 1, ticks: FIVE_MINUTES, air: { latencyMs: 250, phaseMs: [30, 170] } });
     expectSameMatch(r, FIVE_MINUTES);
     const h = r.host.s.result()!;
-    expect(h.delay).toBe(delayFor(500));
     expect(h.fast).toBe(true); // (30 dB both ways)
+    expect(h.delay).toBe(delayFor(500, packetMs("high", "fast")));
     for (const p of [r.host, r.guest]) {
       const st = p.s.status();
       expect(p.phases).toEqual(["pairing", "starting", "match"]);
@@ -337,10 +337,14 @@ describe("a session from the lobby to the end of the match", () => {
     }
   });
 
+  // (pairing's D allows for no loss: 5 here, from a round trip of 503–504 ms and fast's 100 ms packets, just past D =
+  // 4's 500. Loss costs stalls on top: at D = 4 they ran 3.2–3.6 s at 10% and 24 s at 30%)
   for (const [loss, seed, stall] of [[0.1, 2, 3_000], [0.3, 3, 12_000]] as const)
     it(`plays in lockstep at ${loss * 100}% loss`, { timeout: 120_000 }, () => {
       const r = duel({ seed, ticks: 2000, air: { loss, latencyMs: 250 }, strategies: ["airswarm", "boom"] });
       expectSameMatch(r, 2000);
+      expect(r.host.s.status().rttMs).toBeGreaterThan(500);
+      expect(r.host.s.result()!.delay).toBe(5);
       for (const p of [r.host, r.guest]) {
         expect(p.w!.tick).toBe(2000);
         expect(p.s.lockstep!.status().stallMs).toBeLessThanOrEqual(stall);
@@ -1102,8 +1106,13 @@ describe("a session over the modem", () => {
     const r = duel({ seed: 19, ticks: 250, link, stepMs: 4 });
     expectSameMatch(r, 250);
     const res = r.host.s.result()!;
-    // the room's round trip is about 170 ms: D = 3, fast
-    expect([res.delay, res.fast]).toEqual([3, true]);
+    // the room's round trip, packet start to fully received both ways over the lobby's robust packets, is about
+    // 550 ms: D = 5 (4 at 500 ms or less), fast
+    const rtt = r.host.s.status().rttMs!;
+    expect(rtt).toBeGreaterThan(520);
+    expect(rtt).toBeLessThan(600);
+    expect([res.fast, res.delay]).toEqual([true, 5]);
+    expect(res.delay).toBe(delayFor(rtt, packetMs("high", "fast")));
     for (const p of [r.host, r.guest]) {
       const st = p.s.status();
       expect(p.tap.keys.map(({ host, guest }) => [host, guest])).toEqual([[res.hostNonce, res.guestNonce]]);

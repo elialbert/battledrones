@@ -32,8 +32,9 @@
  * The slack gate (a deviation: the spec has K = clamp(D − 2, 1, 4) alone). The
  * newest turns ride the newest segment, which goes out once a rotation, so
  * every segment beyond the first holds them back up to a packet longer. Pairing
- * picks D = ceil((rtt / 2 + 150 ms) / 100 ms), about a packet of margin, so a
- * fixed K of D − 2 makes the peer stall: in two-world AI duels over PacketAir
+ * picks D with about half a tick of margin (pairing.ts delayFor; at the time
+ * of these measurements, ceil((rtt / 2 + 150 ms) / 100 ms)), so a fixed K of
+ * D − 2 makes the peer stall: in two-world AI duels over PacketAir
  * (250 ms, D = 5, five minutes) K = 3 stalled the two phones 160 and 36 ms in
  * fast mode where K = 1 stalled neither, 11.7 and 9.6 s in robust mode against
  * 16 and 0 ms, and 5.6 and 6.0 s at 10% loss against 0.8 and 0.5 s. So K is
@@ -44,7 +45,11 @@
  * (setPacketMs): modes are per direction, and it is this phone's rotation that
  * holds its turns back. Until the session gives one, it is the shortest gap
  * between the peer's newest arrivals, which is the same while both phones run
- * the mode the pairing started them in. Only a full window of 16 counts,
+ * the mode the pairing started them in, and the other direction's once they
+ * don't: fast one way and robust the other (300 ms, D = 8, AI orders with
+ * 30-unit bursts every 10 s, three seeds) the robust sender read 100 ms and
+ * opened three segments, and the fast one stalled up to 48 ms where K = 1 and
+ * each phone's own period stalled neither. Only a full window of 16 counts,
  * started over by a pause on either phone, by a stall here and by a new
  * period: the peer's slack runs high while it is behind this phone (at the
  * start, both hold turns 0 … D − 1; while either is paused or this one stalls;

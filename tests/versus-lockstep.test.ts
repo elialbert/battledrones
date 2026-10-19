@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { endOf, replay, type BattleRecord } from "../src/arena/record";
 import { parseRecord } from "../src/game/replay";
 import { PacketAir, type PacketAirOptions } from "../src/link/packet-air";
-import { nextFrameIndex, type LinkTransport, type OutFrame } from "../src/link/transport";
+import { nextFrameIndex, type LinkTransport, type ModemMode, type OutFrame } from "../src/link/transport";
 import { createAiState, tickAi, type AiState, type StrategyName } from "../src/sim/ai/commander";
 import { worldHash } from "../src/sim/checksum";
 import { allowedOpener, pickAiOpener, type OpenerId } from "../src/sim/openers";
@@ -1274,7 +1274,14 @@ interface Scenario {
   prepare?: (w: World) => void;
   /** K for both phones (default: segmentsFor(delay)). */
   segmentsMax?: number;
+  /** Blue's and red's own transmit modes, set as the match starts (modes are per direction; default `air.mode` both ways). */
+  modes?: [ModemMode, ModemMode];
+  /** Each phone gives its Lockstep its own transmit period (setPacketMs) from the mode its link sends in, as the session does. */
+  packetMs?: boolean;
 }
+
+/** PacketAir's packet period in each mode (ms). */
+const PERIOD_MS: Record<ModemMode, number> = { fast: 100, robust: 200 };
 
 /** Two phones, each with its own world, AI and Lockstep, joined by PacketAir; each phone's AI orders only its own side. */
 function duel(s: Scenario): Run {
@@ -1290,6 +1297,10 @@ function duel(s: Scenario): Run {
   const air = new PacketAir({ seed: s.seed, mode: "fast", clockOffsetMs: [0, 987_654], ...s.air });
   air.a.setSessionKey(4242, 777);
   air.b.setSessionKey(4242, 777);
+  if (s.modes) {
+    air.a.setMode(s.modes[0]);
+    air.b.setMode(s.modes[1]);
+  }
   const phone = (side: Faction, link: LinkTransport, strat: StrategyName | null, frameMs: number, phase: number): Phone => {
     const w = setupWorld(setup);
     s.prepare?.(w);
@@ -1325,6 +1336,7 @@ function update(p: Phone, r: Run, s: Scenario): void {
   p.last = now;
   p.next = now + p.frameMs;
   for (const pk of p.link.poll()) p.ls.receive(pk.bits, pk.nbits, pk.at);
+  if (s.packetMs) p.ls.setPacketMs(PERIOD_MS[p.link.stats().txMode]);
   if (!p.paused) p.acc += dt * p.ls.speed();
   for (let n = 0; p.acc >= 100 && n < 8 && p.w.tick < s.ticks; n++) {
     const t = p.w.tick;
@@ -1513,6 +1525,34 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
       expect(k[side].ls.status().stallMs, side).toBeLessThanOrEqual(one[side].ls.status().stallMs + 300);
     }
     expect(firstDiff(k, FIVE_MINUTES)).toBe(-1);
+  });
+
+  it("rotate at each phone's own packet period when the two directions run different modes", { timeout: 120_000 }, () => {
+    // blue sends fast and red robust (modes are per direction), each giving its Lockstep the period it sends at, at
+    // 300 ms with D = 8: room for the gate to open, and a 30-unit select-all order from each side every 10 s. Read off
+    // the peer's arrivals instead, each phone's period was the other's: red took 100 ms and opened three segments (at
+    // its own 200 ms, two at most), and blue stalled 48 ms where K = 1 stalled neither phone
+    const bursts = (p: Phone, t: number) => {
+      if (t % 100 !== 50 || t > FIVE_MINUTES - 300) return;
+      const mine = [...p.w.units.values()].filter((u) => u.faction === p.side).map((u) => u.id);
+      const ids = [...mine, ...Array.from({ length: 30 }, (_, i) => 5000 + 40 * t + 37 * i)].slice(0, 30);
+      p.extra.push({ type: "move", faction: p.side, unitIds: ids, x: 10 + (t % 37), y: 20.3 });
+    };
+    const [k, one] = [undefined, 1].map((segmentsMax) =>
+      duel({
+        map: "riverlands", seed: 7, ticks: FIVE_MINUTES, delay: 8, segmentsMax, air: { latencyMs: 300 }, modes: ["fast", "robust"], packetMs: true,
+        afterStep: bursts
+      })
+    ) as [Run, Run];
+    expect(k.blue.maxSegments).toBeGreaterThan(1);
+    for (const side of ["blue", "red"] as const) {
+      expect(k[side].ls.status().stallMs, side).toBeLessThanOrEqual(one[side].ls.status().stallMs);
+      expect(one[side].maxSegments).toBe(1);
+    }
+    // (the fast sender's bursts land sooner for its rotation: 20 ticks on average against K = 1's 37)
+    expect(k.blue.ls.status().orderDelay!).toBeLessThan(one.blue.ls.status().orderDelay!);
+    expect(firstDiff(k, FIVE_MINUTES)).toBe(-1);
+    expect(firstDiff(one, FIVE_MINUTES)).toBe(-1);
   });
 
   it("keep identical hash trails with bursts of 30-unit orders", { timeout: 120_000 }, () => {

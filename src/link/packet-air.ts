@@ -9,7 +9,13 @@
  *    packet starts, in key rotation (transport.ts nextFrameIndex; none yet:
  *    nothing goes out); the packet's start is a slot;
  *  - each packet arrives `latencyMs` after its start (default 250), unless
- *    lost: seeded Bernoulli loss, Gilbert–Elliott bursts, or an outage;
+ *    lost: seeded Bernoulli loss, Gilbert–Elliott bursts, or an outage.
+ *    That is start to fully received, as LinkPacket.at is on every transport
+ *    (transport.ts), so it includes the packet's own air time: over the modem
+ *    in the room, the audio path (about 75 ms) plus one packet (100–400 ms by
+ *    plan and mode). It doesn't change with the mode, which the modem's does:
+ *    a latency shorter than a packet is a model, not a link. Its `at` is that
+ *    arrival on the receiver's clock;
  *  - it arrives as the modem delivers it: `capacity` bits (188 unless
  *    overridden), the payload zero-padded;
  *  - game frames (type 01) are dropped between ends whose session keys
@@ -39,7 +45,7 @@ export interface GilbertElliott {
 }
 
 export interface PacketAirOptions {
-  /** Packet start to delivery (ms). Default 250. */
+  /** Packet start to delivery, fully received: the packet's air time included (ms). Default 250. */
   latencyMs?: number;
   /** Bernoulli loss per packet, 0–1. Default 0. */
   loss?: number;

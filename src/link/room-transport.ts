@@ -7,8 +7,13 @@
  *
  * Clocks: each end's now() is its own phone's frame counter in ms (phones
  * share no clock, and theirs run at their own rate and skew). A packet's
- * `at` is when its first DFT window began on that clock, as
- * WorkletTransport stamps it; slots() are packet starts on the same clock.
+ * `at` is its last sample on that clock (transport.ts): its first DFT
+ * window, as the receiver timed it, plus the back-off, P − 1 whole symbols
+ * and a useful part, as WorkletTransport stamps it (the friend's clock
+ * stretches those by its skew, a tenth of a millisecond at most); slots()
+ * are packet starts on the same clock. The room runs each phone's blocks
+ * when they begin, so a packet decoded in the block that brought its last
+ * sample can end up to a block past now(): poll() caps `at` at now().
  *
  * send() hands the frame list to the modem (ModemCore.setPayloads), which
  * sends one per packet in key rotation. onSlot sees every packet start with
@@ -19,8 +24,12 @@
  * PacketAir.advance.
  */
 import { ModemCore, type ModemConfig, type SlotEvent } from "./modem/core";
+import { PACKET_SYMBOLS, timing, type Timing } from "./modem/params";
 import { Room, type RoomEndpoint, type RoomOptions } from "./sim/room";
 import type { BandPlan, LinkPacket, LinkStats, LinkTransport, ModemMode, OutFrame } from "./transport";
+
+/** Frames from a packet's first DFT window (RxPacket.sample) to its last sample: the back-off, P − 1 whole symbols and a useful part. */
+const tailFrames = (t: Timing, plan: BandPlan, mode: ModemMode): number => t.backoff + (PACKET_SYMBOLS[plan][mode] - 1) * t.ts + t.N;
 
 export interface RoomLinkOptions extends RoomOptions {
   /** The host's band plan (default high). */
@@ -37,6 +46,7 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
   private readonly link: RoomLink;
   private readonly side: 0 | 1;
   private readonly sr: number;
+  private readonly t: Timing;
   private readonly inbox: LinkPacket[] = [];
   private readonly starts: number[] = [];
   private lastAt: number | null = null;
@@ -46,6 +56,7 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
     this.link = link;
     this.side = side;
     this.sr = cfg.sampleRate;
+    this.t = timing(cfg.sampleRate);
     this.modem = new ModemCore(cfg);
   }
 
@@ -61,7 +72,7 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
       this.link.onSlot?.(this.side, s);
     }
     for (const p of this.modem.take()) {
-      const at = p.sample * ms;
+      const at = (p.sample + tailFrames(this.t, p.plan, p.mode)) * ms;
       this.inbox.push({ bits: p.bits, nbits: p.nbits, snrDb: p.snrDb, at, session: p.session });
       this.lastAt = at;
     }
@@ -78,7 +89,10 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
   }
 
   poll(): LinkPacket[] {
-    return this.inbox.splice(0);
+    const now = this.now();
+    const out = this.inbox.splice(0);
+    for (const p of out) p.at = Math.min(p.at, now);
+    return out;
   }
 
   slots(): number[] {

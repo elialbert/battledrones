@@ -759,7 +759,7 @@ describe("RoomLink", () => {
       expect([...pb[0]!.bits.slice(0, 4)]).toEqual([0x81, 1, 2, 3]);
       for (const p of pa) {
         expect(p.nbits).toBe(188);
-        expect(p.at).toBeLessThan(link.a.now());
+        expect(p.at).toBeLessThanOrEqual(link.a.now());
       }
       // robust packets start 200 ms apart (250 ms across a sync symbol)
       const gaps = slots.slice(1).map((s, i) => Math.round(s - slots[i]!));
@@ -798,25 +798,28 @@ function keyOf(p: LinkPacket): number {
 /**
  * A RoomLink whose host sends keyed frames to the guest: every host packet
  * start with its key (from onSlot), and every packet the guest decoded with
- * the slot it came from, matched by when its first DFT window should reach
- * the guest's microphone (the slot's frame through the room, as the
- * acquisition test above computes it).
+ * the slot it came from, matched by when its last sample should reach the
+ * guest's microphone (the slot's frame through the room, as the acquisition
+ * test above computes it).
  */
 function keyedLink(seed: number) {
   const link = new RoomLink({ seed, distanceCm: 20, mode: "fast", b: { sampleRate: 44100, ppm: -150 } });
-  const [ta, tb] = [timing(48000), timing(44100)];
+  const ta = timing(48000);
   const sent: { key: number | null; ms: number }[] = [];
   link.onSlot = (side, s) => {
     if (side !== 0) return;
-    // the guest's RoomLink stamps a packet at its first DFT window, on its own clock
-    const at = link.room.arrival(0, s.sample + ta.cp) - tb.backoff;
+    // the guest's RoomLink stamps a packet at its last sample, on its own clock: two fast symbols after its start
+    const at = link.room.arrival(0, s.sample + PACKET_SYMBOLS.high.fast * ta.ts);
     sent.push({ key: s.key, ms: (at * 1000) / 44100 });
   };
   const got: { key: number; zero: boolean; sent: { key: number | null; ms: number } | undefined }[] = [];
   const run = (ms: number) => {
     for (let t = 0; t < ms; t += 100) {
       link.advance(100);
-      for (const p of link.b.poll()) got.push({ key: keyOf(p), zero: p.bits.every((v) => v === 0), sent: sent.find((x) => Math.abs(x.ms - p.at) < 1) });
+      // (a packet that ended in the block running past now() reads now(): up to a block early)
+      const now = link.b.now();
+      const near = (p: LinkPacket, x: { ms: number }) => Math.abs(x.ms - p.at) < 1 || (p.at === now && x.ms > p.at && x.ms - p.at < 4);
+      for (const p of link.b.poll()) got.push({ key: keyOf(p), zero: p.bits.every((v) => v === 0), sent: sent.find((x) => near(p, x)) });
     }
   };
   return { link, sent, got, run };

@@ -29,16 +29,16 @@
  *
  * Mode adaptation (SOUND-DUEL.md is silent on it beyond the starting mode).
  * The pairing starts the match in fast mode when both phones heard each other
- * at 15 dB or better; during the match each phone picks its own transmit
- * mode, from what its friend says of it, so a link that is poor one way only
- * slows that way only. It goes robust when the friend's receive quality of it
- * has read 1 or less (under 6 dB) for 2 s, or when the friend's game frames
- * keep arriving but none has acknowledged anything new for 1.5 s, or for the
- * round trip and half a second where the pairing measured a longer one (its
- * packets aren't getting through, whatever the SNR says; counted from when
- * the friend's frames last started arriving, since right after an outage they
- * still carry the acks of before it). It goes back to fast once the friend's
- * quality of it has read 5 or more (15 dB, pairing's FAST_RXQ) for 10 s;
+ * at 12 dB or better (its FAST_RXQ); during the match each phone picks its
+ * own transmit mode, from what its friend says of it, so a link that is poor
+ * one way only slows that way only. It goes robust when the friend's receive
+ * quality of it has read 1 or less (under 6 dB) for 2 s, or when the friend's
+ * game frames keep arriving but none has acknowledged anything new for 1.5 s,
+ * or for the round trip and half a second where the pairing measured a longer
+ * one (its packets aren't getting through, whatever the SNR says; counted from
+ * when the friend's frames last started arriving, since right after an outage
+ * they still carry the acks of before it). It goes back to fast once the
+ * friend's quality of it has read 4 or more (12 dB, FAST_RXQ) for 10 s;
  * after a fallback the quality didn't explain, twice as long as the last time
  * (up to 80 s), until fast has held for a minute. Each wait counts from the
  * switch at the earliest, and a switch holds for at least a superframe
@@ -47,16 +47,21 @@
  * says nothing about which way or which mode is at fault, and the stall
  * overlays already say "bring the phones closer".
  *
- * The quality that sends a phone robust is where fast starts to fail, not a
- * margin above it. At the D pairing picks robust doesn't fit over the modem
- * (a modem packet's `at` is its start, so the round trip leaves out robust's
- * longer packets), and it costs more than fast does until fast loses about
- * half its packets. Over RoomLink at D = 3, fast delivered 99% of its packets
- * at 7–9 dB, 83–90% at 6 dB, 36–51% at 5 and none at 4.5; robust all of them
- * down to 3. With the host's signal dropping mid-match (900 ticks, stall host
- * / guest), going robust at rxq 3 or less (12 dB) cost 7.9 / 8.5 s at 7–8 dB
- * where staying fast cost 0.4 / 0.9; at 6 dB 8.0 / 8.6 s against 6.9 / 7.7
- * (robust 10 s later); at 5 dB the same either way.
+ * The quality that sends a phone robust is where fast starts to fail, three
+ * steps below the one that brings it back. Over RoomLink (pairing.ts
+ * FAST_RXQ) fast delivered every packet wherever the receiver reported rxq 3
+ * (9 dB) or more, 50–100% at the worst point reporting 2, by room, plan and
+ * rate, and 13–50% at 1; robust 97% or more down to 1. A match keeps the D
+ * of its starting mode, and robust needs more than fast. A fast start on the
+ * high plan gets D = 5 at the room's 75 ms audio path, where robust (both
+ * phones, from the start) stalled 0.1–1.0% of a two-minute match (3 of 7
+ * rooms over 0.5%), and D = 4 at 50 ms or less, where it stalled 1.5–6.8%;
+ * on the low plan it gets 8, where robust stalled 5–7% (it needs about 10).
+ * D sized for robust whatever the start would spare a fallback this, at
+ * 100 ms more input delay for every fast match on the high plan (pairing.ts
+ * delayFor). With the host's signal at the guest dropping to 5.5–8.5 dB 30 s
+ * in (1200 ticks, both plans), going robust at rxq 2 rather than 1 changed
+ * neither phone's stall by more than 0.2 s, so the threshold stays low.
  *
  * A friend whose newest frame says paused acknowledges nothing that counts
  * against this phone: a hidden page may get no frames and no timers while its
@@ -146,7 +151,7 @@ import type { OpenerId } from "../sim/openers";
 import type { Command, Faction } from "../sim/types";
 import { CodecError } from "./codec";
 import { Lockstep, rxqOf, type Decision, type LockstepStatus } from "./lockstep";
-import { FAST_RXQ, Pairing, readLobbyFrame, type HostOffer, type PairingResult, type PairingState } from "./pairing";
+import { FAST_RXQ, Pairing, packetMs, readLobbyFrame, type HostOffer, type PairingResult, type PairingState } from "./pairing";
 
 /** After leave(), the end goes out this long before the session may close (SOUND-DUEL.md "Leaving"). */
 export const END_FRAMES_MS = 2000;
@@ -360,6 +365,9 @@ export class Session {
       this.keyAtGo();
     } else if (this.ls) {
       this.ls.setRxq(this.rxq);
+      // (its rotation runs at this phone's own packet period: the mode on the air, which a switch reaches only at
+      // the next superframe; modes are per direction, so the friend's arrivals don't say it)
+      this.ls.setPacketMs(packetMs(st.plan, st.txMode));
       this.adaptMode();
     }
     this.flush();
@@ -530,10 +538,13 @@ export class Session {
 
   private lockstepFor(m: MatchShape, setupHash: number): Lockstep {
     const size = mapById(m.mapId).size;
-    return new Lockstep({
+    const ls = new Lockstep({
       local: m.local, delay: m.delay, mapWidth: size, mapHeight: size, capacity: this.transport.capacity(), setupHash,
       now: () => this.transport.now(), segmentsMax: this.segmentsMax
     });
+    const st = this.transport.stats();
+    ls.setPacketMs(packetMs(st.plan, st.txMode));
+    return ls;
   }
 
   /**
