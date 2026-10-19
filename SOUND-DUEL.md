@@ -2,35 +2,36 @@
 
 Two phones on a table play a 1v1 skirmish against each other. They have no
 network connection: the only link is each phone's speaker and microphone. Each
-phone runs the full deterministic simulation (deterministic lockstep, as
-MULTIPLAYER.md plans for internet play). Only the players' orders cross the
-air, carried by an acoustic modem in an AudioWorklet.
+phone runs the full deterministic simulation in lockstep (as MULTIPLAYER.md
+plans for internet play), and only the players' orders cross the air, carried
+by an acoustic modem running in an AudioWorklet.
 
-This document is the specification the implementation follows. Background:
-`reports/Audio modem for lockstep multiplayer.md` (research),
-`radio-probe.html` (the measurement page) and MULTIPLAYER.md (internet
-lockstep, most of whose sim-side decisions carry over).
+This document is the specification the implementation follows. It was revised
+after four independent design reviews (modem DSP, lockstep, platform,
+integration); their simulations are behind several of the numbers below.
+Background: `reports/Audio modem for lockstep multiplayer.md` (research),
+`radio-probe.html` (the measurement page) and MULTIPLAYER.md.
 
 ## What the measurements say
 
 The probe measured an iPhone receiving another phone 10 cm and 30 cm away
 (October 2026):
 
-- Power SNR was 40–70 dB in every 1 kHz band from 1 to 21 kHz. Noise is not
-  the limit.
-- Echo that outlasts the OFDM cyclic prefix is the limit. With 21.3 ms symbols
-  and a 5.3 ms prefix, the effective SNR (from measured phase errors) was
-  17–31 dB at 10 cm and 9–19 dB at 30 cm. A cluster of reflections arrived
-  8–15 ms after the direct sound at 30 cm. Longer symbols with a longer prefix
-  fix most of it.
+- Power SNR was 40–70 dB in every 1 kHz band from 1 to 21 kHz.
+- The limit was echo outlasting the OFDM cyclic prefix. With 21.3 ms symbols
+  and a 5.3 ms prefix, the effective SNR was 17–31 dB at 10 cm and 9–19 dB at
+  30 cm, with reflections arriving 8–15 ms after the direct sound.
 - The sending speaker's harmonics were 40–60 dB down above 4 kHz, but only
   about 20 dB down below 3 kHz.
-- Round trip, speaker to its own microphone: 75 ms, identical for eight chirps.
-- iOS leaves a 0.1–1.4 s hole in the recording just after the microphone opens.
+- Speaker-to-own-microphone round trip was 75 ms, identical for eight chirps.
+- iOS leaves a 0.1–1.4 s hole in the recording right after the microphone opens.
 
-So the link can carry a few kbit/s each way. That is far more than lockstep
-needs, so orders can land about 0.4 s after the tap, as in MULTIPLAYER.md's
-internet design.
+Two things are not measured yet. Both are tested in the lobby (own-signal
+monitor, two-way link meter) and listed under *Before launch*:
+
+- an iPhone transmitting with its microphone open (iOS may route sound to the
+  earpiece);
+- a phone's own transmission at its own microphone while it listens.
 
 ## Decisions
 
@@ -38,180 +39,251 @@ internet design.
 |---|---|
 | Network model | Deterministic lockstep, one turn per 100 ms tick, input delay D ticks (3–8, chosen at pairing from the measured round trip) |
 | Duplex | Both phones transmit all the time, each in its own band (frequency-division duplex) |
-| Band plan "high" (default) | Host transmits 9.5–12.5 kHz, guest transmits 16.0–19.0 kHz. Harmonics of the low band land at ≥19 kHz; third-order intermodulation of each band stays clear of the other band |
-| Band plan "low" (fallback, audible) | Host 5.0–6.5 kHz, guest 8.0–9.5 kHz, with 200 ms packets. Use it only if a phone can't play 16–19 kHz |
-| Modulation | OFDM with 25 Hz tone spacing (40 ms symbols + 10 ms cyclic prefix), differential BPSK ("robust") or differential QPSK ("fast") |
-| Coding | Convolutional K=7 rate ½ (133/171), soft Viterbi, interleaved, CRC-16 per packet |
-| Packet | High plan: 2 symbols (100 ms), 83 payload bits robust or 188 fast. Low plan: 4 symbols (200 ms), 82 or 186 |
-| Transport model | Latest state: each packet carries the newest frame the upper layer handed over, repeated until replaced. No ARQ: lockstep frames repeat every unacknowledged turn |
-| Sides | Host plays blue, guest plays red; a rematch swaps them |
-| Colours, camera | Fixed side colours (blue is blue on both phones), north up on both, as MULTIPLAYER.md recommends |
+| Band plan "high" (default) | Host transmits 9.525–12.5 kHz, guest 15.975–18.95 kHz. The host band's 2nd harmonic starts at 19.05 kHz, and each band's 3rd-order intermodulation stays clear of the other band |
+| Band plan "low" (fallback) | Host 5.025–6.5 kHz, guest 8.025–9.5 kHz. It is audible and needs an output path that carries 9.5 kHz; use it only when a phone can't play the high band |
+| Modulation | OFDM with 25 Hz tone spacing (40 ms symbols + 10 ms cyclic prefix). "Fast" uses differential QPSK; "robust" uses differential BPSK over twice as many symbols per packet |
+| Payload | The same in both modes, so a mode switch never changes what fits: 188 bits per packet (high plan) or 186 (low). Fast packets take 100 ms (high) or 200 ms (low); robust packets take twice as long |
+| Coding | Convolutional code (K=7, rate ½, 133/171), soft Viterbi with an agreement gate, interleaving, CRC-16 per packet |
+| Transport model | Latest state: each packet carries the newest frame the upper layer handed over, repeated until replaced. No ARQ: frames re-describe every unacknowledged turn |
+| Replay protection | Turns are accepted once each (high-water mark). Game packets use a CRC keyed to the pairing's two nonces, so a recording of another match fails its CRC. Pairing needs a fresh nonce echoed back. Jamming can't be prevented, only survived: lockstep stalls, it never desyncs |
+| Sides | The host plays blue unless a rematch swapped it. Rematches swap sides, never roles or bands |
+| Colours, camera | Fixed side colours (blue is blue on both phones), north up on both |
 | Career | No XP, medals or stars. A separate local sound-duel win/loss record |
-| Pause | Local and allowed: the other phone stalls within D ticks and shows "Friend paused" |
-| Game speed | Fixed at 1× (a small automatic trim keeps the phones in step) |
-| Desync | A world-hash trail exchanged every 5 s. A mismatch ends the match as "no contest" with copyable debug info |
-| Rematch | Reloads the page and reopens the lobby with sides swapped; each phone taps once (audio needs a fresh gesture) |
-| Gating | No build flag. The code is a lazily loaded chunk behind a menu button, shown only where AudioWorklet, getUserMedia and a secure context exist |
+| Pause | Local and allowed. The other phone stalls within D ticks and shows "Friend paused" |
+| Game speed | 1× on average; an automatic ±10% trim balances the two phones' slack |
+| Desync | A world-hash trail, checked every 5 s and at the end of the match. A mismatch ends it as "no contest" with copyable debug info |
+| Rematch | Reloads the page and reopens the lobby. Each phone taps Rematch, then "Tap to reconnect" (iOS may ask for the microphone again) |
+| Gating | No build flag. The duel code is a lazily loaded chunk, prefetched when the menu shows and capabilities exist; the button appears only where AudioWorklet, getUserMedia and a secure context exist |
 
 ## Architecture
 
 ```
-            phone A (host, blue)                       phone B (guest, red)
-  GameScene ── VersusFeed (MatchFeed) ──┐     ┌── VersusFeed ── GameScene
-                  │ Lockstep (codec)    │     │    Lockstep
-                  │ Pairing (lobby)     │     │    Pairing
-                  └── Session ──────────┘     └── Session
-                         │ LinkTransport            │ LinkTransport
-                  WorkletTransport               WorkletTransport
-                         │ MessagePort              │
-                  AudioWorklet: ModemCore     AudioWorklet: ModemCore
-                   TX 9.5–12.5 kHz ──────)))  RX 9.5–12.5 kHz
-                   RX 16–19 kHz    (((──────  TX 16–19 kHz
+            phone A (host)                               phone B (guest)
+  GameScene ── VersusFeed (MatchFeed, local) ─┐   ┌─ VersusFeed ── GameScene
+                 Lockstep · codec             │   │   Lockstep · codec
+                 Pairing (lobby)              │   │   Pairing
+                 Session ─────────────────────┘   └── Session
+                    │ LinkTransport                     │ LinkTransport
+             WorkletTransport  (MessagePort)      WorkletTransport
+             AudioWorklet: ModemCore              AudioWorklet: ModemCore
+              TX host band ───────────)))──────── RX host band
+              RX guest band ─────────(((───────── TX guest band
 ```
 
-Everything below the GameScene is pure TypeScript with no DOM, no timers and
+Everything below GameScene is pure TypeScript with no DOM and no timers, and
 no `Math.random` in its logic. Clocks and randomness are injected, so the same
 code runs in the browser, in the AudioWorklet and in Node tests.
 
-## Modules and ownership
+## Modules
 
 | Path | Contents |
 |---|---|
 | `src/sim/setup.ts`, `src/sim/checksum.ts` | `setupWorld(MatchSetup)` and `worldHash(w)` (done) |
-| `src/sim/*` | `{ type: "resign"; faction }` command, `world.resigned`, `resign` FxEvent (done) |
-| `src/game/controller.ts` | `PLAYER`/`ENEMY` live bindings and `setLocalSide(f)` |
-| `src/link/transport.ts` | `LinkTransport` interface and shared link types |
-| `src/link/packet-air.ts` | `PacketAir`: a frame-level simulated link (latency, loss, slots) implementing `LinkTransport` for both ends |
-| `src/link/modem/*.ts` | The modem DSP: parameters, FEC, CRC, interleaver, scrambler, OFDM transmitter and receiver, `ModemCore` |
+| `src/sim/*` | The `resign` command, `world.resigned` and the `resign` FxEvent (done) |
+| `src/game/controller.ts` | Live `PLAYER`/`ENEMY` bindings and `setLocalSide(f)` |
+| `src/game/local-side.ts` | Pure helpers: `composeTick(local, mine, theirs)` (blue's commands, then red's) and `applyOpenersCanonical(w, picks)` |
+| `src/link/transport.ts` | The `LinkTransport` interface and shared link types |
+| `src/link/packet-air.ts` | `PacketAir`: two connected ends of a frame-level simulated link |
+| `src/link/modem/*.ts` | The modem DSP: params, CRC, convolutional code and Viterbi, interleaver, scrambler, transmitter, receiver, self-monitor, `ModemCore` |
 | `src/link/sim/room.ts` | A sample-level simulated room for two `ModemCore`s |
-| `src/link/room-transport.ts` | `RoomLink`: two `ModemCore`s in a simulated room, exposing two `LinkTransport`s (Node full-stack tests) |
+| `src/link/room-transport.ts` | `RoomLink`: two `ModemCore`s in a `Room`, exposing two `LinkTransport`s |
 | `src/link/worklet.ts` | The AudioWorkletProcessor wrapping `ModemCore` |
-| `src/link/rig.ts` | Opening and closing the audio: session type, context, microphone, wake lock, diagnostics |
+| `src/link/rig.ts` | Opening, recovering and closing the audio |
 | `src/link/worklet-transport.ts` | `WorkletTransport`: the real `LinkTransport` |
-| `src/versus/codec.ts` | Bit reader/writer, the command codec |
-| `src/versus/lockstep.ts` | `Lockstep`: turns, sealing, frames, acks, stalls, hash trail |
-| `src/versus/pairing.ts` | `Pairing`: the lobby protocol state machine |
-| `src/versus/session.ts` | Glue: a transport plus pairing, then lockstep; drives both from a clock |
-| `src/versus/feed.ts` | `VersusFeed implements MatchFeed`: connects the session to GameScene |
-| `src/versus/lobby.ts`, `src/versus/hud.ts` | The lobby sheet; in-match overlays |
-| `src/versus/loop-peer.ts` | A headless sim + AI peer in the same page, for `?duel=loop` |
-| `src/versus/relay-transport.ts` | A `LinkTransport` through page functions, for `?duel=relay` (Playwright) |
-| `src/versus/records.ts` | The sound-duel win/loss record; the battle record to save |
+| `src/versus/codec.ts` | Bit I/O, Exp-Golomb, canonicalize/split, command codec |
+| `src/versus/lockstep.ts` | `Lockstep`: turns, sealing, frames, acks, stalls, hash trail, end protocol |
+| `src/versus/pairing.ts` | `Pairing`: the lobby protocol |
+| `src/versus/session.ts` | Glue: transport + pairing, then lockstep, driven by a clock |
+| `src/versus/feed.ts` | `VersusFeed implements MatchFeed` |
+| `src/versus/lobby.ts` | The lobby sheet; exports `openRig`, `showLobby`, `reconnect` |
+| `src/versus/hud.ts` | In-match overlays |
+| `src/versus/records.ts` | Sound-duel win/loss record; the saved battle record |
+| `src/versus/loop-peer.ts` | In-page sim + AI peer for `?duel=loop` |
+| `src/versus/relay-transport.ts` | `LinkTransport` through page functions for `?duel=relay` |
 
-Nothing outside `src/versus/**` and `src/link/**` statically imports them;
-`main.ts` loads the lobby with a dynamic `import()`. `src/game/audio.ts` gets
-a band guard (`setLinkGuard`), which is plain game code.
+Import rules (enforced by a test like arena.test.ts):
 
-## Lockstep
+- Nothing outside `src/versus/**` and `src/link/**` statically imports them.
+- `main.ts` reaches them only through `import('./versus/lobby')` (exactly one
+  such call site).
+- They may use `import type` from `src/arena/**`, but no value imports.
+
+`src/game/audio.ts` gains the band guard, which is plain game code.
+
+## Lockstep (`src/versus/lockstep.ts`)
 
 ### Turns
 
-A turn is one tick (100 ms). The input delay is `D` ticks, fixed for the match.
+A turn is one tick (100 ms). The input delay is D ticks, fixed for the match.
 
-- Turns `0 … D-1` are empty for both sides.
-- When a phone is about to step tick `t`, it first **seals** its own turn
-  `t + D`: it drains the controller's commands, canonicalizes them (below),
-  appends them to a local pending queue, and moves as many commands from the
-  front of the queue into turn `t + D` as fit in the per-turn budget. The rest
-  wait for later turns. Sealing happens once per tick, before the stall check,
-  so the peer gets the turn as early as possible.
-- The phone may step tick `t` only when it holds the peer's turn `t`. It then
-  steps with `[...blue turn t, ...red turn t]`. That order is canonical on both
-  phones, whichever side is local. Otherwise it **stalls**: it does not step,
-  and tries again next frame.
-- Both phones run the **decoded** form of every command, their own included:
-  `decode(encode(canonicalize(c)))`. Coordinates are quantized, so this keeps
-  the two worlds identical.
-- The receiving phone stamps each of the peer's decoded commands with the
-  peer's faction. The faction is never on the wire.
+- **Start state.** Turns `0 … D−1` are empty for both sides. `newestSealed`,
+  `ackThrough` (the peer turns this phone holds, contiguous) and `peerAck`
+  (this phone's turns the peer holds, from the peer's frames) all start at
+  `D − 1`. `trail` starts at `0x811c9dc5` with the setup world's
+  `worldHash32` folded in.
+- **Sealing.** Before stepping tick `t`, the phone seals its own turn `t + D`:
+  it drains the controller, canonicalizes and splits the commands (codec), and
+  appends them to its pending queue. Then it moves commands from the front of
+  the queue into turn `t + D` under the window rule. Sealing happens exactly
+  once per tick, before the stall check. While paused or after the match has
+  ended, nothing new is sealed.
+- **Window rule.** Move the queue's front command into turn T only while two
+  things hold:
+  - the frame describing `peerAck + 1 … T` still fits in `capacity`, counting
+    its header, a 21-bit checkpoint reserve, and every sealed turn's gap,
+    count and command bits;
+  - turn T stays at or under `TURN_MAX = capacity − 57` bits and 15 commands.
 
-The per-turn budget is `min(capacityBits − 40, 600)` bits of encoded commands,
-where `capacityBits` is the transport's current payload size.
+  If the front command does not fit, T is sealed with what it has (perhaps
+  nothing) and the command waits for acks to shrink the window. Because of the
+  split rule, any command fits once the window is empty.
+- **Stepping.** The phone steps tick `t` only when `ackThrough ≥ t`. It steps
+  with `composeTick(local, myTurn(t), peerTurn(t))`, which is blue's commands
+  then red's whichever side is local. Otherwise it stalls: it does not step,
+  and keeps the interpolation where it is.
+- **Decoded form.** Both phones run the decoded form of every command, their
+  own included: `decode(encode(canonicalize(c)))`.
+- **Faction.** The receiver stamps each of the peer's commands with the peer's
+  faction. The faction is never on the wire.
+
+The pending queue's length is visible in `status()`. The HUD shows "Orders
+queued" when it holds more than 2 s of turns.
 
 ### Frames
 
-Each phone keeps the newest frame it would send. The transport repeats it in
-every packet until a newer one replaces it. A frame describes every turn from
-the first one the peer has not acknowledged up to the newest sealed turn, as
-many as fit. A lost packet costs nothing as long as a later one arrives before
-the turn is needed.
+Each phone keeps its newest frame and hands it to `transport.send()` whenever
+one of these changes: a turn is sealed, a packet changes `ackThrough` or
+`peerAck`, or the pause or end state changes. The transport repeats it until
+it is replaced. A frame describes `from = min(peerAck + 1, newestSealed)`
+through `to`. That is always at least one turn; the receiver ignores turns it
+already holds.
 
-Game frame (all fields MSB-first; `UE` is unsigned Exp-Golomb, `SE` signed
-Exp-Golomb, see the codec):
+Game frame, MSB-first (`UE` = unsigned Exp-Golomb, `SE` = signed, see the
+codec):
 
 ```
-kind        1   0 = game frame
-paused      1   this phone is paused
-rxq         3   this phone's receive quality of the peer, 0-7 (effective SNR / 3 dB, clamped)
-to          16  newest turn described (mod 65536)
-span        UE  to − from (turns from..to are all described; turns without commands are empty)
-tickLag     SE  to − this phone's current tick
-ack         SE  ackThrough − to, where ackThrough is the newest peer turn this phone holds with no gaps
-nonEmpty    UE  how many turns in from..to have commands
+type      2   01 = game frame (10 = lobby; 00 and 11 are invalid, so an all-zero packet is nothing)
+paused    1
+end       2   0 playing, 1 left, 2 desync, 3 decided
+rxq       3   this phone's receive quality of the peer: clamp(floor(effective SNR dB / 3), 0, 7)
+to        16  newest turn described (mod 65536)
+span      UE  to − from
+tickLag   SE  to − this phone's current tick
+ack       SE  ackThrough − to
+nonEmpty  UE  turns in from..to that have commands
   per non-empty turn, ascending:
-    gap     UE  turn − (previous non-empty turn + 1), or turn − from for the first
-    count   UE  commands − 1
+    gap   UE  turn − from for the first; turn − (previous + 1) after that
+    count UE  commands − 1
     command × count            (codec)
-hash        1   a checkpoint follows
-  hashTick  16  tick of the checkpoint (mod 65536)
-  trail     24  the low 24 bits of this phone's hash trail at hashTick
+hash      1   a checkpoint follows: hashIdx 4 (checkpoint tick / 50, mod 16), trail 16 (low 16 bits)
+if end = 3:  endTick 16, endTrail 16
 ```
 
-Mod-65536 fields are unwrapped to the value nearest the receiver's
-expectation. The receiver ignores turns it already holds, and accepts the rest
-only if `from ≤ ackThrough + 1`. Frames longer than the transport capacity are
-never built: the builder stops adding turns when the next one would not fit,
-and lowers `to` accordingly.
+- **Unwrapping.** A mod-65536 field is unwrapped to the value nearest the
+  receiver's expectation: the peer's last known `to` for `to`, and its own
+  current tick for ticks. `hashIdx` is unwrapped to the checkpoint nearest its
+  own `tick / 50`.
+- **Bounds.** The two phones' ticks never differ by more than D + 1, so
+  `tickLag` lies in [−D−1, D] and `ack` in [−2D−1, 3D+1]. A frame describing
+  one turn therefore has at most 57 header bits.
+- **Accepting turns.** The receiver takes turns only from a frame whose `from`
+  is at most `ackThrough + 1`. It ignores turns it holds, stores the rest, and
+  raises `ackThrough` to `to`.
+- **Rejecting frames.** It rejects the whole frame on any codec error, `to`
+  more than 200 turns from expected, or span > 64.
+- **`peerAck`** only increases.
 
-### Hash trail
+### Hash trail and the end of the match
 
-After stepping each tick, the phone folds the world hash into a trail:
+After each step:
 `trail = Math.imul(trail ^ worldHash32, 0x01000193) >>> 0`, where
-`worldHash32 = parseInt(worldHash(w), 16)`. Every 50 ticks it saves
-`(tick, trail)` as a checkpoint and puts the newest checkpoint in its frames
-until the peer's ack covers that tick. A receiver compares a checkpoint with
-its own trail at that tick, if it has stepped that far, or stores it to
-compare later. A mismatch fires `onDesync`. Because it is a trail, a lost
-checkpoint cannot hide a divergence.
+`worldHash32 = parseInt(worldHash(w), 16)`.
+
+- **Checkpoints.** Every 50 ticks the phone saves `(tick, trail)`. Every frame
+  carries the newest checkpoint whenever it fits; there is no ack for
+  checkpoints. A phone keeps its own trail for its last 8 checkpoints. It
+  compares a peer checkpoint as soon as it has stepped that tick, storing it
+  until then. A mismatch makes the phone end the match as desync, and its
+  frames then carry `end = 2`.
+- **Decided match.** When the world is decided after stepping T, frames carry
+  `end = 3, endTick = T, endTrail = trail(T)`. The report shows "Checking
+  sync…" until the peer's end checkpoint arrives:
+  - "In sync ✓" if it matches;
+  - desync ("no contest") if it differs;
+  - desync if the peer reports a decision at T while this phone has stepped T
+    without one;
+  - "Not verified" after 10 s with no reply.
+
+  The phone keeps transmitting while the report is up.
+- **Leaving.** A phone that leaves or aborts sends frames with `end = 1`
+  (left) or `end = 2` (desync) for 2 s before closing the rig. The receiver
+  ends at once with "Friend left" (abandoned, no result) or "Out of sync (no
+  contest)".
 
 ### Pacing
 
-The phones need no shared clock: the one that is ahead stalls. To avoid
-stutter, the feed trims the game speed between 0.9× and 1.1×. Let
-`peerTickEstimate = peer's reported tick + (time since that frame arrived) /
-100 ms + latencyTicks`, where `latencyTicks` is half the paired round trip in
-ticks. Speed = `clamp(1 + 0.04 × (peerTickEstimate − myTick), 0.9, 1.1)`.
+The phones need no shared clock: the one that is ahead stalls. The feed
+balances their slack to avoid stutter:
 
-### Pause, leaving, resigning
+- `slack = ackThrough − currentTick`
+- the peer's slack, from its newest frame: `peerSlack = ack + tickLag`
+- `speed = clamp(1 + 0.02 × (slack − peerSlack), 0.9, 1.1)`
 
-- Pause is local: the paused phone keeps sending frames with `paused = 1` but
-  seals nothing new. The other phone stalls within D ticks and shows "Friend
-  paused".
-- Resign is a sim command (`{ type: "resign", faction }`) that rides the
-  stream like any order, so both phones end on the same tick with the normal
-  finale.
-- Leaving or losing the link is not a sim event. After 5 s of stall with no
-  packets, the HUD shows "Signal lost: bring the phones closer". After 60 s it
-  offers "Leave match" (recorded as abandoned, no result).
+The two speeds sum to 2, so the match runs at exactly 1× on average whatever
+the latency.
+
+### Pause, resign, leave, background
+
+- **Pause** is local. Frames carry `paused = 1` and nothing new is sealed. The
+  peer shows "Friend paused" once it stalls.
+- **Resign** (pause menu, with confirmation) closes the pause menu and
+  unpauses. It enqueues `{ type: "resign", faction: PLAYER }`, locks input and
+  shows "Resigning…" until the tick it lands. Both phones apply it D ticks
+  later.
+- **"Resign and leave"** replaces "Quit to menu" while packets are arriving:
+  it resigns, shows the report, and Menu reloads.
+- **"Leave (no result)"** appears only once "Signal lost" shows, or after 60 s
+  of stall even while packets arrive. It sends `end = 1` frames for 2 s.
+- **Stall overlays.** These count time with no new peer turn, whether or not
+  packets arrive:
+  - "Waiting for your friend…" after 0.5 s ("…to load" while the peer still
+    sends lobby frames, "Friend paused" while it is paused);
+  - "Signal lost: bring the phones closer" after 5 s;
+  - Leave after 30 s.
+- **Background.** On `visibilitychange` to hidden, the feed sets `paused`
+  synchronously, so the repeated frame says paused and the peer shows "Friend
+  switched away". On visible, see Rig > Lifecycle.
 
 ## Command codec (`src/versus/codec.ts`)
 
 Lossless for canonical commands, and stateless across turns.
 
-**Canonicalize** (sender side, before encoding):
+### Canonicalize and split (sender side, before encoding)
 
-- `x`, `y` (map coordinates): `k = clamp(floor(v × 16), 0, size × 16 − 1)`,
-  `v' = (k + 0.5) / 16`, where `size` is the map width (x) or height (y). This
-  keeps the tile and centres the point in its 1/16-tile cell.
-- `unitIds`: sorted ascending, duplicates removed.
-- An `unload` without a point stays without one (`x`, `y` absent, never NaN
-  or 0).
-- `faction` is set to the local side.
+- **Coordinates.** `x`, `y`: `k = clamp(floor(v × 16), 0, size × 16 − 1)`,
+  `v' = (k + 0.5) / 16`, where `size` is the map width (x) or height (y).
+  This keeps the tile, so harvest's `Math.floor` is unchanged.
+- **Unit lists.** `unitIds` are sorted ascending and deduplicated.
+- **Unload.** An `unload` has a point exactly when
+  `Number.isFinite(x) && Number.isFinite(y)`. Otherwise both are absent.
+- **Faction.** Set to the local side.
+- **Drop** commands that cannot be encoded or do nothing:
+  - an empty unit list after deduplication;
+  - an id that is not an integer, is negative, or is ≥ 2^24;
+  - a required x or y that is not finite;
+  - `tx`/`ty` outside `0 … size − 1`;
+  - an enum value missing from its table.
+- **Split.** A command with a unit list (move, attackMove, attack, harvest,
+  stop, anchor, packUp, board, unload) whose encoding exceeds `C_MAX = 96`
+  bits is split greedily into consecutive commands of the same type and
+  parameters, each at most 96 bits, keeping order. `lift` is never split. The
+  sim applies these per unit, so this is behaviour-identical and desync-safe,
+  and every command fits in an empty turn.
 
-**Bit layout of one command** (no faction):
+### Layout of one command (no faction)
 
 ```
-type        5   index into COMMAND_TYPES (an explicit fixed table, never Object.keys order)
+type   5  index into COMMAND_TYPES (an explicit fixed table, never Object.keys order)
 then by type:
   move, attackMove, harvest:     units, x, y
   attack:                        units, id(targetId)
@@ -219,7 +291,7 @@ then by type:
   produce, cancelProduce:        id(buildingId), unitKind 5
   startBuilding:                 buildingKind 4
   cancelBuilding, callWave:      –
-  placeBuilding:                 tx, ty      (ceil(log2(size)) bits each)
+  placeBuilding:                 tx, ty     (ceil(log2(size)) bits each)
   sell:                          id(buildingId)
   rally:                         id(buildingId), x, y
   calldown:                      power 2, x, y
@@ -227,130 +299,263 @@ then by type:
   unload:                        units, hasPoint 1, [x, y]
   lift:                          units, id(goliathId)
   resign:                        –
-units  = sameAsPrevious 1 (same list as the previous command in this turn that had units)
-         or: count UE, first UE, then (gap − 1) UE for each next id
+units  = sameAsPrevious 1 (always written; 1 = the same list as the previous command in this
+         turn that had units, and it must be 0 when there is none), else
+         UE(count − 1), UE(first), then UE(gap − 1) for each further id
 id     = UE
-x, y   = ceil(log2(size × 16)) bits each, the quantized cell index k
+x, y   = the cell index k in ceil(log2(size × 16)) bits
 ```
 
-The enum tables (`COMMAND_TYPES`, `UNIT_KINDS`, `BUILDING_KINDS`,
-`POWER_KINDS`) are explicit arrays in the codec, versioned by
-`CODEC_VERSION`. A test checks that they cover every kind in the sim's
-balance tables. Exp-Golomb: `UE(v)` writes `v + 1` in binary with
-`floor(log2(v + 1))` leading zeros; `SE(v)` maps 0, 1, −1, 2, −2… to 0, 1, 2,
-3, 4….
+- **Exp-Golomb.** `UE(v)` writes `v + 1` in binary, preceded by
+  `floor(log2(v + 1))` zeros. `SE(v)` maps 0, 1, −1, 2, −2… to 0, 1, 2, 3, 4…
+  and then writes `UE`.
+- **Rejection.** The decoder rejects the whole frame on any of:
+  - more than 24 leading zeros in a UE;
+  - a read past `nbits`;
+  - an enum index outside its table;
+  - `sameAsPrevious = 1` with no previous list;
+  - a cell index ≥ `size × 16`, or `tx`/`ty` ≥ `size`.
+- **Tables.** `COMMAND_TYPES`, `UNIT_KINDS`, `BUILDING_KINDS` and `POWER_KINDS`
+  are explicit arrays, versioned by `CODEC_VERSION`. A test checks they cover
+  the sim's types and balance tables.
 
 ## Pairing (`src/versus/pairing.ts`)
 
-The phone that taps **Host** transmits in the host band and listens in the
-guest band; **Join** does the reverse. Lobby frames ride the same transport
-(`kind = 1`). Each phone sends its current state in rotation, one message per
-packet:
+The phone that taps **Host** transmits in the host band of the chosen plan
+(Advanced settings; default high). **Join** listens for a host in both plans'
+host bands, then switches itself to the plan it locks first and transmits in
+that plan's guest band. Each phone repeats one lobby frame describing its whole
+state:
 
 ```
-kind 1 (=1), msg 2:
-HELLO  0: role 1 (0 host, 1 guest), proto 4, build 16, nonce 16, heard 16 (the peer nonce I hear, 0 = none),
-          rxq 3, ping 8 (my clock in 10 ms units, mod 256), echo 8 (the newest peer ping I heard),
-          hold 5 (10 ms units since I heard it, max 31)
-CONFIG 1 (host only): nonce 16, map 4 (0-5: built-in MAPS index; 8 + biome 0-4: random map), mutators 12
-          (mask in MUTATOR_IDS order), delay 3 (D − 3), hostSide 1 (0 blue), plan 1 (0 high, 1 low), fast 1
-PICK   2: nonce 16, confHash 16, opener 2 (OPENER_IDS index), picked 1
-GO     3: nonce 16, confHash 16, mine 2, theirs 2
+type 2 (=10)  role 1 (0 host, 1 guest)  proto 4  build 16
+nonce 16      (drawn uniformly from 1…65535; 0 means none)
+heard 16      the peer nonce this phone hears (0 = none)
+rxq 3         as in game frames
+ping 8        this phone's link clock at the start of the packet carrying this frame, in 10 ms units, mod 256
+echo 8        the newest peer ping heard
+hold 5        10 ms units from hearing that ping to the start of this packet (31 = too old: discard)
+hasConfig 1   (host only) then:
+  map 4       0–5: built-in MAPS index; 8–12: random map of biome 0–4, followed by seed 32; other values are invalid
+  mutators 12 mask in MUTATOR_IDS order
+  delay 3     D − 3
+  hostSide 1  0: the host plays blue
+  fast 1      the match starts in fast mode
+confHash 16   this phone's hash of (config, plan, both nonces); 0 = none yet
+pick 2        OPENER_IDS index, or 3 = no opener (all blocked under the config)
+picked 1
+go 1          then theirs 2: the peer's pick as this phone holds it
 ```
 
-- `build` is the first 16 bits of `__SIM_HASH__` XORed with `CODEC_VERSION`
-  and the protocol version. A mismatch stops pairing with "These phones run
+The longest frame is 155 bits, which fits a packet.
+
+- **Build check.** `build` is the first 16 bits of `__DUEL_HASH__`, a sha256
+  that vite.config defines over `src/sim/**`, `src/versus/**` and
+  `src/link/**`. `proto` is a separate version number, so the lobby can say
+  which phone is older. A mismatch stops pairing with "These phones run
   different versions: reload both".
-- The match seed is `hash32(hostNonce, guestNonce, 1)`, and a random map's
-  seed is `hash32(hostNonce, guestNonce, 2)` (`src/sim/rand.ts` hash32), so
-  neither needs sending.
-- `confHash` is a 16-bit hash of the decoded config plus both nonces. Both
-  phones must agree on it before GO.
-- The round trip comes from HELLO's ping, echo and hold:
-  `rtt = now − ping_sent − hold`. The host picks `D = clamp(ceil((rtt / 2 +
-  150 ms) / 100 ms), 3, 8)`.
-- `fast` is set when both phones report `rxq ≥ 5` (about 15 dB).
-- Stages: hearing each other (nonces echoed both ways) → config agreed (the
-  guest's PICK carries the host's confHash) → both picked → GO. A phone starts
-  its match once it has sent GO and heard the peer's GO or a game frame.
-  Turns `0 … D-1` are empty, so the phone that loads faster simply stalls at
-  tick D until the other starts.
+- **Link clock.** `ping` and `hold` are stamped at air time. The transport's
+  `slot` events give each packet's start, and the session rebuilds the lobby
+  frame on every slot. `rtt = now − pingSentAt(echo) − hold`. The host keeps
+  the last 5 samples.
+- **Config.** The host's config is the menu's `shownMap()` and
+  `activeMutators()` at the moment of the Duel tap. A random map sends its own
+  32-bit seed, so the map shown is the map played. The match seed is
+  `hash32(hostNonce, guestNonce, 1)` (`src/sim/rand.ts`).
+  - `D = clamp(ceil((median rtt / 2 + 150 ms) / 100 ms), 3, 8)`.
+  - `fast` is set when both phones' last 10 frames report `rxq ≥ 5`.
+  - The host freezes its config when it first hears a guest frame whose
+    `confHash` equals its own, and never changes it afterwards.
+- **Picks.** Once the config is agreed, both phones show the opener cards.
+  Only openers that are not `openerBlocked(setupWorld({ map, seed, mutators,
+  openers: {} }), side, id)` are offered. A pick is final once `picked = 1`.
+  Picking times out after 20 s with `allowedOpener(…, OPENER_IDS[0])`, or 3
+  (none).
+- **GO.** A phone sets `go` only after hearing the peer's frame with an equal
+  `confHash` and `picked = 1`, and having picked itself. It accepts the peer's
+  GO only if:
+  - the nonce is the peer's HELLO nonce;
+  - `confHash` is equal;
+  - `theirs` equals its own pick.
+
+  Otherwise it shows "Pairing failed: tap to retry" and resets. If the peer's
+  nonce changes mid-pairing, pairing resets.
+- **Start.** After setting GO, a phone's payload is the GO frame alone until
+  its first game frame. It starts its match once it has sent GO and heard the
+  peer's GO or any game frame that passes the session CRC. The phone that
+  loads faster stalls at tick D and shows "Waiting for your friend to load…".
+- **Session CRC.** From GO on, game frames use the session CRC (see the
+  modem). Lobby frames always use the default.
+- **Same role on both phones.** If both phones pick Host, or both Join, they
+  hear nothing. After 8 s with nothing heard, the lobby says "Nothing heard
+  yet. One phone taps Host, the other Join" and offers a one-tap switch.
 
 ## The modem (`src/link/modem/`)
 
 ### Numerology
 
-- Sample rate `sr`: whatever the AudioContext runs at. Supported when
-  `0.04 × sr` and `0.01 × sr` are integers (44.1, 48, 96 kHz…).
-- Tone spacing 25 Hz, useful symbol `TU = 40 ms` (`N = 0.04 × sr` samples),
-  cyclic prefix `TCP = 10 ms`, symbol `TS = 50 ms`. Tone `k` has frequency
-  `25k` Hz: an exact DFT bin at every supported rate, so a 44.1 kHz phone and
-  a 48 kHz phone share one grid.
-- Band tones: plan high, host `k = 381…500` (9.525–12.5 kHz), guest
-  `k = 641…760` (16.025–19.0 kHz), 120 tones each. Plan low, host
-  `k = 201…260` (5.025–6.5 kHz), guest `k = 321…380` (8.025–9.5 kHz), 60
-  tones each. A band has pilots at the tones with index `i % 8 == 0` and data
-  on the rest: 15 pilots and 105 data tones (high), 8 and 52 (low).
-- Packet length `P`: 2 symbols (high) or 4 (low).
-- Superframe: 1 sync symbol, then 40 data symbols (20 packets for high, 10
-  for low): 41 symbols, 2.05 s.
+- **Sample rate.** `sr` is the AudioContext's rate. It must be a multiple of
+  100: at least 44100 for the high plan, or 24000 for the low plan. Otherwise
+  `rig.open` reports "This phone's audio runs at N Hz, which the sound link
+  can't use". Durations that are not whole samples are rounded to the nearest
+  sample on each phone (local only, never affecting interoperability).
+- **Symbols.** Tone spacing is 25 Hz: tone `k` is at `25k` Hz, an exact DFT
+  bin at every supported rate, so phones at 44.1 and 48 kHz share one grid.
+  The useful symbol is `TU = 40 ms` (`N = 0.04 sr` samples), the cyclic prefix
+  `TCP = 10 ms`, so a symbol is `TS = 50 ms`.
+- **Band tones.**
+
+  | Plan | Host tones | Guest tones |
+  |---|---|---|
+  | high | `k = 381…500` (120 tones) | `k = 639…758` (120 tones) |
+  | low | `k = 201…260` (60 tones) | `k = 321…380` (60 tones) |
+
+  Within a band, tone index `i % 8 == 0` is a pilot and the rest carry data:
+  15 pilots and 105 data tones in the high plan (`T = 105`), 8 and 52 in the
+  low plan (`T = 52`).
+- **Packets.** `P` symbols per packet:
+
+  | Plan | Fast | Robust |
+  |---|---|---|
+  | high | 2 | 4 |
+  | low | 4 | 8 |
+
+  `capacity = P × T × b / 2 − 16 − 6`, with b = 2 (fast) or 1 (robust): 188
+  bits (high) and 186 (low) in both modes.
+- **Superframe.** One sync symbol, then 40 data symbols (41 symbols, 2.05 s).
+  That is 20, 10, 10 or 5 packets for high fast, high robust, low fast and low
+  robust.
 
 ### Transmitter
 
-- Each tone's phase advances from one symbol to the next (differential). The
-  sync symbol sets a known phase for every tone, so it is also the reference
-  for the first data symbol. Pilot tones never change phase after the sync
-  symbol.
-- Two sync patterns, A and B: fixed pseudo-random phase sets, published as
-  constants. A means the next 20 packets are robust, B means fast. The
-  transmitter changes mode only at a superframe boundary.
-- Packet bits: payload (exactly `capacity` bits, zero-padded), then CRC-16
-  (CCITT, poly 0x1021, init 0xFFFF, MSB-first, over the payload bits), then 6
-  zero tail bits. These are convolutionally encoded (K=7, generators 133 and
-  171 octal, rate ½), block-interleaved (write row by row into a matrix with
-  `dataTones` columns, read column by column), and XORed with a PN sequence
-  (LFSR x⁹ + x⁵ + 1, seed 0x1FF + packet index within the superframe).
-  `capacity = P × dataTones × bitsPerTone / 2 − 16 − 6`.
-  - Robust: each data tone's phase change is 0 or π (1 bit). High: 2 × 105 =
-    210 coded bits, capacity 83. Low: 4 × 52 = 208, capacity 82.
-  - Fast: each data tone's phase change is Gray-coded from 2 bits: 00→0,
-    01→π/2, 11→π, 10→3π/2. High: capacity 188. Low: capacity 186.
-  - The interleaver is a fixed permutation in which any 12 consecutive coded
-    bits land on different tones, at least 5 tones apart, and spread over the
-    packet's symbols.
-- Symbol synthesis: the sum of the band's tones at equal amplitude, the
-  previous symbol's phases plus this symbol's changes, over `TCP + TU`. Each
-  symbol fades in and out with a 1.25 ms raised cosine overlapping the next
-  symbol's prefix. Per-tone amplitude puts the band's RMS at −18 dBFS × gain,
-  with a hard limit at ±0.9.
-- The payload is the newest one `setPayload` delivered before the packet's
-  first symbol starts. Without one, a packet carries all zeros. Upper layers
-  treat a frame of all zeros as nothing.
+- **Phases.** Every tone's phase changes differentially from one symbol to the
+  next.
+  - Pilots carry a fixed pilot phase set, never changing.
+  - In the sync symbol, data tones carry pattern A (the next superframe is
+    robust) or B (fast): `A_i = π·i²/T` (Newman, low crest factor) and
+    `B_i = −A_i`, over data-tone index i.
+  - The sync symbol is the differential reference for the first data symbol.
+  - The mode changes only at a superframe boundary.
+- **Packet bits.** The payload (exactly `capacity` bits, zero-padded), then
+  CRC-16, then 6 zero tail bits. These are:
+  - convolutionally encoded;
+  - interleaved, so coded bit j (0 ≤ j < P·T·b) goes to symbol `s = j mod P`,
+    data tone `t = (A·q + B·s) mod T` and bit-in-tone `floor(q / T)`, where
+    `q = floor(j / P)` and `(A, B) = (8, 56)` for T = 105 or `(17, 4)` for
+    T = 52;
+  - XORed in slot order with a PN sequence: a 9-bit Fibonacci LFSR with state
+    bits s1…s9, output s9, feedback s9 ⊕ s5, seeded with
+    `1 + ((37 · packetIndex) mod 511)`.
+- **CRC-16.** CCITT, polynomial 0x1021, MSB-first over the payload bits. The
+  init is 0xFFFF for lobby frames. For game frames it is the session key,
+  `crcKey(role) = (hash32(hostNonce, guestNonce, 7, role === "host" ? 0 : 1)
+  & 0xFFFF) || 0xFFFF`, keyed to the transmitting phone's role.
+- **Bit to phase.** Robust: a 1 bit gives a phase change of π. Fast: Gray
+  from two bits, 00→0, 01→π/2, 11→π, 10→3π/2.
+- **Synthesis.** Each symbol is the sum of the band's tones at equal
+  amplitude, over `TCP + TU`, with a raised-cosine fade of
+  `TW = round(0.00125 sr)` samples overlapping the next symbol's prefix.
+  - The per-tone amplitude puts the band's RMS at −15 dBFS × gain, where
+    `gain ≤ 1.5` (default 1).
+  - A sample beyond ±0.9 is clipped and counted as a fault in the stats; it is
+    not a normal path.
+  - Synthesis uses a persistent oscillator bank.
+- **Timeline.** The transmit timeline is indexed by the AudioWorklet's
+  `currentFrame`. After a jump of J frames, it skips J samples rather than
+  delaying. After any local gap or underrun it starts a new superframe (a sync
+  symbol) at the next symbol boundary.
+- **Payload.** A packet takes the newest payload delivered before its first
+  symbol starts. Without one, it carries all zeros (an invalid frame, ignored
+  upstream). When a packet latches its payload, the modem emits a `slot` event
+  with that packet's start frame.
 
 ### Receiver
 
-- **Acquisition**: correlate the input with both sync symbols (band-limited,
-  FFT overlap-save). A normalized correlation above 0.3 that is the
-  strongest within ±25 ms marks a superframe start, and its pattern gives the
-  mode.
-- **Symbols**: the DFT window for symbol `m` starts `TCP − 2 ms` after the
-  symbol's start (2 ms of back-off inside the prefix tolerates timing error
-  and pre-echo). The phone computes the band's tones only (Goertzel or direct
-  DFT).
-- **Tracking**: per symbol, take the differential product on the pilots,
-  `d_k = X_k(m) · conj(X_k(m−1))`, and fit a phase slope through the origin,
-  `s = Σ |d_k| f_k arg(d_k) / Σ |d_k| f_k²`. Remove `e^{−j s f_k}` from every
-  tone's differential product. Accumulate the implied timing drift `s / 2π`,
-  and when it passes half a sample, move the window one sample and correct
-  that symbol's phase. Clock offsets up to ±300 ppm must track.
-- **Soft bits**: robust uses `Re(d̃)`; fast rotates by −π/4 and uses `Re` and
-  `Im`. Both are normalized by the mean amplitude of the packet's data tones.
-  Then descramble, deinterleave, soft Viterbi, and check the CRC.
-- **Quality**: the effective SNR per packet is `1 / mean(phase error²)` over
-  the pilots (dB). Packets with a good CRC are delivered with that SNR.
-- **Superframes**: at each expected sync position, re-correlate ±5 ms to
-  refine timing and read the mode. After 3 superframes without a good packet,
-  drop lock and search again.
+- **Acquisition.**
+  - The input is band-passed with a real FIR on the receive band.
+  - `ρ(t) = ⟨x_bp, template⟩ / (‖x_bp‖ · ‖template‖)` over the 40 ms useful
+    length, for the data-tone templates of A and B (pilots excluded). It is
+    computed by FFT overlap-save, spread across audio blocks.
+  - A candidate is a sample with `ρ ≥ 0.4` that is the maximum within ±50 ms,
+    whose pattern beats the other by at least 0.15.
+  - Its timing is the first path: the earliest sample within the 15 ms before
+    the maximum with `ρ ≥ 0.5 ρmax`.
+  - Lock is declared only when the first packet after the candidate passes its
+    CRC and the gate. Otherwise the candidate is discarded and the search
+    continues 50 ms later.
+  - Acquisition keeps running in the background while locked. A sync found
+    elsewhere with ρ ≥ 0.4 that passes a packet replaces the lock.
+- **Window.** WOLA:
+  - take `N + β` samples, `β = round(0.00125 sr)`, starting `β/2` before the
+    nominal window;
+  - taper the first and last β samples (0.5 − 0.5 cos);
+  - fold the last β/2 onto the first β/2 and the first β/2 onto the last β/2;
+  - evaluate the N-sample DFT.
+
+  The nominal window starts `TCP − backoff` after the symbol start, with
+  `backoff = round(0.001 sr)`. This cuts the phone's own transmission leaking
+  through the window to about −80 dB (high plan). The post-echo guard is
+  `TCP − TW − backoff − β/2 ≈ 7.1 ms`.
+- **Clock tracking.**
+  - Keep a clock estimate ε̂, initialised from the timing difference between
+    the first two syncs, or from the mean pilot slope of the first 4 symbols.
+  - Evaluate each tone's DFT at `f_k (1 + ε̂)`, not at the bin frequency
+    (Goertzel, or direct with a recurrence).
+  - Advance the window by `TS · sr · (1 + ε̂)` per symbol in a fractional
+    accumulator. Start it at the rounded position, apply the fractional
+    remainder δ as `e^{+j 2π f_k δ / sr}`, and take any whole-sample change.
+  - Per symbol, fit the residual pilot slope through the origin,
+    `s = Σ |d_k| f_k arg(d_k) / Σ |d_k| f_k²` with
+    `d_k = X_k(m) conj(X_k(m−1))` (s = −2π·Δτ). Update
+    `ε̂ ← ε̂ − 0.1 · s / (2π TS)`. Remove `e^{−j s f_k}` from every tone's
+    differential product.
+  - The sync symbol is skipped in the fit: its pilots are continuous, but its
+    data tones are not.
+  - It must track ±300 ppm.
+- **Soft bits.** Positive values mean bit 0. With `μ` = the mean of `|d̃|`
+  over the packet's data tones, and λ clamped to ±4:
+  - robust: `λ = Re(d̃) / μ`;
+  - fast: `z = d̃ e^{−jπ/4}`, `λ0 = Re(z) / μ`, `λ1 = −Im(z) / μ`.
+- **Decoding.** Descramble, deinterleave, soft Viterbi (zero-tail), then:
+  - **gate:** re-encode the decoded bits and reject the packet if more than 8%
+    disagree with the hard decisions;
+  - **CRC:** check the session key first (when set), then 0xFFFF. A game frame
+    must match the session key, and a lobby frame 0xFFFF.
+- **Quality.** The packet's effective SNR is `1 / mean(phase error²)` over its
+  pilots, in dB.
+- **Superframes.**
+  - At each expected sync, re-correlate ±5 ms with the first-path rule. Read
+    the mode, and correct the timing by at most 0.5 ms per superframe.
+  - If neither pattern clears 0.3 there, keep the timing and decode that
+    superframe's packets in both modes; the CRC and the gate decide.
+  - Drop lock after that plus 4 consecutive packets failing.
+- **Gaps.**
+  - Gaps of known length are zero-filled. The phone keeps its timing and ε̂,
+    and marks packets overlapping the gap as erased.
+  - While transmitting, an input block that is entirely 0.0 counts as missing
+    input: a live microphone that hears its own speaker never produces digital
+    silence.
+  - After a gap on either phone, good packets must resume within 2.5 s.
+- **Self-monitor.** A second, pilots-only receiver locks onto this phone's own
+  transmission at its own microphone. It reports:
+  - `ownSnrDb`, the effective SNR of its own pilots, used for the route check;
+  - `loopbackMs`, from its own sync's emission to its detection.
+- **Self-test mode.** When the receive band is the transmit band, the main
+  receiver decodes the phone's own packets: a one-phone check of the whole
+  chain.
+- **Plan detection (Join).** In the lobby the guest searches both plans' host
+  bands until it locks, then sets its plan.
+
+### CPU rules
+
+- `process()` allocates nothing after construction. Buffers are preallocated,
+  and messages are built only for rx, stats, slot and gap.
+- It generates exactly its block's output from the oscillator state and folds
+  the input into per-tone accumulators incrementally.
+- It starts at most one deferred heavy job (an FFT block, a Viterbi, a sync
+  re-correlation) per call.
+- A vitest benchmark runs ModemCore over 60 s and fails if a 128-frame block
+  takes over 0.7 ms at p99 in Node.
 
 ### `ModemCore` API
 
@@ -361,191 +566,411 @@ export type BandRole = "host" | "guest";
 export interface ModemConfig {
   sampleRate: number;
   plan: BandPlan;
-  /** Which band this phone transmits in; it receives the other (or the same, for self-test). */
   tx: BandRole;
-  rx: BandRole;
-  /** Linear output gain (1 = band RMS at −18 dBFS). */
+  /** The band received: the other role's, the same (self-test), or "detect" (Join in the lobby: either plan's host band). */
+  rx: BandRole | "detect";
   gain?: number;
 }
-export interface RxPacket { bits: Uint8Array; nbits: number; mode: ModemMode; snrDb: number; frame: number }
+export interface RxPacket { bits: Uint8Array; nbits: number; mode: ModemMode; snrDb: number; sample: number; plan: BandPlan; session: boolean }
 export interface ModemStats {
-  frame: number; locked: boolean; rxMode: ModemMode | null; txMode: ModemMode;
+  sample: number; locked: boolean; plan: BandPlan; rxMode: ModemMode | null; txMode: ModemMode;
   snrDb: number | null; rxOk: number; rxBad: number; syncs: number; clockPpm: number | null; txPackets: number;
+  ownSnrDb: number | null; loopbackMs: number | null; clips: number; inputPeak: number;
 }
 export class ModemCore {
   constructor(cfg: ModemConfig);
-  /** One audio block: read `input` (microphone), fill `output` (speaker); the same length (128 in the worklet). */
-  process(input: Float32Array, output: Float32Array): void;
-  /** The payload every packet repeats from now on (MSB-first bits, nbits ≤ capacity(txMode)). */
-  setPayload(bits: Uint8Array, nbits: number): void;
-  /** The mode from the next superframe on. */
-  setTxMode(mode: ModemMode): void;
-  capacity(mode?: ModemMode): number;
-  /** Packets decoded since the last call. */
+  process(input: Float32Array, output: Float32Array): void;     // same length (128 in the worklet)
+  setPayload(bits: Uint8Array, nbits: number): void;            // MSB-first, nbits ≤ capacity
+  setTxMode(mode: ModemMode): void;                             // from the next superframe
+  setSessionKey(hostNonce: number, guestNonce: number): void;    // enables the session CRC
+  reconfigure(cfg: Partial<ModemConfig>): void;                  // at the next symbol boundary
+  capacity(): number;                                            // constant per plan
   take(): RxPacket[];
+  takeSlots(): { sample: number; index: number }[];
   stats(): ModemStats;
 }
 ```
 
-Bits are packed MSB-first into bytes: bit `i` is `(bits[i >> 3] >> (7 - (i & 7))) & 1`.
+- **Sample.** `RxPacket.sample` is the input-sample index (the `currentFrame`
+  domain) of the first sample of the packet's first DFT window.
+- **Bits.** MSB-first: bit `i` is `(bits[i >> 3] >> (7 − (i & 7))) & 1`.
 
 ## Link layer (`src/link/`)
 
 ```ts
-export interface LinkPacket { bits: Uint8Array; nbits: number; snrDb: number | null; at: number }
+export interface LinkPacket { bits: Uint8Array; nbits: number; snrDb: number | null; at: number; session: boolean }
 export interface LinkStats {
   locked: boolean; snrDb: number | null; rxOk: number; rxBad: number; txMode: ModemMode; rxMode: ModemMode | null;
-  /** Milliseconds since the last good packet (Infinity: none yet). */
-  sinceRx: number;
+  sinceRx: number; ownSnrDb: number | null; loopbackMs: number | null; plan: BandPlan;
 }
 export interface LinkTransport {
-  /** Payload bits per packet in the current TX mode. */
   capacity(): number;
-  /** The frame every packet repeats until replaced. */
-  send(bits: Uint8Array, nbits: number): void;
-  /** Packets received since the last call. */
+  send(bits: Uint8Array, nbits: number): void;    // repeated in every packet until replaced
   poll(): LinkPacket[];
-  /** Milliseconds on this link's clock (the audio clock for real links). */
-  now(): number;
+  /** Packet starts since the last call, on this link's clock (lobby frames are stamped at air time). */
+  slots(): number[];
+  now(): number;                                   // monotonic milliseconds
   setMode(mode: ModemMode): void;
+  setSessionKey(hostNonce: number, guestNonce: number): void;
   stats(): LinkStats;
   close(): void;
 }
 ```
 
-- `PacketAir` gives two connected ends. Packets go out every 100 ms per end
-  (independent phases). Each packet is delivered after `latencyMs` (default
-  250) with a seeded Bernoulli or Gilbert–Elliott loss. It is driven by
-  `advance(ms)` in tests, or a real timer in `?duel=loop`. Capacity follows
-  the mode (83 or 188), and both can be overridden for tests.
-- `WorkletTransport` posts `send` to the worklet, receives packets and stats
-  over its MessagePort, and keeps `now()` from the worklet's frame counter.
-- `RoomLink` runs two `ModemCore`s through `Room` in 128-frame blocks, for
-  Node full-stack tests.
+- **`PacketAir`** gives two connected ends, each on an injected clock
+  (`advance(ms)` in tests, a real timer in `?duel=loop`).
+  - Packets go out every 100 ms (fast) or 200 ms (robust), with independent
+    phases per end.
+  - Each is delivered after `latencyMs` (default 250), with seeded Bernoulli
+    or Gilbert–Elliott loss.
+  - Capacity is 188 unless overridden.
+  - It honours `setSessionKey` by dropping game frames between ends whose keys
+    differ.
+- **`RoomLink`** runs two `ModemCore`s through a `Room` in 128-frame blocks.
+- **`WorkletTransport`.**
+  - `now() = performance.now() − t0`: monotonic, and it keeps running while
+    the link context is suspended or rebuilt.
+  - Each worklet message carries `sample`. A packet's
+    `at = now() − max(0, (ctx.currentTime × sr − sample) / sr × 1000)`.
 
-### Worklet message protocol
+### Worklet
 
-- Main → worklet: `{ t: "payload", bits: ArrayBuffer, nbits }`,
-  `{ t: "mode", mode }`, `{ t: "config", ... }`, `{ t: "close" }`.
-- Worklet → main: `{ t: "rx", bits, nbits, mode, snrDb, frame }`, a
-  `{ t: "stats", ...ModemStats }` about four times a second, and
-  `{ t: "gap", frames }` when `currentFrame` jumps or the input goes missing.
-  The receiver resets its timing after a gap.
-
-The worklet is built by Vite from `src/link/worklet.ts` (`?worker&url`, so
-it is bundled into a single file and precached by the PWA) and loaded with
-`audioWorklet.addModule(url)`.
+- **Loading.** `src/link/worklet.ts` is imported as
+  `./worklet.ts?worker&url`. A production build emits a self-contained IIFE,
+  which `addModule` accepts and the PWA precaches. Rig keeps a
+  `WeakMap<BaseAudioContext, Promise<void>>` so addModule runs once per
+  context.
+- **Allowed globals.** The worklet and everything it imports use no
+  `import.meta`, dynamic `import()`, `self`, `window`, `document`, `location`,
+  `performance`, timers, `TextEncoder`/`TextDecoder`, `crypto` or `fetch`. Only
+  JS builtins plus `sampleRate`, `currentFrame`, `currentTime`,
+  `registerProcessor`, `AudioWorkletProcessor` and `port`. Their declarations
+  are module-local in worklet.ts, never `declare global`.
+- **Creation.** The node is created at the Host, Join or Self-test tap, with
+  `processorOptions: ModemConfig`, `channelCount: 2`, `"explicit"` and
+  `"discrete"`.
+- **Channel choice.** Each block uses the louder channel when the other is
+  more than 40 dB quieter, and channel 0 otherwise. It never sums two live
+  microphones, which comb-filters.
+- **Messages.**
+  - Main → worklet: `{t:"payload", bits, nbits}`, `{t:"mode", mode}`,
+    `{t:"session", hostNonce, guestNonce}`,
+    `{t:"config", plan, tx, rx, gain}`, `{t:"close"}` (after which `process()`
+    returns false).
+  - Worklet → main: `{t:"rx", ...RxPacket}`, `{t:"slot", sample, index}`,
+    `{t:"stats", ...ModemStats}` (about 4 per second), and
+    `{t:"gap", sample, frames}` (once when a gap starts, once with its total
+    when capture resumes).
+- **Tests.** `tools/worklet-smoke.mjs` builds dist, then loads the built
+  worklet in Playwright Chromium. It uses an OfflineAudioContext at 48 kHz with
+  two nodes (host and guest) cross-wired through gain and delay paths (own path
+  loud, peer path quiet), and asserts payloads decode both ways. It should
+  also be run once in WebKit or on an iPhone.
 
 ### Rig (`src/link/rig.ts`)
 
-This ports the probe's `Rig`:
+- **Open.** `openRig({ micMode })` runs synchronously inside the tap. It:
+  - sets `navigator.audioSession.type = "play-and-record"`;
+  - creates an AudioContext (`latencyHint: "interactive"`, default rate),
+    resumes it and plays a 1-sample silent buffer;
+  - requests a wake lock;
+  - starts getUserMedia;
+  - returns a promise that resolves when the microphone is connected.
 
-- `open({ micMode })` runs synchronously inside the tap: set
-  `navigator.audioSession.type = "play-and-record"`, create an AudioContext
-  (`latencyHint: "interactive"`, default rate), resume it, and play a
-  1-sample silent buffer. Then it asks for the microphone with
-  `echoCancellation`, `noiseSuppression` and `autoGainControl` false ("raw",
-  the default) or with echo cancellation on ("voice"). Capture uses 2
-  discrete channels, summed.
-- It holds a screen wake lock.
-- `info()` and `health()` give diagnostics.
-- `close()` stops the tracks, closes the context and sets the session back to
-  "auto".
-- The link context is separate from the game's (`sfx`) context. The mic stays
-  open from the lobby until the player leaves the duel. Lockstep starts only
-  after 1.5 s of capture with no gaps.
+  After getUserMedia it calls `ctx.resume()` again and checks that the state
+  is `"running"`; if not, the lobby shows "Tap to start sound".
+- **Mic modes.**
+  - `raw` (default): `{echoCancellation: false, noiseSuppression: false,
+    autoGainControl: false, channelCount: {ideal: 1}}`.
+  - `ec`: the same with echo cancellation on.
 
-### Game audio guard
+  Changing the mode re-requests the microphone and reconnects the source.
+- **Refusal.** If the microphone is refused, the rig closes the context, sets
+  the session back to `"auto"`, turns off the guard, and shows "Microphone
+  refused".
+- **Capture.** Lockstep starts only after 1.5 s of gap-free capture.
+- **Lifecycle.** `onLost(reason)` fires on:
+  - the track ending;
+  - the track muted for more than 1 s;
+  - the link context not running for more than 0.5 s;
+  - `devicechange`.
 
-The game's own sound would jam the modem. `sfx.setLinkGuard(true)` does three
-things:
+  The rig never suspends its own context. On visible, it re-requests the wake
+  lock. If the context isn't running or the track has ended, a full-screen
+  "Tap to reconnect the sound link" overlay appears. Its tap resumes the
+  context, and re-requests the microphone into the existing worklet node if
+  needed, so the modem state and `now()` survive. If the context is broken, the
+  tap rebuilds it. After 2 failures it offers Leave. The overlay closes after
+  1.5 s of gap-free capture.
+- **No wake lock.** Where `navigator.wakeLock` is missing (installed iOS apps
+  before 18.4), the lobby says to set Auto-Lock to Never.
+- **Close.** `close()` stops the tracks, closes the context and sets the
+  session back to `"auto"`.
 
-- Inserts a high-pass (~300 Hz, to cut the sub-bass that makes speakers
-  distort) before the compressor.
-- Inserts a linear-phase FIR low-pass after it (ConvolverNode, designed at the
-  context rate; flat to 8 kHz, at least 70 dB down from 9.5 kHz; for plan low,
-  flat to 4 kHz, at least 60 dB down from 5 kHz).
-- Lowers the master gain by 10 dB.
+### Game audio guard (`src/game/audio.ts`)
 
-It also turns spoken announcer lines off: speechSynthesis can't be filtered.
-`setLinkGuard(false)` restores everything.
+`sfx.setLinkGuard(plan: BandPlan | null)`. The chain becomes:
+
+```
+master → high-pass ~300 Hz → guardGain (−GUARD_CUT_DB) → compressor → { dry | FIR (ConvolverNode) } → destination
+```
+
+- **Crossfade.** Dry and FIR crossfade over 50 ms.
+- **FIR.** A Kaiser windowed sinc designed at the context rate:
+  - high plan: flat to 8 kHz, ≥ 70 dB down from 9.5 kHz (about 133–145 taps);
+  - low plan: flat to 4 kHz, ≥ 60 dB down from 5 kHz.
+
+  The ConvolverNode's `normalize` is set to false before its buffer.
+- **Cut.** `GUARD_CUT_DB` is 10 dB, or 0 on iOS in raw mode, where the page's
+  sound already goes to the quieter earpiece. `setMuted` keeps controlling
+  master only.
+- **Speech.** A transient `sfx.linkMode` (never saved) turns spoken lines off:
+  the announcer, `radioCheck()` and the speech priming listener skip speech,
+  and `speechSynthesis.cancel()` runs on entry.
+- **Reverb.** In link mode, Music bypasses its reverb send.
+- **Timing.** The Duel tap turns the guard on and stops the menu music before
+  anything else plays. It stays on through the lobby, the match and the report
+  until the player leaves the duel. Cancel and every lobby error turn it off
+  and resume the menu music.
 
 ## Game integration
 
-- `controller.ts`: `export let PLAYER`, `export let ENEMY`,
-  `setLocalSide(f)`, called once before `new GameScene`. In single player the
-  AI plays `ENEMY` and openers apply blue then red. The dev-only `?side=red`
-  plays red against a blue AI.
-- `GameScene` with a feed that has `local` set (an interactive feed):
-  - no AI commanders;
-  - `ctrl.drainCommands()` is left to the feed (not drained and dropped);
-  - a stall holds the interpolation (`acc` kept just under one tick);
-  - game speed comes from `feed.speed()`, the speed chip is hidden and holding
-    the clock does nothing;
-  - the debug fog toggle is gone from the pause menu;
-  - the pause menu gains Resign (with confirmation) and Leave;
-  - labels read "vs <friend>";
-  - `settleCareer` is skipped;
-  - the end report shows the duel result, the sound-duel record, link stats
-    and "In sync ✓";
-  - `abort(reason)` ends the match without a sim winner (desync "no contest",
-    or leaving).
-- The menu's Skirmish tab gains "🔊 Duel a friend (sound)". Its tap runs
-  `rig.open` and `sfx.unlock` synchronously, then lazily imports the lobby.
-- Lobby sheet:
-  1. **Placement**: "two phones, 10–30 cm apart, speakers facing, volume about
-     75%, silent switch off".
-  2. **Host / Join**, with Advanced settings: band plan, mic mode, and
-     "Self-test (one phone)". Self-test transmits and receives in the same
-     band and shows packets decoding, to check the modem on one device.
-  3. **Live link meter**: packets heard, SNR, round trip.
-  4. **Paired**: opener cards, then "Waiting for your friend to pick…".
-  5. **GO**, then loading and the match.
-  6. **Errors**: version mismatch, microphone refused, nothing heard after
-     30 s (with tips).
-- In the match, the HUD shows:
-  - a link chip (signal bars and the delay);
-  - a stall overlay after 0.5 s: "Waiting for your friend…";
-  - "Friend paused" while the friend is paused;
-  - "Signal lost" after 5 s of silence, and a Leave button after 60 s.
-- The report's actions are Rematch (swap sides), Save battle (a BattleRecord
-  that plays in 🎬 Watch a replay) and Menu.
+### Getting into a duel
 
-### Dev and test modes
+- **Prefetch.** `showMenu` starts `const duel = import('./versus/lobby')` once
+  the menu mounts where the capabilities exist. The "🔊 Duel a friend (sound)"
+  button (Skirmish tab) stays disabled until the chunk has loaded.
+- **The tap.** The click handler runs synchronously, in this order:
+  1. `duel.openRig({ micMode })`;
+  2. `sfx.unlock()`;
+  3. `sfx.setLinkGuard("high")`;
+  4. `music.stop()`;
+  5. `void fullscreen.enter()` (last: it consumes the activation);
+  6. `duel.showLobby({ shownMap, mutators, start })`.
 
-- `?side=red` (dev only): single player as red against a blue AI.
-- `?duel=loop[&delay=4][&loss=0.1][&latency=250]` (every build): a duel
-  against an in-page AI peer through `PacketAir`, with no audio. Use it to
-  playtest the delay and lockstep without two phones.
-- `?duel=relay&seat=host|guest` (every build, for Playwright): the transport
-  calls `window.__duelOut(bitsBase64, nbits)` and receives through
-  `window.__duelIn(bitsBase64, nbits)`. `tools/duel-smoke.mjs` connects two
-  pages through Node with a seeded delay and loss, plays both sides, and
-  checks equal world hashes and the same result.
+  If the import or `addModule` fails, the lobby says "A new version is ready:
+  reload this phone (and your friend's)".
+- **Start.** `start(feed)` calls `begin(false, () => duelSetup(feed.config),
+  feed)`, keeping the `starting` guard. begin skips its own
+  `fullscreen.enter()` and click sound when `feed.local` is set.
+- **`duelSetup(cfg)`** (`mode.ts`) never saves settings. It:
+  - sets `gameMode.mapId` to the agreed map (a MAPS id, or
+    `randomMapId(biome, seed)`);
+  - sets `mode = "skirmish"`, `mutators`, `spectator = false`,
+    `daily = null`, `op = null`, `uncharted = false`;
+  - calls `setLocalSide(cfg.local)`.
+
+  So startGame loads art for the agreed map. The lobby asserts
+  `feed.world.mapId === gameMode.mapId`.
+
+### MatchFeed and GameScene
+
+```ts
+interface MatchFeed {
+  // … existing members …
+  /** This phone commands this side: an interactive feed (a duel), not a watched match. */
+  readonly local?: Faction;
+  /** Game speed this frame (the slack trim). */
+  speed?(): number;
+  /** Who the opponent is, for labels. */
+  readonly opponent?: string;
+}
+```
+
+Every new GameScene branch tests `feed?.local !== undefined`, so ReplayFeed and
+spectator runs are unchanged. `VersusFeed.keyframe` returns null and `seek()`
+does nothing. With an interactive feed, GameScene behaves as follows:
+
+- **No AI.** No AI commanders.
+- **Input.** The feed drains `ctrl.drainCommands()` itself, from inside
+  `commands(tick)`.
+- **Stalls.** A null from `commands()` keeps `acc = TICK_MS × 0.999` and
+  breaks, so units hold their pose with no catch-up burst afterwards.
+- **Speed.** `planTicks(acc, delta, feed.speed())`.
+- **Fixed speed.** Awareness gets `fixedSpeed: true`, which means:
+  - GameSpeed is built with `raw = null` (base 1), and cycleSpeed and onHold
+    do nothing;
+  - no speed chip is mounted;
+  - TempoGuard is off and `sfx.setTempo(1)`;
+  - the `.` key is ignored.
+- **HUD.** `strategies: null`, and a new `HudApi.duel = { opponent, delayMs(),
+  resign(), leave() }`.
+- **Pause menu.** The line reads "vs your friend · 🔊 <delay> ms". The debug
+  fog toggle is removed; Resign, "Resign and leave" and (later) Leave replace
+  Quit.
+- **No auto-harvest.** The constructor's auto-harvest command is skipped:
+  openers already set harvesters mining.
+- **Resign.** The `resign` FxEvent sets `finaleAt` to the resigning side's HQ
+  (else the centre of its home box), with cause "resign" and no blasts.
+  `finaleBanner` gains:
+  - "Your friend resigned · Victory";
+  - "You resigned · Defeat";
+  - "Both resigned · Draw" (never the Robot Love line).
+
+  Music plays win, lose or draw without the love sting.
+- **Career.** `settleCareer` is skipped.
+- **`abort(reason: "desync" | "left" | "lost", info?)`.** Sets `ended`,
+  skips the finale and career, clears selection and placement, and calls
+  `hud.showEnd(null, { head: { title, cls: "lose", sub } })`.
+  - showEnd and showReport accept `winner: null` (a "draw" panel with a head
+    override).
+  - togglePause does nothing once the match has ended.
+  - A desync adds "Copy debug info": config, nonces, D, the turn log and both
+    trails.
+- **Report.** `opponent` is set:
+  - sideName gives "You"/"Friend";
+  - the headline reads "vs your friend · <map> · <time> · over sound";
+  - the tips leave out difficulty and AI;
+  - a Sound duel section shows the record, link quality (good/bad packets,
+    stall time, average order delay) and the sync status.
+
+  The actions are Rematch, Save battle and Menu.
+- **In flight.** Controller keeps an `inFlight` list of placement and
+  production orders sealed but not yet applied. The build bar treats them as
+  applied, so a second tap within the delay does not re-enter placement.
+
+### Records
+
+- **Win/loss.** localStorage `battledrones.soundduel` holds
+  `{ w, l, d, abandoned, noContest }`. It is written at the end, or on abort.
+  Loop and relay matches never write it, and their report says "Practice link
+  (no sound)".
+- **Save battle.** Downloads a BattleRecord as `.json` through a Blob link. It
+  doesn't load the viewer, so main.ts keeps exactly 2
+  `import("./game/replay")`. The record:
+
+  ```
+  {v:1, commit:null, sim:__SIM_HASH__, created, map, mutators, seed, round:1, maxTicks:endTick, openers,
+   seats:{blue:{player:"sound-duel:host"|"sound-duel:guest"}, red:{…}}, frames:"own",
+   turns:[[tick, side, commands as stepped]…] (blue's entry before red's for a tick),
+   radio:[], hashes:[[tick, worldHash]] every 100 ticks, log:[], tick,
+   end: endOf(tick, winner, resigned) or {tick, winner:null, reason:"aborted"}, usage:{}}
+  ```
+
+  The duel code defines its own `HASH_EVERY = 100` and end helper, and uses
+  only `import type` from `src/arena/record.ts`.
+
+### Rematch
+
+- **The tap.** Rematch writes sessionStorage `battledrones.rematch = "duel"`
+  and `battledrones.duel = { role, plan, micMode, hostSide: flipped, mapId,
+  mutators }`, then reloads.
+- **Boot.** On boot, `main.ts` sees `"duel"`. Before any audio context exists,
+  it:
+  - sets `navigator.audioSession.type = "play-and-record"`;
+  - sets `sfx.linkMode`;
+  - prefetches the lobby chunk;
+  - shows one button, "Rematch · tap to reconnect (allow the microphone if
+    asked)".
+
+  The button runs the Duel tap sequence and then pairs with the stored role
+  and plan. The host reuses the stored map and mutators. Roles and bands never
+  swap.
+- **Waiting.** A phone still on the report that hears its friend's lobby
+  frames shows "Your friend is back in the lobby: tap Rematch".
+- **Fallback.** After 60 s with nothing heard, it falls back to the menu.
+- **URL cleanup.** `fullscreen.reloadWithoutLink` also strips `duel`, `seat`,
+  `delay`, `loss`, `latency` and `side`.
+
+### Playing red (Phase 0)
+
+- **Binding.** `export let PLAYER`, `export let ENEMY`,
+  `setLocalSide(f: Faction)`, set once before `new GameScene`.
+- **Single player.** The AI plays `ENEMY`, and `startWithOpener` uses
+  `applyOpenersCanonical` (blue then red, one tickFog). The update loop uses
+  `composeTick`.
+- **Minimap.** Buildings, dots, anchored rings and Goliath diamonds use side
+  colours (`b.faction`/`u.faction`), with own dots brighter.
+- **Icons.** `icon(kind, f = PLAYER)`, and side-aware icons in `command.ts`
+  and `openers.ts`.
+- **Uplink fallback.** `objectives.ts`: `player === "red" ? {x: world.width,
+  y: 0} : {x: 0, y: world.height}`.
+- **Production meters.** GameScene's production meters use side colours.
+- **`?side=red`** works in every build (single player as red against a blue
+  AI), and `window.__bd.player` exposes the local side.
+
+## The lobby (`src/versus/lobby.ts`)
+
+1. **Placement.** "Lay both phones flat, 10–30 cm apart. Turn the volume to
+   about 75%, silent switch off. On an iPhone the sound may come from the
+   earpiece at the top: turn the phones until both bars below are full."
+2. **Host / Join**, with Advanced settings: band plan (host only), mic mode,
+   and Self-test (one phone: decodes its own packets).
+3. **Live link meter**, both directions:
+   - "You hear your friend": this phone's receive SNR and good packets;
+   - "Your friend hears you": the peer's rxq;
+   - the round trip.
+
+   Two warnings may appear:
+   - **Route check:** if `ownSnrDb < 10` for 3 s, "This phone can't hear its
+     own signal: sound may be going to the earpiece or Bluetooth, or it can't
+     play this band. Unplug headphones, turn the volume up, or switch the host
+     to band Low."
+   - **Loud own signal:** if the microphone peaks above −6 dBFS, the gain
+     drops.
+4. **Paired:** the map name or code and the mutators, then opener cards, then
+   "Waiting for your friend to pick…".
+5. **GO**, then loading, then the match.
+6. **Errors:**
+   - version mismatch;
+   - microphone refused;
+   - unsupported sample rate;
+   - nothing heard (after 8 s, the role-switch hint; after 30 s, tips);
+   - the update-ready message.
+
+## Dev and test modes
+
+- **`?side=red`** (every build): single player as red against a blue AI.
+- **`?duel=loop[&delay=4][&loss=0.1][&latency=250][&side=red]`** (every
+  build): the Duel button skips the rig and the guard. It pairs over PacketAir
+  with an in-page peer that steps its own `setupWorld` copy from
+  `VersusFeed.frame` and plays at normal difficulty (incomeMult 1). The config
+  comes from the menu. Values are clamped: delay 3–8, loss 0–0.9, latency
+  0–2000.
+- **`?duel=relay&seat=host|guest`** (every build): the Duel button skips the
+  rig and the guard.
+  - RelayTransport calls `window.__duelOut(base64, nbits)` every 100 ms
+    (fast) or 200 ms (robust), whether or not the frame changed, and receives
+    through `window.__duelIn`.
+  - The page exposes `window.__duel = { state, tick, trail(), hash(), result }`.
+  - Without `__duelOut`, the lobby says "Relay not connected".
+  - `tools/duel-smoke.mjs` connects two pages (one browser context each)
+    through Node with seeded delay and loss. It advances them with
+    `__bd.scene.step()`, never relying on rAF in a hidden page. It drives the
+    lobby, openers, orders, pause and resign, and checks equal hashes and the
+    same result.
+- **Phone testing** needs HTTPS: `npm run dev:https` (`DEV_HTTPS=1` loads
+  `@vitejs/plugin-basic-ssl`), or `vite build --watch` with
+  `vite preview --https`.
 
 ## Tests
 
+Long tests set explicit timeouts (60–180 s).
+
 | Test | Checks |
 |---|---|
-| `tests/resign.test.ts` | resign, draw on mutual resign, setup and hash shared with records (done) |
-| `tests/local-side.test.ts` | `setupWorld` identical whoever is local; a red local controller issues red commands; single player as red vs a blue AI plays |
-| `tests/versus-codec.test.ts` | Bit I/O and Exp-Golomb; canonicalize is idempotent; decode(encode(c)) equals c (compared with `Object.is` per field) for every command in a corpus from AI-vs-AI arena matches on several maps and mutators, plus hand-written cases for every type; the enum tables are complete |
-| `tests/versus-lockstep.test.ts` | Two worlds and two `Lockstep`s through `PacketAir`, AIs on both sides (normal difficulty) for 3+ game minutes: identical hash trails at every tick; with 0%, 10% and 30% loss and 3 s dropouts; bursts that spill across turns; pause; resign ends both on the same tick; a desync injected into one world is detected |
-| `tests/versus-pairing.test.ts` | Two `Pairing`s over `PacketAir` agree on config, seed, D and openers; a build mismatch is refused; duplicate or out-of-order lobby frames are harmless |
-| `tests/link-fec.test.ts` | CRC-16 known vectors; convolutional code plus Viterbi corrects scattered errors; interleaver and scrambler round trip |
-| `tests/link-modem.test.ts` | Two `ModemCore`s through `Room`, both transmitting at once at 48/48 and 48/44.1 kHz, ±150 ppm, measured-like echo and noise: robust packets at least 99% good in a "20 cm" room and at least 95% in a "40 cm" room; fast at least 98% at "20 cm"; acquisition from a random start; recovery after a 1 s capture gap; mode switch at a superframe; packet latency (send → delivery) under 250 ms plus the room delay |
-| `tests/link-guard.test.ts` | The FIR guard's response: flat in the pass band, at least 70 dB down in the modem band |
-| `tests/duel-fullstack.test.ts` | Pairing then a 60 s duel through `RoomLink` (real DSP in a simulated room) with AIs on both phones: identical hash trails, at least 90% of ticks without a stall after the first second |
-| `tools/duel-smoke.mjs` | Two Chromium pages through a relay: pairing UI, openers, orders, pause, resign, same hashes and result |
+| `tests/resign.test.ts` | Resign, a draw on a mutual resign, and setup and hashing shared with records (done) |
+| `tests/local-side.test.ts` | `setupWorld` gives the same world whoever is local; `applyOpenersCanonical` and `composeTick` are canonical for both local sides; a red Controller issues red commands |
+| `tests/versus-codec.test.ts` | Bit I/O and Exp-Golomb. For every command `c` in a corpus from AI-vs-AI arena matches (several maps and mutators, showcase records) plus hand-written cases for every type, with `k = canonicalize(c)`: `canonicalize(k)` deep-equals `k`, and `decode(encode(k))` deep-equals `k` (Object.is per scalar, element-wise for unitIds). Split pieces are ≤ 96 bits and keep order. Malformed inputs are rejected. The enum tables are complete |
+| `tests/versus-lockstep.test.ts` | Two worlds and two `Lockstep`s through `PacketAir`, normal-difficulty AIs on both sides for 5 game minutes: identical hash trails at every tick. Run at 0%, 10% and 30% loss, and with 3 s dropouts; with bursts of 30-unit orders; with pause; resign ends both on the same tick; a desync injected into one world is caught at the next checkpoint or the end check; leave and end frames work; stall time is bounded; the saved BattleRecord round-trips through `parseRecord` and `replay()` with no divergence |
+| `tests/versus-pairing.test.ts` | Two `Pairing`s over `PacketAir` agree on config, seed, D and openers; a build mismatch is refused; duplicate, stale or out-of-order lobby frames are harmless; both-Host is detected; a recorded HELLO from another session can't complete pairing |
+| `tests/versus-feed.test.ts` | VersusFeed with a real Controller and fake clock: a stall consumes no input, sealing happens once per tick, the order is canonical with the local side red, and nothing is sealed while paused |
+| `tests/versus-imports.test.ts` | The import rules above |
+| `tests/link-fec.test.ts` | CRC-16 known vectors and the session keys; convolutional code plus Viterbi corrects scattered errors; the gate rejects random input (0 false accepts in 10⁶ garbage packets); the interleaver properties for all four plan/mode cases; distinct, non-zero PN seeds |
+| `tests/link-modem.test.ts` | Two `ModemCore`s through `Room`, transmitting at once, own path +40 dB with unaligned symbols, h2/h3/h5 speaker nonlinearity, and a game-audio jammer through the guard, at 48/48 and 48/44.1 kHz and ±300 ppm. Robust ≥ 99% good at "20 cm" and ≥ 95% at "40 cm" (with an 8–15 ms reflection cluster); fast ≥ 98% at "20 cm". Also: acquisition from 50 random starts never locks off the true timing; a 40 ms and a 700 ms jump on the sender recover within one superframe; a 1 s capture gap recovers within 2.5 s; mode switches; plan detection; self-monitor and self-test; latency bounds `(TS + P·TS) + 128/sr + room delay`; the CPU benchmark |
+| `tests/link-guard.test.ts` | The FIR guard's response for both plans at 44.1 and 48 kHz |
+| `tests/duel-fullstack.test.ts` | Pairing, then a 90 s duel through `RoomLink` with AIs on both phones: identical hash trails, and at least 90% of ticks without a stall after the first 2 s |
+| `tools/worklet-smoke.mjs` | The built worklet decodes both ways in Chromium |
+| `tools/duel-smoke.mjs` | Two pages through the relay, end to end |
 
-## Risks to check on real phones
+## Before launch, on real phones
 
-- iOS output routing with the microphone open (earpiece versus loudspeaker),
-  and what voice processing does to the modem bands. The probe's iPhone send
-  runs will show it.
-- Each phone's own transmission at its own microphone (full-duplex isolation),
-  especially intermodulation into its receive band.
-- 16–19 kHz output from phone speakers, and resamplers that cut near 20 kHz.
-- Game audio and speaker distortion jamming the 9.5–12.5 kHz band.
-- The iOS capture gap when the microphone opens, and when the app comes back
-  from the background.
+- The probe's iPhone **send** runs: raw and ec, mic on and off, at 10 and 30
+  cm. These decide the default mic mode and the placement text.
+- Full-duplex isolation in each phone's receive band while it transmits, at
+  the default gain, with game audio playing.
+- 16–19 kHz output on a range of Android speakers.
+- Backgrounding, phone calls and Siri, and AirPods connecting mid-match.
+- Offline: both phones in airplane mode after one online visit. Pair and play,
+  which proves the worklet and lobby chunk come from the precache.
+- WebKit or an iPhone running `tools/worklet-smoke.mjs`.
