@@ -53,13 +53,48 @@ export interface HudApi {
    * shows only what's been scouted, the pause menu has no map reveal, and the end screen reveals it.
    */
   uncharted?: boolean;
+  /** A sound duel (an interactive feed): its pause menu and report buttons. Absent in single player and replays. */
+  duel?: DuelHud;
+}
+
+/**
+ * A sound duel's parts of the HUD (SOUND-DUEL.md "MatchFeed and GameScene"),
+ * from its feed (src/versus/feed.ts): the pause menu's line and its ways out
+ * in place of "Quit to menu", and the report's buttons.
+ */
+export interface DuelHud {
+  /** Who the other phone is: "your friend". */
+  opponent: string;
+  /** The input delay in ms (the pause line: "vs your friend · 🔊 400 ms"). */
+  delayMs(): number;
+  /** Resign, confirmed in the pause menu. `leave` ("Resign and leave"): no finale, straight to the report once it lands. */
+  resign(leave: boolean): void;
+  /** "Leave (no result)", confirmed: the match ends here for both phones. */
+  leave(): void;
+  /** The pause menu's ways out besides Resign: "Resign and leave" while the friend's packets arrive, "Leave (no result)" once the link is lost. */
+  exits(): { resignAndLeave: boolean; leave: boolean };
+  /** A resign is on its way: the pause menu offers none. */
+  resigning(): boolean;
+  /** The report's Rematch and Main menu: each leaves the duel first (its end frames go out), then reloads. */
+  rematch(): void;
+  menu(): void;
+  /** The report's buttons between Rematch and the menu (Save battle). */
+  actions(): { id: string; label: string; cls?: string; on(): void }[];
+  /** A practice link (no sound): no record kept, and the report says so. */
+  practice: boolean;
+}
+
+/** What a duel's end screen adds: a head instead of VICTORY / DEFEAT (no result), and more buttons (Copy debug info). */
+export interface EndOpts {
+  head?: { title: string; cls: "win" | "lose"; sub: string };
+  actions?: { id: string; label: string; cls?: string; on(): void }[];
 }
 
 export interface Hud {
   /** Every frame; `dtMs` is the frame's real time (drives hint pacing). */
   update(dtMs?: number): void;
-  /** The end screen: who won, or "draw" (Robot Love), which never reads as a defeat. */
-  showEnd(winner: Faction | "draw"): void;
+  /** The end screen: who won, or "draw" (Robot Love), which never reads as a defeat; null: a duel with no result (`opts.head` says why). */
+  showEnd(winner: Faction | "draw" | null, opts?: EndOpts): void;
   alert(msg: string, x: number, y: number): void;
   /** A small radio caption for an announcer line (tap jumps to x, y). */
   radio(msg: string, tone: string, x?: number, y?: number): void;
@@ -84,6 +119,8 @@ export interface Hud {
 }
 
 type Tab = "build" | "ground" | "infantry" | "air";
+/** The duel exit a pause menu is asking about. */
+type DuelAsk = "resign" | "resign-leave" | "leave";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "build", label: "Base", icon: "🏗" },
@@ -379,7 +416,9 @@ export function createHud(api: HudApi): Hud {
 
   for (const kind of BUILDABLE)
     makeButton(`b:${kind}`, kind, BUILDINGS[kind].cost, SHORT[kind] ?? BUILDINGS[kind].name, () => {
-      const p = f().pending;
+      // (a sound duel: orders still on their way count as applied, controller.ts BuildView)
+      const view = api.ctrl.view();
+      const p = view.pending;
       if (p?.kind === kind && p.ready) {
         api.ctrl.placing = kind;
         api.ctrl.clearSelection();
@@ -392,7 +431,7 @@ export function createHud(api: HudApi): Hud {
       }
       const why = buildingBlocker(w, PLAYER, kind);
       if (why) return toast(why);
-      if (f().scrap < BUILDINGS[kind].cost) {
+      if (view.scrap < BUILDINGS[kind].cost) {
         radioCue("no-scrap");
         return toast("Not enough scrap");
       }
@@ -404,12 +443,13 @@ export function createHud(api: HudApi): Hud {
     makeButton(`u:${kind}`, kind, unitCost(w, PLAYER, kind), SHORT[kind] ?? UNITS[kind].name, () => {
       const why = unitBlocker(w, PLAYER, kind);
       if (why) return toast(why);
-      if (f().scrap < unitCost(w, PLAYER, kind)) {
+      const view = api.ctrl.view();
+      if (view.scrap < unitCost(w, PLAYER, kind)) {
         radioCue("no-scrap");
         return toast("Not enough scrap");
       }
       // (infantry: a selected anchored Goliath first, else the shortest queue, Bays and Goliaths alike)
-      const at = pickProducer(w, kind, api.ctrl.selectedUnits);
+      const at = pickProducer(w, kind, api.ctrl.selectedUnits, view);
       if (!at) return toast(kind === "goliath" ? "Gantry busy" : "Production queue full");
       api.ctrl.enqueue({ type: "produce", faction: PLAYER, buildingId: at.id, unit: kind });
       sfx.play("click");
@@ -468,8 +508,9 @@ export function createHud(api: HudApi): Hud {
       if (b.unique) rows.push(`<tr><td>Limit</td><td colspan="3">One per side</td></tr>`);
     }
     const note = api.cardNote?.(kind) ?? null;
+    const view = api.ctrl.view();
     const queuedHere = isUnit
-      ? queuesOf(w, PLAYER, kind as UnitKind).reduce((n, p) => n + p.queue.filter((q) => q.kind === kind).length, 0)
+      ? queuesOf(w, PLAYER, kind as UnitKind).reduce((n, p) => n + p.queue.filter((q) => q.kind === kind).length + view.extra(p.id, kind as UnitKind), 0)
       : 0;
     cardEl.innerHTML = `
       <div class="ch"><img src="${icon(kind)}" alt="" /><div><b>${s.name}</b><p>${s.role}</p></div>
@@ -478,12 +519,13 @@ export function createHud(api: HudApi): Hud {
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
       ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
-      ${!isUnit && f().pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
+      ${!isUnit && view.pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;
     layout.refresh(true); // (portrait: kept under the band at its real height)
     cardEl.querySelector("#card-x")!.addEventListener("click", () => (cardEl.hidden = true));
     cardEl.querySelector("#card-cancel")?.addEventListener("click", () => {
-      const p = queuesOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind));
+      const now = api.ctrl.view();
+      const p = queuesOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind) || now.extra(p.id, kind as UnitKind) > 0);
       if (p) api.ctrl.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: kind as UnitKind });
       cardEl.hidden = true;
     });
@@ -907,24 +949,32 @@ export function createHud(api: HudApi): Hud {
     versus.title = `${api.strategies?.blue} vs ${api.strategies?.red}`;
   }
 
+  /** The match is over: the end screen is up (or a duel ended with no result). Nothing pauses any more. */
+  let over = false;
+
   function togglePause(): void {
-    if (!endEl.hidden || w.winner) return; // over (the finale is playing): nothing to pause
+    if (over || !endEl.hidden || w.winner) return; // over (the finale is playing): nothing to pause
     api.ctrl.paused = !api.ctrl.paused;
     pauseEl.hidden = !api.ctrl.paused;
     offToggles?.();
     offToggles = null;
+    duelShown = null;
     if (!api.ctrl.paused) return;
+    const duel = api.duel;
+    const line = duel
+      ? `vs ${duel.opponent} · 🔊 ${duel.delayMs()} ms`
+      : ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`;
     pauseEl.innerHTML = `
       <div class="panel">
         <h1>PAUSED</h1>
-        <p class="time">${ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`}</p>
+        <p class="time">${line}</p>
         ${ops ? ops.pauseHtml() : ""}
         ${pauseRulesHtml(w)}
         <button class="cta" id="p-resume">▶ Resume</button>
         <div id="p-sound"></div>
         <button class="cta alt" id="p-help">How to play</button>
-        ${uncharted ? "" : `<button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>`}
-        <button class="cta alt" id="p-quit">Quit to menu</button>
+        ${uncharted || duel ? "" : `<button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>`}
+        ${duel ? `<div id="p-duel" class="p-duel"></div>` : `<button class="cta alt" id="p-quit">Quit to menu</button>`}
         <div id="p-helptext" class="help" hidden>${HELP_HTML}</div>
       </div>`;
     shield(pauseEl);
@@ -938,7 +988,50 @@ export function createHud(api: HudApi): Hud {
       api.ctrl.showFog = !api.ctrl.showFog;
       togglePause();
     });
-    pauseEl.querySelector("#p-quit")!.addEventListener("click", () => fullscreen.reload());
+    pauseEl.querySelector("#p-quit")?.addEventListener("click", () => fullscreen.reload());
+    if (duel) renderDuelExits(duel, null);
+  }
+
+  /** The duel buttons as last rendered (null: the pause menu is closed), so update() redraws them only when they change. */
+  let duelShown: { ask: DuelAsk | null; key: string } | null = null;
+  const exitsKey = (duel: DuelHud) => {
+    const ex = duel.exits();
+    return `${ex.resignAndLeave}|${ex.leave}|${duel.resigning()}`;
+  };
+  /**
+   * A duel's ways out, in place of "Quit to menu": Resign, "Resign and leave"
+   * while the friend's packets arrive, "Leave (no result)" once the link is
+   * lost; each asks first (`ask`: the one being confirmed).
+   */
+  function renderDuelExits(duel: DuelHud, ask: DuelAsk | null): void {
+    const box = pauseEl.querySelector<HTMLElement>("#p-duel");
+    if (!box) return;
+    const ex = duel.exits();
+    const resigning = duel.resigning();
+    duelShown = { ask, key: exitsKey(duel) };
+    if (ask) {
+      const q =
+        ask === "leave"
+          ? `Leave with no result? The match ends for ${duel.opponent} too.`
+          : `Resign${ask === "resign-leave" ? " and leave" : ""}? ${duel.opponent.charAt(0).toUpperCase()}${duel.opponent.slice(1)} wins.`;
+      box.innerHTML = `<p class="p-ask">${q}</p>
+        <button class="cta alt warn" id="p-yes">${ask === "leave" ? "Leave" : ask === "resign" ? "🏳 Resign" : "Resign and leave"}</button>
+        <button class="cta alt" id="p-no">Cancel</button>`;
+      box.querySelector("#p-no")!.addEventListener("click", () => renderDuelExits(duel, null));
+      box.querySelector("#p-yes")!.addEventListener("click", () => {
+        // (the pause menu closes and the game runs on: the resign lands D ticks later, both phones step it)
+        if (api.ctrl.paused) togglePause();
+        if (ask === "leave") duel.leave();
+        else duel.resign(ask === "resign-leave");
+      });
+      return;
+    }
+    box.innerHTML = `${resigning ? "" : `<button class="cta alt" id="p-resign">🏳 Resign</button>`}
+      ${ex.resignAndLeave && !resigning ? `<button class="cta alt" id="p-resign-leave">Resign and leave</button>` : ""}
+      ${ex.leave ? `<button class="cta alt warn" id="p-leave">Leave (no result)</button>` : ""}`;
+    box.querySelector("#p-resign")?.addEventListener("click", () => renderDuelExits(duel, "resign"));
+    box.querySelector("#p-resign-leave")?.addEventListener("click", () => renderDuelExits(duel, "resign-leave"));
+    box.querySelector("#p-leave")?.addEventListener("click", () => renderDuelExits(duel, "leave"));
   }
 
   // ------------------------------------------------------------- minimap ---
@@ -975,8 +1068,12 @@ export function createHud(api: HudApi): Hud {
       const { x, y } = shown;
       toast(`💡 ${shown.msg}`, x !== undefined && y !== undefined ? () => api.centerCamera(x, y) : undefined, "hint", shown.ms ?? HINTS.showMs);
     }
+    // (a duel's pause menu: Leave appears once the link is lost, "Resign and leave" while packets arrive)
+    if (api.duel && api.ctrl.paused && duelShown && !duelShown.ask && duelShown.key !== exitsKey(api.duel)) renderDuelExits(api.duel, null);
     const fs = f();
-    const scrap = Math.floor(fs.scrap);
+    // (a sound duel: orders still on their way count as applied, controller.ts BuildView)
+    const view = api.ctrl.view();
+    const scrap = Math.floor(view.scrap);
     if (scrap !== lastScrap) {
       lastScrap = scrap;
       scrapEl.textContent = String(scrap);
@@ -1079,12 +1176,13 @@ export function createHud(api: HudApi): Hud {
     }
 
     // building buttons
-    const p = fs.pending;
+    const p = view.pending;
     if (p?.ready && lastReady !== p.kind && !ctrl.spectator) {
       lastReady = p.kind;
       sfx.play("ready");
       toast(`${BUILDINGS[p.kind].name} ready — tap here to place it`, () => {
-        ctrl.placing = p.kind;
+        // (not once it has been placed: in a sound duel the placement may still be on its way)
+        if (ctrl.view().pending?.ready) ctrl.placing = p.kind;
       }, "good");
       if (tab !== "build") {
         tab = "build";
@@ -1098,7 +1196,7 @@ export function createHud(api: HudApi): Hud {
       const pendingThis = p?.kind === kind;
       const blocked = buildingBlocker(w, PLAYER, kind);
       el.classList.toggle("locked", !!blocked);
-      el.classList.toggle("poor", !pendingThis && fs.scrap < BUILDINGS[kind].cost);
+      el.classList.toggle("poor", !pendingThis && view.scrap < BUILDINGS[kind].cost);
       el.classList.toggle("busy", !!p && !pendingThis);
       el.classList.toggle("ready", !!(pendingThis && p.ready));
       el.classList.toggle("placing", ctrl.placing === kind);
@@ -1119,19 +1217,22 @@ export function createHud(api: HudApi): Hud {
       // (Goliaths' training queues count with the Assembly Bays', paused ones too)
       let queued = 0;
       let headProg = -1;
-      for (const p of queuesOf(w, PLAYER, kind))
+      for (const p of queuesOf(w, PLAYER, kind)) {
         p.queue.forEach((q, i) => {
           if (q.kind !== kind) return;
           queued++;
           if (i === 0) headProg = Math.max(headProg, 1 - q.remaining / (UNITS[kind].buildTime * TICK_RATE));
         });
+        queued += view.extra(p.id, kind);
+      }
+      queued = Math.max(0, queued);
       tabQ[tabOf(kind)] += queued;
       const blocked = unitBlocker(w, PLAYER, kind);
       // the live price (a Goliath's climbs with each one you have)
       const cost = unitCost(w, PLAYER, kind);
       if (pt.price !== cost) pt.cost.textContent = String((pt.price = cost));
       el.classList.toggle("locked", !!blocked);
-      el.classList.toggle("poor", fs.scrap < cost);
+      el.classList.toggle("poor", view.scrap < cost);
       lock.hidden = !blocked;
       markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       badge.hidden = queued === 0;
@@ -1286,10 +1387,20 @@ export function createHud(api: HudApi): Hud {
     mctx.stroke();
   }
 
-  function showEnd(winner: Faction | "draw"): void {
+  function showEnd(winner: Faction | "draw" | null, opts?: EndOpts): void {
+    over = true;
+    // (a duel can end while its pause menu is up: the friend left, or the worlds drifted apart)
+    if (api.ctrl.paused) {
+      api.ctrl.paused = false;
+      pauseEl.hidden = true;
+      offToggles?.();
+      offToggles = null;
+      duelShown = null;
+    }
     const rematch = () => relaunch(rematchToken());
+    const duel = api.duel;
     // (Last Stand only ends one way; a draw anywhere goes to the report, titled DRAW)
-    if (surv && !ops && winner !== "draw") {
+    if (surv && !ops && winner !== "draw" && winner !== null) {
       surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());
       if (uncharted) endEl.querySelector(".panel > .time")?.insertAdjacentHTML("afterend", revealHtml(w.mapId));
       shield(endEl);
@@ -1309,7 +1420,18 @@ export function createHud(api: HudApi): Hud {
         enemy: api.enemy,
         onRematch: rematch,
         onMenu: () => fullscreen.reload(),
-        ...(ops?.reportOpts() ?? {})
+        ...(ops?.reportOpts() ?? {}),
+        // a sound duel: You and Friend, its own buttons (each leaves the duel before it reloads)
+        ...(duel
+          ? {
+              opponent: duel.opponent,
+              via: duel.practice ? "practice link (no sound)" : "over sound",
+              onRematch: () => duel.rematch(),
+              onMenu: () => duel.menu(),
+              after: [...duel.actions(), ...(opts?.actions ?? [])]
+            }
+          : {}),
+        ...(opts?.head ? { head: opts.head } : {})
       });
     } finally {
       offReveal?.();

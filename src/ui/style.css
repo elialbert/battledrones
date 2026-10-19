@@ -1556,6 +1556,20 @@ button {
 .snd.held {
   opacity: 0.5;
 }
+/* a sound duel's ways out (Resign, Resign and leave, Leave), each asked first */
+.p-duel {
+  display: flex;
+  flex-direction: column;
+}
+.p-ask {
+  margin: 14px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.cta.alt.warn {
+  color: var(--red);
+  border-color: rgba(255, 110, 90, 0.5);
+}
 .snd:active {
   transform: scale(0.96);
 }

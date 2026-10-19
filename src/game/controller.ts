@@ -1,11 +1,11 @@
 import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
 import { producerCap, producersOf, type Producer } from "../sim/economy";
-import { anchorBlocker, canWalk, goliathReachAt } from "../sim/goliath";
+import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
-import type { BuildingKind, Command, Faction, Unit, UnitKind, World } from "../sim/types";
+import type { BuildingKind, Command, Faction, PendingBuilding, Unit, UnitKind, World } from "../sim/types";
 import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { Squads } from "./squads";
@@ -67,12 +67,88 @@ export const isProducer = (kind: BuildingKind): boolean => PRODUCERS.has(kind);
  * Goliaths, as sim/economy.ts producersOf lists them). Null when every queue
  * is full.
  */
-export function pickProducer(w: World, kind: UnitKind, selected: ReadonlySet<number>): Producer | null {
-  const open = producersOf(w, PLAYER, kind).filter((p) => p.queue.length < producerCap(kind));
+export function pickProducer(w: World, kind: UnitKind, selected: ReadonlySet<number>, view?: BuildView): Producer | null {
+  // (a sound duel: orders on their way count as queued already, BuildView)
+  const len = (p: Producer) => p.queue.length + (view?.extra(p.id) ?? 0);
+  const open = producersOf(w, PLAYER, kind).filter((p) => len(p) < producerCap(kind));
   const picked = open.filter((p) => p.goliath && selected.has(p.id));
   let best: Producer | null = null;
-  for (const p of picked.length > 0 ? picked : open) if (!best || p.queue.length < best.queue.length) best = p;
+  for (const p of picked.length > 0 ? picked : open) if (!best || len(p) < len(best)) best = p;
   return best;
+}
+
+/**
+ * A side's construction, scrap and queues as the build bar shows them: the
+ * world's, with the placement and production orders still on their way
+ * applied (Controller.inFlight). In a sound duel an order lands D ticks after
+ * the tap, and the bar must not offer the same tap again meanwhile: a placed
+ * building is no longer ready to place, one started is under construction,
+ * a unit ordered is queued and paid for. Without orders in flight it is the
+ * world's own state.
+ */
+export interface BuildView {
+  scrap: number;
+  pending: PendingBuilding | null;
+  /** Units queued at producer `id` beyond its queue in the world (of `kind` only, when given; negative: cancels on their way). */
+  extra(id: number, kind?: UnitKind): number;
+}
+
+/** Orders the build bar counts as applied while they are on their way. */
+const TRACKED: ReadonlySet<Command["type"]> = new Set(["startBuilding", "cancelBuilding", "placeBuilding", "produce", "cancelProduce"]);
+
+/** buildView's rules: each order as the sim would take it now (economy.ts), in the order they were given. */
+export function buildView(w: World, side: Faction, orders: readonly Command[] | null): BuildView {
+  const f = w.factions[side];
+  if (!orders?.length) return { scrap: f.scrap, pending: f.pending, extra: () => 0 };
+  let scrap = f.scrap;
+  let pending: PendingBuilding | null = f.pending;
+  const queued: { id: number; kind: UnitKind; n: number; paid: number }[] = [];
+  for (const c of orders)
+    switch (c.type) {
+      case "startBuilding":
+        if (!pending && scrap >= BUILDINGS[c.building].cost) {
+          scrap -= BUILDINGS[c.building].cost;
+          pending = { kind: c.building, remaining: BUILDINGS[c.building].buildTime * TICK_RATE, ready: false };
+        }
+        break;
+      case "cancelBuilding":
+        if (pending) scrap += BUILDINGS[pending.kind].cost;
+        pending = null;
+        break;
+      case "placeBuilding":
+        if (pending?.ready) pending = null;
+        break;
+      case "produce": {
+        const cost = unitCost(w, side, c.unit);
+        if (scrap >= cost) {
+          scrap -= cost;
+          queued.push({ id: c.buildingId, kind: c.unit, n: 1, paid: cost });
+        }
+        break;
+      }
+      case "cancelProduce": {
+        // (one of ours still on its way goes first; else one the world holds, refunded)
+        let i = -1;
+        for (let k = queued.length - 1; k >= 0; k--)
+          if (queued[k]!.id === c.buildingId && queued[k]!.kind === c.unit && queued[k]!.n > 0) {
+            i = k;
+            break;
+          }
+        if (i >= 0) {
+          scrap += queued[i]!.paid;
+          queued.splice(i, 1);
+        } else {
+          scrap += UNITS[c.unit].cost;
+          queued.push({ id: c.buildingId, kind: c.unit, n: -1, paid: 0 });
+        }
+        break;
+      }
+    }
+  return {
+    scrap,
+    pending,
+    extra: (id, kind) => queued.reduce((n, q) => n + (q.id === id && (kind === undefined || q.kind === kind) ? q.n : 0), 0)
+  };
 }
 
 /**
@@ -87,6 +163,22 @@ export type TapFeedback = {
   x: number;
   y: number;
 } | null;
+
+/** The same placement or production order (its faction aside: the codec stamps the sender's side). */
+function sameOrder(a: Command, b: Command): boolean {
+  if (a.type !== b.type) return false;
+  switch (a.type) {
+    case "startBuilding":
+      return b.type === a.type && a.building === b.building;
+    case "placeBuilding":
+      return b.type === a.type && a.tx === b.tx && a.ty === b.ty;
+    case "produce":
+    case "cancelProduce":
+      return (b.type === "produce" || b.type === "cancelProduce") && a.buildingId === b.buildingId && a.unit === b.unit;
+    default:
+      return true;
+  }
+}
 
 /**
  * Bridges input/HUD and the sim: owns the player's selection, the command
@@ -113,6 +205,16 @@ export class Controller {
   tip: string | null = null;
   /** Three saved control groups (squad chips, keys 1–3). */
   readonly squads = new Squads(PLAYER);
+  /**
+   * Placement and production orders drained but not applied yet, oldest
+   * first, while an interactive feed (a sound duel) carries them: they land
+   * D ticks after the tap. Null where orders apply at the next tick (single
+   * player, replays). The build bar counts them as applied (view()); the feed
+   * takes each off as the tick it lands in is stepped (landed()).
+   */
+  inFlight: Command[] | null = null;
+  /** No new orders (a sound duel's resign is on its way). */
+  locked = false;
   private queue: Command[] = [];
 
   constructor(public world: World) {}
@@ -120,12 +222,38 @@ export class Controller {
   drainCommands(): Command[] {
     const cmds = this.queue;
     this.queue = [];
+    if (this.inFlight) for (const c of cmds) if (TRACKED.has(c.type)) this.inFlight.push(c);
     return cmds;
   }
 
   enqueue(cmd: Command): void {
-    if (this.spectator) return;
+    if (this.spectator || this.locked) return;
     this.queue.push(cmd);
+  }
+
+  /** Track orders in flight from now on (an interactive feed). */
+  trackInFlight(): void {
+    this.inFlight ??= [];
+  }
+
+  /**
+   * This side's commands that a step just applied: their in-flight copies
+   * come off (the oldest of each that matches, as the lockstep keeps the
+   * order of these).
+   */
+  landed(applied: readonly Command[]): void {
+    const fl = this.inFlight;
+    if (!fl?.length) return;
+    for (const c of applied) {
+      if (!TRACKED.has(c.type)) continue;
+      const i = fl.findIndex((q) => sameOrder(q, c));
+      if (i >= 0) fl.splice(i, 1);
+    }
+  }
+
+  /** The player's construction, scrap and queues as the build bar shows them (BuildView). */
+  view(): BuildView {
+    return buildView(this.world, PLAYER, this.inFlight);
   }
 
   /**

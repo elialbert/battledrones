@@ -3,6 +3,8 @@ import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim
 import { isRandomMapId } from "../sim/mapgen";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import { opById, type OpDef } from "../sim/ops";
+import type { Faction } from "../sim/types";
+import { setLocalSide } from "./controller";
 import type { DailyOp } from "./daily";
 
 /** Skirmish (vs an AI commander), Last Stand (survive endless waves) or the Ops campaign. */
@@ -46,6 +48,23 @@ export function activeMutators(): MutatorId[] {
   if (gameMode.mode !== "skirmish") return [];
   const def = mapById(gameMode.mapId);
   return gameMode.mutators.filter((id) => !mapBansMutator(def, id));
+}
+
+/**
+ * Point the coming match at a sound duel's agreed one (SOUND-DUEL.md "Getting
+ * into a duel"): its map (a MAPS id, or a generated map's id) and mutators, a
+ * plain skirmish played by this phone as `local`, so startGame loads the art
+ * for the map both phones play. Never saved: the menu's own picks stay.
+ */
+export function duelSetup(cfg: { mapId: string; mutators: MutatorId[]; local: Faction }): void {
+  gameMode.mapId = cfg.mapId;
+  gameMode.mode = "skirmish";
+  gameMode.mutators = cfg.mutators.slice();
+  gameMode.spectator = false;
+  gameMode.daily = null;
+  gameMode.op = null;
+  gameMode.uncharted = false;
+  setLocalSide(cfg.local);
 }
 
 /**

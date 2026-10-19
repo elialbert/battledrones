@@ -8,7 +8,7 @@ import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
-import { buildingCenter, domainOf } from "../sim/world";
+import { buildingCenter, domainOf, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, ENEMY, PLAYER, type TapHit } from "./controller";
 import { applyOpenersCanonical, composeTick } from "./local-side";
@@ -24,7 +24,7 @@ import { baseGoliath, calldownThreatens, planTicks } from "./awareness";
 import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
-import { Finale, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
+import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
 import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
 import { OpsPresenter } from "./ops";
@@ -34,7 +34,7 @@ import { CombatJuice } from "./render/juice-view";
 import { WreckRenderer } from "./render/wrecks";
 import { PowerRenderer } from "./render/powers";
 import { ObjectiveRenderer } from "./render/objectives";
-import { createHud, type Hud } from "../ui/hud";
+import { createHud, type DuelHud, type EndOpts, type Hud } from "../ui/hud";
 import { PlacementView } from "./placement-view";
 import { CommandUi } from "../ui/command";
 import { showOpenerPicker } from "../ui/openers";
@@ -65,9 +65,13 @@ const DASH_RIM = [8, 2];
 const NO_DASH: number[] = [];
 
 /**
- * A match played from outside instead of by the AI commanders: the dev-only
- * battle viewer (src/game/replay.ts, AGENT-BATTLES.md "Watching") feeds a
- * recorded agent battle through this. Spectator rules apply.
+ * A match played from outside instead of by the AI commanders: the battle
+ * viewer (src/game/replay.ts, AGENT-BATTLES.md "Watching") feeds a recorded
+ * battle through this, and spectator rules apply. A sound duel's feed
+ * (src/versus/feed.ts, SOUND-DUEL.md "MatchFeed and GameScene") is an
+ * interactive one: it sets `local`, and this phone plays that side, its
+ * orders and the friend's arriving through commands(). Every scene branch for
+ * it tests `feed?.local !== undefined`, so watched matches run as before.
  */
 export interface MatchFeed {
   /** The world, set up as the fed match was. */
@@ -84,7 +88,25 @@ export interface MatchFeed {
   frame(deltaMs: number): void;
   /** The latest saved copy of the world at or before `tick`, to rewind to (null: none). */
   keyframe(tick: number): World | null;
+  /** This phone commands this side: an interactive feed (a duel), not a watched match. */
+  readonly local?: Faction;
+  /** Game speed this frame (a duel's slack trim around 1×). */
+  speed?(): number;
+  /** Who the opponent is, for labels ("your friend"). */
+  readonly opponent?: string;
+  /** A duel's pause menu and report buttons (ui/hud.ts DuelHud). */
+  readonly duel?: DuelHud;
 }
+
+/** Why a duel ended with no result (GameScene.abort): the worlds drifted apart, the friend left, or this phone left. */
+export type AbortReason = "desync" | "left" | "lost";
+
+/** The end screen's head for each abort (SOUND-DUEL.md "Hash trail", "Leaving"). */
+const ABORT_HEAD: Record<AbortReason, { title: string; cls: "lose"; sub: string }> = {
+  desync: { title: "OUT OF SYNC", cls: "lose", sub: "No contest: the two phones' games drifted apart" },
+  left: { title: "FRIEND LEFT", cls: "lose", sub: "No result" },
+  lost: { title: "SIGNAL LOST", cls: "lose", sub: "You left · No result" }
+};
 
 /**
  * The battle: the deterministic sim at a fixed 10 Hz, interpolated into a
@@ -144,6 +166,10 @@ export class GameScene {
   private chevrons: number[] = [];
   private hud!: Hud;
   private ended = false;
+  /** A duel's no-result end (abort): no finale, no report of a winner. */
+  private aborted: AbortReason | null = null;
+  /** An interactive feed (a sound duel): this phone plays feed.local against a friend, not an AI. */
+  private readonly interactive: boolean;
   /** The clock waits for the player's opener pick. */
   private holdStart = false;
   private simSeconds = 0;
@@ -165,6 +191,9 @@ export class GameScene {
     document.getElementById("loading")?.remove();
     this.world = feed ? feed.world : createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    const interactive = (this.interactive = feed?.local !== undefined);
+    // (a duel's orders land D ticks after the tap: the build bar counts them meanwhile)
+    if (interactive) this.ctrl.trackInFlight();
     // Uncharted: a generated map played blind, decided once here (a fed match or replay never is)
     const uncharted = !feed && unchartedMatch();
 
@@ -320,9 +349,9 @@ export class GameScene {
     this.targetZoom = rig.zoom;
 
     this.setupInput();
-    // the starting harvester gets to work immediately
+    // the starting harvester gets to work immediately (a duel's openers set every harvester mining already)
     for (const u of this.world.units.values())
-      if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator) {
+      if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator && !interactive) {
         const f = nearestReachableResource(this.world, u.x, u.y, u.faction);
         if (f) this.ctrl.enqueue({ type: "harvest", faction: PLAYER, unitIds: [u.id], x: f.x + 0.5, y: f.y + 0.5 });
       }
@@ -344,7 +373,9 @@ export class GameScene {
       targetChip: () => this.powerUi?.chip() ?? null,
       calldowns: () => this.powerFx.rings(),
       minimapOverlay: (ctx, k) => this.objFx.minimap(ctx, k),
-      strategies: feed
+      strategies: interactive
+        ? null
+        : feed
         ? feed.labels
         : this.blueAi
         ? {
@@ -355,7 +386,8 @@ export class GameScene {
       enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
-      uncharted
+      uncharted,
+      ...(interactive && feed?.duel ? { duel: feed.duel } : {})
     });
 
     this.aware = new Awareness({
@@ -364,7 +396,9 @@ export class GameScene {
       sees: (x, y) => this.seesPoint(x, y),
       seesUnit: (u) => this.unitVisible(u),
       cinematic: () => !!this.finale,
-      pulse: (x, y, col) => this.fx.pulse(x, y, col, 1.4)
+      pulse: (x, y, col) => this.fx.pulse(x, y, col, 1.4),
+      // (a duel: both phones at 1×, the feed's slack trim aside)
+      fixedSpeed: interactive
     });
     this.command = new CommandUi({
       root: document.getElementById("hud")!, world: this.world, ctrl: this.ctrl, spectator: gameMode.spectator,
@@ -472,7 +506,7 @@ export class GameScene {
    */
   seek(tick: number): void {
     const feed = this.feed;
-    if (!feed) return;
+    if (!feed || this.interactive) return; // (a duel can't be rewound or skipped)
     const target = Math.max(0, Math.floor(tick));
     if (target < this.world.tick) {
       const kf = feed.keyframe(target);
@@ -620,17 +654,21 @@ export class GameScene {
     this.updateCamera(delta);
 
     if (!this.ctrl.paused && !this.ended && !this.holdStart) {
-      // game speed (1–4×), at most AWARE.maxTicksPerFrame ticks per frame
-      const plan = planTicks(this.acc, delta, this.aware.value);
+      // game speed (1–4×; a duel's slack trim), at most AWARE.maxTicksPerFrame ticks per frame
+      const plan = planTicks(this.acc, delta, this.interactive ? this.feed?.speed?.() ?? 1 : this.aware.value);
       this.acc = plan.acc;
       for (let i = 0; i < plan.ticks; i++) {
         // decided mid-frame: the winning tick's events were handled once, don't replay them
         if (this.world.winner) break;
         const fed = this.feed ? this.feed.commands(this.world.tick) : null;
-        if (this.feed && !fed) break; // (a live battle: the next round isn't played yet)
+        if (this.feed && !fed) {
+          // (a duel stalls on the friend's turn: hold the pose, and no burst of catch-up ticks after)
+          if (this.interactive) this.acc = TICK_MS * 0.999;
+          break; // (a live battle: the next round isn't played yet)
+        }
         this.snapshotPrev();
-        // our orders (a spectator's: blue's commander) and the enemy commander's, stepped blue's first
-        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
+        // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
+        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
         const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
         step(this.world, fed ?? composeTick(PLAYER, mine, theirs));
         this.simSeconds += 1 / TICK_RATE;
@@ -694,7 +732,8 @@ export class GameScene {
       // Last Stand always ends in defeat; a new record still gets the fanfare
       const run = this.survival && !gameMode.spectator && !this.world.ops ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
       this.chronicle.finish();
-      settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
+      // XP, medals, stars (spectators: no-op; a duel keeps its own record, src/versus/records.ts)
+      if (!this.interactive) settleCareer(this.world, PLAYER);
       this.playFinale(() => {
         // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
         // (Robot Love: a draw resolves on its own sweet sting; its chime has already rung for music-off)
@@ -703,6 +742,57 @@ export class GameScene {
         if (!music.finale(outcome) && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
       });
     }
+  }
+
+  /**
+   * End a duel with no result (SOUND-DUEL.md "Hash trail and the end of the
+   * match", "Leaving"): the two worlds drifted apart, the friend left, or this
+   * phone left ("Leave (no result)"). No finale and no career; selection and
+   * placement go, and the end screen says why, with "Copy debug info" when
+   * `info` is given (a desync). A finale or report already up gives way: an
+   * end check that fails after the result was shown is no contest after all.
+   */
+  abort(reason: AbortReason, info?: string): void {
+    if (this.aborted) return;
+    this.aborted = reason;
+    this.ended = true;
+    this.finale = null;
+    this.glide = null;
+    this.gest.reset();
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    this.ctrl.locked = true;
+    this.powerUi?.cancel();
+    const opts: EndOpts = { head: ABORT_HEAD[reason] };
+    if (info !== undefined)
+      opts.actions = [
+        {
+          id: "copy-debug",
+          label: "Copy debug info",
+          cls: "alt",
+          on: () => {
+            const ok = () => this.hud.notify("Debug info copied", "good");
+            const no = () => this.hud.notify("Couldn't copy: this browser doesn't allow it", "bad");
+            try {
+              void navigator.clipboard.writeText(info).then(ok, no);
+            } catch {
+              no();
+            }
+          }
+        }
+      ];
+    this.hud.showEnd(null, opts);
+  }
+
+  /** How a duel ended with no result (null: it hasn't, or it was decided). */
+  get abortReason(): AbortReason | null {
+    return this.aborted;
+  }
+
+  /** The match is over here: decided (its finale may still be playing) or aborted. */
+  get over(): boolean {
+    return this.ended;
   }
 
   /** Fast-forward helper for tools: `n` frames of `ms` each, drawing only the last. */
@@ -741,7 +831,8 @@ export class GameScene {
       x: at.x,
       y: at.y,
       size: at.size,
-      blasts: !opEnd?.byGoal && !love,
+      // (an op won on its goal, Robot Love or a resign: nothing blew up)
+      blasts: !opEnd?.byGoal && !love && at.cause !== "resign",
       love: !!love,
       screenX: rig.width / 2 + free.x,
       screenY: rig.height / 2 + free.y,
@@ -761,6 +852,18 @@ export class GameScene {
       }
     });
     this.zoomBy(zoom / this.targetZoom);
+  }
+
+  /**
+   * Skip the finale still playing and show the end screen now (a duel's
+   * "Resign and leave": the player asked to go). The result banner and its
+   * music come first, as at the flash.
+   */
+  skipFinale(): void {
+    const f = this.finale;
+    const winner = this.world.winner;
+    if (!f || !winner || this.aborted) return;
+    f.update(Math.max(FINALE.doneAt, LOVE_FINALE.doneAt));
   }
 
   // ------------------------------------------------------------- sim glue --
@@ -833,6 +936,15 @@ export class GameScene {
     if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
+      case "resign": {
+        // (a sound duel) the finale looks at the side that gave up: its HQ, else the middle of its home box
+        if (this.finaleAt?.cause === "resign") break; // (both at once: the first one's)
+        const hq = hqOf(w, ev.faction);
+        const box = hq ? null : homeBox(w, ev.faction);
+        const c = hq ? buildingCenter(hq) : box ? { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 } : { x: w.width / 2, y: w.height / 2 };
+        this.finaleAt = { x: c.x, y: c.y, size: hq ? BUILDINGS.hq.size : 2, cause: "resign" };
+        break;
+      }
       case "shot": {
         const src = w.units.get(ev.sourceId) ?? w.buildings.get(ev.sourceId);
         // (a Goliath is always seen: its guns flash even in the fog)
@@ -1423,7 +1535,7 @@ export class GameScene {
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
-      else if (e.key === ".") this.aware.cycleSpeed();
+      else if (e.key === "." && !this.interactive) this.aware.cycleSpeed(); // (a duel runs at one speed)
       else if (e.key === "j") this.aware.jump();
       else if (/^Digit[1-3]$/.test(e.code)) {
         // squads: 1–3 select (twice: fly there); Ctrl/Cmd/Shift + 1–3 save

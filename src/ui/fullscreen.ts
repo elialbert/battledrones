@@ -29,15 +29,32 @@ function browserEnv(): FullscreenEnv {
   } catch {
     /* blocked: no restore after a reload */
   }
-  return { doc: document, win: window, storage, reload: () => reloadWithoutLink(window.location) };
+  const rematch = () => {
+    try {
+      return storage?.getItem("battledrones.rematch") ?? null;
+    } catch {
+      return null;
+    }
+  };
+  return { doc: document, win: window, storage, reload: () => reloadWithoutLink(window.location, rematch()) };
 }
 
-/** Reload, leaving a replay's `?replay=` link behind (main.ts watchLinked): its Menu buttons mean the menu. */
-export function reloadWithoutLink(loc: Pick<Location, "href" | "reload" | "assign">): void {
+/** What a replay's link (main.ts watchLinked) and a practice duel's (?duel=loop|relay, SOUND-DUEL.md "Dev and test modes") put in the URL. */
+const LINK_PARAMS = ["replay", "follow", "duel", "seat", "delay", "loss", "latency", "side"];
+
+/**
+ * Reload, leaving a replay's `?replay=` link and a practice duel's `?duel=`
+ * parameters behind: their Menu buttons mean the menu. Only such a page
+ * loses `side` too: a single-player `?side=red` reloads as it is (its
+ * Rematch and Menu stay red). A duel's Rematch (`rematch`, the token just
+ * stored, is "duel") keeps the duel's parameters, so a practice rematch is
+ * one again.
+ */
+export function reloadWithoutLink(loc: Pick<Location, "href" | "reload" | "assign">, rematch: string | null = null): void {
   const url = new URL(loc.href);
-  if (!url.searchParams.has("replay")) return loc.reload();
-  url.searchParams.delete("replay");
-  url.searchParams.delete("follow");
+  const q = url.searchParams;
+  if (!q.has("replay") && (!q.has("duel") || rematch === "duel")) return loc.reload();
+  for (const k of LINK_PARAMS) q.delete(k);
   loc.assign(url.href);
 }
 

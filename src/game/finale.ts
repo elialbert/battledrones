@@ -176,14 +176,16 @@ export function finaleOutcome(o: { won: boolean; newRecord: boolean; spectator: 
   return o.won || o.newRecord || (o.spectator && !o.survival) ? "victory" : "defeat";
 }
 
-/** What decided the match, for the finale's banner: an HQ, a side's last Goliath, or Robot Love (a draw). */
-export type FinaleCause = "hq" | "goliath" | "love";
+/** What decided the match, for the finale's banner: an HQ, a side's last Goliath, Robot Love (a draw), or a resign (a sound duel). */
+export type FinaleCause = "hq" | "goliath" | "love" | "resign";
 
 /**
  * The finale's banner: who won and what decided it. The keys stay the
  * announcer's (victory, defeat, hq-destroyed for a spectator, draw), only
  * the words change with the cause: an HQ ("Enemy HQ destroyed"), a side's
- * last Goliath ("Our last Goliath has fallen"), or two Goliaths in love.
+ * last Goliath ("Our last Goliath has fallen"), two Goliaths in love, or a
+ * sound duel's resign ("Your friend resigned"; both at once is a draw, never
+ * the Robot Love line).
  */
 export function finaleBanner(o: {
   cause: FinaleCause;
@@ -194,6 +196,15 @@ export function finaleBanner(o: {
   y: number;
 }): Announcement {
   const { x, y } = o;
+  if (o.cause === "resign") {
+    if (o.winner === "draw") return { key: "draw", text: "Both resigned", sub: "Draw", tone: "info", priority: 0, x, y };
+    if (o.spectator) {
+      const won = o.winner === "blue" ? "Blue" : "Red";
+      return { key: "hq-destroyed", text: `${won === "Blue" ? "Red" : "Blue"} resigned`, sub: `${won} wins`, tone: "epic", priority: 0, x, y };
+    }
+    if (o.winner === o.player) return { key: "victory", text: "Your friend resigned", sub: "Victory", tone: "epic", priority: 0, x, y };
+    return { key: "defeat", text: "You resigned", sub: "Defeat", tone: "bad", priority: 0, x, y };
+  }
   if (o.winner === "draw" || o.cause === "love")
     return { key: "draw", text: "💘 They fell in love", sub: "It's a draw", tone: "good", priority: 0, x, y, say: "They fell in love. It's a draw." };
   const loser = o.winner === "blue" ? "Red" : "Blue";

@@ -1,0 +1,652 @@
+/**
+ * The feed of a sound duel (SOUND-DUEL.md "MatchFeed and GameScene"): the
+ * MatchFeed GameScene plays a duel through. It builds the world both phones
+ * agreed on, begins the session's lockstep, and from then on is the scene's
+ * only way to the sim: each tick it seals this phone's orders (drained from
+ * the scene's Controller) and hands back both sides' turn, or null to stall;
+ * after each step it folds the world hash into the trail and keeps the turn
+ * log and hashes for Save battle. Around that it runs the duel's in-match
+ * life: the pause and background bits, the stall overlays, the reconnect
+ * cover, resign and leave, the end (aborts, the win/loss record) and the way
+ * out (Menu and Rematch wait for the end to go out, then reload).
+ *
+ *   const feed = new VersusFeed({ session, rig, practice, onExit })   (phase "starting": beginMatch now)
+ *   main.ts:  begin(false, () => duelSetup(feed.config), feed)        (GameScene calls attach, commands, afterTick, frame)
+ *
+ * It pumps the session from construction on, every animation frame and from
+ * a 50 ms timer (art loading blocks frames, and a hidden page gets none), and
+ * stops when closed. A visibilitychange to hidden pauses the lockstep at once
+ * (session.setHidden), so the frame the link repeats says paused.
+ *
+ * Lift groups first. The codec splits a long unit list into pieces the
+ * lockstep seals into turns of their own, and a Goliath whose lift is still
+ * hooking on obeys a move only when its Condors are named in the same command
+ * (src/sim/lift.ts HeldLiftOrders): a select-all whose Goliath fell in an
+ * earlier piece than its Condors would leave the Goliath behind. So the feed
+ * hands the lockstep each such lift as a command of its own first (the
+ * Goliath and its Condors that the order names), then the rest of the order:
+ * a small command is never split, and the lift goes as one.
+ *
+ * Engine-free where it can be: the browser's pieces (timers, document,
+ * storage, reload) come through FeedEnv, and what it needs of the scene
+ * through DuelScene, so tests run it in Node with a real Controller.
+ *
+ * Where the spec is silent:
+ *  - "Waiting for your friend to load…" also shows while the friend's game
+ *    frames arrive but it has sealed no turn yet (it hasn't stepped tick 0:
+ *    its art is still loading), as well as on its lobby frames;
+ *  - Leave in the stall pill: after 30 s of "Signal lost", or 60 s of any
+ *    stall (the friend paused or loading for that long); in the pause menu,
+ *    once "Signal lost" showed, a stall reached 60 s, or nothing has been
+ *    heard for 5 s. "Resign and leave" while packets arrive (heard within
+ *    2.5 s);
+ *  - "Resign and leave" resigns like Resign and then skips the finale: the
+ *    report shows as soon as the resign lands, and its Menu reloads;
+ *  - "Leave (no result)" leaves at once (the end goes out for 2 s while the
+ *    end screen says "You left · No result") and counts as abandoned. A
+ *    friend that left before this phone's match was decided ends it as
+ *    "Friend left" (abandoned); one that leaves after keeps the result;
+ *  - the win/loss record is written once: when the end check settles ("In
+ *    sync ✓" or "Not verified"), on an abort, or on leaving the page with
+ *    the check still running (the result as decided). A match decided here
+ *    and found out of sync after is no contest;
+ *  - Menu and Rematch wait for the session to be closable or 2.5 s, showing
+ *    "Leaving…", then close the session, call onExit and reload; a page
+ *    unload does the record and onExit only;
+ *  - a reconnect cover that succeeds stays up ("Listening…") until the rig
+ *    has had CAPTURE_OK_MS of gap-free capture, as the spec's overlay does;
+ *  - "Copy debug info" copies JSON: the build, role and side, the agreed
+ *    config and nonces, D, the tick, both trails' checkpoints and the end
+ *    reports (Lockstep.debug), and the turn log;
+ *  - in-flight orders (Controller.inFlight) come off as their turn is
+ *    stepped, and all of them at an abort.
+ */
+import type { BattleRecord } from "../arena/record";
+import type { Controller } from "../game/controller";
+import type { AbortReason, MatchFeed } from "../game/GameScene";
+import { CAPTURE_OK_MS, LEAVE_AFTER_FAILURES, type Rig } from "../link/rig";
+import { worldHash } from "../sim/checksum";
+import type { MutatorId } from "../sim/rules";
+import { setupWorld } from "../sim/setup";
+import type { Command, Faction, World } from "../sim/types";
+import { fullscreen } from "../ui/fullscreen";
+import type { DuelHud } from "../ui/hud";
+import { addReportSection } from "../ui/report";
+import { duelReportSection, mountDuelOverlay, type DuelOverlay, type DuelReportView, type OverlayState, type StallKind } from "./hud";
+import type { PairingResult } from "./pairing";
+import {
+  HASH_EVERY, addOutcome, battleRecord, downloadRecord, duelEnd, readTally, tallyLine, withOutcome, writeRematch, type DuelOutcome, type DuelTally
+} from "./records";
+import { PEER_HEARD_MS, type Session } from "./session";
+
+declare const __SIM_HASH__: string | undefined;
+/** The sim this build plays (vite.config.ts), or null outside a Vite build (tests). */
+const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
+
+/** A stall shows after this long with no new turn from the friend (SOUND-DUEL.md "Stall overlays"). */
+export const WAIT_SHOW_MS = 500;
+/** … "Signal lost: bring the phones closer" after this long … */
+export const SIGNAL_LOST_MS = 5000;
+/** … and Leave after this long of it, or LEAVE_ANY_MS of any stall (packets arriving: the friend paused or loading). */
+export const LEAVE_LOST_MS = 30_000;
+export const LEAVE_ANY_MS = 60_000;
+/** Menu and Rematch wait at most this long for the end frames to go out. */
+export const EXIT_WAIT_MS = 2500;
+/** The pending queue holds more than this many ticks of orders: "Orders queued". */
+const QUEUED_TICKS = 20;
+/** The fallback pump (ms): art loading blocks animation frames, and a hidden page gets none. */
+const PUMP_MS = 50;
+
+/** What duelSetup (src/game/mode.ts) points the match at. */
+export interface DuelSetupConfig {
+  mapId: string;
+  mutators: MutatorId[];
+  local: Faction;
+}
+
+/** What the feed needs of the scene: GameScene, or a stand-in in tests. */
+export interface DuelScene {
+  readonly ctrl: Controller;
+  /** End with no result (GameScene.abort). */
+  abort(reason: AbortReason, info?: string): void;
+  /** Show the end screen now if the finale is playing ("Resign and leave"). */
+  skipFinale(): void;
+}
+
+/** The browser around the feed (tests pass their own pieces). */
+export interface FeedEnv {
+  setInterval(fn: () => void, ms: number): unknown;
+  clearInterval(id: unknown): void;
+  /** Null: no animation frames (the timer alone pumps). */
+  requestAnimationFrame: ((fn: () => void) => unknown) | null;
+  cancelAnimationFrame(id: unknown): void;
+  /** Null: no DOM (no overlays, no report section, no visibility). */
+  document: Document | null;
+  /** pagehide (the page going away): the record and onExit. */
+  window: Pick<Window, "addEventListener" | "removeEventListener"> | null;
+  /** localStorage (the win/loss record) and sessionStorage (the rematch), or null where blocked. */
+  local: Pick<Storage, "getItem" | "setItem"> | null;
+  session: Pick<Storage, "getItem" | "setItem"> | null;
+  /** Back to the menu (or into the rematch): fullscreen.reload(). */
+  reload(): void;
+  /** For the record's `created`. */
+  date(): Date;
+}
+
+function storage(kind: "localStorage" | "sessionStorage"): Storage | null {
+  try {
+    return window[kind];
+  } catch {
+    return null;
+  }
+}
+
+function browserEnv(): FeedEnv {
+  if (typeof window === "undefined")
+    return {
+      setInterval: () => null, clearInterval: () => undefined, requestAnimationFrame: null, cancelAnimationFrame: () => undefined,
+      document: null, window: null, local: null, session: null, reload: () => undefined, date: () => new Date()
+    };
+  return {
+    setInterval: (fn, ms) => window.setInterval(fn, ms),
+    clearInterval: (id) => window.clearInterval(id as number),
+    requestAnimationFrame: (fn) => window.requestAnimationFrame(fn),
+    cancelAnimationFrame: (id) => window.cancelAnimationFrame(id as number),
+    document,
+    window,
+    local: storage("localStorage"),
+    session: storage("sessionStorage"),
+    reload: () => fullscreen.reload(),
+    date: () => new Date()
+  };
+}
+
+export interface VersusFeedOptions {
+  /** Phase "starting": result() is set. The feed calls beginMatch in its constructor. */
+  session: Session;
+  /** The audio rig (null on a practice link, ?duel=loop or relay: no reconnect cover). */
+  rig: Rig | null;
+  /** A practice link (no sound): no win/loss record, and the report says so. */
+  practice: boolean;
+  /** The other side's label (default "your friend"). */
+  opponent?: string;
+  /** Once, when the duel is over for this page (the session closable, or the page going): the lobby closes the rig and turns the guard off. */
+  onExit: () => void;
+  /** Every frame (a practice peer steps along). */
+  onFrame?: (deltaMs: number) => void;
+  /** The browser's pieces (tests). */
+  env?: Partial<FeedEnv>;
+}
+
+const OTHER: Record<Faction, Faction> = { blue: "red", red: "blue" };
+const isLiftOrder = (c: Command): c is Extract<Command, { type: "move" | "attackMove" | "unload" | "stop" }> =>
+  c.type === "move" || c.type === "attackMove" || c.type === "unload" || c.type === "stop";
+
+/**
+ * Lift groups first (see the header): each order a lift takes that names a
+ * Goliath still hooking on together with any of its Condors becomes one
+ * command naming exactly that Goliath and those Condors, then the order for
+ * the rest of its units (none left: nothing). Other commands pass unchanged.
+ */
+export function liftGroupsFirst(w: World, cmds: readonly Command[]): Command[] {
+  const out: Command[] = [];
+  for (const c of cmds) {
+    if (!isLiftOrder(c)) {
+      out.push(c);
+      continue;
+    }
+    const named = new Set(c.unitIds);
+    const grouped = new Set<number>();
+    const groups: number[][] = [];
+    for (const id of c.unitIds) {
+      const lift = w.units.get(id)?.goliath?.lift;
+      if (!lift || lift.phase !== "hooking" || grouped.has(id) || w.units.get(id)!.faction !== c.faction) continue;
+      const carriers = lift.carriers.filter((cid) => named.has(cid));
+      if (carriers.length === 0) continue; // (its Condors not named: it waits, as a single order would leave it)
+      const ids = [id, ...carriers];
+      for (const i of ids) grouped.add(i);
+      groups.push(ids);
+    }
+    if (groups.length === 0) {
+      out.push(c);
+      continue;
+    }
+    for (const ids of groups) out.push({ ...c, unitIds: ids });
+    const rest = c.unitIds.filter((id) => !grouped.has(id));
+    if (rest.length > 0) out.push({ ...c, unitIds: rest });
+  }
+  return out;
+}
+
+const outcomeOf = (winner: Faction | "draw", local: Faction): DuelOutcome => (winner === "draw" ? "draw" : winner === local ? "win" : "loss");
+
+export class VersusFeed implements MatchFeed {
+  readonly config: DuelSetupConfig;
+  readonly local: Faction;
+  readonly opponent: string;
+  readonly world: World;
+  readonly labels: Record<Faction, string>;
+  readonly session: Session;
+  /** The match as the pairing agreed it. */
+  readonly result: PairingResult;
+  readonly practice: boolean;
+  /** The pause menu's and the report's duel parts (GameScene hands them to the HUD). */
+  readonly duel: DuelHud;
+
+  private readonly env: FeedEnv;
+  private readonly rig: Rig | null;
+  private readonly onExit: () => void;
+  private readonly onFrame: ((deltaMs: number) => void) | null;
+  private readonly created: string;
+  private scene: DuelScene | null = null;
+  private ui: DuelOverlay | null = null;
+  private teardown: (() => void)[] = [];
+  private timer: unknown = null;
+  private raf: unknown = null;
+  private closed = false;
+  private exited = false;
+
+  /** The turns as stepped (blue's entry before red's on a tick), and a world hash every HASH_EVERY ticks: Save battle. */
+  private readonly turns: [number, Faction, Command[]][] = [];
+  private readonly hashes: [number, string][] = [];
+  /** The commands commands() handed over for the step afterTick follows. */
+  private stepping: Command[] | null = null;
+
+  private userPaused = false;
+  /** The tick a resign was ordered on (null: none), and whether it was "Resign and leave". */
+  private resignAt: number | null = null;
+  private resignLeave = false;
+  private aborted: AbortReason | null = null;
+  /** The outcome counted (once), and the record as it then stood. */
+  private settled: DuelOutcome | null = null;
+  private tally: DuelTally | null = null;
+  /** The latest stall shown, kept while paused (the pause menu's Leave), cleared once the match moves. */
+  private lastStall: { kind: StallKind; ms: number } | null = null;
+  /** The reconnect cover's state ("ok": none). */
+  private linkPhase: "ok" | "lost" | "trying" | "failed" | "settling" = "ok";
+  /** Menu or Rematch: leaving since (link clock). */
+  private exiting: { to: "menu" | "rematch"; at: number } | null = null;
+
+  constructor(o: VersusFeedOptions) {
+    const r = o.session.result();
+    if (!r) throw new Error("no duel agreed yet: the session has no result");
+    this.session = o.session;
+    this.result = r;
+    this.rig = o.rig;
+    this.practice = o.practice;
+    this.onExit = o.onExit;
+    this.onFrame = o.onFrame ?? null;
+    this.env = { ...browserEnv(), ...o.env };
+    this.local = r.local;
+    this.opponent = o.opponent ?? "your friend";
+    this.config = { mapId: r.mapId, mutators: r.setup.mutators.slice(), local: r.local };
+    this.labels = { [r.local]: "You", [OTHER[r.local]]: "Friend" } as Record<Faction, string>;
+    this.created = this.env.date().toISOString();
+    this.world = setupWorld(r.setup);
+    o.session.beginMatch(parseInt(worldHash(this.world), 16));
+    this.duel = {
+      opponent: this.opponent,
+      practice: this.practice,
+      delayMs: () => r.delay * 100,
+      resign: (leave) => this.resign(leave),
+      leave: () => this.leave(),
+      exits: () => this.exits(),
+      resigning: () => this.resignAt !== null,
+      rematch: () => this.exit("rematch"),
+      menu: () => this.exit("menu"),
+      actions: () => (this.env.document ? [{ id: "duel-save", label: "Save battle", cls: "alt", on: () => this.save() }] : [])
+    };
+
+    const env = this.env;
+    const doc = env.document;
+    if (doc) {
+      const vis = () => this.session.setHidden(doc.visibilityState === "hidden");
+      doc.addEventListener("visibilitychange", vis);
+      this.teardown.push(() => doc.removeEventListener("visibilitychange", vis));
+      vis();
+    }
+    const win = env.window;
+    if (win) {
+      const gone = (e: Event) => {
+        if (!(e as PageTransitionEvent).persisted) this.pageGone();
+      };
+      win.addEventListener("pagehide", gone);
+      this.teardown.push(() => win.removeEventListener("pagehide", gone));
+    }
+    if (this.rig) {
+      const off = this.rig.onLost(() => {
+        if (this.linkPhase === "ok" || this.linkPhase === "settling") this.linkPhase = "lost";
+      });
+      this.teardown.push(off);
+    }
+    this.timer = env.setInterval(() => this.pump(), PUMP_MS);
+    const raf = env.requestAnimationFrame;
+    if (raf) {
+      const loop = () => {
+        if (this.closed) return;
+        this.pump();
+        this.raf = raf(loop);
+      };
+      this.raf = raf(loop);
+    }
+  }
+
+  // ------------------------------------------------------- MatchFeed ---
+
+  /** The scene is up: its Controller, abort and finale; the overlays and the report section go in with it. */
+  attach(scene: DuelScene): void {
+    this.scene = scene;
+    const doc = this.env.document;
+    const root = doc?.getElementById("hud");
+    if (root) {
+      this.ui = mountDuelOverlay(root, { reconnect: () => this.reconnect(), leave: () => this.leave() });
+      this.teardown.push(addReportSection(duelReportSection(() => this.reportView())));
+    }
+    this.pump();
+  }
+
+  /** Tick `tick`'s commands, both sides' (blue's then red's), or null to stall. Seals this phone's turn tick + D once. */
+  commands(tick: number): Command[] | null {
+    const scene = this.scene;
+    if (!scene || this.closed || this.aborted) return null;
+    // (paused since the last pump: nothing is sealed, whoever calls)
+    this.syncPause(scene);
+    const cmds = this.session.commandsFor(tick, () => liftGroupsFirst(this.world, scene.ctrl.drainCommands()));
+    this.stepping = cmds;
+    return cmds;
+  }
+
+  /** After each step: the trail, the turn log and hashes, and the orders that landed. */
+  afterTick(w: World): void {
+    const cmds = this.stepping ?? [];
+    this.stepping = null;
+    const t = w.tick - 1;
+    const hash = worldHash(w);
+    for (const side of ["blue", "red"] as const) {
+      const theirs = cmds.filter((c) => c.faction === side);
+      if (theirs.length > 0) this.turns.push([t, side, theirs]);
+    }
+    this.session.afterStep(t, parseInt(hash, 16), w.winner ? { winner: w.winner, resigned: w.resigned ?? null } : null);
+    if (w.tick % HASH_EVERY === 0) this.hashes.push([w.tick, hash]);
+    this.scene?.ctrl.landed(cmds.filter((c) => c.faction === this.local));
+  }
+
+  /** Every frame: pump, overlays, and a practice peer's step. */
+  frame(deltaMs: number): void {
+    this.pump();
+    this.onFrame?.(deltaMs);
+  }
+
+  /** No rewinding a duel. */
+  keyframe(): World | null {
+    return null;
+  }
+
+  /** Game speed this frame: the slack trim (0.9–1.1). */
+  speed(): number {
+    return this.session.speed();
+  }
+
+  // ------------------------------------------------------------ driving ---
+
+  /** Pump the session, then everything that follows from it: the pause bit, the end, the overlays, leaving. Cheap; call any time. */
+  pump(): void {
+    if (this.closed) return;
+    this.session.pump();
+    this.watch();
+    if (this.closed) return;
+    // (always: the pause menu's Leave reads the stall it last saw)
+    const shown = this.overlay();
+    this.ui?.update(shown);
+  }
+
+  private watch(): void {
+    const ls = this.session.lockstep;
+    const scene = this.scene;
+    if (scene) this.syncPause(scene);
+    if (this.exiting) {
+      const st = this.session.status();
+      if (st.closable || this.session.transport.now() - this.exiting.at >= EXIT_WAIT_MS) this.finish(this.exiting.to);
+      return;
+    }
+    if (!ls || !scene) return;
+    const st = ls.status();
+    // the end: out of sync, the friend gone before this phone's match was decided, or the result final
+    if (st.desync) this.abort("desync");
+    else if (!st.decided && st.peerEnd === "left") this.abort("left");
+    else if (st.decided && (st.endCheck === "ok" || st.endCheck === "unverified")) this.settle(outcomeOf(st.decided.winner, this.local));
+    if (this.resignLeave && this.world.winner && !this.aborted) scene.skipFinale();
+    // the reconnect cover
+    const rig = this.rig;
+    if (rig) {
+      if (this.linkPhase === "ok" && rig.state === "lost") this.linkPhase = "lost";
+      if (this.linkPhase === "settling" && rig.captureOkMs() >= CAPTURE_OK_MS) this.linkPhase = "ok";
+    }
+  }
+
+  /** The pause menu (ctrl.paused): the frames say paused and nothing new is sealed (the game loop stops calling commands too). */
+  private syncPause(scene: DuelScene): void {
+    const paused = scene.ctrl.paused;
+    if (paused === this.userPaused) return;
+    this.userPaused = paused;
+    this.session.setPaused(paused);
+  }
+
+  /** What the overlays show now. */
+  private overlay(): OverlayState {
+    const st = this.session.status();
+    const ls = st.lockstep;
+    const over = this.aborted !== null || !!this.world.winner || this.session.phase === "ended";
+    let stall: OverlayState["stall"] = null;
+    const wt = st.waiting;
+    if (wt && !over) {
+      // (the friend's frames arrive but it has no turn of its own yet: it hasn't stepped tick 0, its art is loading)
+      const loading = wt.why === "load" || (!!ls && ls.ackThrough < ls.delay && st.link.sinceRx <= PEER_HEARD_MS);
+      const kind: StallKind = wt.why === "paused" ? "paused" : loading ? "load" : wt.ms >= SIGNAL_LOST_MS ? "lost" : "wait";
+      this.lastStall = { kind, ms: wt.ms };
+      if (wt.ms >= WAIT_SHOW_MS) stall = { kind, leave: (kind === "lost" && wt.ms >= LEAVE_LOST_MS) || wt.ms >= LEAVE_ANY_MS };
+    } else if (!this.userPaused && !st.lockstep?.paused) this.lastStall = null;
+    return {
+      stall,
+      queued: !over && !!ls && ls.queuedTicks > QUEUED_TICKS,
+      resigning: this.resignAt !== null && !over,
+      reconnect:
+        this.linkPhase === "ok" || this.exiting
+          ? null
+          : { phase: this.linkPhase, leave: (this.rig?.failures ?? 0) >= LEAVE_AFTER_FAILURES && !over },
+      leaving: this.exiting !== null
+    };
+  }
+
+  // ------------------------------------------------------ the player ---
+
+  /** Resign (the pause menu, confirmed): it lands D ticks later on both phones; input is locked meanwhile. */
+  private resign(leave: boolean): void {
+    const scene = this.scene;
+    if (!scene || this.resignAt !== null || this.aborted || this.world.winner || this.exiting) return;
+    scene.ctrl.enqueue({ type: "resign", faction: this.local });
+    scene.ctrl.locked = true;
+    scene.ctrl.placing = null;
+    scene.ctrl.clearSelection();
+    this.resignAt = this.world.tick;
+    this.resignLeave = leave;
+    this.pump();
+  }
+
+  /** "Leave (no result)": the end goes out for 2 s, the end screen says so, and it counts as abandoned. */
+  private leave(): void {
+    if (this.aborted || this.exiting) return;
+    this.session.leave("left");
+    this.abort("lost");
+  }
+
+  /** The pause menu's ways out besides Resign. */
+  private exits(): { resignAndLeave: boolean; leave: boolean } {
+    const link = this.session.status().link;
+    const s = this.lastStall;
+    return {
+      resignAndLeave: link.sinceRx <= PEER_HEARD_MS,
+      leave: (s !== null && (s.kind === "lost" || s.ms >= LEAVE_ANY_MS)) || link.sinceRx > SIGNAL_LOST_MS
+    };
+  }
+
+  /** The cover's tap, inside the gesture. */
+  private reconnect(): void {
+    const rig = this.rig;
+    if (!rig || this.linkPhase === "ok" || this.linkPhase === "trying" || this.linkPhase === "settling") return;
+    this.linkPhase = "trying";
+    void rig.reconnect().then((ok) => {
+      if (this.closed || this.linkPhase !== "trying") return;
+      this.linkPhase = ok ? "settling" : "failed";
+      this.pump();
+    });
+  }
+
+  /** Save battle: the record as a .json download. */
+  private save(): void {
+    const doc = this.env.document;
+    if (doc) downloadRecord(this.record(), doc);
+  }
+
+  // ------------------------------------------------------------ the end ---
+
+  /** End with no result: count it, drop the orders in flight, and the scene's end screen. */
+  private abort(reason: AbortReason): void {
+    if (this.aborted) return;
+    this.aborted = reason;
+    this.settle(reason === "desync" ? "noContest" : "abandoned");
+    this.scene?.ctrl.inFlight?.splice(0);
+    this.scene?.abort(reason, reason === "desync" ? this.debugInfo() : undefined);
+  }
+
+  /** Count the match once (never on a practice link). */
+  private settle(o: DuelOutcome): void {
+    if (this.settled) return;
+    this.settled = o;
+    if (!this.practice) this.tally = addOutcome(o, this.env.local);
+  }
+
+  /** The outcome as it stands, for a record not yet written: decided, else abandoned. */
+  private pendingOutcome(): DuelOutcome {
+    const d = this.session.lockstep?.status().decided;
+    return d ? outcomeOf(d.winner, this.local) : "abandoned";
+  }
+
+  /** Menu or Rematch: the end goes out (closable, or EXIT_WAIT_MS at most), then onExit and reload. */
+  private exit(to: "menu" | "rematch"): void {
+    if (this.exiting || this.closed) return;
+    this.exiting = { to, at: this.session.transport.now() };
+    this.session.leave("left");
+    this.pump();
+  }
+
+  private finish(to: "menu" | "rematch"): void {
+    this.settle(this.pendingOutcome());
+    if (to === "rematch") {
+      const r = this.result;
+      writeRematch(
+        { role: r.role, plan: r.plan, micMode: this.rig?.micMode ?? "raw", hostSide: OTHER[r.config.hostSide], mapId: r.mapId, mutators: r.config.mutators.slice() },
+        this.env.session
+      );
+    }
+    this.close();
+    this.callExit();
+    this.env.reload();
+  }
+
+  /** The page is going (a reload or navigation that isn't ours): count the match and let the lobby close the rig. */
+  private pageGone(): void {
+    if (this.exited) return;
+    this.settle(this.pendingOutcome());
+    this.close();
+    this.callExit();
+  }
+
+  private callExit(): void {
+    if (this.exited) return;
+    this.exited = true;
+    this.onExit();
+  }
+
+  /** Stop pumping and close the session (the link). Safe to call twice. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.env.clearInterval(this.timer);
+    if (this.raf !== null) this.env.cancelAnimationFrame(this.raf);
+    for (const f of this.teardown.splice(0)) f();
+    this.ui?.destroy();
+    this.ui = null;
+    this.session.close();
+  }
+
+  // ------------------------------------------------------------ reading ---
+
+  /** The win/loss outcome counted for this match (null: not yet). */
+  get outcome(): DuelOutcome | null {
+    return this.settled;
+  }
+
+  /** How the match ended with no result (null: it didn't). */
+  get abortReason(): AbortReason | null {
+    return this.aborted;
+  }
+
+  /** The turns as stepped so far: [tick, side, commands], blue's entry before red's on a tick. */
+  turnLog(): [number, Faction, Command[]][] {
+    return this.turns.slice();
+  }
+
+  /** The match as a battle record (Save battle): it replays exactly in the battle viewer. */
+  record(): BattleRecord {
+    const r = this.result;
+    const w = this.world;
+    const other = r.role === "host" ? "guest" : "host";
+    const seats = { [r.local]: r.role, [OTHER[r.local]]: other } as Record<Faction, "host" | "guest">;
+    // (the world's own resigned: null when both sides resigned, unset otherwise)
+    const end = duelEnd(w.tick, w.winner ?? null, w.resigned);
+    return battleRecord({ setup: r.setup, seats, turns: this.turns, hashes: this.hashes, tick: w.tick, end, sim: BUILD_SIM, created: this.created });
+  }
+
+  /** "Copy debug info" after a desync. */
+  debugInfo(): string {
+    const r = this.result;
+    const ls = this.session.lockstep;
+    return JSON.stringify({
+      build: this.session.pairing.build,
+      sim: BUILD_SIM,
+      role: r.role,
+      local: r.local,
+      config: r.config,
+      nonces: { host: r.hostNonce, guest: r.guestNonce },
+      delay: r.delay,
+      plan: r.plan,
+      tick: this.world.tick,
+      trails: ls?.debug() ?? null,
+      desync: ls?.status().desyncReason ?? null,
+      turns: this.turns
+    });
+  }
+
+  /** The report's Sound duel block. */
+  private reportView(): DuelReportView {
+    const st = this.session.status();
+    const ls = st.lockstep;
+    const sync: DuelReportView["sync"] = this.aborted
+      ? this.aborted
+      : ls?.endCheck === "ok"
+        ? "ok"
+        : ls?.endCheck === "unverified"
+          ? "unverified"
+          : ls?.endCheck === "mismatch"
+            ? "desync"
+            : "pending";
+    const decided = ls?.decided ?? null;
+    const tally = this.tally ?? (decided ? withOutcome(readTally(this.env.local), outcomeOf(decided.winner, this.local)) : readTally(this.env.local));
+    return {
+      record: this.practice ? null : tallyLine(tally),
+      sync,
+      link: { good: st.link.rxOk, bad: st.link.rxBad, stallMs: ls?.stallMs ?? 0, orderDelayMs: ls && ls.orderDelay !== null ? ls.orderDelay * 100 : null }
+    };
+  }
+}
