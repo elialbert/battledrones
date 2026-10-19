@@ -130,6 +130,7 @@
 .duelsheet .op-name { font-size: 18px; }
 /* what the opener gives (the single-player picker's pills, as one line) */
 .duelsheet .op-gives { font-size: 12px; font-weight: 700; color: var(--dim); line-height: 1.25; }
+.duelsheet .op-gives span { white-space: nowrap; }
 .duel-cards.chosen .op-card { animation: none; }
 .duel-cards.chosen .op-card:not(.picked) { opacity: 0.3; transform: scale(0.97); }
 .duel-go {

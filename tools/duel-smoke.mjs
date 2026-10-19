@@ -165,7 +165,7 @@ class Air {
   }
   /** One page, as `name`, whose packets go to `to`. */
   async attach(name, to, page) {
-    const dir = { from: name, to, rand: rng(this.seed * 2 + this.dirs.size + 1), queue: [], last: 0, busy: false, sent: 0, lost: 0, delivered: 0, cutUntil: 0 };
+    const dir = { from: name, to, rand: rng(this.seed * 2 + this.dirs.size + 1), queue: [], last: 0, busy: false, sent: 0, lost: 0, delivered: 0, cutUntil: 0, sentAt: 0, deliveredAt: 0 };
     this.dirs.set(name, dir);
     this.ends.set(name, page);
     await page.exposeFunction("__duelOut", (b64, nbits) => this.send(name, b64, nbits));
@@ -174,6 +174,7 @@ class Air {
     const d = this.dirs.get(from);
     const now = Date.now();
     d.sent++;
+    d.sentAt = now;
     // (draw both always, so the pattern doesn't depend on the outage)
     const lost = d.rand() < LOSS;
     const at = Math.max(d.last, now + LATENCY + d.rand() * JITTER);
@@ -200,12 +201,19 @@ class Air {
         .evaluate((list) => {
           for (const [b, n] of list) window.__duelIn?.(b, n);
         }, due)
-        .then(() => (d.delivered += due.length), () => undefined)
+        .then(() => ((d.delivered += due.length), (d.deliveredAt = Date.now())), () => undefined)
         .finally(() => (d.busy = false));
     }
   }
   stats() {
     return [...this.dirs.values()].map((d) => `${d.from}→${d.to} ${d.sent} sent, ${d.lost} lost, ${d.delivered} delivered`).join("; ");
+  }
+  /** What each direction did lately: a held page is the link's (nothing sent or delivered) or the page's. */
+  recent() {
+    const now = Date.now();
+    return [...this.dirs.values()]
+      .map((d) => `${d.from}→${d.to}: last sent ${now - d.sentAt} ms ago, last delivered ${now - d.deliveredAt} ms ago, ${d.queue.length} queued${d.busy ? ", delivering" : ""}`)
+      .join("; ");
   }
   close() {
     clearInterval(this.timer);
@@ -401,8 +409,18 @@ async function goesOn(what, n) {
       return check(false, `${what}: ${n} ticks took over ${(limit / 1000).toFixed(1)} s (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D})`);
     for (const i of [0, 1]) {
       if (now[i] !== last[i]) [last[i], held[i]] = [now[i], Date.now()];
-      else if (now[i] < from[i] + n && Date.now() - held[i] > STUCK_MS)
-        return check(false, `${what}: the ${i ? "guest" : "host"} was held on tick ${now[i]} for ${STUCK_MS} ms (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D})`);
+      else if (now[i] < from[i] + n && Date.now() - held[i] > STUCK_MS) {
+        const pages = await both((p) =>
+          p.page
+            .evaluate(() => `${document.visibilityState}, ${window.__bd?.ctrl?.paused ? "paused" : "playing"}, "${document.querySelector(".duel-stall:not([hidden])")?.innerText ?? ""}"`)
+            .catch((e) => String(e))
+        );
+        return check(
+          false,
+          `${what}: the ${i ? "guest" : "host"} was held on tick ${now[i]} for ${STUCK_MS} ms (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D}; ` +
+            `host ${pages[0]}, guest ${pages[1]}; ${air.recent()})`
+        );
+      }
     }
     await sleep(30);
   }
@@ -550,7 +568,7 @@ const synced = await run(15000, async () => (await both((p) => text(p, ".duel-sy
     // (the order delay as felt: from the tap's drain to the step, mean and worst)
     const link = await text(p, ".duel-link");
     log(`${p.name}'s link: ${JSON.stringify(link)}`);
-    check(/Order delay\s+[\d.]+ m?s average · [\d.]+ m?s worst/.test(link), `the ${p.name}'s report has no order delay: ${JSON.stringify(link)}`);
+    check(/Order delay\s+[\d.]+ m?s average\nSlowest order\s+[\d.]+ m?s/.test(link), `the ${p.name}'s report has no order delay: ${JSON.stringify(link)}`);
     check(/Practice link \(no sound\)/.test(await text(p, ".duel-rec")), "the report doesn't say practice link");
     check((await p.page.locator("#duel-save").count()) === 1 && (await p.page.locator("#menu").count()) === 1, "Save battle or Main menu missing");
     check((await p.page.evaluate(() => localStorage.getItem("battledrones.soundduel"))) === null, "a practice link wrote the win/loss record");

@@ -17,7 +17,7 @@ import { hqOf, spawnUnit } from "../src/sim/world";
 import { setupWorld } from "../src/sim/setup";
 import type { AbortReason } from "../src/game/GameScene";
 import { VersusFeed, liftGroupsFirst, type DuelRig, type FeedEnv } from "../src/versus/feed";
-import { ordersLine } from "../src/versus/hud";
+import { orderRows } from "../src/versus/hud";
 import { RECORD_KEY, REMATCH_KEY, readRematch, readTally } from "../src/versus/records";
 import { Session } from "../src/versus/session";
 
@@ -492,9 +492,9 @@ describe("the report's order delay", () => {
   });
 
   it("reads as the mean and the worst", () => {
-    expect(ordersLine(null)).toBe("–");
-    expect(ordersLine({ meanMs: 620.4, worstMs: 1420 })).toBe("620 ms average · 1.4 s worst");
-    expect(ordersLine({ meanMs: 412, worstMs: 12_400 })).toBe("412 ms average · 12 s worst");
+    expect(orderRows(null)).toEqual([["Order delay", "–"], ["Slowest order", "–"]]);
+    expect(orderRows({ meanMs: 620.4, worstMs: 1420 })).toEqual([["Order delay", "620 ms average"], ["Slowest order", "1.4 s"]]);
+    expect(orderRows({ meanMs: 412, worstMs: 12_400 })).toEqual([["Order delay", "412 ms average"], ["Slowest order", "12 s"]]);
   });
 });
 

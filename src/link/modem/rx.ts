@@ -126,6 +126,11 @@ export class Receiver {
   private trialRef = NaN;
   /** The runner-up turn's clock, when the pilots fit it about as well and nothing else picked the turn (NaN: none). */
   private altEps = NaN;
+  /** Window start (input frame) of the newest packet delivered (−Infinity: none since configure()). */
+  private lastRx = -Infinity;
+  /** A lock was just won on a friend not heard for longer than `reacquireAfter` (input frames; ModemCore sets it, reads the flag and clears it). */
+  reacquired = false;
+  reacquireAfter = Infinity;
   private readonly maxShift: number;
   private readonly near: number;
   // stats
@@ -183,6 +188,8 @@ export class Receiver {
     this.hasSnr = false;
     this.rxMode = null;
     this.lastEps = NaN;
+    this.lastRx = -Infinity;
+    this.reacquired = false;
     this.recent.fill(-Infinity);
     this.search.setBands(bands, mon, this.ring.end);
   }
@@ -376,6 +383,7 @@ export class Receiver {
     if (job.gen === this.trialGen && job.first) {
       this.decoder.run(job, this.sessionKey);
       if (job.ok) {
+        if (job.sample - this.lastRx > this.reacquireAfter && this.lastRx > -Infinity) this.reacquired = true;
         this.promote();
         if (this.deliver(job)) this.rxOk++;
         this.quality(job);
@@ -453,6 +461,7 @@ export class Receiver {
     for (let i = 0; i < RECENT; i++) if (Math.abs(job.sample - this.recent[i]!) < near) return false;
     this.recent[this.recentHead] = job.sample;
     this.recentHead = (this.recentHead + 1) % RECENT;
+    if (job.sample > this.lastRx) this.lastRx = job.sample;
     const cap = job.tb!.shape[job.mode].capacity;
     const slot = this.held[(this.heldHead + this.heldCount) % HELD]!;
     if (this.heldCount < HELD) this.heldCount++;

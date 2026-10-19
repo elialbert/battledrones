@@ -28,6 +28,28 @@
  * was rendered on time all along, so the friend's lock on it is intact, and
  * a restart would only make the friend lose a superframe re-acquiring it.
  *
+ * Re-acquiring a friend. When the receiver wins a lock on a friend it had
+ * not heard for over REACQUIRE_S (its previous packet delivered that long
+ * before the new lock's first), the transmitter starts a new superframe at
+ * its next symbol boundary: the friend may have lost this phone too, and
+ * its next sync would otherwise be up to a superframe away. The case is a
+ * phone whose context was suspended. It starts a new superframe on its
+ * skip, and its friend re-acquires it within a second; but its own
+ * microphone comes back about 20 ms off the context's clock (Chromium), so
+ * its lock on the friend is stale and it waited for the friend's next sync,
+ * up to 2.5 s. With the friend's restart it hears it about half a second
+ * after the friend re-acquired it (the room with that offset, 24
+ * suspensions: 1.68 s after the resume on average and 2.75 s at worst
+ * without, 1.12 and 1.80 with). It can't ping-pong: a restart costs a
+ * friend that was hearing this phone at most half a second between packets
+ * (0.30 to 0.49 s measured), under REACQUIRE_S, so the friend's own
+ * re-acquisition doesn't restart it in turn; and a phone restarts at most
+ * once per RESTART_GUARD_S, its own restarts on a jump or a counter going
+ * back included (a phone that just restarted on its skip is being
+ * re-acquired already). The cost: when both lost each other but one kept
+ * its lock (a loss shorter than its sync check), that one gets the other's
+ * restart for nothing, half a second between packets once.
+ *
  * Plan detection. A Join (rx "detect") searches both plans' host bands, and
  * until it locks it transmits in the high plan's guest band (16–19 kHz),
  * whatever plan it was given, when the rate carries it: the low plan's guest
@@ -127,6 +149,10 @@ export interface GapEvent {
 /** Tone-samples of DFT work per call: the lock's tracker live needs about 15,000 at 48 kHz. */
 const BUDGET = 48_000;
 const MONITOR_BUDGET = 8_000;
+/** A lock won on a friend not heard for longer than this (s) restarts this phone's superframe (see above)... */
+const REACQUIRE_S = 1;
+/** ...unless it restarted, for that or on a jump, less than this long ago (s). */
+const RESTART_GUARD_S = 5;
 /** Blocks longer than this are processed in pieces. */
 const PIECE = 512;
 const NONE: never[] = Object.freeze([]) as unknown as never[];
@@ -153,6 +179,9 @@ export class ModemCore {
   private gapStart = 0;
   private gapLen = 0;
   private peak = 0;
+  /** Frame of this phone's newest superframe restart (a jump, the counter going back, or a re-acquisition), and the frames that must pass before the next re-acquisition restarts it. */
+  private lastRestart = -Infinity;
+  private readonly restartGuard: number;
   private readonly gapSample = new Float64Array(16);
   private readonly gapFrames = new Float64Array(16);
   private gapCount = 0;
@@ -169,6 +198,8 @@ export class ModemCore {
     this.search = new SyncSearch(this.t, tables);
     this.tx = new Transmitter(this.t, tables, this.cfg.plan, cfg.tx, this.cfg.gain, "robust");
     this.rx = new Receiver(this.t, this.ring, this.search);
+    this.rx.reacquireAfter = REACQUIRE_S * cfg.sampleRate;
+    this.restartGuard = RESTART_GUARD_S * cfg.sampleRate;
     this.mon = new SelfMonitor(this.t);
     // every receive configuration's band list, made now so a switch never allocates
     const c = (plan: BandPlan, role: BandRole) => this.search.corr.get(bandKey(plan, role)) ?? null;
@@ -227,6 +258,7 @@ export class ModemCore {
         this.gapEvent(this.next, lost);
         this.ring.skip(lost);
         this.tx.jumped();
+        this.lastRestart = frame;
       } else {
         // the counter went back: start over from here
         this.endGap();
@@ -235,6 +267,7 @@ export class ModemCore {
         this.tx.resetTimeline();
         this.mon.reset();
         this.applyRx();
+        this.lastRestart = frame;
       }
       this.next = frame;
     }
@@ -270,6 +303,14 @@ export class ModemCore {
     // one deferred heavy job: a waiting decode first, else the sync search's next FFT
     if (!this.rx.runDecode()) this.search.runJob(this.ring);
     if (this.rx.detected) this.planFound(this.rx.detected);
+    if (this.rx.reacquired) {
+      // a friend heard again after a long silence may have lost this phone too: a sync for it now (see above)
+      this.rx.reacquired = false;
+      if (frame - this.lastRestart > this.restartGuard) {
+        this.tx.restartSuperframe();
+        this.lastRestart = frame;
+      }
+    }
     this.next = frame + n;
   }
 

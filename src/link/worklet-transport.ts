@@ -30,36 +30,40 @@
  * until the friend's next sync. So at every message from the worklet the
  * transport reads how far the context's clock lies behind its own,
  * now() − currentTime × 1000. That only grows when the context stops while
- * time goes on (a busy main thread reads currentTime as fresh as ever, so a
- * late message doesn't fake it). Once the readings have stood more than
+ * time goes on (a busy main thread reads currentTime as fresh as ever while
+ * the context runs, so a late message doesn't fake it). Once the readings have stood more than
  * SKIP_MIN_MS above their lowest for SKIP_CONFIRM_MS, and stopped moving,
  * the step is a stretch the modem neither heard nor played, and the
  * transport posts it as {t:"skip", frames}. Stopped moving: the lowest
- * reading of the first half of the last SKIP_CONFIRM_MS and the lowest of
- * the second agree within SETTLE_MS, and the skip is the lower of the two.
+ * reading of the last SETTLE_SPAN_MS and the lowest of the SKIP_CONFIRM_MS
+ * before agree within SETTLE_MS, and the skip is the lower of the two.
  * Readings run late, never early, so the lowest of a few is the truest; but
- * one taken while the stall was still going on (a message read late, while
- * currentTime stood still) is early for the step it ends at: taken as the
+ * one taken while a stall still went on (a message read late, currentTime
+ * standing still) is early for the step it ends at: taken as the
  * step, it left a 200 ms stop of Chromium's audio service skipped 33–97 ms
  * short in 4 stops of 8, the rest too small to skip ever after, and the
  * modem's frame counter off by it. And a render thread that catches up
  * renders what it owes late, faster than real time, so the readings fall
  * back: frames it did render are not a skip. Both show as a floor still
  * moving, rising or falling, so neither goes over until it stands. (A
- * context that stands for SKIP_CONFIRM_MS before it catches up, or one
- * catching up at under SETTLE_MS a half, can't be told from one that lost
- * the time; nor can a reading late in both halves alike.)
- * The modem takes a skip as a jump of its frame counter: it
- * starts a new superframe, so the friend hears this phone again about half
- * a second after the skip whatever the phase, and its receiver takes the
- * stretch as a gap of known length, keeping its lock, which is right if the
- * input moved on by exactly the skip. In the room model it does, and this
- * phone hears the friend again as soon. In Chromium it doesn't quite: a
+ * context that stands still for SKIP_CONFIRM_MS before it catches up, or
+ * one catching up by under SETTLE_MS in SETTLE_SPAN_MS, can't be told from
+ * one that lost the time.)
+ *
+ * The modem takes a skip as a jump of its frame counter: it starts a new
+ * superframe, so the friend hears this phone again about half a second
+ * after the skip whatever the phase, and its receiver takes the stretch as
+ * a gap of known length, keeping its lock, which is right if the input
+ * moved on by exactly the skip. In the room model it does, and this phone
+ * hears the friend again as soon. In Chromium it doesn't quite: a
  * MediaStream input comes back on a 10 ms grid about 20 ms off what the
  * context's clock says, past the receiver's tolerance (3 ms short to 9 ms
- * long), so this phone's receiver usually re-acquires on the friend's next
- * sync as it would without the skip (tools/worklet-smoke.mjs measures both).
- * The gap comes out of takeGaps() like any other.
+ * long), so this phone's receiver needs a new sync from the friend. The
+ * friend sends one: having re-acquired this phone after more than a second,
+ * it starts a new superframe (ModemCore), so this phone hears it again
+ * about half a second after it was heard, not whenever the friend's
+ * superframe comes round (tools/worklet-smoke.mjs measures both). The gap
+ * comes out of takeGaps() like any other.
  *
  * Where the spec is silent:
  *  - the constructor throws a RangeError for a config whose sampleRate is not
@@ -130,14 +134,17 @@ export interface WorkletTransportOptions {
 const KEEP = 256;
 /** How far (ms) the context's clock must fall behind this link's, and stay, to count as a stretch it did not render. */
 const SKIP_MIN_MS = 100;
-/** How long (ms of this link's clock) it must stay there first, with a reading in each half of the last this-many ms. */
+/** How long (ms of this link's clock) it must stay there first. */
 const SKIP_CONFIRM_MS = 200;
 /**
- * The lowest readings of the two halves agree within this (ms) once the step
- * stands. Above a reading's own spread (a few ms on a desktop, where the
- * lowest of a half is rarely late by more), below a render thread catching
- * up at 1.15× real time.
+ * The step stands once the lowest reading of the last SETTLE_SPAN_MS agrees
+ * within SETTLE_MS with the lowest of the SKIP_CONFIRM_MS before (which holds
+ * a reading even when the worklet's messages come 200 ms apart). SETTLE_MS is
+ * above a reading's own spread (a few ms on a desktop, where the lowest of a
+ * few is rarely late by more), and below what a render thread catching up at
+ * 1.15× real time takes off in SETTLE_SPAN_MS.
  */
+const SETTLE_SPAN_MS = 100;
 const SETTLE_MS = 15;
 /** Readings past the step kept (a ring): a few seconds of messages, many more than SKIP_CONFIRM_MS needs. */
 const STEP_READINGS = 64;
@@ -387,15 +394,14 @@ export class WorkletTransport implements LinkTransport {
     this.stepNext = (this.stepNext + 1) % STEP_READINGS;
     this.stepN = Math.min(this.stepN + 1, STEP_READINGS);
     if (now - this.stepSince < SKIP_CONFIRM_MS) return;
-    // the lowest reading of each half of the last SKIP_CONFIRM_MS: the step stands once they agree (a half without a
-    // reading reads Infinity, which agrees with nothing)
+    // the lowest reading of the last SETTLE_SPAN_MS (this one at least) and the lowest of the SKIP_CONFIRM_MS before:
+    // the step stands once they agree (none before reads Infinity, which agrees with nothing)
     let older = Infinity;
     let newer = Infinity;
     for (let i = 0; i < this.stepN; i++) {
       const age = now - this.stepAt[i]!;
-      if (age > SKIP_CONFIRM_MS) continue;
-      if (age >= SKIP_CONFIRM_MS / 2) older = Math.min(older, this.stepD[i]!);
-      else newer = Math.min(newer, this.stepD[i]!);
+      if (age < SETTLE_SPAN_MS) newer = Math.min(newer, this.stepD[i]!);
+      else if (age <= SETTLE_SPAN_MS + SKIP_CONFIRM_MS) older = Math.min(older, this.stepD[i]!);
     }
     if (!(Math.abs(older - newer) <= SETTLE_MS)) return;
     // the lowest reading of the settled step against the lowest before it (readings run late, never early, and the

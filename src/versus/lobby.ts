@@ -885,7 +885,10 @@ function openerCard(id: OpenerId, side: Faction, picked: boolean): string {
   const n = o.units.length || o.harvesters;
   return `<button class="op-card op-${id}${picked ? " picked" : ""}" data-act="pick" data-id="${id}">
       <div class="op-art"><img class="op-b" src="${iconUrl(o.building, side)}" alt="" draggable="false"/><img class="op-u" src="${iconUrl(unit, side)}" alt="" draggable="false"/><span class="op-n">×${n}</span></div>
-      <div class="op-text"><b class="op-name">${esc(o.name)}</b><span class="op-tag">${esc(o.tagline)}</span><span class="op-gives">${esc(openerGives(id))}</span></div>
+      <div class="op-text"><b class="op-name">${esc(o.name)}</b><span class="op-tag">${esc(o.tagline)}</span><span class="op-gives">${openerGives(id)
+        .split(" · ")
+        .map((part) => `<span>${esc(part)}</span>`)
+        .join(" · ")}</span></div>
     </button>`;
 }
 

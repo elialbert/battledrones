@@ -195,6 +195,11 @@ export class Transmitter {
     this.symStart = -Infinity;
   }
 
+  /** Start a new superframe (a sync) at the next symbol boundary, the symbol on air played out. */
+  restartSuperframe(): void {
+    this.restart = true;
+  }
+
   /** The frame counter went back: a jump, and the syncs already sent belong to a timeline that is gone. */
   resetTimeline(): void {
     this.jumped();

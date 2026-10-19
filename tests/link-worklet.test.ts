@@ -407,36 +407,35 @@ describe("WorkletTransport", () => {
     const settle = (level: number, n = 40) => {
       for (let i = 0; i < n; i++) read(50, level + ((i * 7) % 5));
     };
+    /** Readings every 50 ms around `level` until a skip goes over: when (ms after the first), and what. */
+    const until = (level: number) => {
+      const t0 = clock.t;
+      for (let i = 0; i < 40; i++) {
+        read(50, level + ((i * 3) % 5));
+        const k = skips();
+        if (k.length) return { ms: clock.t - t0, frames: k };
+      }
+      return null;
+    };
     settle(0);
     // Chromium's audio service stopped for 224 ms: a message posted just before is read 127 ms into it, currentTime
     // standing still; then the context runs again, 224 ms behind for good. Taken as the step, the 127 would leave the
-    // other 97 under SKIP_MIN_MS, never to go over
+    // other 97 under SKIP_MIN_MS, never to go over: the step goes over once that reading is past the readings it is
+    // weighed with (300 ms), at what the clock settled at
     read(50, 127);
     read(100, 224 + 2);
-    read(50, 224);
-    read(50, 224 + 3);
-    // (the step has stood 200 ms, but the 127 is still the lowest of the first half)
-    expect(skips()).toEqual([]);
-    read(50, 224 + 1);
-    expect(skips()).toEqual([Math.round((224 + 3) * 48)]);
+    expect(until(224)).toEqual({ ms: 250, frames: [Math.round((224 + 3) * 48)] });
     settle(224);
     expect(skips()).toEqual([]);
     // a render thread held up 300 ms renders what it owes faster than real time, a little at a time: the frames came,
     // late, so none of it is a skip
-    let behind = 524;
-    while (behind > 224) {
-      read(50, behind + ((behind * 7) % 5));
-      behind -= 12;
-    }
+    for (let behind = 524; behind > 224; behind -= 12) read(50, behind + ((behind * 7) % 5));
     settle(224);
     expect(skips()).toEqual([]);
     // one whose clock runs at half speed for 600 ms, then at full speed 300 ms behind: one skip, once it stands
     for (let i = 1; i <= 12; i++) read(50, 224 + 25 * i);
     expect(skips()).toEqual([]);
-    for (let i = 0; i < 3; i++) read(50, 524 + ((i * 3) % 5));
-    expect(skips()).toEqual([]);
-    for (let i = 0; i < 2; i++) read(50, 524 + ((i * 3) % 5));
-    expect(skips()).toEqual([Math.round((300 + 3) * 48)]);
+    expect(until(524)).toEqual({ ms: 300, frames: [Math.round((300 + 3) * 48)] });
     settle(524);
     expect(skips()).toEqual([]);
   });
@@ -704,7 +703,9 @@ describe("the worklet's processor", () => {
  * suspend(side, ms) stops a phone's context for that long: its processor
  * isn't called, its speaker is silent, its frame counter and currentTime
  * stand still while its clock runs on, as a suspended or interrupted
- * context's do.
+ * context's do. suspend(side, ms, lagMs) also brings its microphone back
+ * lagMs later than its context's clock says, as Chromium's MediaStream
+ * input comes back (about 20 ms).
  */
 function worklets(o: RoomOptions, cfgs: [Partial<ModemConfig>, Partial<ModemConfig>] = [{}, {}]) {
   const sr = [o.a?.sampleRate ?? 48000, o.b?.sampleRate ?? 48000] as const;
@@ -729,18 +730,28 @@ function worklets(o: RoomOptions, cfgs: [Partial<ModemConfig>, Partial<ModemConf
     const second = new Float32Array(128);
     /** Frames the context did not render (suspended): its currentFrame is the room's frame less these. */
     const held = { frames: 0 };
+    /** How late its microphone comes in (frames), through a delay line. */
+    const lag = { frames: 0 };
+    const line = new Float32Array(1 << 16);
+    const mic = new Float32Array(128);
+    let w = 0;
     const endpoint: RoomEndpoint = {
       process(input, output, frame) {
         worker.flush();
         const f = frame! - held.frames;
         scope.currentFrame = f;
-        proc!.process([[input, second]], [[output]]);
+        for (let k = 0; k < input.length; k++) {
+          line[(w + k) & 0xffff] = input[k]!;
+          mic[k] = line[(w + k - lag.frames) & 0xffff]!;
+        }
+        w += input.length;
+        proc!.process([[lag.frames ? mic : input, second]], [[output]]);
         rendered = (f + output.length) / sr[side];
       }
     };
     /** The processor's modem (null once it stopped). */
     const modem = () => (proc as unknown as { modem: ModemCore | null }).modem;
-    return { tr, ctx, main, worker, endpoint, held, modem };
+    return { tr, ctx, main, worker, endpoint, held, lag, modem };
   };
   const host = phone(0);
   const guest = phone(1);
@@ -755,9 +766,11 @@ function worklets(o: RoomOptions, cfgs: [Partial<ModemConfig>, Partial<ModemConf
       got[1].push(...guest.tr.poll());
     }
   };
-  const suspend = (side: 0 | 1, ms: number) => {
+  const suspend = (side: 0 | 1, ms: number, lagMs = 0) => {
     room!.jump(side, ms);
-    (side ? guest : host).held.frames += Math.round((ms / 1000) * sr[side]);
+    const ph = side ? guest : host;
+    ph.held.frames += Math.round((ms / 1000) * sr[side]);
+    ph.lag.frames = Math.round((lagMs / 1000) * sr[side]);
   };
   return { host, guest, room, got, run, suspend, errors, sr };
 }
@@ -893,6 +906,33 @@ describe("two phones through their worklets, when things go wrong", () => {
     },
     120_000
   );
+
+  it("TMPSCAN lagged microphone", () => {
+    const rows: string[] = [];
+    for (let seed = Number(process.env.S0 ?? 1); seed <= Number(process.env.S1 ?? 10); seed++)
+      for (const side of (process.env.SIDE ? [Number(process.env.SIDE)] : [0, 1]) as (0 | 1)[]) {
+        const ms = seed % 2 ? 700 : 1500;
+        const w = worklets({ seed, distanceCm: 20, a: { ownDb: 35 }, b: { ownDb: 35, ppm: 120, sampleRate: seed % 3 ? 48000 : 44100 } });
+        w.host.tr.send([keyed(10)]);
+        w.guest.tr.send([keyed(77)]);
+        w.run(5000 + seed * 173);
+        const ph = side ? w.guest : w.host;
+        let skipAt = Infinity;
+        const post = ph.main.postMessage.bind(ph.main);
+        ph.main.postMessage = (m: unknown, x?: Transferable[]) => { if ((m as ToWorklet).t === "skip" && skipAt === Infinity) skipAt = ph.tr.now(); post(m, x); };
+        const n = [w.got[0].length, w.got[1].length];
+        w.suspend(side, ms, 20);
+        const resumed = w.room.time + ms / 1000;
+        w.run(ms + 3500);
+        const back = w.room.localMs(side, resumed);
+        const first = w.got[side].slice(n[side]).find((p) => p.at >= skipAt);
+        const other = w.got[1 - side]!.slice(n[1 - side]).find((p) => p.at >= w.room.localMs((1 - side) as 0 | 1, resumed));
+        rows.push(`seed ${seed} side ${side} ${ms}: skip +${(skipAt - back).toFixed(0)}, suspended hears friend ${first ? (first.at - back).toFixed(0) : "never"}, friend hears it ${other ? (other.at - w.room.localMs((1 - side) as 0 | 1, resumed)).toFixed(0) : "never"}`);
+      }
+    console.log(rows.join("\n"));
+    const L = (globalThis as { __log?: string[] }).__log;
+    if (L) console.log(L.filter((l) => !/stepN 0->0/.test(l) || /d [1-9]\d\d/.test(l)).slice(0, 60).join("\n"));
+  }, 600_000);
 
   it(
     "a Join's capacity() never offers more than its modem takes, through the detection and on the plan it finds",

@@ -202,9 +202,12 @@ const secs = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${M
 /** Under a second in ms, then in seconds. */
 const span = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : secs(ms));
 
-/** "620 ms average · 1.4 s worst", or "–" before any order. */
-export function ordersLine(o: DuelReportView["link"]["orders"]): string {
-  return o ? `${span(o.meanMs)} average · ${span(o.worstMs)} worst` : "–";
+/** The order delay's rows: "Order delay" "620 ms average" and "Slowest order" "1.4 s" ("–" before any order). */
+export function orderRows(o: DuelReportView["link"]["orders"]): [string, string][] {
+  return [
+    ["Order delay", o ? `${span(o.meanMs)} average` : "–"],
+    ["Slowest order", o ? span(o.worstMs) : "–"]
+  ];
 }
 
 function syncLine(v: DuelReportView): string {
@@ -256,7 +259,7 @@ export function duelReportSection(view: () => DuelReportView, hooks: Pick<Overla
         <table class="duel-link">
           <tr><td>Packets heard</td><td>${l.good} good · ${l.bad} bad</td></tr>
           <tr><td>Waiting on the link</td><td>${secs(l.stallMs)}</td></tr>
-          <tr><td>Order delay</td><td>${ordersLine(l.orders)}</td></tr>
+          ${orderRows(l.orders).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("")}
         </table>`;
     },
     mount: (el) => {
