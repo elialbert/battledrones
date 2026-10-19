@@ -88,6 +88,7 @@ code runs in the browser, in the AudioWorklet and in Node tests.
 | `src/link/sim/room.ts` | A sample-level simulated room for two `ModemCore`s |
 | `src/link/room-transport.ts` | `RoomLink`: two `ModemCore`s in a `Room`, exposing two `LinkTransport`s |
 | `src/link/worklet.ts` | The AudioWorkletProcessor wrapping `ModemCore` |
+| `src/link/worklet-protocol.ts` | The processor's name and the worklet message types (no worklet code) |
 | `src/link/rig.ts` | Opening, recovering and closing the audio |
 | `src/link/worklet-transport.ts` | `WorkletTransport`: the real `LinkTransport` |
 | `src/versus/codec.ts` | Bit I/O, Exp-Golomb, canonicalize/split, command codec |
@@ -108,7 +109,9 @@ Import rules (enforced by a test like arena.test.ts):
   such call site).
 - They may use `import type` from `src/arena/**`, but no value imports.
 
-`src/game/audio.ts` gains the band guard, which is plain game code.
+`src/game/audio.ts` gains the band guard, which is plain game code, with its
+filter design in the pure `src/game/guard-fir.ts` (the room model uses it
+too). `src/game` imports nothing from `src/link` or `src/versus` except types.
 
 ## Lockstep (`src/versus/lockstep.ts`)
 
@@ -173,41 +176,6 @@ transport repeats them until they are replaced. Together the frames describe
 `from = min(peerAck + 1, newestSealed)` through `newestSealed`. That is
 always at least one turn; the receiver ignores turns it already holds.
 
-### Segments and rotation
-
-With one frame per packet, everything in flight must fit in one packet:
-about 120 bits of orders per round trip, roughly 300 bit/s of a link that
-carries 1,880. A 30-unit order (about 190 bits, three 96-bit pieces) would
-then take three round trips to land. Segments let a burst use more of the
-link:
-
-- **Segments.** The sender's unacknowledged turns are cut into at most K
-  segments of consecutive turns, each small enough for one frame. Segment
-  boundaries are fixed when turns are sealed: a newly sealed turn joins the
-  newest segment if that segment's frame still fits, and otherwise starts a
-  new segment. An ack only trims the oldest segment's start or drops whole
-  segments, so a segment's frame never grows after it is cut.
-- **Frames.** Each segment is one frame, `from = max(segment start,
-  peerAck + 1)` through the segment's end (the newest segment ends at
-  `newestSealed`). Every frame carries the current header state (paused, end,
-  rxq, tickLag, ack) and the checkpoint when it fits; the end report rides in
-  the newest segment's frame. Its `key` is the segment's start turn.
-- **Rotation.** The transport sends one frame per packet. After a packet
-  carrying key k, the next packet carries the first frame in the list whose
-  key is greater than k, wrapping to the first. One frame repeats in every
-  packet, which is the common case: with no burst in flight, all unacknowledged
-  turns fit one segment and nothing changes from plain latest state.
-- **K.** `K = clamp(D − 2, 1, 4)`. Rotation adds up to K − 1 packets to the
-  time the newest turn waits for the air, and the input delay D has room for
-  about D − 2 ticks of it beyond the one-way trip, so a burst does not stall
-  the peer in good conditions. The window rule enforces K, so the queue
-  absorbs anything beyond it.
-- **Receiving out of order.** The receiver keeps turns from any accepted frame
-  whose `from` lies within 128 turns past `ackThrough`, and records which turns
-  each frame described (empty or not). `ackThrough` then advances through
-  every contiguous turn it holds. A lost segment costs one rotation, not one
-  per later segment.
-
 Game frame, MSB-first (`UE` = unsigned Exp-Golomb, `SE` = signed, see the
 codec):
 
@@ -243,6 +211,64 @@ if end = 3:  endTick 16, endTrail 16
   more than 200 turns from expected, span > 64, a turn past `to`, a turn of
   more than 15 commands, or a `from` below 0.
 - **`peerAck`** only increases.
+
+### Segments and rotation
+
+With one frame per packet, everything in flight must fit in one packet:
+about 120 bits of orders per round trip, roughly 300 bit/s of a link that
+carries 1,880. A 30-unit order (about 190 bits, three 96-bit pieces) then
+takes three round trips to land. Segments let a burst use more of the link
+when the input delay leaves room for it:
+
+- **Segments.** The sender's unacknowledged turns are cut into at most K
+  segments of consecutive turns, each small enough for one frame. Boundaries
+  are fixed when turns are sealed: a newly sealed turn joins the newest
+  segment if that segment's frame still fits, and otherwise starts a new
+  segment. The fit is checked with `tickLag` and `ack` at their bounds, the
+  span field at `max(span, 2D + 1)` (the empty turns latency always leaves),
+  the checkpoint reserve, and the turns' bits. An ack only trims the oldest
+  segment's start or drops whole segments.
+- **Frames.** Each segment is one frame. Its `key` is the segment's start turn
+  as cut, never moved by acks (a moved key would make the rotation send that
+  segment twice in a row). It describes `max(key, min(peerAck + 1,
+  newestSealed))` through the segment's end; the newest segment ends at
+  `newestSealed`, so the newest turn is always described. Every frame carries
+  the current paused, end, rxq, `tickLag` and `ack` (the last two written
+  clamped to their bounds; clamping `ack` only understates what this phone
+  holds), and the checkpoint when it fits. `left` and `desync` ride in every
+  frame; the end report rides only in the newest segment's frame, and older
+  frames say `end = 0` while decided.
+- **Rotation.** The transport sends one frame per packet. After a packet
+  carrying key k, the next carries the first frame in the list whose key is
+  greater than k, wrapping to the first. One frame repeats in every packet.
+- **K and the slack gate.** `K = clamp(D − 2, 1, 4)` is a cap. A new segment
+  also needs the peer's slack to cover one more packet of delay: the lowest
+  slack in the peer's newest 16 frames (a full window; the window starts over
+  when either phone pauses or this phone stalls) must exceed what one more
+  packet costs at this phone's own transmit period. Without the gate, rotation
+  stalled the peer for seconds even at 0% loss (robust: 16 ms at K = 1 against
+  11.7 s). With it, stall at 0% loss equals K = 1 in every case measured,
+  while order delay improves where D leaves room (D = 6 fast: 9.4 → 6.9 ticks
+  mean, worst queue age 42 → 15 ticks; a 30-unit order at D = 7 lands in 5
+  ticks against 17). At the D pairing usually picks, the gate rarely opens and
+  matches play exactly as K = 1.
+- **One strike.** A lost packet costs the newest turns a whole rotation, and
+  no sender-side gate sees loss coming. So the first time the peer stalls
+  during a rotation (or within 2D ticks of one), no new segment is started
+  for the rest of the match.
+- **Starvation.** When the peer reports it is stalled and `peerAck` hasn't
+  moved for (segments + 1) packets + 2D ticks, the list is the oldest
+  segment's frame alone until the peer holds it. (Losing every second or
+  third packet in step with the rotation otherwise starved one segment for
+  ever.)
+- **Receiving out of order.** The receiver keeps turns from any accepted frame
+  whose `from` lies within 128 turns past `ackThrough`, takes each turn once,
+  and advances `ackThrough` through every contiguous turn it holds.
+  `lastNewTurnAt` moves only when `ackThrough` does.
+- **Minimum capacity.** "Any command fits once the window is empty" needs
+  `capacity ≥ minCapacity(D)`: 175, 175, 177, 177, 183, 183 bits for D = 3…8,
+  because the window always holds the empty turns latency leaves. Real links
+  carry 186 or 188.
 
 ### Hash trail and the end of the match
 
@@ -391,12 +417,12 @@ state:
 
 ```
 type 2 (=10)  role 1 (0 host, 1 guest)  proto 4  build 16
-nonce 16      (drawn uniformly from 1…65535; 0 means none)
-heard 16      the peer nonce this phone hears (0 = none)
+nonce 16      (drawn uniformly from 1…65535; 0: this phone gave up, see "Failure")
+heard 16      the peer nonce this phone hears (0 = none; when failed, the phone it gave up on)
 rxq 3         as in game frames
 ping 8        this phone's link clock at the start of the packet carrying this frame, in 10 ms units, mod 256
 echo 8        the newest peer ping heard
-hold 5        10 ms units from hearing that ping to the start of this packet (31 = too old: discard)
+hold 7        10 ms units from hearing that ping to the start of this packet (127 = too old or none)
 hasConfig 1   (host only) then:
   map 4       0–5: built-in MAPS index; 8–12: random map of biome 0–4, followed by seed 32; other values are invalid
   mutators 12 mask in MUTATOR_IDS order
@@ -409,17 +435,24 @@ picked 1
 go 1          then theirs 2: the peer's pick as this phone holds it
 ```
 
-The longest frame is 155 bits, which fits a packet.
+The longest frame is 157 bits, which fits a packet. (`hold` is 7 bits: with
+200 ms packets holds of 210–400 ms are normal, and 400 ms packets give up to
+800 ms.)
 
 - **Build check.** `build` is the first 16 bits of `__DUEL_HASH__`, a sha256
   that vite.config defines over `src/sim/**`, `src/versus/**`, `src/link/**`
   and `src/game/local-side.ts`. `proto` is a separate version number, so the lobby can say
   which phone is older. A mismatch stops pairing with "These phones run
-  different versions: reload both".
+  different versions: reload both". One stray frame from a nearby phone must
+  not end a pairing: other-version frames are ignored while the peer is live
+  (heard hearing this phone within 2 s), and otherwise the error needs 3 of
+  them within 5 s.
 - **Link clock.** `ping` and `hold` are stamped at air time. The transport's
   `slot` events give each packet's start, and the session rebuilds the lobby
-  frame on every slot. `rtt = now − pingSentAt(echo) − hold`. The host keeps
-  the last 5 samples.
+  frame on every slot. `rtt = now − pingSentAt(echo) − hold`, where `now` is
+  the echo packet's `at` (fully received). A sample down to −10 ms (one
+  `hold` unit of rounding) counts as 0; lower is garbage. The host keeps the
+  last 5 samples.
 - **Config.** The host's config is the menu's `shownMap()` and
   `activeMutators()` at the moment of the Duel tap. A random map sends its own
   32-bit seed, so the map shown is the map played. The match seed is
@@ -438,19 +471,84 @@ The longest frame is 155 bits, which fits a packet.
   GO only if:
   - the nonce is the peer's HELLO nonce;
   - `confHash` is equal;
-  - `theirs` equals its own pick.
+  - `theirs` equals its own pick;
+  - the GO's own `pick` equals the peer's pick as this phone holds it (the
+    one committed in its own GO, else the peer's newest frame's), and is
+    allowed for the peer's side.
 
-  Otherwise it shows "Pairing failed: tap to retry" and resets. If the peer's
-  nonce changes mid-pairing, pairing resets.
+  A GO whose `heard` is not this phone's nonce is read as a plain hello (its
+  `go` and `theirs` ignored), so a phone whose GO is on the air can still meet
+  its friend's next incarnation. The peer's pick and readiness come from its
+  newest frame only; only a GO commits a pick.
+- **Failure.** On a GO it can't accept, a phone shows "Pairing failed: tap to
+  retry" and sends `nonce = 0` with `heard` naming the phone it gave up on.
+  Only that phone restarts (with a fresh nonce, retiring the old peer, so
+  replayed copies of the give-up name a nonce no longer in use); give-ups
+  naming anyone else do nothing.
+- **A new nonce.** A friend that reloads or retries comes back under a new
+  nonce. It replaces the current peer only after 3 of its packets that hear
+  this phone arrive with no live frame from the current peer in between, and
+  a replaced nonce may come back only after its replacement has been silent
+  for 2 s. One damaged frame, or a third phone heard while the real friend is
+  live, never takes over.
+- **Retry.** After `reset()` (the retry tap) the session hands the new frame to
+  the link at once: the frame the link holds is the old pairing's, maybe its
+  GO, and the friend would otherwise start alone on it.
 - **Start.** After setting GO, a phone's payload is the GO frame alone until
   its first game frame. It starts its match once it has sent GO and heard the
-  peer's GO or any game frame that passes the session CRC. The phone that
-  loads faster stalls at tick D and shows "Waiting for your friend to load…".
+  peer's GO or a game frame that passes the session CRC and says `end = 0`
+  (a friend that took its result and left sends only end frames, and must not
+  start anyone). The phone that loads faster stalls at tick D and shows
+  "Waiting for your friend to load…".
+- **Two generals.** A phone whose GO has gone out and which then resets can
+  leave its friend started and waiting for it. The stall overlays' Leave
+  covers that case.
 - **Session CRC.** From GO on, game frames use the session CRC (see the
   modem). Lobby frames always use the default.
 - **Same role on both phones.** If both phones pick Host, or both Join, they
   hear nothing. After 8 s with nothing heard, the lobby says "Nothing heard
   yet. One phone taps Host, the other Join" and offers a one-tap switch.
+
+## Session (`src/versus/session.ts`)
+
+The glue between one `LinkTransport` and the two protocols that take turns on
+it: the Pairing until the match starts, then the Lockstep. Engine-free; it
+acts only in `pump()` (called every animation frame and from a fallback
+timer) and in the calls the feed makes. Its header comment records every rule
+in detail; the main ones:
+
+- **Routing.** Lobby frames go to the pairing, game frames to the lockstep.
+  Game frames that fail the session CRC are always dropped, so a transport
+  that can't check the CRC (a relay of bare frames) must emulate it: carry
+  the key with each game frame and compare, as PacketAir does.
+- **Before the match.** Game frames heard before `beginMatch` count only
+  under this pairing's GO key. They are dropped (they repeat), but the newest
+  is kept and the lockstep takes it first, so a friend that left while this
+  phone loaded ends the match at once. One saying `end = 0` tells the
+  pairing the friend started; one saying it left or desynced sets
+  `status().peerEnded` instead.
+- **At GO.** `transport.setSessionKey(hostNonce, guestNonce)` and the starting
+  mode. The lobby frame is rebuilt and handed over on every slot (and at once
+  after a retry).
+- **Receive quality.** `rxqOf(stats().snrDb)`, read as 0 once nothing has
+  arrived for over 1 s.
+- **Mode adaptation.** During the match each phone picks its own transmit
+  mode from what its friend says of it, so a link that is poor one way slows
+  only that way. It goes robust when the friend's rxq of it is at or below
+  `ROBUST_RXQ` for 2 s, or when the friend's frames keep arriving (not
+  paused) but acknowledge nothing new for `max(1.5 s, rtt + 0.5 s)`. It goes
+  back to fast once the friend's rxq has been at or above `FAST_RXQ` for 10 s
+  (doubling after a fallback the rxq didn't explain, up to 80 s, until fast
+  has held for a minute). A switch holds for at least one superframe. Every
+  rule needs the friend's game frames to be arriving.
+- **Stall reasons.** `waiting.why` is "load" while the friend's newest packet
+  is its own lobby frame (its role and nonce), "paused" while its newest frame
+  says paused, either only while that packet is under 2.5 s old, and "link"
+  otherwise.
+- **Leave.** Before this phone's GO there is nothing to tell. From GO on, with
+  no match begun, a stand-in lockstep (never stepped) sends `end = 1` or `2`
+  for 2 s; after a decided match `leave("left")` keeps the end report on the
+  air for the 2 s. `status().closable` says when the rig may close.
 
 ## The modem (`src/link/modem/`)
 
@@ -538,7 +636,10 @@ The longest frame is 155 bits, which fits a packet.
   sent, wrapping to the first ("Segments and rotation"). A list of one repeats
   in every packet. Without one, it carries all zeros (an invalid frame,
   ignored upstream). When a packet latches its payload, the modem emits a
-  `slot` event with that packet's start frame and key.
+  `slot` event with that packet's start frame and key. A payload longer than
+  the band now on air (after a plan switch) goes out as all zeros with slot
+  key null, and the rotation moves past it: a frame cut to fit would still
+  pass its CRC.
 
 ### Receiver
 
@@ -635,7 +736,8 @@ The longest frame is 155 bits, which fits a packet.
 - **Plan detection (Join).** In the lobby the guest searches both plans' host
   bands until it locks, then sets its plan. Until then it transmits in the
   high plan's guest band whenever the rate allows (clear of both host bands),
-  and `capacity()` is 188.
+  and `capacity()` is 186, what either plan carries (lobby frames are at most
+  157 bits).
 
 ### CPU rules
 
@@ -727,6 +829,17 @@ export interface LinkTransport {
     the link context is suspended or rebuilt.
   - Each worklet message carries `sample`. A packet's
     `at = now() − max(0, (ctx.currentTime × sr − sample) / sr × 1000)`.
+  - `loadWorklet(ctx)` runs `addModule` once per context (a WeakMap).
+  - `stats()` and `modemStats()` go stale once the newest report is over 1 s
+    old, or after a fatal error: unlocked, no SNR.
+  - Suspensions: at every message it compares `now()` with
+    `ctx.currentTime`. A step over 100 ms that persists for 200 ms is sent as
+    a `skip`, so the modem starts a new superframe and its friend re-acquires
+    it quickly (218–495 ms after resume in Chromium, against 1.1–1.4 s). The
+    suspended phone's own receiver still waits for its friend's next sync:
+    its microphone input comes back about 20 ms off the context's clock.
+  - While a Join detects its plan, `capacity()` is 186 until a report of its
+    own shows the lock; `detectedPlan()` says what it found.
 
 ### Worklet
 
@@ -750,12 +863,17 @@ export interface LinkTransport {
 - **Messages.**
   - Main → worklet: `{t:"payload", frames}`, `{t:"mode", mode}`,
     `{t:"session", hostNonce, guestNonce}`,
-    `{t:"config", plan, tx, rx, gain}`, `{t:"close"}` (after which `process()`
-    returns false).
+    `{t:"config", plan, tx, rx, gain}`, `{t:"skip", frames}` (the context
+    stopped rendering for that long: the modem takes it as a jump of its
+    frame counter), `{t:"close"}` (after which `process()` returns false).
+    The processor's name, `MODEM_PROCESSOR`, and the message types live in
+    `src/link/worklet-protocol.ts`, which imports no worklet code.
   - Worklet → main: `{t:"rx", ...RxPacket}`, `{t:"slot", sample, index, key}`,
     `{t:"stats", ...ModemStats}` (about 4 per second), and
     `{t:"gap", sample, frames}` (once when a gap starts, once with its total
-    when capture resumes).
+    when capture resumes), and `{t:"error", message, fatal}` (fatal: the
+    modem could not start or stopped). Every `sample` is a frame in the
+    context's `currentFrame` domain as the context's clock runs now.
 - **Tests.** `tools/worklet-smoke.mjs` builds dist, then loads the built
   worklet in Playwright Chromium. It uses an OfflineAudioContext at 48 kHz with
   two nodes (host and guest) cross-wired through gain and delay paths (own path
@@ -763,6 +881,14 @@ export interface LinkTransport {
   also be run once in WebKit or on an iPhone.
 
 ### Rig (`src/link/rig.ts`)
+
+The rig never imports game code: the lobby turns the guard on and off. It
+reports failures as a `RigError` with a reason (`no-audio`, `no-worklet`,
+`mic-refused`, `no-mic`, `rate`, `update`), and `createLink(cfg)` resolves a
+`RigLink`, a `LinkTransport` that survives a context rebuild underneath
+(same `t0`; config, gain, frames, mode and session key replayed). A Join's
+link, once its detection has locked, is rebuilt on the plan it found with
+`rx: "host"`.
 
 - **Open.** `openRig({ micMode })` runs synchronously inside the tap. It:
   - sets `navigator.audioSession.type = "play-and-record"`;
@@ -780,10 +906,13 @@ export interface LinkTransport {
   - `ec`: the same with echo cancellation on.
 
   Changing the mode re-requests the microphone and reconnects the source.
-- **Refusal.** If the microphone is refused, the rig closes the context, sets
-  the session back to `"auto"`, turns off the guard, and shows "Microphone
-  refused".
-- **Capture.** Lockstep starts only after 1.5 s of gap-free capture.
+- **Refusal.** If the microphone is refused, the rig closes the context and
+  sets the session back to `"auto"`; the lobby turns off the guard, resumes
+  the menu music and shows "Microphone refused". The same holds for every
+  `RigError`.
+- **Capture.** Lockstep starts only after 1.5 s of gap-free capture
+  (`captureOkMs()`, counted from the latest of the microphone's connection,
+  the end of the last gap and the context starting to run).
 - **Lifecycle.** `onLost(reason)` fires on:
   - the track ending;
   - the track muted for more than 1 s;
@@ -796,7 +925,8 @@ export interface LinkTransport {
   context, and re-requests the microphone into the existing worklet node if
   needed, so the modem state and `now()` survive. If the context is broken, the
   tap rebuilds it. After 2 failures it offers Leave. The overlay closes after
-  1.5 s of gap-free capture.
+  1.5 s of gap-free capture. A "tap-to-start" rig moves to running by itself
+  if the context starts without a tap, so the lobby watches the state.
 - **No wake lock.** Where `navigator.wakeLock` is missing (installed iOS apps
   before 18.4), the lobby says to set Auto-Lock to Never.
 - **Close.** `close()` stops the tracks, closes the context and sets the
@@ -807,8 +937,21 @@ export interface LinkTransport {
 `sfx.setLinkGuard(plan: BandPlan | null)`. The chain becomes:
 
 ```
-master → high-pass ~300 Hz → guardGain (−GUARD_CUT_DB) → compressor → { dry | FIR (ConvolverNode) } → destination
+master → high-pass 300 Hz → guardGain (−(GUARD_CUT_DB + makeup)) → limiter → { dry | FIR (ConvolverNode) } → destination
 ```
+
+- **Limiter.** `GUARD_LIMITER`: threshold −30 dB, knee 0, ratio 20, attack
+  2 ms, release 150 ms. Web Audio's automatic makeup at those settings is
+  +17.1 dB, so the guard gain takes it back: otherwise sounds under the
+  limiter would come out 7 dB louder than with no guard. The cut applies at
+  once and the limiter settings 60 ms later, after the compressor's
+  look-ahead has flushed the uncut sound (switching both at once gave a 6 ms
+  burst about 16 dB too loud).
+- **On and off.** `setLinkGuard(plan)` also sets `sfx.linkMode`, and
+  `setLinkGuard(null)` clears it and restores the original chain exactly. It
+  builds the FIR before rewiring, so a browser failure leaves the chain as it
+  was (it throws; the Duel tap catches it). At a rate too low to reach the
+  stopband the FIR is the identity.
 
 - **Crossfade.** Dry and FIR crossfade over 50 ms.
 - **FIR.** A Kaiser windowed sinc designed at the context rate:
@@ -823,9 +966,11 @@ master → high-pass ~300 Hz → guardGain (−GUARD_CUT_DB) → compressor → 
   Loud game audio also hurts through the speaker's nonlinearity and by
   pushing the microphone towards clipping: in the room model, game audio at
   −20 dBFS RMS after the guard with the own path at +40 dB cut delivery to
-  84–90%. So the compressor after the cut works as a limiter, and the cut and
-  limiter are set so that a loud battle mix leaves delivery at least 98% in
-  that case (tests/link-guard.test.ts measures it).
+  84–90%. A battle mix built from the game's own sound recipes and levels
+  measures −19 dBFS RMS (−3.5 peak) at the master and −37.6 RMS (−19.7 peak)
+  after the guard; delivery is 100% both ways at gain 1 and 1.1, both modes,
+  48/48 and 48/44.1 kHz, and still 100% with the cut at 0 and the mix 20 dB
+  louder (tests/link-guard.test.ts).
 - **Speech.** A transient `sfx.linkMode` (never saved) turns spoken lines off:
   the announcer, `radioCheck()` and the speech priming listener skip speech,
   and `speechSynthesis.cancel()` runs on entry.
@@ -1060,6 +1205,10 @@ Long tests set explicit timeouts (60–180 s).
 | `tests/versus-imports.test.ts` | The import rules above |
 | `tests/link-fec.test.ts` | CRC-16 known vectors and the session keys; convolutional code plus Viterbi corrects scattered errors; the gate rejects random input (0 false accepts in 10⁶ garbage packets); the interleaver properties for all four plan/mode cases; distinct, non-zero PN seeds |
 | `tests/link-modem.test.ts` | Two `ModemCore`s through `Room`, transmitting at once, own path +40 dB with unaligned symbols, h2/h3/h5 speaker nonlinearity, and a game-audio jammer through the guard, at 48/48 and 48/44.1 kHz and ±300 ppm. Robust ≥ 99% good at "20 cm" and ≥ 95% at "40 cm" (with an 8–15 ms reflection cluster); fast ≥ 98% at "20 cm". Also: acquisition from 50 random starts never locks off the true timing; a 40 ms and a 700 ms jump on the sender recover within one superframe; a 1 s capture gap recovers within 2.5 s; mode switches; plan detection; self-monitor and self-test; latency bounds `(TS + P·TS) + 128/sr + room delay`; the CPU benchmark |
+| `tests/link-worklet.test.ts` | WorkletTransport against a fake port and context (clock mapping, stale stats, skips, close), the real processor class in Node through a shim decoding both ways, and the worklet's import graph using only the allowed globals |
+| `tests/link-rig.test.ts` | The rig's state machine against fakes: open, refusal, lost reasons, reconnect and rebuild (a Join on its detected plan), capture tracking, close during a rebuild |
+| `tests/versus-session.test.ts` | Two Sessions over PacketAir from pairing through a match with AIs: identical trails at 0/10/30% loss and a 3 s outage, a slow loader, the session CRC after GO, mode adaptation, leave and end frames from every phase, replayed lobby frames |
+| `tests/lift-split.test.ts` | A select-all split into pieces applied in one tick equals the single command; a Goliath-only order still waits |
 | `tests/link-guard.test.ts` | The FIR guard's response for both plans at 44.1 and 48 kHz, and delivery with a loud battle mix through the guard at own path +40 dB |
 | `tests/duel-fullstack.test.ts` | Pairing, then a 90 s duel through `RoomLink` with AIs on both phones: identical hash trails, and at least 90% of ticks without a stall after the first 2 s |
 | `tools/worklet-smoke.mjs` | The built worklet decodes both ways in Chromium |
