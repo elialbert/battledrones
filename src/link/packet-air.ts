@@ -5,8 +5,9 @@
  * layers can see of the modem and nothing below it:
  *
  *  - each end sends a packet every 100 ms (fast) or 200 ms (robust), at its
- *    own phase, carrying the newest payload handed to send() before the packet
- *    starts (none yet: nothing goes out); the packet's start is a slot;
+ *    own phase, carrying one of the newest frames handed to send() before the
+ *    packet starts, in key rotation (transport.ts nextFrameIndex; none yet:
+ *    nothing goes out); the packet's start is a slot;
  *  - each packet arrives `latencyMs` after its start (default 250), unless
  *    lost: seeded Bernoulli loss, Gilbert–Elliott bursts, or an outage;
  *  - it arrives as the modem delivers it: `capacity` bits (188 unless
@@ -21,7 +22,7 @@
  * as a failed CRC would.
  */
 import { hash32 } from "../sim/rand";
-import type { BandPlan, LinkPacket, LinkStats, LinkTransport, ModemMode } from "./transport";
+import { nextFrameIndex, type BandPlan, type LinkPacket, type LinkStats, type LinkTransport, type ModemMode, type OutFrame } from "./transport";
 
 /** Two-state burst loss: in the bad state most packets are lost. */
 export interface GilbertElliott {
@@ -70,7 +71,10 @@ interface InFlight {
 }
 
 class AirEnd implements LinkTransport {
-  payload: Uint8Array | null = null;
+  /** The frames as the modem sends them: exactly `capacity` bits each, zero-padded. */
+  payloads: { bits: Uint8Array; key: number }[] | null = null;
+  /** The key the last packet carried. */
+  lastKey: number | null = null;
   mode: ModemMode;
   nextMode: ModemMode;
   nextSlot: number;
@@ -97,12 +101,15 @@ class AirEnd implements LinkTransport {
     return this.air.cap;
   }
 
-  send(bits: Uint8Array, nbits: number): void {
-    if (nbits > this.air.cap) throw new RangeError(`a ${nbits}-bit frame in a ${this.air.cap}-bit packet`);
-    // the payload as the modem sends it: exactly `capacity` bits, zero-padded
-    const p = new Uint8Array((this.air.cap + 7) >> 3);
-    for (let i = 0; i < nbits; i++) if ((bits[i >> 3]! >> (7 - (i & 7))) & 1) p[i >> 3]! |= 0x80 >> (i & 7);
-    this.payload = p;
+  send(frames: readonly OutFrame[]): void {
+    if (!frames.length) throw new RangeError("send() needs at least one frame");
+    this.payloads = frames.map(({ bits, nbits, key }, i) => {
+      if (nbits > this.air.cap || nbits < 0) throw new RangeError(`a ${nbits}-bit frame in a ${this.air.cap}-bit packet`);
+      if (i > 0 && key <= frames[i - 1]!.key) throw new RangeError("frame keys must ascend");
+      const p = new Uint8Array((this.air.cap + 7) >> 3);
+      for (let j = 0; j < nbits; j++) if ((bits[j >> 3]! >> (7 - (j & 7))) & 1) p[j >> 3]! |= 0x80 >> (j & 7);
+      return { bits: p, key };
+    });
   }
 
   poll(): LinkPacket[] {
@@ -147,7 +154,7 @@ class AirEnd implements LinkTransport {
 
   close(): void {
     this.closed = true;
-    this.payload = null;
+    this.payloads = null;
     this.inbox.length = 0;
   }
 }
@@ -230,8 +237,10 @@ export class PacketAir {
     e.mode = e.nextMode;
     e.slotsOut.push(e.clock(this.t));
     e.nextSlot = this.t + this.period[e.mode];
-    if (!e.payload) return;
-    const p: InFlight = { due: this.t + this.latency, bits: e.payload, mode: e.mode, game: e.payload[0]! >> 6 === 1, key: e.key };
+    if (!e.payloads) return;
+    const out = e.payloads[nextFrameIndex(e.payloads, e.lastKey)]!;
+    e.lastKey = out.key;
+    const p: InFlight = { due: this.t + this.latency, bits: out.bits, mode: e.mode, game: out.bits[0]! >> 6 === 1, key: e.key };
     if (this.lost(d)) {
       this.ends[1 - d]!.rxBad++;
       return;

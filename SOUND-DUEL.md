@@ -336,9 +336,11 @@ Lossless for canonical commands, and stateless across turns.
   sim applies these per unit, so this is desync-safe, and every command fits
   in an empty turn. It is behaviour-identical too, with one exception the sim
   closes: a Goliath whose lift is still hooking obeys a move only when its
-  Condors are named in the same command (`src/sim/lift.ts`), so the sim lets
-  a named hooking Goliath release its lift whenever that side names its
-  Condors in the same tick.
+  Condors are named in the same command (`src/sim/lift.ts`). So a hooking
+  Goliath that ignores an order remembers it for the rest of the tick, and
+  takes it if a later command in the same tick calls its lift off by naming
+  its Condors. One command per selection, as single player sends, never
+  reaches that case.
 
 ### Layout of one command (no faction)
 
