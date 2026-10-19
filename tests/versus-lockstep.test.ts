@@ -288,6 +288,29 @@ describe("lockstep turns and frames", () => {
     expect(a.turns()).toEqual(b.turns());
   });
 
+  it("tells the peer a new receive quality at once, stalled or not", () => {
+    const { a, b, exchange } = wire({ delay: 4 });
+    for (let t = 0; t < 10; t++) {
+      tryStep(a);
+      tryStep(b);
+      exchange();
+    }
+    // b goes quiet: a steps until it stalls, and from then on it seals nothing and no ack moves, so nothing else would
+    // rebuild its frames (the peer picks its transmit mode from the quality they say)
+    while (tryStep(a));
+    expect(a.status().stalled).toBe(true);
+    const { version } = a.frames();
+    a.setRxq(5);
+    const f = a.frames();
+    expect(f.version).not.toBe(version);
+    for (const g of f.frames) expect(readGameFrame(g.bits, g.nbits, MAP, "blue", a.status().newestSealed).rxq).toBe(5);
+    // the same quality again rebuilds nothing
+    a.setRxq(5.9);
+    expect(a.frames().version).toBe(f.version);
+    exchange("ab");
+    expect(b.status().peerRxq).toBe(5);
+  });
+
   it("balances the two phones' slack, at 1× on average", () => {
     const { a, b, exchange } = wire({ delay: 6 });
     expect(a.speed()).toBe(1); // (no peer frame yet)
@@ -642,6 +665,41 @@ describe("segments and rotation", () => {
     expect([5, 4, 3, 2].map((slack) => burst(slack, 200))).toEqual([3, 2, 2, 1]);
   });
 
+  it("rotates at this phone's own packet period, whatever the peer's arrivals say: modes are per direction", () => {
+    /** As above, with this phone sending a packet every `own` ms (setPacketMs), and the peer's frames `every` ms apart. */
+    const burst = (slack: number, every: number, own: number) => {
+      const w = wire({ delay: 6 }); // (K = 4)
+      idle(w);
+      w.a.setPacketMs(own);
+      for (let i = 0; i < SLACK_FRAMES; i++) {
+        w.advance(every);
+        ackTo(w.a, w.a.status().peerAck, slack, w.now());
+      }
+      return cut(w.a);
+    };
+    // robust here, the peer fast: one more segment per two ticks of slack, as when both are robust (read off the
+    // peer's arrivals, 100 ms apart, it opened twice the extra segments: [4, 4, 3, 2])
+    expect([5, 4, 3, 2].map((slack) => burst(slack, 100, 200))).toEqual([3, 2, 2, 1]);
+    // fast here, the peer robust: one per tick, as when both are fast (read off its arrivals: [2, 2, 1, 1, 1])
+    expect([4, 3, 2, 1, 0].map((slack) => burst(slack, 200, 100))).toEqual([4, 3, 2, 1, 1]);
+    // a new period starts the window over (the slack the peer reported of the other mode's packets says nothing of
+    // what it will have now); the same period again doesn't
+    const switched = (to: number) => {
+      const w = wire({ delay: 6 });
+      w.a.setPacketMs(100);
+      idle(w);
+      w.a.setPacketMs(to);
+      for (let i = 0; i < SLACK_FRAMES - 1; i++) {
+        w.advance(100);
+        ackTo(w.a, w.a.status().peerAck, 5, w.now());
+      }
+      return cut(w.a);
+    };
+    expect(switched(100)).toBe(4);
+    expect(switched(200)).toBe(1);
+    expect(() => wire().a.setPacketMs(0)).toThrow(RangeError);
+  });
+
   it("reads the peer's slack off a full window only, which a pause on either phone or a stall here starts over", () => {
     /** Both phones step and exchange a packet each way, `n` times. */
     const play = (w: ReturnType<typeof wire>, n: number) => {
@@ -744,6 +802,39 @@ describe("segments and rotation", () => {
     // until the peer holds it: then the rest go round again
     ackTo(a, keys[1]! - 1, 0, w.now());
     expect(a.frames().frames.map((f) => f.key)).toEqual(keys.slice(1));
+  });
+
+  it("counts the starving rotation at this phone's own packet period, not the peer's", () => {
+    /**
+     * As above with the peer's frames `every` ms apart and this phone sending a packet every `own` ms: how long
+     * after the peer stalls on the oldest segment this phone sends it alone.
+     */
+    const starved = (every: number, own: number) => {
+      const w = wire({ delay: 6 });
+      const { a } = w;
+      a.setPacketMs(own);
+      idle(w);
+      const open = cut(a); // (the idle wire's slack affords 4 segments at 100 ms, 2 at 200)
+      const keys = a.frames().frames.map((f) => f.key);
+      expect(keys.length).toBe(open);
+      const held = a.status().peerAck + 1;
+      expect(held).toBeLessThan(keys[1]!);
+      w.advance(every);
+      ackTo(a, held, -1, w.now());
+      const since = w.now();
+      while (a.frames().frames.length > 1) {
+        w.advance(every);
+        ackTo(a, held, -1, w.now());
+      }
+      expect(a.frames().frames.map((f) => f.key)).toEqual([keys[0]]);
+      return { open, after: w.now() - since };
+    };
+    // fast here, the peer robust: (4 + 1) packets of 100 ms and 2D ticks, the first of the peer's frames past 1700 ms
+    // (read off its arrivals, 200 ms apart: 2200)
+    expect(starved(200, 100)).toEqual({ open: 4, after: 1800 });
+    // robust here, the peer fast: (2 + 1) packets of 200 ms and 2D ticks (read off its arrivals, 100 ms apart, it
+    // opened 4 segments and sent the oldest alone at 1700 ms, before a rotation of them could have brought it)
+    expect(starved(100, 200)).toEqual({ open: 2, after: 1800 });
   });
 
   it("needs the capacity a lone largest command takes at its input delay, and always gets one through with it", () => {

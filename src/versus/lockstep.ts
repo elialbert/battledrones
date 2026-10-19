@@ -40,19 +40,23 @@
  * only the cap: a turn starts another segment only while the lowest slack the
  * peer reported in its last 16 frames (the turns of this phone's it held beyond
  * its tick) covers one more packet of delay per segment beyond the first, with
- * a tick to spare. The packet period is the shortest gap between the peer's
- * newest arrivals (the pairing gives both phones one mode). Only a full window
- * of 16 counts, started over by a pause on either phone and by a stall here:
- * the peer's slack runs high while it is behind this phone (at the start, both
- * hold turns 0 … D − 1; while either is paused or this one stalls; and for
- * seconds after, while the speed trim lets it catch up), and read off such
- * frames the gate opened and the peer stalled. Where D leaves room (two or more
- * above what pairing picks: D = 6 at 250 ms in fast mode, D = 8 at 300 ms in
- * robust) the gate opens and bursts land sooner at no stall; at the D pairing
- * picks it stays shut (in none of 15 five-minute runs per condition, AI orders
- * with 30-unit bursts every 5 s, 150–550 ms, fast and robust, at 0% and 10%
- * loss, burst loss, periodic loss and pauses, did it open), and the match runs
- * exactly as with K = 1.
+ * a tick to spare. The packet period is this phone's own transmit period
+ * (setPacketMs): modes are per direction, and it is this phone's rotation that
+ * holds its turns back. Until the session gives one, it is the shortest gap
+ * between the peer's newest arrivals, which is the same while both phones run
+ * the mode the pairing started them in. Only a full window of 16 counts,
+ * started over by a pause on either phone, by a stall here and by a new
+ * period: the peer's slack runs high while it is behind this phone (at the
+ * start, both hold turns 0 … D − 1; while either is paused or this one stalls;
+ * and for seconds after, while the speed trim lets it catch up), and read off
+ * such frames the gate opened and the peer stalled; and what it reported of
+ * one mode's packets says nothing of the other's. Where D leaves room (two or
+ * more above what pairing picks: D = 6 at 250 ms in fast mode, D = 8 at 300 ms
+ * in robust) the gate opens and bursts land sooner at no stall; at the D
+ * pairing picks it stays shut (in none of 15 five-minute runs per condition, AI
+ * orders with 30-unit bursts every 5 s, 150–550 ms, fast and robust, at 0% and
+ * 10% loss, burst loss, periodic loss and pauses, did it open), and the match
+ * runs exactly as with K = 1.
  *
  * Rotation under loss (also beyond the spec). In rotation a lost packet costs
  * the newest turns a whole rotation rather than a packet, and the gate can't
@@ -80,7 +84,7 @@
  *     if (cmds) { step(w, cmds); ls.afterStep(t, parseInt(worldHash(w), 16), w.winner ? { winner: w.winner, resigned: w.resigned } : null) }
  *   for each packet:  ls.receive(p.bits, p.nbits, p.at)
  *   then:             const f = ls.frames(); if (f.version !== sent) { transport.send(f.frames); sent = f.version }
- *   ls.setPaused(b), ls.setRxq(rxqOf(snrDb)), ls.leave("left" | "desync"), ls.speed(), ls.status(), ls.turns()
+ *   ls.setPaused(b), ls.setRxq(rxqOf(snrDb)), ls.setPacketMs(own transmit period), ls.leave("left" | "desync"), ls.speed(), ls.status(), ls.turns()
  *
  * Game frame, MSB-first (UE/SE: Exp-Golomb, codec.ts):
  *
@@ -233,9 +237,9 @@ export const segmentsFor = (delay: number): number => Math.max(1, Math.min(4, de
 export const SLACK_FRAMES = 16;
 /** Ticks of slack the gate keeps in hand beyond the rotation it allows. */
 const SLACK_SPARE = 1;
-/** The packet period is the shortest gap between the arrivals of this many newest game frames. */
+/** Until setPacketMs, the packet period is the shortest gap between the arrivals of this many newest game frames. */
 const ARRIVALS_KEPT = 8;
-/** The packet period assumed before the peer's arrivals give one (robust mode's, the longer). */
+/** The packet period starving() assumes before setPacketMs or the peer's arrivals give one (robust mode's, the longer). */
 const ROBUST_PERIOD = 200;
 
 export const foldTrail = (trail: number, worldHash32: number): number => Math.imul(trail ^ worldHash32, 0x01000193) >>> 0;
@@ -473,9 +477,11 @@ export class Lockstep {
   private readonly peerTrail: [number, number][] = [];
 
   private peerFrame: { paused: boolean; rxq: number; slack: number } | null = null;
-  /** The peer's slack from its newest frames (the slack gate), and when they arrived (the packet period). */
+  /** The peer's slack from its newest frames (the slack gate), and when they arrived (the packet period until setPacketMs). */
   private readonly slacks: number[] = [];
   private readonly arrivals: number[] = [];
+  /** This phone's own transmit period (setPacketMs); null: not given yet. */
+  private packetMs: number | null = null;
   /** The peer's newest frame said it was stalled on this phone's turn peerAck + 1 (its slack below 0, and not paused). */
   private peerStalled = false;
   /** When peerAck last moved, and when this phone last had more than one segment open, on the link's clock. */
@@ -667,9 +673,8 @@ export class Lockstep {
    * peer's slack (the turns of this phone's it holds beyond the tick it is
    * on) is how early they arrive, so another segment is affordable while the
    * lowest slack it reported in its last SLACK_FRAMES frames covers one more
-   * packet per extra segment, with SLACK_SPARE ticks to spare. The packet
-   * period is learned from the peer's arrivals (the pairing gives both phones
-   * one mode); none yet: one segment.
+   * packet per extra segment, with SLACK_SPARE ticks to spare, at this
+   * phone's own packet period (period()); none yet: one segment.
    *
    * Only a full window counts (restartSlack says when it starts over): the
    * peer's slack runs high while it is behind this phone, which it is at the
@@ -686,8 +691,18 @@ export class Lockstep {
     return Math.max(1, Math.min(this.segmentsMax, 1 + Math.floor(((slack - SLACK_SPARE) * 100) / P)));
   }
 
-  /** The packet period: the shortest gap between the peer's newest arrivals (null before two). */
+  /**
+   * The packet period of this phone's rotation: its own transmit period, as
+   * setPacketMs gave it. Before that, the shortest gap between the peer's
+   * newest arrivals (null before two), which is the same while both phones
+   * run the mode the pairing started them in, and no longer once either
+   * adapts its own: a phone sending robust to a fast peer would read 100 ms,
+   * open twice the extra segments its slack affords and send the oldest
+   * segment alone before its rotation could have brought it, and one sending
+   * fast to a robust peer would read 200 ms and open half of them.
+   */
   private period(): number | null {
+    if (this.packetMs !== null) return this.packetMs;
     let gap = Infinity;
     for (let i = 1; i < this.arrivals.length; i++) {
       const d = this.arrivals[i]! - this.arrivals[i - 1]!;
@@ -1067,9 +1082,34 @@ export class Lockstep {
     this.dirty = true;
   }
 
-  /** This phone's receive quality of the peer (rxqOf(snrDb)); it rides along from the next rebuilt frame. */
+  /**
+   * This phone's receive quality of the peer (rxqOf(snrDb)). A new value
+   * rebuilds the frames: a phone stalled on the peer seals nothing and moves
+   * no ack, so nothing else would, and the peer, which picks its transmit mode
+   * from it, would go on hearing the quality of before the stall.
+   */
   setRxq(rxq: number): void {
-    this.rxq = Math.max(0, Math.min(7, Math.floor(rxq) || 0));
+    const v = Math.max(0, Math.min(7, Math.floor(rxq) || 0));
+    if (v === this.rxq) return;
+    this.rxq = v;
+    this.dirty = true;
+  }
+
+  /**
+   * This phone's own transmit period in ms (100 fast, 200 robust): the packet
+   * period of its rotation, for the slack gate and starving(). Modes are per
+   * direction, so the peer's arrivals, which the period is read off until this
+   * is called, can be the other mode's. A new period starts the slack gate's
+   * window over: the slack the peer reported of the other mode's packets says
+   * nothing of what it will have now. Give the mode in force (the link's
+   * stats().txMode), which follows setMode a superframe later: until then the
+   * packets go out at the old period.
+   */
+  setPacketMs(ms: number): void {
+    if (!(ms > 0) || !Number.isFinite(ms)) throw new RangeError(`packet period ${ms} ms`);
+    if (ms === this.packetMs) return;
+    this.packetMs = ms;
+    this.restartSlack();
   }
 
   /** Leave ("left") or abort ("desync"): frames say so from now on (the session keeps sending them for 2 s). */
