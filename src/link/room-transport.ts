@@ -10,12 +10,17 @@
  * `at` is when its first DFT window began on that clock, as
  * WorkletTransport stamps it; slots() are packet starts on the same clock.
  *
+ * send() hands the frame list to the modem (ModemCore.setPayloads), which
+ * sends one per packet in key rotation. onSlot sees every packet start with
+ * the key it carried, which the LinkTransport seam doesn't show (tests
+ * compare it with what arrived).
+ *
  * advance(ms) runs the room that much true time; tests drive it like
  * PacketAir.advance.
  */
-import { ModemCore, type ModemConfig } from "./modem/core";
+import { ModemCore, type ModemConfig, type SlotEvent } from "./modem/core";
 import { Room, type RoomEndpoint, type RoomOptions } from "./sim/room";
-import type { BandPlan, LinkPacket, LinkStats, LinkTransport, ModemMode } from "./transport";
+import type { BandPlan, LinkPacket, LinkStats, LinkTransport, ModemMode, OutFrame } from "./transport";
 
 export interface RoomLinkOptions extends RoomOptions {
   /** The host's band plan (default high). */
@@ -51,7 +56,10 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
     }
     this.modem.process(input, output, frame);
     const ms = 1000 / this.sr;
-    for (const s of this.modem.takeSlots()) this.starts.push(s.sample * ms);
+    for (const s of this.modem.takeSlots()) {
+      this.starts.push(s.sample * ms);
+      this.link.onSlot?.(this.side, s);
+    }
     for (const p of this.modem.take()) {
       const at = p.sample * ms;
       this.inbox.push({ bits: p.bits, nbits: p.nbits, snrDb: p.snrDb, at, session: p.session });
@@ -64,9 +72,9 @@ class RoomEnd implements LinkTransport, RoomEndpoint {
     return this.modem.capacity();
   }
 
-  send(bits: Uint8Array, nbits: number): void {
+  send(frames: readonly OutFrame[]): void {
     if (this.closed) return;
-    this.modem.setPayload(bits, nbits);
+    this.modem.setPayloads(frames);
   }
 
   poll(): LinkPacket[] {
@@ -118,6 +126,8 @@ export class RoomLink {
   readonly b: LinkTransport;
   readonly room: Room;
   readonly modems: [ModemCore, ModemCore];
+  /** Called at every packet start of either end (0: host, 1: guest), with the key the packet carries. */
+  onSlot: ((side: 0 | 1, slot: SlotEvent) => void) | null = null;
 
   constructor(o: RoomLinkOptions = {}) {
     const plan = o.plan ?? "high";

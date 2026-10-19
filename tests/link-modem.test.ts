@@ -15,7 +15,7 @@ import { ToneWeights } from "../src/link/modem/outlier";
 import { CLIP, PACKET_SYMBOLS, SUPERFRAME_SYMBOLS, TS, timing, toneAmplitude } from "../src/link/modem/params";
 import { RoomLink } from "../src/link/room-transport";
 import { Room, type RoomEndpoint, type RoomOptions } from "../src/link/sim/room";
-import type { LinkPacket, ModemMode } from "../src/link/transport";
+import type { LinkPacket, ModemMode, OutFrame } from "../src/link/transport";
 import { hash32 } from "../src/sim/rand";
 
 const code = /<script id="probe-core">([\s\S]*?)<\/script>/.exec(html)![1]!;
@@ -59,6 +59,8 @@ class Duplex {
   /** Per receiver: packets delivered more than once. */
   readonly dups = [0, 0];
   private readonly k = [0, 0];
+  /** Per sender: packet number → the length its frame was set with (a Join detecting the plan offers less than a packet carries). */
+  private readonly nbits: [Map<number, number>, Map<number, number>] = [new Map(), new Map()];
 
   constructor(o: RoomOptions, mode: ModemMode, cfg: [Partial<ModemConfig>, Partial<ModemConfig>] = [{}, {}]) {
     const sr = [o.a?.sampleRate ?? 48000, o.b?.sampleRate ?? 48000];
@@ -67,7 +69,7 @@ class Duplex {
     this.m = [a, b];
     for (const s of [0, 1] as const) {
       this.m[s].setTxMode(mode);
-      this.m[s].setPayload(frameOf(0, s, this.m[s].capacity()), this.m[s].capacity());
+      this.setFrame(s);
     }
     this.room = new Room(o, a, b);
     this.room.onBlock = (side, f) => this.block(side, f);
@@ -78,17 +80,25 @@ class Duplex {
     for (const s of m.takeSlots()) {
       this.sent[side].set(this.k[side]!, [s.sample, this.room.timeOf(side, s.sample)]);
       this.k[side]!++;
-      m.setPayload(frameOf(this.k[side]!, side, m.capacity()), m.capacity());
+      this.setFrame(side);
     }
     const at = this.room.timeOf(side, f + 128);
     for (const p of m.take()) {
       const k = counterOf(p);
-      const ref = frameOf(k, 1 - side, p.nbits);
+      const ref = frameOf(k, 1 - side, Math.min(p.nbits, this.nbits[1 - side]!.get(k) ?? p.nbits));
       if (!p.bits.every((v, i) => v === ref[i] || i >= 24)) this.wrong[side]!++;
       else if (this.heard[side].has(k)) this.dups[side]!++;
       else this.heard[side].set(k, { at, p });
     }
     m.takeGaps();
+  }
+
+  /** The sender's next numbered frame, as long as its modem takes now. */
+  private setFrame(side: 0 | 1): void {
+    const m = this.m[side];
+    const k = this.k[side]!;
+    this.nbits[side].set(k, m.capacity());
+    m.setPayload(frameOf(k, side, m.capacity()), m.capacity());
   }
 
   /** Of the packets `from` started in [t0, t1] (true time), how many the other phone decoded. */
@@ -365,6 +375,9 @@ describe("two modems through the room, both transmitting", () => {
         const seed = 61 + (plan === "low" ? 0 : 1) + (joinPlan === "low" ? 2 : 0);
         const d = new Duplex({ seed, distanceCm: 20, a: { ownDb: 30 }, b: { ownDb: 30, ppm: 90 } }, "robust", [{ plan }, { plan: joinPlan, rx: "detect" }]);
         expect(d.m[1].stats().plan).toBe("high");
+        // until it locks it offers what either plan carries: a frame accepted now must fit the plan it finds
+        expect(d.m[1].capacity()).toBe(186);
+        expect(() => d.m[1].setPayload(frameOf(1, 1), 188)).toThrow(RangeError);
         d.room.run(8);
         const g = d.m[1].stats();
         expect(g.plan).toBe(plan);
@@ -724,9 +737,9 @@ describe("RoomLink", () => {
     () => {
       const link = new RoomLink({ seed: 5, distanceCm: 20, b: { sampleRate: 44100, ppm: 100 } });
       expect(link.a.capacity()).toBe(188);
-      expect(() => link.a.send(new Uint8Array(24), 189)).toThrow(RangeError);
-      link.a.send(new Uint8Array([0x81, 1, 2, 3]), 32);
-      link.b.send(new Uint8Array([0x82, 4, 5, 6]), 32);
+      expect(() => link.a.send([{ bits: new Uint8Array(24), nbits: 189, key: 0 }])).toThrow(RangeError);
+      link.a.send([{ bits: new Uint8Array([0x81, 1, 2, 3]), nbits: 32, key: 0 }]);
+      link.b.send([{ bits: new Uint8Array([0x82, 4, 5, 6]), nbits: 32, key: 0 }]);
       let lastA = -1;
       const pa: LinkPacket[] = [];
       const pb: LinkPacket[] = [];
@@ -761,6 +774,171 @@ describe("RoomLink", () => {
       link.a.poll();
       link.advance(3000);
       expect(link.a.poll().length).toBe(0);
+    },
+    60_000
+  );
+});
+
+/** A lobby-type frame (10…) naming its key in bits 8–23, then filler that depends on the key: 184 bits. */
+function keyed(key: number): OutFrame {
+  const bits = new Uint8Array(23);
+  bits[0] = 0x80;
+  bits[1] = key >> 8;
+  bits[2] = key & 255;
+  for (let i = 3; i < 23; i++) bits[i] = hash32(key, 99, i) & 255;
+  return { bits, nbits: 184, key };
+}
+/** The key a keyed() frame names, once its filler checks out (-1 otherwise). */
+function keyOf(p: LinkPacket): number {
+  const key = (p.bits[1]! << 8) | p.bits[2]!;
+  const ref = keyed(key).bits;
+  return p.nbits === 188 && ref.every((v, i) => p.bits[i] === v) && p.bits[23] === 0 ? key : -1;
+}
+
+/**
+ * A RoomLink whose host sends keyed frames to the guest: every host packet
+ * start with its key (from onSlot), and every packet the guest decoded with
+ * the slot it came from, matched by when its first DFT window should reach
+ * the guest's microphone (the slot's frame through the room, as the
+ * acquisition test above computes it).
+ */
+function keyedLink(seed: number) {
+  const link = new RoomLink({ seed, distanceCm: 20, mode: "fast", b: { sampleRate: 44100, ppm: -150 } });
+  const [ta, tb] = [timing(48000), timing(44100)];
+  const sent: { key: number | null; ms: number }[] = [];
+  link.onSlot = (side, s) => {
+    if (side !== 0) return;
+    // the guest's RoomLink stamps a packet at its first DFT window, on its own clock
+    const at = link.room.arrival(0, s.sample + ta.cp) - tb.backoff;
+    sent.push({ key: s.key, ms: (at * 1000) / 44100 });
+  };
+  const got: { key: number; zero: boolean; sent: { key: number | null; ms: number } | undefined }[] = [];
+  const run = (ms: number) => {
+    for (let t = 0; t < ms; t += 100) {
+      link.advance(100);
+      for (const p of link.b.poll()) got.push({ key: keyOf(p), zero: p.bits.every((v) => v === 0), sent: sent.find((x) => Math.abs(x.ms - p.at) < 1) });
+    }
+  };
+  return { link, sent, got, run };
+}
+
+/** The keys a list of frames rotates through after a packet carrying `last`, n packets' worth. */
+function rotation(keys: number[], last: number | null, n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    last = keys.find((k) => last === null || k > last) ?? keys[0]!;
+    out.push(last);
+  }
+  return out;
+}
+
+describe("RoomLink: a list of frames in key rotation", () => {
+  it(
+    "sends one frame per packet, every key in order, cycling; each packet arrives carrying the key its slot named",
+    () => {
+      const { link, sent, got, run } = keyedLink(21);
+      // before any list: packets of zeros (type 00, which no layer above accepts), with no key
+      run(1000);
+      expect(sent.length).toBeGreaterThan(5);
+      expect(sent.every((s) => s.key === null)).toBe(true);
+      for (const g of got) expect([g.zero, g.sent?.key]).toEqual([true, null]);
+      got.length = 0;
+      const before = sent.length;
+      link.a.send([keyed(10), keyed(20), keyed(30)]);
+      run(8000);
+      const keys = sent.slice(before).map((s) => s.key);
+      expect(keys.length).toBeGreaterThan(60);
+      expect(keys).toEqual(rotation([10, 20, 30], null, keys.length));
+      // the guest heard them all, in the same order, each the frame its slot carried (a packet that started
+      // before the list, still in the air when it was handed over, carries zeros)
+      for (const g of got.filter((g) => g.sent?.key === null)) expect(g.zero).toBe(true);
+      const heard = got.filter((g) => g.sent?.key !== null);
+      expect(heard.length).toBeGreaterThan(keys.length - 5);
+      for (const g of heard) expect(g.key).toBe(g.sent?.key);
+      expect(heard.map((g) => g.key)).toEqual(rotation([10, 20, 30], null, heard.length));
+    },
+    60_000
+  );
+
+  it(
+    "continues by key when the list is replaced mid-rotation, and keeps the old list when a new one breaks a rule",
+    () => {
+      const { link, sent, got, run } = keyedLink(22);
+      const lists: [number[], number[]] = [
+        [5, 25, 35],
+        [10, 20]
+      ];
+      let swaps = 0;
+      const slot = link.onSlot!;
+      link.onSlot = (side, s) => {
+        slot(side, s);
+        // right after a packet carrying 20, then after one carrying 35: the next packet takes the new list
+        if (side === 0 && ((swaps === 0 && s.key === 20 && sent.length > 30) || (swaps === 1 && s.key === 35))) link.a.send(lists[swaps++]!.map(keyed));
+      };
+      link.a.send([keyed(10), keyed(20), keyed(30)]);
+      run(10000);
+      expect(swaps).toBe(2);
+      const keys = sent.map((s) => s.key!);
+      const i = keys.findIndex((k, j) => k === 20 && j > 30);
+      const j = keys.indexOf(35, i);
+      // 10 20 30 … up to a 20; then the first keys over 20 in the new list, 25 and 35; then, after 35, the next list wraps to 10
+      expect(keys.slice(0, i + 1)).toEqual(rotation([10, 20, 30], null, i + 1));
+      expect(keys.slice(i + 1, j + 1)).toEqual([25, 35]);
+      expect(keys.slice(j + 1)).toEqual(rotation([10, 20], 35, keys.length - j - 1));
+      // the guest heard the same sequence (a packet or two at the start lost to acquisition)
+      expect(got.length).toBeGreaterThan(80);
+      for (const g of got) expect(g.key).toBe(g.sent?.key);
+      const heard = got.map((g) => g.key).join(" ");
+      expect(heard).toContain("10 20 25 35 10 20 10 20");
+      // a list that breaks a rule throws and leaves the one in place
+      const bad: OutFrame[][] = [[], Array.from({ length: 9 }, (_, k) => keyed(k)), [keyed(4), keyed(4)], [keyed(4), keyed(3)], [{ ...keyed(1), nbits: 189 }], [{ ...keyed(1), key: NaN }], [{ bits: new Uint8Array(2), nbits: 17, key: 1 }]];
+      for (const list of bad) expect(() => link.a.send(list), JSON.stringify(list.map((f) => [f.key, f.nbits]))).toThrow(RangeError);
+      const n = sent.length;
+      run(1000);
+      expect(sent.slice(n).map((s) => s.key)).toEqual(rotation([10, 20], sent[n - 1]!.key, sent.length - n));
+    },
+    60_000
+  );
+
+  it(
+    "never cuts a frame to fit: after a switch to the low plan, one longer than it carries goes out as zeros, and the rotation goes on past it",
+    () => {
+      // the self-test, so one modem hears its own packets in either plan
+      const sr = 48000;
+      const self = new ModemCore({ sampleRate: sr, plan: "high", tx: "host", rx: "host" });
+      // 188 bits, its last four set: cut to 186 it would still pass its CRC
+      const long: OutFrame = { bits: Uint8Array.from([...keyed(1).bits, 0xf0]), nbits: 188, key: 1 };
+      const short = keyed(2);
+      const kindOf = (p: RxPacket) => {
+        const head = (f: OutFrame) => f.bits.slice(0, 23).every((v, i) => p.bits[i] === v);
+        if (p.bits.every((v) => v === 0)) return "zeros";
+        if (head(short) && p.bits[23] === 0) return "2";
+        if (head(long)) return p.nbits === 188 && p.bits[23] === 0xf0 ? "1" : `1 cut to ${p.nbits} bits`;
+        return "?";
+      };
+      const got: { plan: string; kind: string }[] = [];
+      const keys: (number | null)[] = [];
+      const loop = selfLoop(self, sr);
+      loop.st.onBlock = () => {
+        for (const p of self.take()) got.push({ plan: p.plan, kind: kindOf(p) });
+        for (const s of self.takeSlots()) keys.push(s.key);
+      };
+      self.setPayloads([long, short]);
+      loop.run(5);
+      expect(new Set(got.map((g) => g.kind))).toEqual(new Set(["1", "2"]));
+      self.reconfigure({ plan: "low" });
+      expect(self.capacity()).toBe(186);
+      const n = keys.length;
+      loop.run(8);
+      const low = got.filter((g) => g.plan === "low");
+      expect(low.length).toBeGreaterThan(10);
+      expect(new Set(low.map((g) => g.kind))).toEqual(new Set(["zeros", "2"]));
+      // past the packet or two already latched in the high band, the slots alternate: frame 1's turn (zeros, no key), then 2
+      const after = keys.slice(n + 2);
+      // (robust on the low plan: five packets a superframe)
+      expect(after.length).toBeGreaterThan(14);
+      after.forEach((k, i) => expect(k).toBe(i === 0 ? (after[1] === 2 ? null : 2) : after[i - 1] === 2 ? null : 2));
+      expect(self.stats().rxBad).toBe(0);
     },
     60_000
   );
@@ -825,7 +1003,8 @@ describe("the modem's CPU and globals", () => {
       const out = new Float32Array(128);
       const inp = new Float32Array(128);
       const delay = new Float32Array(4096);
-      self.setPayload(new Uint8Array([0x81]), 8);
+      // three frames in key rotation: the packet start's pick allocates nothing either
+      self.setPayloads([1, 2, 3].map((key) => ({ bits: new Uint8Array([0x81, key]), nbits: 16, key })));
       let f = 0;
       const step = () => {
         for (let i = 0; i < 128; i++) inp[i] = 0.3 * delay[(f + i) & 4095]! + 1e-4 * Math.sin(f + i);

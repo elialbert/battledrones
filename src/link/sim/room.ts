@@ -9,14 +9,16 @@
  * Per phone:
  *  - a sample rate (44.1 or 48 kHz), a clock skew (ppm) and output and input
  *    latencies (speaker after process(), and microphone before it);
- *  - a speaker: the modem's output plus an optional game-audio jammer
- *    (synthesised explosions, blips, music and hats, then put through the
- *    band guard as SOUND-DUEL.md specifies it — a 300 Hz high-pass and a
- *    Kaiser FIR flat to 8 kHz and 70 dB down from 9.5 kHz, made here so the
- *    room doesn't depend on the game's audio module), then a polynomial
- *    nonlinearity (h2, h3, h5) computed at twice the rate so its products
- *    above Nyquist don't fold back into the bands (in a real speaker they are
- *    ultrasound, and the microphone's anti-alias filter removes them);
+ *  - a speaker: the modem's output plus optional game audio, either the
+ *    built-in jammer (synthesised explosions, blips, music and hats, put
+ *    through the band guard as SOUND-DUEL.md specifies it: a 300 Hz
+ *    high-pass and the game's own guard FIR, src/game/guard-fir.ts, then set
+ *    to an RMS level) or a loop the caller made (tests/link-guard.test.ts
+ *    plays a battle mix through a model of the whole guard chain), then a
+ *    polynomial nonlinearity (h2, h3, h5) computed at twice the rate so its
+ *    products above Nyquist don't fold back into the bands (in a real
+ *    speaker they are ultrasound, and the microphone's anti-alias filter
+ *    removes them);
  *  - the own path, 15–40 dB louder than the peer's direct sound: the speaker
  *    to its own microphone a few centimetres away, with a small IR, at the
  *    measured round trip (75 ms by default);
@@ -37,7 +39,7 @@
  *
  * Nothing here reads a clock or Math.random: one seed decides the room.
  */
-import { lowpassFir } from "../modem/dsp";
+import { guardFir } from "../../game/guard-fir";
 import type { BandPlan } from "../transport";
 
 /** Anything that renders a block of output from a block of input (a ModemCore). */
@@ -70,8 +72,14 @@ export interface RoomSide {
   noise?: number;
   /** A band limit at the microphone (two RBJ low-pass sections), Hz. */
   lowpassHz?: number;
-  /** Game audio at the speaker, RMS dBFS after the guard (default none). */
+  /** Game audio at the speaker, RMS dBFS after the guard (default none): the built-in jammer. */
   jammerDb?: number | null;
+  /**
+   * Game audio at the speaker as the caller made it, in place of the built-in
+   * jammer: samples at this phone's rate, already through the guard and at
+   * their final level (full scale ±1), looped from a seeded place.
+   */
+  game?: Float32Array | null;
   /** Which plan's guard FIR the game audio went through (default "high"). */
   guard?: BandPlan;
   /** Speaker nonlinearity (default: harmonics about 40–60 dB down at the modem's level); null for a linear speaker. */
@@ -292,11 +300,11 @@ function gameAudio(sr: number, seconds: number, rmsDb: number, plan: BandPlan, s
     const f = r() < 0.5 ? 880 : 1800;
     for (let i = a; i < Math.min(n, a + Math.round(0.06 * sr)); i++) x[i] = x[i]! + 0.1 * (Math.sin((2 * Math.PI * f * (i - a)) / sr) >= 0 ? 1 : -1);
   }
-  // the guard: high-pass ~300 Hz, then the FIR (high plan: flat to 8 kHz, 70 dB down from 9.5 kHz; low: 4 kHz, 60 dB from 5 kHz)
+  // the guard: high-pass ~300 Hz, then the game's FIR (high plan: flat to 8 kHz, 70 dB down from 9.5 kHz; low: 4 kHz, 60 dB from 5 kHz)
   const hp1 = new Biquad(sr, 300, true);
   const hp2 = new Biquad(sr, 300, true);
   for (let i = 0; i < n; i++) x[i] = hp2.run(hp1.run(x[i]!));
-  const fir = plan === "high" ? lowpassFir(sr, 8750, 2 * Math.round(sr / 680) + 1, 72) : lowpassFir(sr, 4500, 2 * Math.round(sr / 540) + 1, 62);
+  const fir = guardFir(sr, plan);
   // circular convolution (the loop has no seam): the input with its end copied in front
   const L = fir.length;
   const xp = new Float64Array(n + L);
@@ -462,8 +470,13 @@ class Phone {
     const sp = o.speaker === undefined ? DEFAULT_SPEAKER : o.speaker;
     this.speaker = sp ? new Speaker(sp) : null;
     this.outGain = Math.pow(10, (o.outputDb ?? 0) / 20);
-    this.jam = o.jammerDb === undefined || o.jammerDb === null ? null : gameLoop(this.sr, o.guard ?? "high");
-    this.jamGain = o.jammerDb === undefined || o.jammerDb === null ? 0 : Math.pow(10, o.jammerDb / 20);
+    if (o.game && o.game.length > 0) {
+      this.jam = o.game;
+      this.jamGain = 1;
+    } else {
+      this.jam = o.jammerDb === undefined || o.jammerDb === null ? null : gameLoop(this.sr, o.guard ?? "high");
+      this.jamGain = o.jammerDb === undefined || o.jammerDb === null ? 0 : Math.pow(10, o.jammerDb / 20);
+    }
     this.jamPos = Math.floor(r() * (this.jam?.length ?? 1));
     this.lp = o.lowpassHz ? [new Biquad(this.sr, o.lowpassHz), new Biquad(this.sr, o.lowpassHz)] : null;
   }

@@ -16,8 +16,19 @@
  * pattern A (the superframe is robust) or B (fast) on the data tones, and the
  * data symbols after it add 0/π (robust) or Gray-coded quarter turns (fast)
  * to each data tone.
+ *
+ * Payloads. The transmitter holds a list of up to MAX_PAYLOADS frames, each
+ * with a key, and every packet latches one at its first symbol: the first
+ * whose key is greater than the last key sent, wrapping to the first
+ * (transport.ts nextFrameIndex, the rule every transport shares). The last
+ * key sent outlives the list, so a new list continues the rotation by key
+ * rather than starting over: a segment that was just sent waits its turn
+ * even if the list around it changed. A payload longer than the band on air
+ * carries (a list set before a switch to the low plan) is never cut to fit:
+ * a cut frame would pass its CRC as something nobody sent. Its packet goes
+ * out as zeros instead, and the rotation moves on past it.
  */
-import type { BandPlan, BandRole, ModemMode } from "../transport";
+import { nextFrameIndex, type BandPlan, type BandRole, type ModemMode, type OutFrame } from "../transport";
 import { convEncode } from "./conv";
 import { CRC_INIT, crc16 } from "./crc";
 import { CLIP, CRC_BITS, SUPERFRAME_SYMBOLS, toneAmplitude, type Shape, type Timing } from "./params";
@@ -39,6 +50,11 @@ class Bank {
     this.y0 = new Float64Array(max);
   }
 }
+
+/** The most frames a payload list holds: the lockstep sends at most K = 4 segments; the rest is headroom. */
+export const MAX_PAYLOADS = 8;
+/** Room for one payload, one bit per byte (a packet carries at most 188). */
+const PAYLOAD_ROOM = 256;
 
 /** Gray map of a DQPSK bit pair (first bit, second bit) to quarter turns: 00→0, 01→1, 11→2, 10→3. */
 const GRAY = [0, 1, 3, 2];
@@ -70,9 +86,16 @@ export class Transmitter {
   private readonly fadeIn: Float64Array;
   private readonly accCur: Float64Array;
   private readonly accPrev: Float64Array;
-  /** The payload as one bit per byte, `capacity` long (zero-padded). */
-  private readonly payload = new Uint8Array(256);
-  private payloadBits = 0;
+  /** The payload list: frame i's bits one per byte from i·PAYLOAD_ROOM (zero-padded), its length and its key. */
+  private readonly payload = new Uint8Array(MAX_PAYLOADS * PAYLOAD_ROOM);
+  private readonly payloadBits = new Int32Array(MAX_PAYLOADS);
+  private readonly keys: { key: number }[] = Array.from({ length: MAX_PAYLOADS }, () => ({ key: 0 }));
+  /** The first n of `keys` for every n, made once, so the rotation rule reads exactly the list held without one being built per packet. */
+  private readonly keyLists: { key: number }[][] = Array.from({ length: MAX_PAYLOADS + 1 }, (_, n) => this.keys.slice(0, n));
+  private payloadCount = 0;
+  /** The key the last packet carried, once one has (it survives a new list). */
+  private lastKey = 0;
+  private sentKey = false;
   /** CRC registers for game frames, once the session key is set. */
   private sessionKey: number | null = null;
   // the packet on air
@@ -82,9 +105,10 @@ export class Transmitter {
   // outputs for ModemCore
   txPackets = 0;
   clips = 0;
-  /** Packet starts since the last read: frame and running packet number. */
+  /** Packet starts since the last read: frame, running packet number, and the key of the payload it carries (NaN: none). */
   readonly slotFrames = new Float64Array(64);
   readonly slotIndex = new Float64Array(64);
+  readonly slotKey = new Float64Array(64);
   slotCount = 0;
   /** The last few syncs sent (for the self-monitor), newest at (syncHead − 1) mod 8. */
   readonly syncs: SyncMark[] = Array.from({ length: 8 }, () => ({ useful: -Infinity, mode: "robust" as ModemMode }));
@@ -126,10 +150,21 @@ export class Transmitter {
     return (this.pendingBand ?? this.tb).shape.fast.capacity;
   }
 
-  setPayload(bits: Uint8Array, nbits: number): void {
-    for (let i = 0; i < nbits; i++) this.payload[i] = (bits[i >> 3]! >> (7 - (i & 7))) & 1;
-    this.payload.fill(0, nbits);
-    this.payloadBits = nbits;
+  /**
+   * The payload list from the next packet start on. ModemCore has checked it:
+   * 1 to MAX_PAYLOADS frames, keys ascending, each nbits within capacity.
+   * Copied: the caller's buffers are free once this returns.
+   */
+  setPayloads(frames: readonly OutFrame[]): void {
+    for (let f = 0; f < frames.length; f++) {
+      const { bits, nbits, key } = frames[f]!;
+      const base = f * PAYLOAD_ROOM;
+      for (let i = 0; i < nbits; i++) this.payload[base + i] = (bits[i >> 3]! >> (7 - (i & 7))) & 1;
+      this.payload.fill(0, base + nbits, base + PAYLOAD_ROOM);
+      this.payloadBits[f] = nbits;
+      this.keys[f]!.key = key;
+    }
+    this.payloadCount = frames.length;
   }
 
   setMode(mode: ModemMode): void {
@@ -233,13 +268,32 @@ export class Transmitter {
     }
   }
 
-  /** A packet starts: take the newest payload, add the CRC and tail, encode, interleave, scramble. */
+  /**
+   * A packet starts: take the next payload in key rotation from the newest
+   * list, add the CRC and tail, encode, interleave, scramble. No list yet, or
+   * a payload longer than this band carries: all zeros (a type-00 frame,
+   * which no layer above accepts), and the slot's key is NaN (none).
+   */
   private latch(index: number, f: number): void {
     const tb = this.tb;
     const sh = tb.shape[this.mode];
     const cap = sh.capacity;
     const info = this.info;
-    for (let i = 0; i < cap; i++) info[i] = i < this.payloadBits ? this.payload[i]! : 0;
+    let from = 0;
+    let nbits = 0;
+    let key = NaN;
+    if (this.payloadCount > 0) {
+      const i = nextFrameIndex(this.keyLists[this.payloadCount]!, this.sentKey ? this.lastKey : null);
+      // its turn is taken either way, so the rotation goes on past a payload that no longer fits
+      this.lastKey = this.keys[i]!.key;
+      this.sentKey = true;
+      if (this.payloadBits[i]! <= cap) {
+        from = i * PAYLOAD_ROOM;
+        nbits = this.payloadBits[i]!;
+        key = this.lastKey;
+      }
+    }
+    for (let i = 0; i < cap; i++) info[i] = i < nbits ? this.payload[from + i]! : 0;
     // a game frame (type 01) uses the session CRC once there is one
     const game = info[0] === 0 && info[1] === 1;
     const crc = crc16(info, cap, game && this.sessionKey !== null ? this.sessionKey : CRC_INIT);
@@ -254,6 +308,7 @@ export class Transmitter {
     if (this.slotCount < this.slotFrames.length) {
       this.slotFrames[this.slotCount] = f;
       this.slotIndex[this.slotCount] = this.txPackets;
+      this.slotKey[this.slotCount] = key;
       this.slotCount++;
     }
     this.txPackets++;

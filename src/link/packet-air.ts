@@ -15,7 +15,11 @@
  *  - game frames (type 01) are dropped between ends whose session keys
  *    differ, as the session CRC would drop them (session: true when both ends
  *    hold the same key; two ends with no key yet don't differ); lobby frames
- *    always pass (session: false).
+ *    always pass (session: false);
+ *  - each packet reports the SNR of its direction (setSnr changes it, each
+ *    way or one way), and an end's stats() the SNR of the newest packet it
+ *    received, as the modem reports the newest packet's. Only the number
+ *    changes: loss is set apart from it (setLoss).
  *
  * A mode change takes effect at the end's next packet (the modem waits for
  * the next superframe). A lost packet counts as rxBad at the receiving end,
@@ -52,7 +56,7 @@ export interface PacketAirOptions {
   phaseMs?: [number, number];
   /** Each end's clock reads the air's time plus this (ms): phones share no clock. Default 0. */
   clockOffsetMs?: [number, number];
-  /** The SNR each packet reports, and each end's own-signal SNR (the route check). Defaults 30 and 40 dB. */
+  /** The SNR each packet reports (both ways, until setSnr), and each end's own-signal SNR (the route check). Defaults 30 and 40 dB. */
   snrDb?: number;
   ownSnrDb?: number;
   plan?: BandPlan;
@@ -85,6 +89,8 @@ class AirEnd implements LinkTransport {
   rxOk = 0;
   rxBad = 0;
   lastRxAt: number | null = null;
+  /** The SNR the newest packet received reported. */
+  lastSnr: number | null = null;
   rxMode: ModemMode | null = null;
 
   constructor(
@@ -140,7 +146,7 @@ class AirEnd implements LinkTransport {
     const since = this.lastRxAt === null ? Infinity : this.air.now() - this.lastRxAt;
     return {
       locked: since < 2500,
-      snrDb: this.lastRxAt === null ? null : this.air.snrDb,
+      snrDb: this.lastSnr,
       rxOk: this.rxOk,
       rxBad: this.rxBad,
       txMode: this.mode,
@@ -163,7 +169,6 @@ export class PacketAir {
   readonly a: LinkTransport;
   readonly b: LinkTransport;
   readonly cap: number;
-  readonly snrDb: number;
   readonly ownSnrDb: number;
   readonly plan: BandPlan;
   private readonly ends: [AirEnd, AirEnd];
@@ -172,6 +177,8 @@ export class PacketAir {
   private readonly seed: number;
   private loss: number;
   private burst: GilbertElliott | null;
+  /** The SNR packets report per direction (0: a → b, 1: b → a). */
+  private readonly snr: [number, number];
   /** Per direction (0: a → b, 1: b → a): packets in flight, the burst state, the draw counter, outages. */
   private readonly flight: [InFlight[], InFlight[]] = [[], []];
   private readonly bad: [boolean, boolean] = [false, false];
@@ -186,7 +193,7 @@ export class PacketAir {
     this.seed = (o.seed ?? 1) >>> 0;
     this.loss = o.loss ?? 0;
     this.burst = o.burst ?? null;
-    this.snrDb = o.snrDb ?? 30;
+    this.snr = [o.snrDb ?? 30, o.snrDb ?? 30];
     this.ownSnrDb = o.ownSnrDb ?? 40;
     this.plan = o.plan ?? "high";
     const mode = o.mode ?? "robust";
@@ -205,6 +212,11 @@ export class PacketAir {
   setLoss(loss: number, burst: GilbertElliott | null = null): void {
     this.loss = loss;
     this.burst = burst;
+  }
+
+  /** The SNR packets report from now on (on arrival), both ways or one way ("ab": what `a` sends, as `b` hears it). */
+  setSnr(snrDb: number, direction: AirDirection = "both"): void {
+    for (const d of direction === "both" ? [0, 1] : direction === "ab" ? [0] : [1]) this.snr[d] = snrDb;
   }
 
   /** Lose every packet that starts in the next `ms` (a hand over a microphone, a phone call). */
@@ -273,9 +285,10 @@ export class PacketAir {
       to.rxBad++;
       return;
     }
-    to.inbox.push({ bits: p.bits.slice(), nbits: this.cap, snrDb: this.snrDb, at: to.clock(this.t), session: p.game && p.key !== null });
+    to.inbox.push({ bits: p.bits.slice(), nbits: this.cap, snrDb: this.snr[d], at: to.clock(this.t), session: p.game && p.key !== null });
     to.rxOk++;
     to.lastRxAt = this.t;
+    to.lastSnr = this.snr[d];
     to.rxMode = p.mode;
   }
 }

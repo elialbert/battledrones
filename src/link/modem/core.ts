@@ -32,9 +32,29 @@
  * until it locks it transmits in the high plan's guest band (16–19 kHz),
  * whatever plan it was given, when the rate carries it: the low plan's guest
  * band ends 25 Hz below the high host band, and its own loud signal there
- * would bury the host's sync in the very band it is searching.
+ * would bury the host's sync in the very band it is searching. Its
+ * capacity() meanwhile is the smaller of the two plans' (186 bits), not the
+ * spec's 188: a frame sized to it must still fit if detection picks the low
+ * plan.
+ *
+ * Payloads (SOUND-DUEL.md "Segments and rotation"). setPayloads() hands over
+ * a list of frames; each packet takes the next one in key rotation at its
+ * first symbol, and its slot event names the key it carried.
+ *
+ * Where the spec is silent:
+ *  - a list holds at most 8 frames (MAX_PAYLOADS; the lockstep's K is at
+ *    most 4). A list that breaks a rule (empty, too long, keys not strictly
+ *    ascending or not finite, a frame over capacity or with fewer bytes than
+ *    its nbits) throws a RangeError and leaves the old list in place;
+ *  - a packet sent before any list carries all zeros, and its slot's key is
+ *    null; so does a packet whose payload is longer than the band now on air
+ *    carries (a list set before a switch to the low plan): it is never cut
+ *    to fit, which would deliver, CRC and all, a frame nobody sent;
+ *  - the last key sent outlives a new list, a frame counter going back and a
+ *    reconfiguration: rotation follows which frame went out last, and none
+ *    of these change that.
  */
-import type { BandPlan, BandRole, ModemMode } from "../transport";
+import type { BandPlan, BandRole, ModemMode, OutFrame } from "../transport";
 import { crcKey } from "./crc";
 import { clampGain, MIN_RATE, rateProblem, timing, type Timing } from "./params";
 import { InputRing } from "./ring";
@@ -42,9 +62,10 @@ import { Receiver } from "./rx";
 import { SelfMonitor } from "./monitor";
 import { SyncSearch, type CorrBand } from "./sync";
 import { allBandTables, bandKey } from "./tables";
-import { Transmitter } from "./tx";
+import { MAX_PAYLOADS, Transmitter } from "./tx";
 
-export type { BandPlan, BandRole, ModemMode } from "../transport";
+export type { BandPlan, BandRole, ModemMode, OutFrame } from "../transport";
+export { MAX_PAYLOADS } from "./tx";
 
 export interface ModemConfig {
   sampleRate: number;
@@ -87,6 +108,16 @@ export interface ModemStats {
   inputPeak: number;
 }
 
+/** A packet start (the worklet's {t:"slot"} message). */
+export interface SlotEvent {
+  /** The frame its first symbol starts at. */
+  sample: number;
+  /** A running packet number. */
+  index: number;
+  /** The key of the payload it carries; null when there was no payload yet (it carries zeros). */
+  key: number | null;
+}
+
 /** A capture gap: once when it starts (frames 0), once with its length when input resumes. */
 export interface GapEvent {
   sample: number;
@@ -112,6 +143,8 @@ export class ModemCore {
   private readonly corrs: Record<BandPlan, Record<BandRole, CorrBand | null>>;
   private readonly single: Record<BandPlan, Record<BandRole, CorrBand[]>>;
   private readonly detectSet: CorrBand[];
+  /** capacity() while a Join detects the plan: the smallest of the plans this rate carries. */
+  private readonly detectCapacity: number;
   private pendingRx = false;
   private keys: [number, number] | null = null;
   private started = false;
@@ -130,6 +163,9 @@ export class ModemCore {
     this.cfg = { ...cfg, plan: detectPlan(cfg), gain: clampGain(cfg.gain, 1) };
     this.t = timing(cfg.sampleRate);
     const tables = allBandTables(this.t);
+    let cap = Infinity;
+    for (const b of tables.values()) cap = Math.min(cap, b.shape.fast.capacity);
+    this.detectCapacity = cap;
     this.search = new SyncSearch(this.t, tables);
     this.tx = new Transmitter(this.t, tables, this.cfg.plan, cfg.tx, this.cfg.gain, "robust");
     this.rx = new Receiver(this.t, this.ring, this.search);
@@ -265,10 +301,21 @@ export class ModemCore {
     this.applyKeys();
   }
 
-  /** The frame every packet repeats from its next start, until replaced. MSB-first, nbits ≤ capacity(). */
+  /**
+   * The frames packets carry from the next packet start on, one each in key
+   * rotation, until replaced: MSB-first, each nbits ≤ capacity(), keys
+   * strictly ascending, 1 to MAX_PAYLOADS of them. Copied; a list that breaks
+   * a rule throws a RangeError and changes nothing.
+   */
+  setPayloads(frames: readonly OutFrame[]): void {
+    const problem = payloadProblem(frames, this.capacity());
+    if (problem) throw new RangeError(problem);
+    this.tx.setPayloads(frames);
+  }
+
+  /** A list of one frame, key 0: what every packet repeats (the lobby's case, and the tests'). */
   setPayload(bits: Uint8Array, nbits: number): void {
-    if (nbits > this.capacity() || nbits < 0) throw new RangeError(`a ${nbits}-bit payload in a ${this.capacity()}-bit packet`);
-    this.tx.setPayload(bits, nbits);
+    this.setPayloads([{ bits, nbits, key: 0 }]);
   }
 
   /** The transmit mode from the next superframe. */
@@ -303,9 +350,9 @@ export class ModemCore {
     this.applyKeys();
   }
 
-  /** Payload bits per packet: constant for a plan. */
+  /** Payload bits per packet: constant for a plan; while a Join detects the plan, the smaller plan's, which fits whichever it finds. */
   capacity(): number {
-    return this.tx.capacity();
+    return this.cfg.rx === "detect" ? this.detectCapacity : this.tx.capacity();
   }
 
   /** Packets decoded since the last call. */
@@ -322,12 +369,15 @@ export class ModemCore {
     return out;
   }
 
-  /** Packet starts since the last call: the frame each packet's first symbol starts at, and a running packet number. */
-  takeSlots(): { sample: number; index: number }[] {
+  /** Packet starts since the last call: the frame each packet's first symbol starts at, a running packet number, and the key it carries. */
+  takeSlots(): SlotEvent[] {
     const tx = this.tx;
     if (tx.slotCount === 0) return NONE;
-    const out: { sample: number; index: number }[] = [];
-    for (let i = 0; i < tx.slotCount; i++) out.push({ sample: tx.slotFrames[i]!, index: tx.slotIndex[i]! });
+    const out: SlotEvent[] = [];
+    for (let i = 0; i < tx.slotCount; i++) {
+      const key = tx.slotKey[i]!;
+      out.push({ sample: tx.slotFrames[i]!, index: tx.slotIndex[i]!, key: Number.isNaN(key) ? null : key });
+    }
     tx.slotCount = 0;
     return out;
   }
@@ -367,7 +417,24 @@ export class ModemCore {
   }
 }
 
+/**
+ * What is wrong with a payload list for packets of `capacity` bits, or null:
+ * 1 to MAX_PAYLOADS frames, each 0 ≤ nbits ≤ capacity with the bytes to hold
+ * them, keys finite and strictly ascending. (WorkletTransport checks a list
+ * with it on the main thread, so a bad one throws where it was made.)
+ */
+export function payloadProblem(frames: readonly OutFrame[], capacity: number): string | null {
+  if (frames.length < 1 || frames.length > MAX_PAYLOADS) return `a list of ${frames.length} payloads (1 to ${MAX_PAYLOADS})`;
+  for (let i = 0; i < frames.length; i++) {
+    const { bits, nbits, key } = frames[i]!;
+    if (!Number.isInteger(nbits) || nbits < 0 || nbits > capacity) return `a ${nbits}-bit payload in a ${capacity}-bit packet`;
+    if (bits.length * 8 < nbits) return `a ${nbits}-bit payload in ${bits.length} bytes`;
+    if (!Number.isFinite(key) || (i > 0 && !(key > frames[i - 1]!.key))) return "payload keys must be finite and strictly ascending";
+  }
+  return null;
+}
+
 /** The plan a ModemCore starts on: a Join detecting the plan starts on the high one wherever the rate carries it (see above). */
-function detectPlan(cfg: ModemConfig): BandPlan {
+export function detectPlan(cfg: ModemConfig): BandPlan {
   return cfg.rx === "detect" && cfg.sampleRate >= MIN_RATE.high ? "high" : cfg.plan;
 }

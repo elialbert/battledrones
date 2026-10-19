@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { endOf, replay, type BattleRecord } from "../src/arena/record";
 import { parseRecord } from "../src/game/replay";
 import { PacketAir, type PacketAirOptions } from "../src/link/packet-air";
-import type { LinkTransport } from "../src/link/transport";
+import { nextFrameIndex, type LinkTransport, type OutFrame } from "../src/link/transport";
 import { createAiState, tickAi, type AiState, type StrategyName } from "../src/sim/ai/commander";
 import { worldHash } from "../src/sim/checksum";
 import { allowedOpener, pickAiOpener, type OpenerId } from "../src/sim/openers";
@@ -12,33 +12,60 @@ import { setupWorld, type MatchSetup } from "../src/sim/setup";
 import { step } from "../src/sim/sim";
 import type { Command, Faction, World } from "../src/sim/types";
 import { hqOf, spawnUnit } from "../src/sim/world";
-import { BitWriter, C_MAX, canonicalize, commandBits } from "../src/versus/codec";
+import { BitWriter, C_MAX, canonicalize, commandBits, encodeCommands } from "../src/versus/codec";
 import {
-  CHECKPOINT_EVERY, END_CHECK_MS, HEADER_MAX, Lockstep, TRAIL_START, foldTrail, readGameFrame, rxqOf, unwrap16
+  AHEAD_MAX, CHECKPOINT_EVERY, END_CHECK_MS, HEADER_MAX, Lockstep, SLACK_FRAMES, TRAIL_START, foldTrail, minCapacity, readGameFrame, rxqOf, segmentsFor,
+  unwrap16
 } from "../src/versus/lockstep";
 
 const MAP = { width: 56, height: 56 };
 
 // ------------------------------------------------------------- the wire ---
 
-/** Two Locksteps on a perfect wire: frames cross whenever exchange() runs; the clock moves with advance(). */
-function wire(o: { delay?: number; capacity?: number; setupHash?: number } = {}) {
+/** Every frame list a lockstep hands out: at most K frames, keys ascending, each frame within capacity. */
+function checkList(ls: Lockstep, frames: readonly OutFrame[]): void {
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.length).toBeLessThanOrEqual(ls.segmentsMax);
+  frames.forEach((f, i) => {
+    expect(f.nbits).toBeLessThanOrEqual(ls.capacity);
+    if (i > 0) expect(f.key).toBeGreaterThan(frames[i - 1]!.key);
+  });
+}
+
+/**
+ * Two Locksteps on a perfect wire: each exchange() is one packet each way, the frame after the last one sent in
+ * key rotation, as a transport sends them; the clock moves with advance().
+ */
+function wire(o: { delay?: number; capacity?: number; setupHash?: number; segmentsMax?: number } = {}) {
   let t = 0;
   const now = () => t;
   const mk = (local: Faction) =>
-    new Lockstep({ local, delay: o.delay ?? 4, mapWidth: MAP.width, mapHeight: MAP.height, capacity: o.capacity ?? 188, setupHash: o.setupHash ?? 0x1234, now });
+    new Lockstep({
+      local, delay: o.delay ?? 4, mapWidth: MAP.width, mapHeight: MAP.height, capacity: o.capacity ?? 188, setupHash: o.setupHash ?? 0x1234, now,
+      segmentsMax: o.segmentsMax
+    });
   const a = mk("blue");
   const b = mk("red");
   const sizes: number[] = [];
+  const lastKey = new Map<Lockstep, number | null>([[a, null], [b, null]]);
+  /** The frame `ls`'s next packet carries. */
+  const packet = (ls: Lockstep): OutFrame => {
+    const { frames } = ls.frames();
+    checkList(ls, frames);
+    const f = frames[nextFrameIndex(frames, lastKey.get(ls)!)]!;
+    lastKey.set(ls, f.key);
+    return f;
+  };
   const exchange = (dir: "both" | "ab" | "ba" = "both") => {
-    const fa = a.frame();
-    const fb = b.frame();
+    const fa = packet(a);
+    const fb = packet(b);
     sizes.push(fa.nbits, fb.nbits);
     if (dir !== "ba") b.receive(fa.bits, fa.nbits, t);
     if (dir !== "ab") a.receive(fb.bits, fb.nbits, t);
   };
-  return { a, b, exchange, sizes, advance: (ms: number) => void (t += ms), now };
+  return { a, b, exchange, packet, sizes, advance: (ms: number) => void (t += ms), now };
 }
+
 
 /** Step a lockstep's tick if it can, folding a stand-in world hash; returns the commands or null. */
 function tryStep(ls: Lockstep, drain: () => Command[] = () => [], hash = (t: number) => hash32(t, 77), decided: (t: number) => boolean = () => false) {
@@ -48,8 +75,8 @@ function tryStep(ls: Lockstep, drain: () => Command[] = () => [], hash = (t: num
   return cmds;
 }
 
-/** A hand-built game frame header, for the rejection cases. */
-function rawFrame(f: { type?: number; to: number; span?: number; tickLag?: number; ack?: number; nonEmpty?: number }) {
+/** A hand-built game frame, for the rejection and out-of-order cases: `turns` are absolute and ascending. */
+function rawFrame(f: { type?: number; to: number; span?: number; tickLag?: number; ack?: number; nonEmpty?: number; turns?: [number, Command[]][] }) {
   const wr = new BitWriter();
   wr.bits(f.type ?? 1, 2);
   wr.bits(0, 1 + 2 + 3);
@@ -57,7 +84,15 @@ function rawFrame(f: { type?: number; to: number; span?: number; tickLag?: numbe
   wr.ue(f.span ?? 0);
   wr.se(f.tickLag ?? 0);
   wr.se(f.ack ?? 0);
-  wr.ue(f.nonEmpty ?? 0);
+  const turns = f.turns ?? [];
+  wr.ue(f.nonEmpty ?? turns.length);
+  let next = f.to - (f.span ?? 0);
+  for (const [turn, cmds] of turns) {
+    wr.ue(turn - next);
+    wr.ue(cmds.length - 1);
+    encodeCommands(wr, cmds, MAP);
+    next = turn + 1;
+  }
   wr.bit(0);
   return { bits: wr.bytes(), nbits: wr.nbits };
 }
@@ -68,11 +103,15 @@ describe("lockstep turns and frames", () => {
     const s = a.status();
     expect([s.tick, s.newestSealed, s.ackThrough, s.peerAck, s.slack]).toEqual([0, 4, 4, 4, 4]);
     expect(a.trail()).toBe(foldTrail(TRAIL_START, 0x1234));
-    const f = a.frame();
+    const l = a.frames();
+    expect(l.frames.length).toBe(1);
+    const f = l.frames[0]!;
+    expect(f.key).toBe(4);
     expect(f.nbits).toBeLessThanOrEqual(HEADER_MAX);
     const g = readGameFrame(f.bits, f.nbits, MAP, "blue", 4);
     expect(g).toMatchObject({ from: 4, to: 4, tickLag: 4, ack: 0, turns: [], end: "playing", paused: false, checkpoint: null });
-    expect(a.frame().version).toBe(f.version); // (unchanged: no rebuild)
+    expect(a.frames().version).toBe(l.version); // (unchanged: no rebuild)
+    expect([a.segmentsMax, segmentsFor(3), segmentsFor(4), segmentsFor(5), segmentsFor(6), segmentsFor(8)]).toEqual([3, 1, 2, 3, 4, 4]);
   });
 
   it("seals once per tick, and stalls at tick D without the peer", () => {
@@ -148,6 +187,10 @@ describe("lockstep turns and frames", () => {
       expect(cmds.reduce((n, c) => n + commandBits(c, MAP), 0)).toBeLessThanOrEqual(a.turnMax);
     }
     expect(got.flatMap(([, , cmds]) => cmds)).toEqual(want);
+    // (frames take turns in rotation, so the two may stop a tick or two apart: bring both to the same tick)
+    for (let i = 0; i < 6; i++) exchange();
+    while (a.status().tick < b.status().tick) tryStep(a);
+    while (b.status().tick < a.status().tick) tryStep(b);
     expect(a.trail()).toBe(b.trail());
   });
 
@@ -189,8 +232,7 @@ describe("lockstep turns and frames", () => {
     for (let t = 0; t < 600; t++) {
       tryStep(a, () => (t % 7 === 0 ? [{ type: "attackMove", faction: "blue", unitIds: [t, t + 2], x: t % 50, y: 3 }] : []));
       tryStep(b, () => (t % 5 === 0 ? [{ type: "produce", faction: "red", buildingId: t, unit: "wasp" }] : []));
-      const fb = b.frame();
-      old.push(fb);
+      old.push(...b.frames().frames);
       // a hears b's frames late, twice, and now and then one from the past
       if (rnd() < 0.7) {
         const f = old[Math.max(0, old.length - 1 - Math.floor(rnd() * 4))]!;
@@ -201,7 +243,8 @@ describe("lockstep turns and frames", () => {
         const f = old[Math.floor(rnd() * old.length)]!;
         a.receive(f.bits, f.nbits, t * 100);
       }
-      const fa = a.frame();
+      const la = a.frames().frames;
+      const fa = la[Math.floor(rnd() * la.length)]!;
       if (rnd() < 0.7) b.receive(fa.bits, fa.nbits, t * 100);
       advance(100);
     }
@@ -230,8 +273,7 @@ describe("lockstep turns and frames", () => {
     }
     expect(drained).toBe(0);
     expect(a.status().newestSealed).toBe(sealed);
-    const f = a.frame();
-    expect(readGameFrame(f.bits, f.nbits, MAP, "blue", sealed).paused).toBe(true);
+    for (const f of a.frames().frames) expect(readGameFrame(f.bits, f.nbits, MAP, "blue", sealed).paused).toBe(true);
     const sb = b.status();
     expect(sb).toMatchObject({ stalled: true, peerPaused: true });
     expect(sb.tick - a.status().tick).toBeLessThanOrEqual(4 + 1);
@@ -339,11 +381,13 @@ describe("lockstep turns and frames", () => {
           if (before === fullTurn - 4) filled = 15 - a.status().queued;
           tryStep(b, undefined, undefined, (t) => !oneSided && t === T);
           if (a.status().decided && a.status().end === "decided") {
-            const f = a.frame();
-            const g = readGameFrame(f.bits, f.nbits, MAP, "blue", a.status().newestSealed);
-            if (g.end === "playing") endless++;
+            const list = a.frames().frames;
+            const g = list.map((f) => readGameFrame(f.bits, f.nbits, MAP, "blue", a.status().newestSealed));
+            // (the report rides in the newest segment's frame alone)
+            if (g.at(-1)!.end === "playing") endless++;
+            for (const h of g.slice(0, -1)) expect(h.end).toBe("playing");
             // (past the decision every turn is described as empty)
-            for (const [turn] of g.turns) expect(turn).toBeLessThanOrEqual(T);
+            for (const h of g) for (const [turn] of h.turns) expect(turn).toBeLessThanOrEqual(T);
           }
           exchange();
           advance(100);
@@ -505,6 +549,457 @@ describe("lockstep turns and frames", () => {
   });
 });
 
+// ------------------------------------------------------ segments, rotation ---
+
+describe("segments and rotation", () => {
+  /** A 30-unit move: three pieces of 93–95 bits, one turn each. */
+  const order: Command = { type: "move", faction: "blue", unitIds: Array.from({ length: 30 }, (_, i) => 200 + 5 * i), x: 20.2, y: 30.3 };
+  const pieces = canonicalize(order, { local: "blue", ...MAP });
+
+  /** `ls`'s frames as read back: key, from, to, and the turns with commands. */
+  const read = (ls: Lockstep) =>
+    ls.frames().frames.map((f) => {
+      const g = readGameFrame(f.bits, f.nbits, MAP, ls.local, ls.status().newestSealed);
+      return { key: f.key, from: g.from, to: g.to, turns: g.turns.map(([t]) => t) };
+    });
+
+  /** A frame from the peer that only says it holds `ls`'s turns through `upTo`, and that its slack is `slack`. */
+  const ackTo = (ls: Lockstep, upTo: number, slack = 3, at = 0) => {
+    const to = ls.status().ackThrough;
+    const f = rawFrame({ to, ack: upTo - to, tickLag: slack - (upTo - to) });
+    expect(ls.receive(f.bits, f.nbits, at)).toBe("game");
+  };
+
+  /** Both phones idle on the wire, a packet each way every tick: everything acknowledged, each with slack D − 1 to spare. */
+  const idle = (w: ReturnType<typeof wire>) => {
+    for (let i = 0; i < 20; i++) {
+      tryStep(w.a);
+      tryStep(w.b);
+      w.exchange();
+      w.advance(100);
+    }
+  };
+
+  it("cuts a burst into segments as it seals it; acks only trim the oldest or drop whole segments", () => {
+    expect(pieces.map((c) => commandBits(c, MAP))).toEqual([93, 93, 95]);
+    const w = wire({ delay: 5 });
+    idle(w);
+    const { a } = w;
+    expect(a.frames().frames.length).toBe(1);
+    const k0 = a.frames().frames[0]!.key;
+    // the peer goes quiet for a moment: a seals one piece a turn, each piece too big to share a frame
+    const t0 = a.status().tick;
+    const T = t0 + 5;
+    tryStep(a, () => [order]);
+    tryStep(a);
+    tryStep(a);
+    const from = a.status().peerAck + 1;
+    expect(from).toBeLessThanOrEqual(T);
+    expect(read(a)).toEqual([
+      { key: k0, from, to: T, turns: [T] },
+      { key: T + 1, from: T + 1, to: T + 1, turns: [T + 1] },
+      { key: T + 2, from: T + 2, to: T + 2, turns: [T + 2] }
+    ]);
+    expect(a.status()).toMatchObject({ segments: 3, queued: 0 });
+    // a newer turn joins the newest segment: no boundary moves
+    tryStep(a);
+    expect(read(a).map((f) => [f.key, f.from, f.to])).toEqual([[k0, from, T], [T + 1, T + 1, T + 1], [T + 2, T + 2, T + 3]]);
+    // acks trim the oldest segment's from, then drop whole segments; keys stay where the segments were cut
+    ackTo(a, T - 1);
+    expect(read(a).map((f) => [f.key, f.from, f.to])).toEqual([[k0, T, T], [T + 1, T + 1, T + 1], [T + 2, T + 2, T + 3]]);
+    ackTo(a, T);
+    expect(read(a).map((f) => [f.key, f.from, f.to])).toEqual([[T + 1, T + 1, T + 1], [T + 2, T + 2, T + 3]]);
+    ackTo(a, T + 2);
+    expect(read(a).map((f) => [f.key, f.from, f.to])).toEqual([[T + 2, T + 3, T + 3]]);
+    // (all held: the newest turn alone, as before segments)
+    ackTo(a, T + 3);
+    expect(read(a).map((f) => [f.key, f.from, f.to])).toEqual([[T + 2, T + 3, T + 3]]);
+    expect(a.status().segments).toBe(1);
+  });
+
+  /** Another 30-unit move, of other units: with `order`, a burst of six pieces. */
+  const other: Command = { ...order, unitIds: order.type === "move" ? order.unitIds.map((id) => id + 1000) : [] };
+  /** `ls` drains the burst of six pieces and seals it over four ticks without hearing back: the segments it cuts. */
+  const cut = (ls: Lockstep) => {
+    for (let i = 0; i < 4; i++) tryStep(ls, () => (i ? [] : [order, other]));
+    return ls.status().segments;
+  };
+
+  it("affords another segment only while the peer's slack covers one more packet of rotation", () => {
+    /** The segments a burst of six pieces spreads over when the peer's newest frames say `slack`, arriving `every` ms apart. */
+    const burst = (slack: number, every: number) => {
+      const w = wire({ delay: 6 }); // (K = 4)
+      idle(w);
+      for (let i = 0; i < SLACK_FRAMES; i++) {
+        w.advance(every);
+        ackTo(w.a, w.a.status().peerAck, slack, w.now());
+      }
+      return cut(w.a);
+    };
+    // a packet a tick (fast): one more segment per tick of slack beyond the one kept in hand
+    expect([4, 3, 2, 1, 0].map((slack) => burst(slack, 100))).toEqual([4, 3, 2, 1, 1]);
+    // a packet every two ticks (robust): one per two
+    expect([5, 4, 3, 2].map((slack) => burst(slack, 200))).toEqual([3, 2, 2, 1]);
+  });
+
+  it("reads the peer's slack off a full window only, which a pause on either phone or a stall here starts over", () => {
+    /** Both phones step and exchange a packet each way, `n` times. */
+    const play = (w: ReturnType<typeof wire>, n: number) => {
+      for (let i = 0; i < n; i++) {
+        tryStep(w.a);
+        tryStep(w.b);
+        w.exchange();
+        w.advance(100);
+      }
+    };
+    // the peer's first frames say slack D − 1 (both phones hold turns 0 … D − 1 from the start), more than latency
+    // leaves it: read off two of them, the gate opened at once, and the opening seconds stalled (robust, 500 ms, D = 7:
+    // 256 and 48 ms against K = 1's 48 and 0)
+    let w = wire({ delay: 6 });
+    play(w, SLACK_FRAMES - 1);
+    expect(cut(w.a)).toBe(1);
+    w = wire({ delay: 6 });
+    play(w, SLACK_FRAMES);
+    expect(cut(w.a)).toBe(4); // (on the wire the peer's slack really is D − 1)
+    // a paused peer's slack only grows until this phone stalls, and stays high for seconds after it plays on: a frame
+    // that says paused starts the window over
+    w = wire({ delay: 6 });
+    play(w, 20);
+    w.b.setPaused(true);
+    w.exchange();
+    w.b.setPaused(false);
+    play(w, SLACK_FRAMES - 1);
+    expect(cut(w.a)).toBe(1);
+    // so does a pause here: the peer runs on until it stalls, then catches up
+    w = wire({ delay: 6 });
+    play(w, 20);
+    w.a.setPaused(true);
+    w.a.setPaused(false);
+    play(w, SLACK_FRAMES - 1);
+    expect(cut(w.a)).toBe(1);
+    // and a stall here: the peer is behind meanwhile, holding more of this phone's turns than it will keep
+    w = wire({ delay: 6 });
+    play(w, 20);
+    while (tryStep(w.a));
+    expect(w.a.status().stalled).toBe(true);
+    play(w, SLACK_FRAMES - 1);
+    expect(w.b.status().slack).toBeGreaterThan(6); // (b is behind: it holds more of a's turns than the D − 1 it did)
+    expect(cut(w.a)).toBe(1);
+  });
+
+  it("starts no new segment for the rest of the match once the peer stalls during a rotation", () => {
+    const run = (stall: boolean) => {
+      const w = wire({ delay: 6 });
+      idle(w);
+      expect(cut(w.a)).toBe(4);
+      // the peer says it is stalled on one of a's turns: in rotation a lost packet costs the newest turns a whole
+      // rotation, and the gate can't see loss coming
+      if (stall) {
+        w.advance(100);
+        ackTo(w.a, w.a.status().peerAck, -1, w.now());
+      }
+      // everything acknowledged and the slack back where it was, a minute later (b first catches up the four ticks)
+      for (let i = 0; i < 4; i++) {
+        tryStep(w.b);
+        w.exchange();
+        w.advance(100);
+      }
+      expect(w.b.status().stalled).toBe(false);
+      for (let i = 0; i < 600; i++) {
+        tryStep(w.a);
+        tryStep(w.b);
+        w.exchange();
+        w.advance(100);
+      }
+      expect(w.a.status()).toMatchObject({ queued: 0, segments: 1 });
+      return cut(w.a);
+    };
+    expect(run(false)).toBe(4);
+    expect(run(true)).toBe(1);
+  });
+
+  it("sends the oldest segment alone in every packet once the peer has starved for it longer than a rotation and a round trip", () => {
+    const w = wire({ delay: 6 });
+    idle(w);
+    const { a } = w;
+    expect(cut(a)).toBe(4);
+    const keys = a.frames().frames.map((f) => f.key);
+    // the peer takes one more turn, then says it is stalled on the next, which the oldest segment carries, and takes
+    // nothing more (a periodic loss can take the oldest segment's frame every time round: the rotation is periodic)
+    const held = a.status().peerAck + 1;
+    expect(held).toBeLessThan(keys[1]!);
+    w.advance(100);
+    ackTo(a, held, -1, w.now());
+    const since = w.now();
+    // four segments, a packet every 100 ms: (4 + 1) packets and 2D ticks
+    const starve = (4 + 1) * 100 + 2 * 6 * 100;
+    while (w.now() - since < starve) {
+      expect(a.frames().frames.map((f) => f.key), `${w.now() - since} ms`).toEqual(keys);
+      w.advance(100);
+      ackTo(a, held, -1, w.now());
+    }
+    const alone = a.frames().frames;
+    expect(alone.map((f) => f.key)).toEqual([keys[0]]);
+    expect(readGameFrame(alone[0]!.bits, alone[0]!.nbits, MAP, "blue", a.status().newestSealed)).toMatchObject({ from: held + 1, to: keys[1]! - 1 });
+    // until the peer holds it: then the rest go round again
+    ackTo(a, keys[1]! - 1, 0, w.now());
+    expect(a.frames().frames.map((f) => f.key)).toEqual(keys.slice(1));
+  });
+
+  it("needs the capacity a lone largest command takes at its input delay, and always gets one through with it", () => {
+    // the window always holds the empty turns latency leaves unacknowledged, so a lone 96-bit command joins the newest
+    // segment, with its gap and the span at their bound 2D + 1 (at D = 8 and 176 bits it waited for ever)
+    expect([3, 4, 5, 6, 7, 8].map(minCapacity)).toEqual([175, 175, 177, 177, 183, 183]);
+    const lone: Command = { type: "attackMove", faction: "blue", unitIds: [100, 164, 228, 292, 356], x: 20.2, y: 30.3 };
+    const [piece] = canonicalize(lone, { local: "blue", ...MAP });
+    expect(commandBits(piece!, MAP)).toBe(C_MAX);
+    for (let delay = 3; delay <= 8; delay++) {
+      const make = (capacity: number) => () =>
+        new Lockstep({ local: "blue", delay, mapWidth: MAP.width, mapHeight: MAP.height, capacity, setupHash: 1, now: () => 0 });
+      expect(make(minCapacity(delay) - 1), `D ${delay}`).toThrow(RangeError);
+      expect(make(minCapacity(delay)), `D ${delay}`).not.toThrow();
+      // over the air at the longest latency the pairing picks this D for, K = 1
+      const { a, b, run } = overAir({ delay, segmentsMax: 1, air: { latencyMs: 100 * delay - 150, capacity: minCapacity(delay) } });
+      run(6_000);
+      a.orders.push(lone);
+      run(5_000, () => b.ls.turns().some(([, side]) => side === "blue"));
+      expect(b.ls.turns().filter(([, side]) => side === "blue").map(([, , c]) => c), `D ${delay}`).toEqual([[piece]]);
+    }
+  });
+
+  /**
+   * Two Locksteps over PacketAir with no worlds (stand-in hashes), each stepping a tick per 100 ms of air time as
+   * GameScene would (the speed trim, no catch-up after a stall). Each end drains what is pushed onto its `orders`
+   * and what `drain` gives for the tick; `every` runs before each 10 ms of air. `longest`: the longest an end waited
+   * for a new peer turn; `frames`: the most frames it handed over at once.
+   */
+  const overAir = (o: {
+    delay: number; segmentsMax?: number; air?: PacketAirOptions; drain?: (side: Faction, tick: number) => Command[]; every?: (air: PacketAir) => void;
+  }) => {
+    const air = new PacketAir({ seed: 21, mode: "fast", ...o.air });
+    const end = (local: Faction, link: LinkTransport) => ({
+      ls: new Lockstep({ local, delay: o.delay, mapWidth: MAP.width, mapHeight: MAP.height, capacity: link.capacity(), setupHash: 1, now: () => link.now(), segmentsMax: o.segmentsMax }),
+      link, acc: 0, sent: 0, orders: [] as Command[], longest: 0, frames: 0
+    });
+    const [a, b] = [end("blue", air.a), end("red", air.b)];
+    const run = (ms: number, done: () => boolean = () => false) => {
+      for (let t = 0; t < ms && !done(); t += 10) {
+        o.every?.(air);
+        air.advance(10);
+        for (const e of [a, b]) {
+          for (const p of e.link.poll()) e.ls.receive(p.bits, p.nbits, p.at);
+          e.acc += 10 * e.ls.speed();
+          while (e.acc >= 100) {
+            const tick = e.ls.status().tick;
+            if (!e.ls.commandsFor(tick, () => [...e.orders.splice(0), ...(o.drain?.(e.ls.local, tick) ?? [])])) {
+              e.acc = 99.9;
+              break;
+            }
+            e.ls.afterStep(tick, hash32(tick, 77), null);
+            e.acc -= 100;
+          }
+          const s = e.ls.status();
+          if (s.stalled) e.longest = Math.max(e.longest, e.link.now() - s.lastNewTurnAt);
+          const f = e.ls.frames();
+          if (f.version !== e.sent) {
+            checkList(e.ls, f.frames);
+            e.link.send(f.frames);
+            e.sent = f.version;
+            e.frames = Math.max(e.frames, f.frames.length);
+          }
+        }
+      }
+    };
+    return { air, a, b, run };
+  };
+
+  /** From an idle window, blue drains the 30-unit order: the ticks from then until red holds every piece, and the most segments blue had. */
+  const landing = (o: { delay: number; segmentsMax?: number; air?: PacketAirOptions }) => {
+    const { air, a, b, run } = overAir(o);
+    run(6_000);
+    const before = a.ls.status().newestSealed;
+    const t0 = air.now();
+    a.orders.push(order);
+    let last = -1;
+    let most = 1;
+    run(20_000, () => {
+      const s = a.ls.status();
+      most = Math.max(most, s.segments);
+      if (last < 0 && s.newestSealed > before && s.queued === 0) last = s.newestSealed; // (the turn the last piece went in)
+      return last >= 0 && b.ls.status().ackThrough >= last;
+    });
+    const ticks = (air.now() - t0) / 100;
+    run(1_000);
+    expect(b.ls.turns().filter(([, side]) => side === "blue").flatMap(([, , c]) => c)).toEqual(pieces);
+    return { ticks, most, stalls: [a.ls.status().stallMs, b.ls.status().stallMs] };
+  };
+
+  it("lands a 30-unit order from an idle window within about one rotation, where the slack affords it", () => {
+    // [delay, latency, mode] → ticks from the drain until the peer holds all three pieces, and the most segments
+    const got = ([[7, 250, "fast"], [6, 250, "fast"], [5, 150, "fast"], [5, 250, "fast"], [7, 250, "robust"], [5, 150, "robust"]] as const).map(
+      ([delay, latencyMs, mode]) => ({
+        k: landing({ delay, air: { latencyMs, mode } }),
+        one: landing({ delay, air: { latencyMs, mode }, segmentsMax: 1 }),
+        latencyMs
+      })
+    );
+    const [d7, d6, l150, tight, d7Robust, l150Robust] = got;
+    // three segments afforded: the pieces go out in the turns after the drain, one rotation apart at most
+    expect(d7!.k.most).toBe(3);
+    expect(d7!.k.ticks).toBeLessThanOrEqual(1 + 2 + 250 / 100 + 3);
+    // with K = 1 the second and third pieces wait a round trip each
+    expect(d7!.one.ticks).toBeGreaterThanOrEqual(d7!.k.ticks + 8);
+    // less slack, fewer segments: still sooner than K = 1
+    for (const r of [d6!, l150!, d7Robust!]) {
+      expect(r.k.most).toBe(2);
+      expect(r.k.ticks).toBeLessThan(r.one.ticks - 3);
+    }
+    // no slack to spare (D = 5 at 250 ms, and robust at 150 ms): the gate keeps one segment, exactly as K = 1
+    for (const r of [tight!, l150Robust!]) expect(r.k).toEqual(r.one);
+    // and the peer never stalled for it
+    for (const r of got) expect([...r.k.stalls, ...r.one.stalls]).toEqual([0, 0, 0, 0]);
+  });
+
+  it("with K = 1 the same burst waits for acks, a piece a round trip", () => {
+    const w = wire({ delay: 5, segmentsMax: 1 });
+    idle(w);
+    const { a } = w;
+    tryStep(a, () => [order]);
+    tryStep(a);
+    tryStep(a);
+    expect(a.frames().frames.length).toBe(1);
+    expect(a.status().queued).toBe(2);
+  });
+
+  it("gets a segment through a loss as periodic as the rotation", { timeout: 60_000 }, () => {
+    // from 6 s on, every second packet blue sends is lost (an interferer at 5 Hz), and blue moves 30 units every 2 s:
+    // with two segments in the rotation the same one rode every lost packet, and both phones waited for ever (at
+    // about tick 110 of 1200). The peer starving for it sends it alone, and the peer's stall ends rotation for the match.
+    const move = (t: number): Command => ({ ...order, x: 5 + (t % 40) } as Command);
+    const losing = (segmentsMax?: number) => {
+      const r = overAir({
+        delay: 7, segmentsMax, air: { latencyMs: 250, phaseMs: [5, 55] },
+        drain: (side, t) => (side === "blue" && t >= 100 && t % 20 === 0 ? [move(t)] : []),
+        every: (air) => {
+          if (air.now() >= 6_000 && air.now() % 200 === 0) air.outage(10, "ab"); // (blue's packets start at 5 + 100k ms)
+        }
+      });
+      r.run(120_000);
+      return r;
+    };
+    const k = losing();
+    expect(k.a.frames).toBe(2);
+    for (const e of [k.a, k.b]) expect(e.ls.status().tick).toBeGreaterThanOrEqual(1190);
+    expect(k.b.longest).toBeLessThan(3_000);
+    expect(k.a.ls.status().stallMs + k.b.ls.status().stallMs).toBeLessThan(5_000);
+    // (K = 1 carries everything in every packet: half of them is plenty)
+    const one = losing(1);
+    expect([one.a.ls.status().stallMs, one.b.ls.status().stallMs]).toEqual([0, 0]);
+  });
+
+  it("keeps a segment that arrives before the one it follows: a lost packet costs one rotation", () => {
+    const w = wire({ delay: 5 });
+    idle(w);
+    const { a, b, packet } = w;
+    const T = a.status().tick + 5;
+    const held = b.status().ackThrough;
+    expect(held).toBe(T - 1);
+    // one packet a tick, and the one carrying piece 1 (turn T) is lost
+    tryStep(a, () => [order]);
+    const lost = packet(a);
+    tryStep(a);
+    const p2 = packet(a);
+    expect(b.receive(p2.bits, p2.nbits, 0)).toBe("game");
+    expect(b.status().ackThrough).toBe(held); // (turn T is missing: T + 1 waits)
+    tryStep(a);
+    const p3 = packet(a);
+    b.receive(p3.bits, p3.nbits, 0);
+    expect([p2.key, p3.key]).toEqual([T + 1, T + 2]);
+    expect(b.status().ackThrough).toBe(held);
+    // the rotation comes back round to the lost segment, and everything after it is already held
+    const p4 = packet(a);
+    expect(p4.key).toBe(lost.key);
+    b.receive(p4.bits, p4.nbits, 0);
+    expect(b.status()).toMatchObject({ ackThrough: T + 2, framesBad: 0 });
+    // a stale copy changes nothing: each turn is taken once
+    b.receive(p2.bits, p2.nbits, 0);
+    expect(b.status().ackThrough).toBe(T + 2);
+    while (b.status().tick <= T + 2) tryStep(b);
+    expect(b.turns().filter(([, side]) => side === "blue")).toEqual(pieces.map((c, i) => [T + i, "blue", [c]]));
+  });
+
+  it("takes turns from a frame up to 128 turns past ackThrough, each turn once", () => {
+    const { a } = wire({ delay: 4 });
+    const stop = (id: number): Command => ({ type: "stop", faction: "red", unitIds: [id] });
+    expect(a.status().ackThrough).toBe(3);
+    // turns 6–9 arrive before 4–5: held, but ackThrough waits for the gap
+    let f = rawFrame({ to: 9, span: 3, turns: [[7, [stop(5)]]] });
+    expect(a.receive(f.bits, f.nbits, 100)).toBe("game");
+    expect(a.status()).toMatchObject({ ackThrough: 3, lastNewTurnAt: 0 });
+    f = rawFrame({ to: 5, span: 1 });
+    a.receive(f.bits, f.nbits, 200);
+    expect(a.status()).toMatchObject({ ackThrough: 9, lastNewTurnAt: 200 });
+    // a different turn 7 later on is ignored: the first one stands
+    f = rawFrame({ to: 8, span: 1, turns: [[7, [stop(6)]]] });
+    a.receive(f.bits, f.nbits, 300);
+    const stepped: Command[][] = [];
+    for (let t = 0; t <= 9; t++) stepped.push(tryStep(a)!);
+    expect(stepped[7]).toEqual([stop(5)]);
+    expect(stepped.filter((c, t) => t !== 7 && c.length)).toEqual([]);
+    // 128 turns past ackThrough is the furthest a frame's turns are taken from
+    const base = a.status().ackThrough;
+    for (const [to, span] of [[base + AHEAD_MAX + 1, 0], [base + AHEAD_MAX, 0], [base + 64, 63], [base + AHEAD_MAX - 1, AHEAD_MAX - 66]] as const) {
+      f = rawFrame({ to, span });
+      expect(a.receive(f.bits, f.nbits, 400)).toBe("game");
+    }
+    expect(a.status().ackThrough).toBe(base + AHEAD_MAX); // (not + 129: that frame was beyond reach)
+    f = rawFrame({ to: base + AHEAD_MAX + 1, span: 0 });
+    a.receive(f.bits, f.nbits, 500);
+    expect(a.status().ackThrough).toBe(base + AHEAD_MAX + 1); // (in reach now)
+  });
+
+  it("hands out lists that ascend by key, each frame within capacity, through random orders, loss and delays", () => {
+    let seed = 99;
+    const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296;
+    const randomOrder = (side: Faction): Command => {
+      const n = 1 + Math.floor(rnd() * 40);
+      const spacing = 1 + Math.floor(rnd() * 60);
+      const unitIds = Array.from({ length: n }, (_, i) => 50 + i * spacing + Math.floor(rnd() * spacing));
+      const r = rnd();
+      if (r < 0.4) return { type: "move", faction: side, unitIds, x: rnd() * 56, y: rnd() * 56 };
+      if (r < 0.6) return { type: "attack", faction: side, unitIds, targetId: Math.floor(rnd() * 5000) };
+      if (r < 0.8) return { type: "produce", faction: side, buildingId: Math.floor(rnd() * 3000), unit: "scout" };
+      return { type: "stop", faction: side, unitIds };
+    };
+    for (const [delay, capacity] of [[3, 188], [4, 186], [5, 188], [6, minCapacity(6)], [8, minCapacity(8)], [8, 188]] as [number, number][]) {
+      const w = wire({ delay, capacity });
+      let most = 0;
+      for (let t = 0; t < 400; t++) {
+        tryStep(w.a, () => (rnd() < 0.2 ? Array.from({ length: 1 + Math.floor(rnd() * 3) }, () => randomOrder("blue")) : []));
+        tryStep(w.b, () => (rnd() < 0.2 ? [randomOrder("red")] : []));
+        most = Math.max(most, w.a.status().segments);
+        // a packet each way most ticks, some of them lost (packet() checks every list it takes from)
+        if (rnd() < 0.8) {
+          const f = w.packet(w.a);
+          if (rnd() < 0.8) w.b.receive(f.bits, f.nbits, t * 100);
+        }
+        if (rnd() < 0.8) {
+          const f = w.packet(w.b);
+          if (rnd() < 0.8) w.a.receive(f.bits, f.nbits, t * 100);
+        }
+        w.advance(100);
+      }
+      const n = Math.min(w.a.status().tick, w.b.status().tick);
+      expect(n, `D ${delay}`).toBeGreaterThan(150);
+      // (as many as the slack gate afforded: rotation came into play whenever K allowed it)
+      expect(most, `D ${delay}`).toBeLessThanOrEqual(w.a.segmentsMax);
+      if (delay > 3) expect(most, `D ${delay}`).toBeGreaterThan(1);
+      const upTo = (ls: Lockstep) => ls.turns().filter(([t]) => t < n);
+      expect(upTo(w.a), `D ${delay}`).toEqual(upTo(w.b));
+    }
+  });
+});
+
 // ------------------------------------------------------------- PacketAir ---
 
 /** A 10-bit frame: type then a byte. */
@@ -515,14 +1010,16 @@ const tiny = (type: number, v: number) => {
   return wr;
 };
 const byteOf = (p: { bits: Uint8Array }) => ((p.bits[0]! << 2) | (p.bits[1]! >> 6)) & 0xff;
+/** A list of one frame for send(). */
+const one = (wr: BitWriter, key = 0): OutFrame => ({ bits: wr.bytes(), nbits: wr.nbits, key });
 
 describe("PacketAir", () => {
   it("sends the newest payload every period at each end's own phase, and delivers it after the latency", () => {
     const air = new PacketAir({ mode: "fast", phaseMs: [10, 60], clockOffsetMs: [0, 5000] });
     expect([air.a.capacity(), air.b.capacity()]).toEqual([188, 188]);
-    air.a.send(tiny(2, 1).bytes(), 10);
+    air.a.send([one(tiny(2, 1))]);
     air.advance(95);
-    air.a.send(tiny(2, 2).bytes(), 10); // (latched by the next packet, at 110)
+    air.a.send([one(tiny(2, 2))]); // (latched by the next packet, at 110)
     air.advance(400);
     expect(air.a.slots()).toEqual([10, 110, 210, 310, 410]);
     expect(air.b.slots()).toEqual([5060, 5160, 5260, 5360, 5460]); // (on b's own clock)
@@ -536,7 +1033,7 @@ describe("PacketAir", () => {
       expect([...p.bits.slice(2)].every((b) => b === 0)).toBe(true);
     }
     expect(air.a.poll()).toEqual([]); // (b never sent anything)
-    expect(() => air.a.send(new Uint8Array(30), 189)).toThrow(RangeError);
+    expect(() => air.a.send([{ bits: new Uint8Array(30), nbits: 189, key: 0 }])).toThrow(RangeError);
     // a mode change takes effect at the next packet
     air.a.setMode("robust");
     air.advance(1000);
@@ -545,13 +1042,26 @@ describe("PacketAir", () => {
     expect(air.b.stats()).toMatchObject({ rxMode: "robust", rxOk: 9, rxBad: 0, locked: true }); // (the starts up to 1245 have arrived)
   });
 
+  it("sends one frame a packet in key rotation, and keeps its place when the list is replaced", () => {
+    const air = new PacketAir({ mode: "fast", latencyMs: 0, phaseMs: [0, 50] });
+    air.a.send([one(tiny(2, 1), 2), one(tiny(2, 5), 5), one(tiny(2, 9), 9)]);
+    air.advance(350); // (packets at 0, 100, 200 and 300)
+    expect(air.b.poll().map(byteOf)).toEqual([1, 5, 9, 1]);
+    // after a packet with key 2, the next carries the first key past 2
+    air.a.send([one(tiny(2, 5), 5), one(tiny(2, 12), 12)]);
+    air.advance(300);
+    expect(air.b.poll().map(byteOf)).toEqual([5, 12, 5]);
+    expect(() => air.a.send([one(tiny(2, 1), 3), one(tiny(2, 2), 3)])).toThrow(RangeError);
+    expect(() => air.a.send([])).toThrow(RangeError);
+  });
+
   it("drops game frames between ends whose session keys differ", () => {
     const deliver = (ka: [number, number] | null, kb: [number, number] | null) => {
       const air = new PacketAir({ mode: "fast", latencyMs: 0 });
       if (ka) air.a.setSessionKey(...ka);
       if (kb) air.b.setSessionKey(...kb);
-      air.a.send(tiny(1, 9).bytes(), 10); // a game frame
-      air.b.send(tiny(2, 9).bytes(), 10); // a lobby frame
+      air.a.send([one(tiny(1, 9))]); // a game frame
+      air.b.send([one(tiny(2, 9))]); // a lobby frame
       air.advance(1000);
       return [air.b.poll().map((p) => p.session), air.a.poll().map((p) => p.session)];
     };
@@ -565,7 +1075,7 @@ describe("PacketAir", () => {
   it("loses packets as seeded: Bernoulli, bursts and outages", () => {
     const losses = (o: PacketAirOptions, ms = 200_000) => {
       const air = new PacketAir({ mode: "fast", latencyMs: 0, phaseMs: [0, 50], ...o });
-      air.a.send(tiny(2, 0).bytes(), 10);
+      air.a.send([one(tiny(2, 0))]);
       const got: boolean[] = [];
       for (let t = 0; t < ms; t += 100) {
         air.advance(100);
@@ -590,8 +1100,8 @@ describe("PacketAir", () => {
     expect(lost / runs).toBeGreaterThan(3);
     // an outage cuts one way only
     const air = new PacketAir({ mode: "fast", latencyMs: 250 });
-    air.a.send(tiny(2, 0).bytes(), 10);
-    air.b.send(tiny(2, 0).bytes(), 10);
+    air.a.send([one(tiny(2, 0))]);
+    air.b.send([one(tiny(2, 0))]);
     air.advance(1000);
     air.a.poll();
     air.b.poll();
@@ -642,6 +1152,8 @@ interface Phone {
   /** The most orders queued, and the longest an order waited in the queue (ticks), seen after any update before the end. */
   maxQueued: number;
   maxQueuedTicks: number;
+  /** The most frames handed to the transport at once. */
+  maxSegments: number;
 }
 
 interface Run {
@@ -669,6 +1181,8 @@ interface Scenario {
   until?: (r: Run) => boolean;
   /** Changes made to both worlds alike before the match starts (folded into the setup hash). */
   prepare?: (w: World) => void;
+  /** K for both phones (default: segmentsFor(delay)). */
+  segmentsMax?: number;
 }
 
 /** Two phones, each with its own world, AI and Lockstep, joined by PacketAir; each phone's AI orders only its own side. */
@@ -692,9 +1206,12 @@ function duel(s: Scenario): Run {
       side, w, link, frameMs,
       // (normal difficulty only: tickAi writes incomeMult, and normal's is the default both worlds have)
       ai: strat && createAiState(strat, "normal", hash32(s.seed, side === "blue" ? 1 : 2)),
-      ls: new Lockstep({ local: side, delay: s.delay ?? 5, mapWidth: w.width, mapHeight: w.height, capacity: link.capacity(), setupHash: parseInt(worldHash(w), 16), now: () => link.now() }),
+      ls: new Lockstep({
+        local: side, delay: s.delay ?? 5, mapWidth: w.width, mapHeight: w.height, capacity: link.capacity(), setupHash: parseInt(worldHash(w), 16),
+        now: () => link.now(), segmentsMax: s.segmentsMax
+      }),
       acc: 0, last: 0, next: phase, sent: 0, trails: [], hashes: [], extra: [], paused: false, sawPeerPaused: false, maxFrame: 0, desyncAt: null,
-      maxQueued: 0, maxQueuedTicks: 0
+      maxQueued: 0, maxQueuedTicks: 0, maxSegments: 0
     };
   };
   const r: Run = { air, setup, blue: phone("blue", air.a, bs, 16, 3), red: phone("red", air.b, rs, 11, 0) };
@@ -740,11 +1257,13 @@ function update(p: Phone, r: Run, s: Scenario): void {
   }
   if (st.stalled && st.peerPaused) p.sawPeerPaused = true;
   if (st.desync && p.desyncAt === null) p.desyncAt = p.w.tick;
-  const f = p.ls.frame();
+  const f = p.ls.frames();
   if (f.version !== p.sent) {
-    p.link.send(f.bits, f.nbits); // (throws past capacity)
+    checkList(p.ls, f.frames);
+    p.link.send(f.frames); // (throws past capacity)
     p.sent = f.version;
-    p.maxFrame = Math.max(p.maxFrame, f.nbits);
+    for (const g of f.frames) p.maxFrame = Math.max(p.maxFrame, g.nbits);
+    p.maxSegments = Math.max(p.maxSegments, f.frames.length);
   }
 }
 
@@ -822,6 +1341,87 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
     const stalls = [r.blue, r.red].map((p) => p.ls.status().stallMs);
     expect(Math.max(...stalls)).toBeGreaterThan(2500); // (the dropouts really stalled the match)
     for (const s of stalls) expect(s).toBeLessThanOrEqual(25_000);
+  });
+
+  it("rotate segments at no cost in stall against K = 1 at 0% loss, fast and robust", { timeout: 180_000 }, () => {
+    const pair = (delay: number, air: PacketAirOptions) =>
+      [undefined, 1].map((segmentsMax) => duel({ map: "riverlands", seed: 42, ticks: FIVE_MINUTES, delay, air, segmentsMax })) as [Run, Run];
+    // where D leaves room the slack gate lets bursts out in segments, and neither phone stalls longer for it (at 250 ms
+    // pairing picks D = 4; robust packets take 200 ms, so no robust link carries one in less)
+    for (const [delay, air] of [[6, { mode: "fast" }], [8, { mode: "robust", latencyMs: 300 }]] as const) {
+      const [k, one] = pair(delay, air);
+      const label = `D ${delay}, ${air.mode}`;
+      expect(Math.max(k.blue.maxSegments, k.red.maxSegments), label).toBeGreaterThan(1);
+      for (const side of ["blue", "red"] as const) {
+        expect(k[side].ls.status().stallMs, `${label}, ${side}`).toBeLessThanOrEqual(one[side].ls.status().stallMs);
+        expect(one[side].maxSegments).toBe(1);
+      }
+      expect(firstDiff(k, Math.min(k.blue.w.tick, k.red.w.tick)), label).toBe(-1);
+    }
+    // where it leaves none (D = 5 at 250 ms, robust: a packet every two ticks), it keeps one segment: the same match
+    const [k, one] = pair(5, { mode: "robust" });
+    expect([k.blue.maxSegments, k.red.maxSegments]).toEqual([1, 1]);
+    expect(k.blue.ls.turns()).toEqual(one.blue.ls.turns());
+    expect([k.blue.ls.status().stallMs, k.red.ls.status().stallMs]).toEqual([one.blue.ls.status().stallMs, one.red.ls.status().stallMs]);
+  });
+
+  it("keep the slack gate shut at the D pairing picks in robust mode, pauses and all: the same match as K = 1", { timeout: 180_000 }, () => {
+    // archipelago with airborne: the AIs' tick-0 orders overflow one turn. Read off the peer's first two frames, whose
+    // slack (D − 1) latency hadn't eaten yet, the gate opened, and the opening seconds stalled: 256 and 48 ms against
+    // K = 1's 48 and 0 at 500 ms. Reading the slack of a phone that had just played on after a pause (high for
+    // seconds, while it catches up), it stalled the two phones 8400 and 5484 ms against 8032 and 5004.
+    const pausing = (): ((r: Run) => void) => {
+      const pauses: [number, "blue" | "red", number][] = [[60_000, "blue", 5_000], [150_000, "red", 8_000]];
+      let paused: [Phone, number] | null = null;
+      return (r) => {
+        const now = r.air.now();
+        if (!paused && pauses.length && now >= pauses[0]![0]) {
+          const [, side, ms] = pauses.shift()!;
+          paused = [r[side], now + ms];
+          r[side].paused = true;
+          r[side].ls.setPaused(true);
+        } else if (paused && now >= paused[1]) {
+          const p = paused[0];
+          p.paused = false;
+          p.ls.setPaused(false);
+          // (what the player ordered while paused: select all, a-move)
+          const army = [...p.w.units.values()].filter((u) => u.faction === p.side).map((u) => u.id);
+          p.extra.push({ type: "attackMove", faction: p.side, unitIds: army, x: 10.3, y: 20.7 });
+          paused = null;
+        }
+      };
+    };
+    for (const [delay, latencyMs, pauses] of [[7, 500, false], [8, 600, false], [7, 500, true]] as const) {
+      const [k, one] = [undefined, 1].map((segmentsMax) =>
+        duel({
+          map: "archipelago", seed: 7, mutators: ["airborne"], strategies: ["airswarm", "boom"], delay, ticks: FIVE_MINUTES, segmentsMax,
+          air: { mode: "robust", latencyMs, phaseMs: [5, 55] }, every: pauses ? pausing() : undefined
+        })
+      ) as [Run, Run];
+      const label = `${latencyMs} ms, D ${delay}${pauses ? ", pauses" : ""}`;
+      expect([k.blue.maxSegments, k.red.maxSegments], label).toEqual([1, 1]);
+      expect(k.blue.ls.turns(), label).toEqual(one.blue.ls.turns());
+      expect([k.blue.ls.status().stallMs, k.red.ls.status().stallMs], label).toEqual([one.blue.ls.status().stallMs, one.red.ls.status().stallMs]);
+      expect(firstDiff(k, FIVE_MINUTES), label).toBe(-1);
+    }
+  });
+
+  it("stop rotating for the match once the peer stalls in a rotation: burst loss costs little more than with K = 1", { timeout: 120_000 }, () => {
+    // at 250 ms pairing picks D = 4; at 7 the gate opens. A lost packet costs the newest turns a whole rotation, and
+    // the gate can't see loss coming: rotating on regardless, the two phones stalled 512 and 600 ms longer than with
+    // K = 1 over these five minutes (now 96 and 120)
+    const [k, one] = [undefined, 1].map((segmentsMax) =>
+      duel({
+        map: "riverlands", seed: 42, delay: 7, ticks: FIVE_MINUTES, segmentsMax,
+        air: { latencyMs: 250, phaseMs: [5, 55], burst: { pGoodToBad: 0.02, pBadToGood: 0.3 } }
+      })
+    ) as [Run, Run];
+    expect(Math.max(k.blue.maxSegments, k.red.maxSegments)).toBeGreaterThan(1);
+    for (const side of ["blue", "red"] as const) {
+      expect(one[side].ls.status().stallMs).toBeGreaterThan(2_000); // (the loss really stalled the match)
+      expect(k[side].ls.status().stallMs, side).toBeLessThanOrEqual(one[side].ls.status().stallMs + 300);
+    }
+    expect(firstDiff(k, FIVE_MINUTES)).toBe(-1);
   });
 
   it("keep identical hash trails with bursts of 30-unit orders", { timeout: 120_000 }, () => {
