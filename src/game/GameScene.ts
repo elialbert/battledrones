@@ -795,9 +795,9 @@ export class GameScene {
     return this.ended;
   }
 
-  /** Fast-forward helper for tools: `n` frames of `ms` each, drawing only the last. */
-  step(ms = 100, n = 1): void {
-    for (let i = 0; i < n; i++) this.update(ms, i === n - 1);
+  /** Fast-forward helper for tools: `n` frames of `ms` each, drawing only the last (none with `draw` false: tools/duel-smoke.mjs steps two pages that share a software renderer). */
+  step(ms = 100, n = 1, draw = true): void {
+    for (let i = 0; i < n; i++) this.update(ms, draw && i === n - 1);
   }
 
   /**

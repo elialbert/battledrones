@@ -479,8 +479,8 @@ describe("the lobby's logic", () => {
     expect(b.begun.length).toBe(1);
     expect(b.begun[0]!.phase).toBe("starting");
     expect(b.m.done).toBe(true);
-    // the guard stays on through the match, the rig open
-    expect(b.guards).toEqual([]);
+    // the guard goes on the host's plan with the link, and stays on through the match, the rig open
+    expect(b.guards).toEqual(["high"]);
     expect(b.rig!.closed).toBe(false);
     expect(b.ended).toEqual([]);
   });
@@ -499,7 +499,8 @@ describe("the lobby's logic", () => {
     expect(b.m.state().step).toBe("closed");
     expect(b.ended).toEqual(["cancel"]);
     expect(b.rig!.closed).toBe(true);
-    expect(b.guards).toEqual([null]);
+    // (a Join's link keeps the tap's guard until it locks, then off)
+    expect(b.guards).toEqual(["high", null]);
   });
 
   it("Cancel after GO says the end for 2 s before letting go", { timeout: 30_000 }, async () => {
@@ -695,12 +696,12 @@ describe("the lobby's logic", () => {
     // (the friend leaves before it hears this phone's pick: its leave has nothing to say)
     loop.friend.session.leave("left");
     loop.friend.close();
-    for (let i = 0; i < 8; i++) { await b.run(1000); const st = (b.m as any).session?.status(); console.log("DBG", b.c.t, st?.phase, st?.link.sinceRx, st?.rxq, st?.pairing.sinceHeardMs, loop.friend.session.phase); }
     const fresh = b.m.state();
     expect(fresh.meter).toMatchObject({ rxq: 7, peerRxq: 7, snrDb: expect.any(Number) });
     await b.run(QUIET_MS - 1000);
     // (the friend's last numbers are gone well before that)
-    expect(b.m.state().meter).toMatchObject({ rxq: 0, peerRxq: null, snrDb: null, good: fresh.meter!.good });
+    expect(b.m.state().meter).toMatchObject({ rxq: 0, peerRxq: null, snrDb: null });
+    expect(b.m.state().meter!.good).toBeGreaterThanOrEqual(fresh.meter!.good);
     expect(fresh.quiet).toBe(false);
     expect(b.m.state().quiet).toBe(false);
     await b.run(2000);

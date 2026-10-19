@@ -54,8 +54,25 @@
  *    closable, then close the rig, turn the guard off and call onClose
  *    (main.ts resumes the menu music). A RigError releases the audio at once
  *    and leaves its message up until it is closed;
- *  - a friend that left while this phone waited for its capture ("Friend
- *    left", status().peerEnded) stops the lobby there: no match is loaded;
+ *  - a friend that left once this phone said GO ("Your friend left",
+ *    status().peerEnded: it started on this phone's GO, which this phone
+ *    never heard it answer, or this phone waits for its capture) stops the
+ *    lobby there: no match is loaded;
+ *  - a friend heard and then silent for 8 s (QUIET_MS) gets a line under the
+ *    status ("Your friend's phone has gone quiet"), from pairing to GO: the
+ *    pairing has no timeout of its own after GO, and a friend that went Back
+ *    before it heard this phone's pick has nothing to say. Its next tap of
+ *    Host or Join finds this phone again (the pairing lets the friend's next
+ *    incarnation take over), so the lobby waits on; Cancel is the way out;
+ *  - the meter shows only what is current: this phone's SNR of the friend
+ *    while packets arrive (RX_SILENT_MS, as the session's rxq), and the
+ *    friend's rxq of this phone while its frames do (PEER_HEARD_MS);
+ *  - a retry ("Pairing failed: tap to retry") starts the tips' 30 s and a
+ *    rematch's 60 s again, as the pairing starts its 8 s hint again;
+ *  - the guard is put on this machine's plan whenever a link starts, not
+ *    trusted to be as the tap left it (main.ts takes no Duel or Rematch tap
+ *    while a lobby is open or still saying the end, so two lobbies never
+ *    share it);
  *  - a version error names the older phone when the protocols differ;
  *  - window.__duel.state is the lobby's step (LobbyStep) until the feed is
  *    built, then the session's phase; result is null until the match begins,
@@ -75,9 +92,9 @@ import type { Faction } from "../sim/types";
 import { fullscreen } from "../ui/fullscreen";
 import { VersusFeed } from "./feed";
 import { LoopLink, type LoopParams } from "./loop-peer";
-import { NOTHING_HEARD_MESSAGE, VERSION_MESSAGE, type HostOffer, type PairingState } from "./pairing";
+import { NOTHING_HEARD_MESSAGE, NOTHING_HEARD_MS, VERSION_MESSAGE, type HostOffer, type PairingState } from "./pairing";
 import { RelayTransport } from "./relay-transport";
-import { Session } from "./session";
+import { PEER_HEARD_MS, RX_SILENT_MS, Session } from "./session";
 
 export { openRig } from "../link/rig";
 
@@ -352,6 +369,8 @@ export interface LobbyView {
   switchRole: boolean;
   /** Nothing heard for 30 s. */
   tips: boolean;
+  /** The friend was heard, and nothing since for QUIET_MS (pairing to GO). */
+  quiet: boolean;
   /** The route check failed. */
   route: boolean;
   /** The transmit gain was lowered (loud own signal). */
@@ -379,6 +398,8 @@ export const GAIN_MAX = 1.1;
 export const TIPS_MS = 30_000;
 /** A rematch with nothing heard this long falls back to the menu. */
 export const REMATCH_FALLBACK_MS = 60_000;
+/** A friend heard and then silent this long: "Your friend's phone has gone quiet". */
+export const QUIET_MS = NOTHING_HEARD_MS;
 
 const otherRole = (r: BandRole): BandRole => (r === "host" ? "guest" : "host");
 
@@ -463,9 +484,11 @@ export class LobbyMachine {
     this.step = "choose";
   }
 
-  /** "Pairing failed: tap to retry". */
+  /** "Pairing failed: tap to retry". The tips' and a rematch's clocks start again, as the pairing's hint does. */
   retry(): void {
-    this.session?.retry();
+    if (!this.session) return;
+    this.session.retry();
+    this.sessionAt = this.env.now();
   }
 
   pick(id: OpenerId): boolean {
@@ -554,6 +577,8 @@ export class LobbyMachine {
     const link = st?.link;
     const error = this.fatal ?? (live ? this.pairingError(st.pairing, st.peerEnded) : null);
     const before = this.step === "pairing" || this.step === "picking" || this.step === "waiting";
+    // (the friend's numbers only while they are current: its frames, and packets at all)
+    const peerFresh = st !== null && (st.pairing.sinceHeardMs <= PEER_HEARD_MS || (st.phase === "starting" && st.link.sinceRx <= PEER_HEARD_MS));
     return {
       step: error && this.step !== "closed" ? "error" : this.step,
       role: this.role,
@@ -566,15 +591,16 @@ export class LobbyMachine {
       noWakeLock: env.rig !== null && !env.rig.wakeLockSupported,
       switchRole: live && !this.selfTest && !fixedRole && !!p?.hint && !p.heard,
       tips: live && !this.selfTest && p !== null && !p.heard && now - this.sessionAt >= TIPS_MS,
+      quiet: live && !this.selfTest && !error && (before || this.step === "go") && p !== null && p.heard && p.sinceHeardMs >= QUIET_MS,
       route: this.route,
       loud: this.loud,
       meter: link
         ? {
-            snrDb: link.snrDb,
+            snrDb: link.sinceRx <= RX_SILENT_MS ? link.snrDb : null,
             good: link.rxOk,
             bad: link.rxBad,
             rxq: st.rxq,
-            peerRxq: this.selfTest ? null : st.peerRxq,
+            peerRxq: this.selfTest || !peerFresh ? null : st.peerRxq,
             rttMs: st.rttMs
           }
         : null,
@@ -591,7 +617,8 @@ export class LobbyMachine {
       return { kind: "version", message: VERSION_MESSAGE, older };
     }
     if (p.phase === "failed") return { kind: "failed", message: p.error?.message ?? "Pairing failed: tap to retry" };
-    if (peerEnded && this.step === "loading") return { kind: "left", message: "Your friend left" };
+    // (from this phone's GO on: the friend may have started on it, and the session says it has gone)
+    if (peerEnded && (p.go || this.step === "loading")) return { kind: "left", message: "Your friend left" };
     return null;
   }
 
@@ -644,7 +671,8 @@ export class LobbyMachine {
     this.loud = false;
     this.session = new Session({ transport: link, role, build: env.build, random: env.random, ...(role === "host" ? { host: this.offer() } : {}) });
     this.step = selfTest ? "self-test" : "pairing";
-    if (role === "host" || cfg.rx !== "detect") this.setGuard(cfg.plan);
+    // (a Join that detects keeps the guard it has until its link locks on a plan)
+    this.setGuard(cfg.rx === "detect" ? this.guardPlan ?? cfg.plan : cfg.plan, true);
   }
 
   /** The route check, the loud-signal gain, and a Join's guard following the plan its link found. */
@@ -669,8 +697,9 @@ export class LobbyMachine {
     }
   }
 
-  private setGuard(plan: BandPlan): void {
-    if (this.env.practice || plan === this.guardPlan) return;
+  /** The guard on `plan` (`force`: even if it should be on it already). */
+  private setGuard(plan: BandPlan, force = false): void {
+    if (this.env.practice || (plan === this.guardPlan && !force)) return;
     this.guardPlan = plan;
     this.env.guard(plan, this.env.prefs.micMode);
   }
@@ -788,6 +817,7 @@ const TIPS =
   "Still nothing? Turn the volume up and the silent switch off. Unplug headphones and turn Bluetooth off. Keep the phones 10–30 cm apart. Or try band Low on the host (Advanced).";
 const ROUTE_TEXT =
   "This phone can't hear its own signal: sound may be going to the earpiece or Bluetooth, or it can't play this band. Unplug headphones, turn the volume up, or switch the host to band Low.";
+const QUIET_TEXT = "Your friend's phone has gone quiet. Bring the phones closer, or tap Cancel if your friend left.";
 const PLACEMENT =
   "Lay both phones flat, 10–30 cm apart. Turn the volume to about 75%, silent switch off. On an iPhone the sound may come from the earpiece at the top: turn the phones until both bars below are full.";
 
@@ -858,7 +888,7 @@ function fillMeter(root: HTMLElement, v: LobbyView): void {
 function layoutKey(v: LobbyView): string {
   const p = v.pairing;
   return [
-    v.step, v.role, v.error?.kind, v.lost, v.switchRole, v.tips, v.route, v.loud, v.canBack, v.prefs.plan, v.prefs.micMode,
+    v.step, v.role, v.error?.kind, v.lost, v.switchRole, v.tips, v.quiet, v.route, v.loud, v.canBack, v.prefs.plan, v.prefs.micMode,
     p?.phase, p?.pick, p?.picked, p?.offered.join(","), p?.config?.mapId, p?.side
   ].join("|");
 }
@@ -872,6 +902,7 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
     notes.push(`<div class="duel-warn"><p>The sound link stopped.</p><button class="cta" data-act="tap">Tap to reconnect the sound link</button></div>`);
   if (v.route) notes.push(`<p class="duel-warn">${ROUTE_TEXT}</p>`);
   if (v.loud) notes.push(`<p class="sh-note">Your own signal is loud here: this phone now sends a little quieter.</p>`);
+  const quiet = v.quiet ? `<p class="duel-hint">${QUIET_TEXT}</p>` : "";
   const p = v.pairing;
   switch (v.step) {
     case "opening":
@@ -919,7 +950,7 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
         : "";
       const tips = v.tips ? `<p class="duel-hint">${TIPS}</p>` : "";
       return {
-        body: `<p class="sh-sub duel-place">${PLACEMENT}</p><p class="duel-status">${status}</p>${meterHtml(v)}${hint}${tips}${notes.join("")}`,
+        body: `<p class="sh-sub duel-place">${PLACEMENT}</p><p class="duel-status">${status}</p>${quiet}${meterHtml(v)}${hint}${tips}${notes.join("")}`,
         actions: back + cancel
       };
     }
@@ -933,12 +964,12 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
         : `<p class="duel-status">No opener is allowed under these rules.</p>`;
       const head = picked ? `<p class="duel-status">Waiting for your friend to pick…</p>` : `<h3>Pick your opener <small data-m="pickleft"></small></h3>`;
       return {
-        body: `<p class="duel-paired">✓ Paired · you play <b class="duel-side ${side}">${side}</b></p>${p?.config ? mapLine(p.config.mapId, p.config.mutators) : ""}${head}${cards}${meterHtml(v)}${notes.join("")}`,
+        body: `<p class="duel-paired">✓ Paired · you play <b class="duel-side ${side}">${side}</b></p>${p?.config ? mapLine(p.config.mapId, p.config.mutators) : ""}${head}${quiet}${cards}${meterHtml(v)}${notes.join("")}`,
         actions: back + cancel
       };
     }
     case "go":
-      return { body: `<p class="duel-go">GO!</p><p class="duel-status">Waiting for your friend…</p>${meterHtml(v)}${notes.join("")}`, actions: cancel };
+      return { body: `<p class="duel-go">GO!</p><p class="duel-status">Waiting for your friend…</p>${quiet}${meterHtml(v)}${notes.join("")}`, actions: cancel };
     case "loading":
       return { body: `<p class="duel-go">GO!</p><p class="duel-status">Starting the match…</p>${meterHtml(v)}${notes.join("")}`, actions: cancel };
     case "error":

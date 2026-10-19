@@ -166,3 +166,32 @@
 .aar .duel-link td {
   padding: 2px 0;
 }
+/* "Your friend is back in the lobby: tap Rematch" */
+.duel-back {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--gold);
+}
+/* the reconnect, once the match is over: a button in the block, the report's own buttons stay free */
+.sec-duel .duel-relink {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  margin: 4px 0 2px;
+  padding: 8px 12px;
+  min-height: 44px;
+  font-size: 14px;
+}
+.duel-relink small {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+}
+p.duel-relink.busy {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--dim);
+  animation: duelPulse 1s ease-in-out infinite;
+}

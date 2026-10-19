@@ -100,6 +100,15 @@ const duelPractice = ["loop", "relay"].includes(new URLSearchParams(location.sea
 const canDuel = (): boolean =>
   duelPractice || (window.isSecureContext && typeof AudioWorkletNode === "function" && typeof navigator.mediaDevices?.getUserMedia === "function");
 const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend's)";
+/** iOS's audio session (navigator.audioSession): "play-and-record" from a duel's rematch boot, "auto" again when it's declined. */
+const setAudioSession = (type: "auto" | "play-and-record") => {
+  try {
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = type;
+  } catch {
+    /* ignore */
+  }
+};
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -208,15 +217,11 @@ function showMenu(linkedMap?: string | null): void {
     /* ignore */
   }
   // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, the link's audio session
-  // and link mode; the menu's sound waits for the reconnect tap
+  // and link mode; the menu's sound waits for the reconnect tap. (A practice link opens no rig and no guard,
+  // so neither: nothing would put the session back.)
   const duelRematch = token === "duel";
-  if (duelRematch) {
-    try {
-      const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
-      if (session) session.type = "play-and-record";
-    } catch {
-      /* ignore */
-    }
+  if (duelRematch && !duelPractice) {
+    setAudioSession("play-and-record");
     sfx.linkMode = true;
   }
   // ?map=<id> (a shared random map, or any built-in): preselect it and keep it as the pick
@@ -342,8 +347,16 @@ function showMenu(linkedMap?: string | null): void {
   const duelBtn = menu.querySelector<HTMLButtonElement>("#play-duel")!;
   let duel: typeof DuelLobby | null = null;
   let duelBroken = false;
+  let duelLoaded = false;
+  /** A lobby is open, or still saying the end after a Cancel past GO (up to 2 s): no second Duel or Rematch tap until it lets go. */
+  let duelLive = false;
+  const syncDuelBtn = () => {
+    const on = duelLoaded && !duelLive;
+    duelBtn.disabled = !on;
+    duelBtn.style.opacity = on ? "" : "0.6";
+  };
   if (duelable || duelRematch) {
-    duelBtn.style.opacity = "0.6";
+    syncDuelBtn();
     loadDuel()
       .then(
         (d) => void (duel = d),
@@ -353,8 +366,8 @@ function showMenu(linkedMap?: string | null): void {
         }
       )
       .finally(() => {
-        duelBtn.disabled = false;
-        duelBtn.style.opacity = "";
+        duelLoaded = true;
+        syncDuelBtn();
       });
   }
 
@@ -649,16 +662,24 @@ function showMenu(linkedMap?: string | null): void {
   /** The duel's match: main's begin, with the agreed map, mutators and side (never saved). */
   const startDuel = (feed: VersusFeed) => void begin(false, () => duelSetup(feed.config), feed);
   let rematchScreen: HTMLElement | null = null;
-  /** The lobby let the duel's audio go with no match (Cancel, an error, the rematch's fallback): the menu again. */
+  /** The lobby let the duel's audio go with no match (Cancel, an error, the rematch's fallback), or the rematch was declined: the menu again. */
   const duelClosed = () => {
+    duelLive = false;
+    syncDuelBtn();
     rematchScreen?.remove();
     rematchScreen = null;
+    // (the rig's close() already did, if one was opened; the rematch boot's Menu opened none)
+    setAudioSession("auto");
     sfx.linkMode = false;
     sfx.unlockOnGesture();
     music.play("menu", biomeOf(shownMap()));
   };
   /** The Duel tap, synchronously, in this order (SOUND-DUEL.md "The tap"); `rematch`: the rematch's reconnect tap. */
   const duelTap = (d: typeof DuelLobby, rematch: boolean) => {
+    // (one lobby at a time: an old one's late release would turn the new one's guard and link mode off)
+    if (duelLive) return;
+    duelLive = true;
+    syncDuelBtn();
     const tap = d.tapPlan(rematch);
     const rig = tap.practice ? null : d.openRig({ micMode: tap.micMode });
     sfx.unlock();
@@ -711,7 +732,10 @@ function showMenu(linkedMap?: string | null): void {
         btn.textContent = DUEL_UPDATE;
       }
     );
-    scr.querySelector("#duel-menu")!.addEventListener("click", duelClosed);
+    // (declined: no rig was opened, so duelClosed puts the audio session back itself)
+    scr.querySelector("#duel-menu")!.addEventListener("click", () => {
+      if (!duelLive) duelClosed();
+    });
   }
 
   // "Rematch" from the end screen skips straight back into a game

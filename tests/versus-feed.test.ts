@@ -4,6 +4,7 @@ import { planTicks } from "../src/game/awareness";
 import { Controller, buildView } from "../src/game/controller";
 import { parseRecord } from "../src/game/replay";
 import { PacketAir } from "../src/link/packet-air";
+import type { LostReason, MicMode, RigState } from "../src/link/rig";
 import type { BandRole } from "../src/link/transport";
 import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
 import { BUILDINGS, UNITS } from "../src/sim/balance";
@@ -14,7 +15,7 @@ import type { Command, Faction, Unit, UnitKind, World } from "../src/sim/types";
 import { hqOf, spawnUnit } from "../src/sim/world";
 import { setupWorld } from "../src/sim/setup";
 import type { AbortReason } from "../src/game/GameScene";
-import { VersusFeed, liftGroupsFirst, type FeedEnv } from "../src/versus/feed";
+import { VersusFeed, liftGroupsFirst, type DuelRig, type FeedEnv } from "../src/versus/feed";
 import { RECORD_KEY, REMATCH_KEY, readRematch, readTally } from "../src/versus/records";
 import { Session } from "../src/versus/session";
 
@@ -79,6 +80,8 @@ interface Opts {
   ai?: boolean;
   /** The lockstep gets the Controller's commands as drained, not through the feed's lift grouping (a control run). */
   raw?: boolean;
+  /** A phone's audio rig (default none, as on a practice link). */
+  rigs?: Partial<Record<BandRole, DuelRig>>;
 }
 
 interface Run {
@@ -169,7 +172,7 @@ function start(p: Phone, r: Run): void {
     setInterval: () => null, clearInterval: () => undefined, requestAnimationFrame: null, document: null, window: null,
     local: p.local, session: p.session, reload: () => p.reloads++
   };
-  const feed = new VersusFeed({ session: p.s, rig: null, practice: !!r.opts.practice, onExit: () => p.exits++, env });
+  const feed = new VersusFeed({ session: p.s, rig: r.opts.rigs?.[p.role] ?? null, practice: !!r.opts.practice, onExit: () => p.exits++, env });
   r.opts.prepare?.(feed.world);
   const ctrl = new Controller(feed.world);
   ctrl.trackInFlight();
@@ -377,6 +380,52 @@ describe("VersusFeed as GameScene drives it", () => {
     }
   });
 
+  it("groups a lift still on its way the same: a select-all right after the lift tap all moves", { timeout: 60_000 }, () => {
+    const ids = { g: 0, condors: [] as number[], all: [] as number[] };
+    const r = pair({ seed: 11, prepare: army(ids) });
+    const blue = sideOf(r, "blue");
+    const w = blue.feed!.world;
+    blue.ctrl!.enqueue({ type: "lift", faction: "blue", unitIds: ids.condors, goliathId: ids.g });
+    const d0 = blue.drains.length;
+    runUntil(r, () => blue.drains.length > d0, 2000);
+    // the lift is sealed, D ticks from landing: the world doesn't know of it yet, and the select-all comes now
+    expect(w.units.get(ids.g)!.goliath!.lift).toBeNull();
+    const hq = hqOf(w, "blue")!;
+    const to = { x: (Math.floor((hq.tx + 14.5) * 16) + 0.5) / 16, y: (Math.floor((hq.ty - 14.5) * 16) + 0.5) / 16 };
+    blue.ctrl!.enqueue({ type: "move", faction: "blue", unitIds: ids.all, ...to });
+    const d1 = blue.drains.length;
+    runUntil(r, () => blue.drains.length > d1, 2000);
+    expect(w.units.get(ids.g)!.goliath!.lift).toBeNull();
+    const named = () => {
+      const seen = new Set<number>();
+      for (const [, cmds] of blue.stepped) for (const c of cmds) if (c.type === "move" && c.faction === "blue") for (const id of c.unitIds) seen.add(id);
+      return ids.all.every((id) => seen.has(id));
+    };
+    runUntil(r, named, 20_000);
+    const at = tickOf(blue);
+    runUntil(r, () => tickOf(r.host) >= at + 3 && tickOf(r.guest) >= at + 3, 10_000);
+    const moves = [...blue.stepped.values()].flatMap((cmds) => cmds.filter((c): c is Extract<Command, { type: "move" }> => c.type === "move"));
+    expect(moves[0]!.unitIds).toEqual([ids.g, ...ids.condors]);
+    for (const p of [r.host, r.guest]) {
+      const g = p.feed!.world.units.get(ids.g)!;
+      // (the lift landed first, hooking on; the group called it off and took the order)
+      expect(g.goliath!.lift).toBeNull();
+      expect(g.order, "the Goliath").toMatchObject({ type: "move", ...to });
+    }
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+    // (liftGroupsFirst with a lift on its way, or one earlier in the same drain: the same group; one after it: nothing)
+    const rest = ids.all.filter((id) => id !== ids.g && !ids.condors.includes(id));
+    const lift: Command = { type: "lift", faction: "blue", unitIds: ids.condors, goliathId: ids.g };
+    const move: Command = { type: "move", faction: "blue", unitIds: ids.all, x: 1.5, y: 1.5 };
+    const grouped = [
+      { ...move, unitIds: [ids.g, ...ids.condors] },
+      { ...move, unitIds: rest }
+    ];
+    expect(liftGroupsFirst(w, [move], [{ goliathId: ids.g, condors: ids.condors }])).toEqual(grouped);
+    expect(liftGroupsFirst(w, [lift, move])).toEqual([lift, ...grouped]);
+    expect(liftGroupsFirst(w, [move, lift])).toEqual([move, lift]);
+  });
+
   it("keeps a turn log and hashes that replay through parseRecord with no divergence", { timeout: 120_000 }, () => {
     const r = pair({ seed: 13, ai: true });
     runUntil(r, () => tickOf(r.host) >= 1250 && tickOf(r.guest) >= 1250, 300_000);
@@ -511,6 +560,172 @@ describe("the duel's record", () => {
       expect(p.ctrl!.inFlight).toEqual([]);
     }
     expect(r.guest.s.status().closable).toBe(true);
+  });
+});
+
+describe("the duel's record when the worlds drift apart", () => {
+  /**
+   * Red's world drifts from blue's (one scrap) and blue resigns. Blue's game holds once the resign is sealed,
+   * so red is decided first, its end check waiting on blue's report; `then` runs there, and blue plays on.
+   */
+  function drifted(then: (r: Run, red: Phone, blue: Phone) => void): { r: Run; red: Phone } {
+    const r = pair({ seed: 31 });
+    runUntil(r, () => tickOf(r.host) >= 10 && tickOf(r.guest) >= 10, 30_000);
+    const red = sideOf(r, "red");
+    const blue = sideOf(r, "blue");
+    red.feed!.world.factions.red.scrap += 1;
+    blue.feed!.duel.resign(false);
+    const d0 = blue.drains.length;
+    runUntil(r, () => blue.drains.length > d0, 2000);
+    blue.hold = true;
+    runUntil(r, () => ls(red).decided !== null, 10_000);
+    expect(ls(red).endCheck).toBe("pending");
+    expect(red.feed!.world.winner).toBe("red");
+    then(r, red, blue);
+    blue.hold = false;
+    return { r, red };
+  }
+
+  it("counts no contest when the end check fails while Rematch waits for the end to go out", { timeout: 60_000 }, () => {
+    const { r, red } = drifted((_, p) => p.feed!.duel.rematch());
+    runUntil(r, () => red.reloads > 0, 5000);
+    expect(ls(red).desync).toBe(true);
+    expect(red.feed!.outcome).toBe("noContest");
+    expect(readTally(red.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 0, noContest: 1 });
+    expect(red.local.writes(RECORD_KEY)).toBe(1);
+  });
+
+  it("turns a result counted as Not verified into no contest when the friend then reports the desync", { timeout: 60_000 }, () => {
+    // blue's packets don't reach red for 12 s: red's end check runs out first
+    const { r, red } = drifted((run, _, blue) => run.air.outage(12_000, blue.role === "host" ? "ab" : "ba"));
+    runUntil(r, () => red.feed!.outcome !== null, 15_000);
+    expect(ls(red).endCheck).toBe("unverified");
+    expect(red.feed!.outcome).toBe("win");
+    expect(readTally(red.local).w).toBe(1);
+    expect(red.feed!.reportView().sync).toBe("unverified");
+    runUntil(r, () => red.aborts.length > 0, 10_000);
+    expect(red.aborts.map((a) => a.reason)).toEqual(["desync"]);
+    expect(red.feed!.outcome).toBe("noContest");
+    expect(readTally(red.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 0, noContest: 1 });
+    expect(red.feed!.reportView()).toMatchObject({ sync: "desync", record: "0 wins · 0 losses · 0 draws · 1 with no result" });
+  });
+});
+
+/** The rig as the feed reads it: lost on demand, its reconnects working or failing as told. */
+class FakeRig implements DuelRig {
+  state: RigState = "running";
+  failures = 0;
+  micMode: MicMode = "raw";
+  /** What the next reconnect resolves. */
+  works = false;
+  capture = 2000;
+  private readonly lost = new Set<(reason: LostReason) => void>();
+  onLost(fn: (reason: LostReason) => void): () => void {
+    this.lost.add(fn);
+    return () => this.lost.delete(fn);
+  }
+  lose(): void {
+    this.state = "lost";
+    this.capture = 0;
+    for (const f of this.lost) f("context");
+  }
+  reconnect(): Promise<boolean> {
+    if (this.works) {
+      this.state = "running";
+      this.failures = 0;
+    } else this.failures++;
+    return Promise.resolve(this.works);
+  }
+  captureOkMs(): number {
+    return this.capture;
+  }
+}
+
+const settled = () => new Promise((r) => setTimeout(r, 0));
+
+describe("the reconnect cover", () => {
+  it("covers the match until the tap works, offers Leave after 2 failures, and never covers the end screen", { timeout: 60_000 }, async () => {
+    const rig = new FakeRig();
+    const r = pair({ seed: 37, rigs: { host: rig } });
+    runUntil(r, () => tickOf(r.host) >= 20 && tickOf(r.guest) >= 20, 30_000);
+    const f = r.host.feed!;
+    expect(f.overlay().reconnect).toBeNull();
+    rig.lose();
+    expect(f.overlay().reconnect).toEqual({ phase: "lost", leave: false });
+    f.reconnect();
+    expect(f.overlay().reconnect).toEqual({ phase: "trying", leave: false });
+    await settled();
+    expect(f.overlay().reconnect).toEqual({ phase: "failed", leave: false });
+    // it works: "Listening…" until capture has run gap-free for 1.5 s
+    rig.works = true;
+    f.reconnect();
+    await settled();
+    expect(f.overlay().reconnect).toEqual({ phase: "settling", leave: false });
+    rig.capture = 1600;
+    f.pump();
+    expect(f.overlay().reconnect).toBeNull();
+    // lost again, and two taps fail: Leave
+    rig.works = false;
+    rig.lose();
+    for (let i = 0; i < 2; i++) {
+      f.reconnect();
+      await settled();
+    }
+    expect(f.overlay().reconnect).toEqual({ phase: "failed", leave: true });
+    // the cover's Leave: no result, and the end screen isn't covered (its Main menu is the way out)
+    f.duel.leave();
+    expect(r.host.aborts.map((a) => a.reason)).toEqual(["lost"]);
+    expect(f.overlay().reconnect).toBeNull();
+    expect(f.reportView().relink).toBeNull();
+  });
+
+  it("leaves a decided match's report uncovered: the report offers the reconnect instead", { timeout: 60_000 }, async () => {
+    const rig = new FakeRig();
+    const r = pair({ seed: 17, rigs: { host: rig } });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    r.guest.feed!.duel.resign(false);
+    runUntil(r, () => [r.host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    const f = r.host.feed!;
+    expect(f.reportView().relink).toBeNull();
+    rig.lose();
+    f.pump();
+    expect(f.overlay().reconnect).toBeNull();
+    expect(f.reportView().relink).toBe("lost");
+    for (let i = 0; i < 3; i++) {
+      f.reconnect();
+      await settled();
+    }
+    expect(f.overlay().reconnect).toBeNull();
+    expect(f.reportView().relink).toBe("failed");
+    rig.works = true;
+    f.reconnect();
+    await settled();
+    expect(f.reportView().relink).toBe("settling");
+    rig.capture = 1600;
+    f.pump();
+    expect(f.reportView().relink).toBeNull();
+  });
+});
+
+describe("the report after the match", () => {
+  it("says when the friend is back in the lobby (its reloaded page, under a new nonce)", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 17 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    r.guest.feed!.duel.resign(false);
+    runUntil(r, () => [r.host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    const f = r.host.feed!;
+    expect(f.reportView().friendInLobby).toBe(false);
+    // the friend taps Rematch: its end goes out, then its page reloads
+    r.guest.feed!.duel.rematch();
+    runUntil(r, () => r.guest.reloads > 0, 5000);
+    runFor(r, 1500);
+    expect(f.reportView().friendInLobby).toBe(false);
+    // the reloaded page opens the same phone's link and pairs again: lobby frames
+    Object.assign(r.air.b, { closed: false });
+    const again = new Session({ transport: r.air.b, role: "guest", build: BUILD, random: rng(99) });
+    runUntil(r, () => (again.pump(), f.reportView().friendInLobby), 5000);
+    expect(f.abortReason).toBeNull();
+    expect(f.outcome).toBe("win");
   });
 });
 

@@ -15,7 +15,10 @@
  *   gesture: it resumes the audio and may ask for the microphone), with
  *   Leave after LEAVE_AFTER_FAILURES failed taps.
  * - The report's "Sound duel" block: the record, the link's quality, and the
- *   end check ("Checking sync…" until the friend's end report arrives).
+ *   end check ("Checking sync…" until the friend's end report arrives);
+ *   "Your friend is back in the lobby: tap Rematch" (SOUND-DUEL.md "Rematch
+ *   > Waiting"); and the reconnect, as a button, when the rig loses its
+ *   audio once the match is over: the cover would hide the report's buttons.
  *
  * Text is set as text (nothing here is markup from the air). Styles live in
  * ./hud.css, which ships with the duel chunk.
@@ -173,6 +176,10 @@ export interface DuelReportView {
   record: string | null;
   /** The end check: "pending" shows "Checking sync…". */
   sync: "pending" | "ok" | "unverified" | "desync" | "left" | "lost";
+  /** The rig lost its audio after the match (the cover gives way to the end screen): the report's reconnect. */
+  relink: ReconnectPhase | null;
+  /** The friend's reloaded page is in the lobby: "tap Rematch". */
+  friendInLobby: boolean;
   link: { good: number; bad: number; stallMs: number; orderDelayMs: number | null };
 }
 
@@ -192,6 +199,22 @@ function syncLine(v: DuelReportView): string {
   return `<p class="duel-sync ${t.cls}">${t.text}</p>`;
 }
 
+/** What changes while the report is up: the end check, the friend back in the lobby, the reconnect. */
+function liveLines(v: DuelReportView): string {
+  const back = v.friendInLobby ? `<p class="duel-back">Your friend is back in the lobby: tap Rematch</p>` : "";
+  return syncLine(v) + back + relinkLine(v);
+}
+
+/** The reconnect cover's tap, as a button in the report (its words are the cover's). */
+function relinkLine(v: DuelReportView): string {
+  if (!v.relink) return "";
+  const t = COVER_TEXT[v.relink];
+  const busy = v.relink === "trying" || v.relink === "settling";
+  return busy
+    ? `<p class="duel-relink busy">🔊 ${t.text}</p>`
+    : `<button class="cta alt duel-relink">🔊 ${t.text}<small>${t.sub}</small></button>`;
+}
+
 function recordLine(v: DuelReportView): string {
   // (a practice link keeps no record)
   return v.record === null
@@ -201,10 +224,12 @@ function recordLine(v: DuelReportView): string {
 
 /**
  * The report's Sound duel block (addReportSection): the end check first (it
- * changes while the report is up), the record, then the link. `view` is read
- * when the report renders and every 250 ms after, until the report goes.
+ * changes while the report is up), "Your friend is back in the lobby" and
+ * the reconnect button when they apply, the record, then the link. `view` is
+ * read when the report renders and every 250 ms after, until the report goes.
+ * The reconnect button calls `hooks.reconnect` inside the tap.
  */
-export function duelReportSection(view: () => DuelReportView): ReportSection {
+export function duelReportSection(view: () => DuelReportView, hooks: Pick<OverlayHooks, "reconnect">): ReportSection {
   return {
     id: "duel",
     // (first in the left column: right under the result, where "Checking sync…" is seen)
@@ -214,7 +239,7 @@ export function duelReportSection(view: () => DuelReportView): ReportSection {
       const v = view();
       const l = v.link;
       return `<h3 class="duel-h">🔊 Sound duel</h3>
-        <div class="duel-live">${syncLine(v)}${recordLine(v)}</div>
+        <div class="duel-live">${liveLines(v)}${recordLine(v)}</div>
         <table class="duel-link">
           <tr><td>Packets heard</td><td>${l.good} good · ${l.bad} bad</td></tr>
           <tr><td>Waiting on the link</td><td>${secs(l.stallMs)}</td></tr>
@@ -225,10 +250,13 @@ export function duelReportSection(view: () => DuelReportView): ReportSection {
       const live = el.querySelector<HTMLElement>(".duel-live");
       if (!live) return;
       let shown = live.innerHTML;
+      live.addEventListener("click", (e) => {
+        if (e.target instanceof Element && e.target.closest("button.duel-relink")) hooks.reconnect();
+      });
       const timer = window.setInterval(() => {
         if (!el.isConnected) return window.clearInterval(timer);
         const v = view();
-        const html = syncLine(v) + recordLine(v);
+        const html = liveLines(v) + recordLine(v);
         if (html !== shown) live.innerHTML = shown = html;
       }, 250);
     }

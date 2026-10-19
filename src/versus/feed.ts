@@ -25,7 +25,11 @@
  * earlier piece than its Condors would leave the Goliath behind. So the feed
  * hands the lockstep each such lift as a command of its own first (the
  * Goliath and its Condors that the order names), then the rest of the order:
- * a small command is never split, and the lift goes as one.
+ * a small command is never split, and the lift goes as one. A lift lands D
+ * ticks (or a queue's wait) after its tap, so a select-all right after it
+ * would find no lift in the world yet, then split, and its Goliath piece
+ * would land on a lift hooking on by then: the feed also counts the lifts it
+ * sent and hasn't stepped yet (LiftInFlight).
  *
  * Engine-free where it can be: the browser's pieces (timers, document,
  * storage, reload) come through FeedEnv, and what it needs of the scene
@@ -48,13 +52,22 @@
  *    "Friend left" (abandoned); one that leaves after keeps the result;
  *  - the win/loss record is written once: when the end check settles ("In
  *    sync ✓" or "Not verified"), on an abort, or on leaving the page with
- *    the check still running (the result as decided). A match decided here
- *    and found out of sync after is no contest;
+ *    the check still running (the result as the lockstep then has it: out
+ *    of sync is no contest, even found while Menu or Rematch waits). A match
+ *    decided here and found out of sync after is no contest: one counted as
+ *    "Not verified" is moved over (a second write, the only one);
  *  - Menu and Rematch wait for the session to be closable or 2.5 s, showing
  *    "Leaving…", then close the session, call onExit and reload; a page
  *    unload does the record and onExit only;
  *  - a reconnect cover that succeeds stays up ("Listening…") until the rig
- *    has had CAPTURE_OK_MS of gap-free capture, as the spec's overlay does;
+ *    has had CAPTURE_OK_MS of gap-free capture, as the spec's overlay does.
+ *    It covers the match only: once the match is over (decided or aborted)
+ *    the end screen stays free, and the report's Sound duel block offers the
+ *    same tap as a button (the link still brings the end check and the
+ *    friend's rematch), except after this phone left;
+ *  - "Your friend is back in the lobby: tap Rematch" shows on the report
+ *    once a lobby frame follows the friend's game frames (its page reloaded:
+ *    the lockstep's peerInLobby), on any end screen, since all offer Rematch;
  *  - "Copy debug info" copies JSON: the build, role and side, the agreed
  *    config and nonces, D, the tick, both trails' checkpoints and the end
  *    reports (Lockstep.debug), and the turn log;
@@ -75,7 +88,8 @@ import { addReportSection } from "../ui/report";
 import { duelReportSection, mountDuelOverlay, type DuelOverlay, type DuelReportView, type OverlayState, type StallKind } from "./hud";
 import type { PairingResult } from "./pairing";
 import {
-  HASH_EVERY, addOutcome, battleRecord, downloadRecord, duelEnd, readTally, tallyLine, withOutcome, writeRematch, type DuelOutcome, type DuelTally
+  HASH_EVERY, addOutcome, battleRecord, downloadRecord, duelEnd, moveOutcome, readTally, tallyLine, withOutcome, writeRematch, type DuelOutcome,
+  type DuelTally
 } from "./records";
 import { PEER_HEARD_MS, type Session } from "./session";
 
@@ -96,6 +110,8 @@ export const EXIT_WAIT_MS = 2500;
 const QUEUED_TICKS = 20;
 /** The fallback pump (ms): art loading blocks animation frames, and a hidden page gets none. */
 const PUMP_MS = 50;
+/** A lift sent this many ticks ago and still not stepped never will be (the codec dropped it): lift groups first forgets it. */
+const LIFT_FLIGHT_MAX = 600;
 
 /** What duelSetup (src/game/mode.ts) points the match at. */
 export interface DuelSetupConfig {
@@ -161,11 +177,20 @@ function browserEnv(): FeedEnv {
   };
 }
 
+/** What the feed reads of the audio rig (src/link/rig.ts Rig; tests pass a stand-in). */
+export type DuelRig = Pick<Rig, "state" | "failures" | "micMode" | "onLost" | "reconnect" | "captureOkMs">;
+
+/** A `lift` this phone sent that hasn't been stepped yet: the Goliath, and the Condors it named. */
+export interface LiftInFlight {
+  goliathId: number;
+  condors: readonly number[];
+}
+
 export interface VersusFeedOptions {
   /** Phase "starting": result() is set. The feed calls beginMatch in its constructor. */
   session: Session;
   /** The audio rig (null on a practice link, ?duel=loop or relay: no reconnect cover). */
-  rig: Rig | null;
+  rig: DuelRig | null;
   /** A practice link (no sound): no win/loss record, and the report says so. */
   practice: boolean;
   /** The other side's label (default "your friend"). */
@@ -186,24 +211,32 @@ const isLiftOrder = (c: Command): c is Extract<Command, { type: "move" | "attack
  * Lift groups first (see the header): each order a lift takes that names a
  * Goliath still hooking on together with any of its Condors becomes one
  * command naming exactly that Goliath and those Condors, then the order for
- * the rest of its units (none left: nothing). Other commands pass unchanged.
+ * the rest of its units (none left: nothing). A Goliath counts as hooking on
+ * while its lift is in the world, and while a lift for it is on its way:
+ * `inFlight` (sent, not stepped yet) or earlier in `cmds`. Lifts and other
+ * commands pass unchanged.
  */
-export function liftGroupsFirst(w: World, cmds: readonly Command[]): Command[] {
+export function liftGroupsFirst(w: World, cmds: readonly Command[], inFlight: readonly LiftInFlight[] = []): Command[] {
   const out: Command[] = [];
+  const sent = inFlight.slice();
   for (const c of cmds) {
+    if (c.type === "lift") sent.push({ goliathId: c.goliathId, condors: c.unitIds });
     if (!isLiftOrder(c)) {
       out.push(c);
       continue;
     }
-    const named = new Set(c.unitIds);
     const grouped = new Set<number>();
     const groups: number[][] = [];
     for (const id of c.unitIds) {
-      const lift = w.units.get(id)?.goliath?.lift;
-      if (!lift || lift.phase !== "hooking" || grouped.has(id) || w.units.get(id)!.faction !== c.faction) continue;
-      const carriers = lift.carriers.filter((cid) => named.has(cid));
-      if (carriers.length === 0) continue; // (its Condors not named: it waits, as a single order would leave it)
-      const ids = [id, ...carriers];
+      const g = w.units.get(id);
+      if (!g?.goliath || g.faction !== c.faction || grouped.has(id)) continue;
+      // its Condors: the lift's while it hooks on, and those any lift on its way names
+      const lift = g.goliath.lift;
+      const condors = new Set(lift?.phase === "hooking" ? lift.carriers : []);
+      for (const l of sent) if (l.goliathId === id) for (const cid of l.condors) condors.add(cid);
+      const ids = [id];
+      for (const cid of c.unitIds) if (condors.has(cid) && !grouped.has(cid) && !ids.includes(cid)) ids.push(cid);
+      if (ids.length === 1) continue; // (its Condors not named: it waits, as a single order would leave it)
       for (const i of ids) grouped.add(i);
       groups.push(ids);
     }
@@ -234,7 +267,7 @@ export class VersusFeed implements MatchFeed {
   readonly duel: DuelHud;
 
   private readonly env: FeedEnv;
-  private readonly rig: Rig | null;
+  private readonly rig: DuelRig | null;
   private readonly onExit: () => void;
   private readonly onFrame: ((deltaMs: number) => void) | null;
   private readonly created: string;
@@ -251,13 +284,15 @@ export class VersusFeed implements MatchFeed {
   private readonly hashes: [number, string][] = [];
   /** The commands commands() handed over for the step afterTick follows. */
   private stepping: Command[] | null = null;
+  /** This phone's lifts sent and not stepped yet (lift groups first), with the tick each was drained on. */
+  private readonly lifts: (LiftInFlight & { at: number })[] = [];
 
   private userPaused = false;
   /** The tick a resign was ordered on (null: none), and whether it was "Resign and leave". */
   private resignAt: number | null = null;
   private resignLeave = false;
   private aborted: AbortReason | null = null;
-  /** The outcome counted (once), and the record as it then stood. */
+  /** The outcome counted (once, or moved to no contest once: settle), and the record as it then stood. */
   private settled: DuelOutcome | null = null;
   private tally: DuelTally | null = null;
   /** The latest stall shown, kept while paused (the pause menu's Leave), cleared once the match moves. */
@@ -340,7 +375,7 @@ export class VersusFeed implements MatchFeed {
     const root = doc?.getElementById("hud");
     if (root) {
       this.ui = mountDuelOverlay(root, { reconnect: () => this.reconnect(), leave: () => this.leave() });
-      this.teardown.push(addReportSection(duelReportSection(() => this.reportView())));
+      this.teardown.push(addReportSection(duelReportSection(() => this.reportView(), { reconnect: () => this.reconnect() })));
     }
     this.pump();
   }
@@ -351,7 +386,12 @@ export class VersusFeed implements MatchFeed {
     if (!scene || this.closed || this.aborted) return null;
     // (paused since the last pump: nothing is sealed, whoever calls)
     this.syncPause(scene);
-    const cmds = this.session.commandsFor(tick, () => liftGroupsFirst(this.world, scene.ctrl.drainCommands()));
+    const cmds = this.session.commandsFor(tick, () => {
+      const drained = scene.ctrl.drainCommands();
+      const out = liftGroupsFirst(this.world, drained, this.lifts);
+      for (const c of drained) if (c.type === "lift") this.lifts.push({ goliathId: c.goliathId, condors: c.unitIds.slice(), at: tick });
+      return out;
+    });
     this.stepping = cmds;
     return cmds;
   }
@@ -368,7 +408,15 @@ export class VersusFeed implements MatchFeed {
     }
     this.session.afterStep(t, parseInt(hash, 16), w.winner ? { winner: w.winner, resigned: w.resigned ?? null } : null);
     if (w.tick % HASH_EVERY === 0) this.hashes.push([w.tick, hash]);
-    this.scene?.ctrl.landed(cmds.filter((c) => c.faction === this.local));
+    const mine = cmds.filter((c) => c.faction === this.local);
+    this.scene?.ctrl.landed(mine);
+    // (the lifts that landed are in the world now; one the codec dropped, naming too many Condors, never lands)
+    for (const c of mine)
+      if (c.type === "lift") {
+        const i = this.lifts.findIndex((l) => l.goliathId === c.goliathId);
+        if (i >= 0) this.lifts.splice(i, 1);
+      }
+    while (this.lifts.length > 0 && t - this.lifts[0]!.at > LIFT_FLIGHT_MAX) this.lifts.shift();
   }
 
   /** Every frame: pump, overlays, and a practice peer's step. */
@@ -432,8 +480,8 @@ export class VersusFeed implements MatchFeed {
     this.session.setPaused(paused);
   }
 
-  /** What the overlays show now. */
-  private overlay(): OverlayState {
+  /** What the overlays show now (each pump; public for tests). */
+  overlay(): OverlayState {
     const st = this.session.status();
     const ls = st.lockstep;
     const over = this.aborted !== null || !!this.world.winner || this.session.phase === "ended";
@@ -450,10 +498,11 @@ export class VersusFeed implements MatchFeed {
       stall,
       queued: !over && !!ls && ls.queuedTicks > QUEUED_TICKS,
       resigning: this.resignAt !== null && !over,
+      // (over, the end screen is up: the report offers the reconnect instead, under its own buttons)
       reconnect:
-        this.linkPhase === "ok" || this.exiting
+        this.linkPhase === "ok" || this.exiting || over
           ? null
-          : { phase: this.linkPhase, leave: (this.rig?.failures ?? 0) >= LEAVE_AFTER_FAILURES && !over },
+          : { phase: this.linkPhase, leave: (this.rig?.failures ?? 0) >= LEAVE_AFTER_FAILURES },
       leaving: this.exiting !== null
     };
   }
@@ -490,8 +539,8 @@ export class VersusFeed implements MatchFeed {
     };
   }
 
-  /** The cover's tap, inside the gesture. */
-  private reconnect(): void {
+  /** The reconnect cover's tap, or the report's: inside the gesture (rig.reconnect() resumes the audio). */
+  reconnect(): void {
     const rig = this.rig;
     if (!rig || this.linkPhase === "ok" || this.linkPhase === "trying" || this.linkPhase === "settling") return;
     this.linkPhase = "trying";
@@ -519,17 +568,35 @@ export class VersusFeed implements MatchFeed {
     this.scene?.abort(reason, reason === "desync" ? this.debugInfo() : undefined);
   }
 
-  /** Count the match once (never on a practice link). */
+  /**
+   * Count the match once (never on a practice link), but for one correction:
+   * a result counted when the end check said "Not verified" that the worlds
+   * then turn out to contradict (the friend's end = 2, or its end report
+   * arriving while Menu or Rematch waits) is no contest, as the end screen
+   * then says, and moves over in the record.
+   */
   private settle(o: DuelOutcome): void {
-    if (this.settled) return;
+    if (this.settled === null) {
+      this.settled = o;
+      if (!this.practice) this.tally = addOutcome(o, this.env.local);
+      return;
+    }
+    const decided = this.settled === "win" || this.settled === "loss" || this.settled === "draw";
+    if (o !== "noContest" || !decided) return;
+    if (!this.practice) this.tally = moveOutcome(this.settled, o, this.env.local);
     this.settled = o;
-    if (!this.practice) this.tally = addOutcome(o, this.env.local);
   }
 
-  /** The outcome as it stands, for a record not yet written: decided, else abandoned. */
+  /** The outcome as the lockstep has it: out of sync, else decided; null while neither. */
+  private currentOutcome(): DuelOutcome | null {
+    const st = this.session.lockstep?.status();
+    if (st?.desync) return "noContest";
+    return st?.decided ? outcomeOf(st.decided.winner, this.local) : null;
+  }
+
+  /** The outcome as it stands, for a record not yet written (leaving): as the lockstep has it, else abandoned. */
   private pendingOutcome(): DuelOutcome {
-    const d = this.session.lockstep?.status().decided;
-    return d ? outcomeOf(d.winner, this.local) : "abandoned";
+    return this.currentOutcome() ?? "abandoned";
   }
 
   /** Menu or Rematch: the end goes out (closable, or EXIT_WAIT_MS at most), then onExit and reload. */
@@ -628,24 +695,23 @@ export class VersusFeed implements MatchFeed {
     });
   }
 
-  /** The report's Sound duel block. */
-  private reportView(): DuelReportView {
+  /** The report's Sound duel block (read while the report is up; public for tests). */
+  reportView(): DuelReportView {
     const st = this.session.status();
     const ls = st.lockstep;
-    const sync: DuelReportView["sync"] = this.aborted
-      ? this.aborted
-      : ls?.endCheck === "ok"
-        ? "ok"
-        : ls?.endCheck === "unverified"
-          ? "unverified"
-          : ls?.endCheck === "mismatch"
-            ? "desync"
-            : "pending";
-    const decided = ls?.decided ?? null;
-    const tally = this.tally ?? (decided ? withOutcome(readTally(this.env.local), outcomeOf(decided.winner, this.local)) : readTally(this.env.local));
+    const check = ls?.endCheck;
+    const sync: DuelReportView["sync"] =
+      this.aborted ?? (ls?.desync || check === "mismatch" ? "desync" : check === "ok" || check === "unverified" ? check : "pending");
+    // (not counted yet: the record as it will be)
+    const now = this.currentOutcome();
+    const tally = this.tally ?? (now ? withOutcome(readTally(this.env.local), now) : readTally(this.env.local));
     return {
       record: this.practice ? null : tallyLine(tally),
       sync,
+      // (the link still brings the end check and the friend's rematch; not once this phone has left)
+      relink: this.linkPhase === "ok" || this.exiting || this.aborted === "lost" ? null : this.linkPhase,
+      // (a lobby frame after the friend's game frames: its page reloaded into the lobby)
+      friendInLobby: !!ls && ls.peerInLobby && ls.framesIn > 0 && !this.exiting,
       link: { good: st.link.rxOk, bad: st.link.rxBad, stallMs: ls?.stallMs ?? 0, orderDelayMs: ls && ls.orderDelay !== null ? ls.orderDelay * 100 : null }
     };
   }

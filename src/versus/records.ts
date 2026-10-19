@@ -5,8 +5,9 @@
  *
  * Win/loss. localStorage `battledrones.soundduel` holds { w, l, d,
  * abandoned, noContest }. The feed adds one outcome per match, when the
- * match's result is final (or on an abort); practice links (?duel=loop,
- * ?duel=relay) never write it.
+ * match's result is final (or on an abort), and moves it once to no contest
+ * if a result counted as "Not verified" turns out out of sync after all;
+ * practice links (?duel=loop, ?duel=relay) never write it.
  *
  * Save battle. The record replays exactly through the battle viewer and the
  * arena tools: the setup the pairing agreed, every non-empty turn as the two
@@ -97,6 +98,22 @@ export function addOutcome(o: DuelOutcome, store: Store | null): DuelTally {
     /* blocked: the report still shows it */
   }
   return t;
+}
+
+/**
+ * Recount one match already counted as `from` as `to` instead (a result that
+ * turned out to be no contest): returns the record as stored.
+ */
+export function moveOutcome(from: DuelOutcome, to: DuelOutcome, store: Store | null): DuelTally {
+  const t = readTally(store);
+  const f = FIELD[from];
+  const back = withOutcome({ ...t, [f]: Math.max(0, t[f] - 1) }, to);
+  try {
+    store?.setItem(RECORD_KEY, JSON.stringify(back));
+  } catch {
+    /* blocked: the report still shows it */
+  }
+  return back;
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
