@@ -14,8 +14,18 @@
  *    Beyond about 500 ppm between the phones the slope is ambiguous by a
  *    turn of the pilots (tracker.ts). When the stream's previous sync is
  *    still in the correlator's history, one superframe earlier, the timing
- *    difference of the two (the spec's other initialisation) picks the turn;
- *    otherwise the turn whose pilots fit clearly best does.
+ *    difference of the two (the spec's other initialisation) picks the turn.
+ *    Otherwise the friend's clock as the lock knew it does (the live lock's
+ *    ε̂, or the last one's after it dropped): a friend whose stream restarted
+ *    (a jump) or stepped keeps its clock, and its new sync has no previous
+ *    one a superframe before it. With neither, the turn whose pilots fit
+ *    clearly best does; but near 600 ppm the first pass looks for every tone
+ *    nearly half a bin from where it is, the tones leak into each other, and
+ *    two turns can fit about as well. Then a first packet that fails on the
+ *    best gets a second try on the other, from the sync again, before the
+ *    candidate is given up: the CRC and the gate decide, as they do the mode
+ *    of a superframe whose sync was missed. (Without these, at 600 ppm half
+ *    the acquisitions without a pair waited a superframe for one.)
  *  - Locked, every expected sync is re-correlated within ±5 ms: it sets the
  *    superframe's mode and trims the timing by at most 0.5 ms. If neither
  *    pattern clears 0.3, the timing stays and that superframe's packets are
@@ -110,6 +120,12 @@ export class Receiver {
   private readonly prevSync: Recorr = { rho: 0, t: 0, mode: null };
   private pairEps = 0;
   private hasPair = false;
+  /** The friend's clock as the lock knew it: the live lock's ε̂, or the last one's once it dropped (NaN: none since configure()). */
+  private lastEps = NaN;
+  /** The trial's clock before its first packet was tried (a reference picked its turn: the pair, or the lock's clock). */
+  private trialRef = NaN;
+  /** The runner-up turn's clock, when the pilots fit it about as well and nothing else picked the turn (NaN: none). */
+  private altEps = NaN;
   private readonly maxShift: number;
   private readonly near: number;
   // stats
@@ -166,6 +182,7 @@ export class Receiver {
     this.fails = 0;
     this.hasSnr = false;
     this.rxMode = null;
+    this.lastEps = NaN;
     this.recent.fill(-Infinity);
     this.search.setBands(bands, mon, this.ring.end);
   }
@@ -229,6 +246,10 @@ export class Receiver {
     const sf = this.t.superframe;
     this.hasPair = this.search.recorrelate(corr, t - sf, ps) && ps.rho >= RHO_DETECT && Math.abs((t - ps.t) / sf - 1) <= EPS_LIMIT;
     this.pairEps = (t - ps.t) / sf - 1;
+    // otherwise the friend's clock as the lock knew it: a stream that restarted (a jump, a new superframe) or stepped
+    // keeps its clock, and its new sync has no previous one a superframe earlier
+    this.trialRef = this.hasPair ? this.pairEps : this.main ? this.main.eps : this.lastEps;
+    this.altEps = NaN;
     tr.gen = this.trialGen = ++this.gens;
     tr.begin(corr.tables, t, 0, true, false, 1 + CLOCK_SYMBOLS);
     this.trial = tr;
@@ -240,6 +261,7 @@ export class Receiver {
     this.trial = null;
     this.trialStage = 0;
     this.trialGen = -1;
+    this.altEps = NaN;
     if (this.hasNext) {
       this.hasNext = false;
       const n = this.next;
@@ -254,18 +276,20 @@ export class Receiver {
       if (tr.active) return;
       // the clock from the pilots' mean slope, on the right turn, then demodulate from the sync again
       const k = -1 / (Math.max(tr.nslopes, 1) * 2 * Math.PI * TS);
+      const ref = this.trialRef;
       let best = 1;
       for (let n = 0; n < 3; n++) {
-        if (this.hasPair) {
-          if (Math.abs(k * tr.slopeSum[n]! - this.pairEps) < Math.abs(k * tr.slopeSum[best]! - this.pairEps)) best = n;
+        if (!Number.isNaN(ref)) {
+          if (Math.abs(k * tr.slopeSum[n]! - ref) < Math.abs(k * tr.slopeSum[best]! - ref)) best = n;
         } else if (tr.fitErr[n]! < TURN_MARGIN * tr.fitErr[1]! && tr.fitErr[n]! < tr.fitErr[best]!) best = n;
       }
-      const eps = k * tr.slopeSum[best]!;
-      const c = this.cand;
-      tr.gen = this.trialGen = ++this.gens;
-      tr.begin(c.corr!.tables, c.t, Math.max(-1e-3, Math.min(1e-3, eps)), false, true, Infinity);
-      tr.sfMode = c.mode;
-      this.trialStage = 2;
+      if (Number.isNaN(ref)) {
+        // nothing but the fit picked it: a turn that fits about as well gets the first packet's second try
+        let alt = -1;
+        for (let n = 0; n < 3; n++) if (n !== best && (alt < 0 || tr.fitErr[n]! < tr.fitErr[alt]!)) alt = n;
+        if (TURN_MARGIN * tr.fitErr[alt]! < tr.fitErr[best]!) this.altEps = k * tr.slopeSum[alt]!;
+      }
+      this.demodulate(tr, k * tr.slopeSum[best]!);
       return;
     }
     const jd = tr.lastJ;
@@ -295,6 +319,15 @@ export class Receiver {
       job.closes = unknown && mode === "robust";
       this.enqueue(job);
     }
+  }
+
+  /** The trial's second pass: from its sync again, the tones where the clock `eps` puts them. */
+  private demodulate(tr: Tracker, eps: number): void {
+    const c = this.cand;
+    tr.gen = this.trialGen = ++this.gens;
+    tr.begin(c.corr!.tables, c.t, Math.max(-EPS_LIMIT, Math.min(EPS_LIMIT, eps)), false, true, Infinity);
+    tr.sfMode = c.mode;
+    this.trialStage = 2;
   }
 
   /** The expected sync of the lock's superframe: timing trim and mode, once ρ is known there. */
@@ -346,6 +379,11 @@ export class Receiver {
         this.promote();
         if (this.deliver(job)) this.rxOk++;
         this.quality(job);
+      } else if (!Number.isNaN(this.altEps) && this.trial) {
+        // the other turn, once
+        const eps = this.altEps;
+        this.altEps = NaN;
+        this.demodulate(this.trial, eps);
       } else this.abortTrial();
     } else if (job.gen === this.mainGen && this.main) {
       this.decoder.run(job, this.sessionKey);
@@ -392,6 +430,7 @@ export class Receiver {
       this.fails++;
     }
     if (this.syncMissed && this.fails >= DROP_AFTER) {
+      this.lastEps = main.eps;
       main.stop();
       this.main = null;
       this.mainCorr = null;

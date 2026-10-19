@@ -20,7 +20,10 @@
  * `battledrones.duel` = { role, plan, micMode, hostSide, mapId, mutators },
  * the host side already flipped: rematches swap sides, never roles or bands.
  * main.ts reads it at boot, before any audio context exists, and the lobby
- * pairs with it.
+ * pairs with it. The keys, the token and the parser live here alone: the
+ * lobby re-exports them, and main.ts, which may import the duel's types only,
+ * ties its literals to them by type (`typeof DuelLobby.REMATCH_KEY`), as
+ * tests/versus-rematch.test.ts checks too.
  *
  * Engine-free and DOM-light: storage and the document come in as arguments,
  * so tests pass their own (or null, where storage is blocked).
@@ -33,7 +36,9 @@
  *    tick reached, and maxTicks is the end tick, so the viewer's seek bar
  *    ends where the match did. Both sides resigning on one tick ends it as a
  *    draw by "resign", not "love" as the arena's endOf has every draw;
- *  - the seats name the bands: "sound-duel:host" and "sound-duel:guest";
+ *  - the seats name the bands: "sound-duel:host" and "sound-duel:guest"
+ *    (the battle viewer labels them "Host phone" and "Guest phone" with the
+ *    opener's name: src/game/replay.ts, which may not import this);
  *  - the file is named battledrones-duel-<map>-<date>.json.
  */
 import type { BattleEnd, BattleRecord } from "../arena/record";
@@ -48,7 +53,11 @@ import type { Command, Faction } from "../sim/types";
 export const HASH_EVERY = 100;
 /** localStorage: the sound-duel record. */
 export const RECORD_KEY = "battledrones.soundduel";
-/** sessionStorage: what the reloaded page starts with, and the duel it rematches. */
+/**
+ * sessionStorage: what the reloaded page starts with (the single-player end
+ * screen's Rematch writes its own tokens under the same key: "1", "spectate",
+ * "daily", "op:<id>"), the sound duel's token, and the duel it rematches.
+ */
 export const REMATCH_KEY = "battledrones.rematch";
 export const REMATCH_DUEL = "duel";
 export const DUEL_KEY = "battledrones.duel";
@@ -228,21 +237,35 @@ export function writeRematch(p: RematchPlan, store: Pick<Storage, "setItem"> | n
   }
 }
 
-/** The stored rematch, checked field by field; null when there is none or it can't be used. */
-export function readRematch(store: Pick<Storage, "getItem"> | null): RematchPlan | null {
+/**
+ * A stored rematch (DUEL_KEY's JSON), checked field by field; null when there
+ * is none or it can't be used. A microphone mode it can't read is the default
+ * one ("raw"), and unknown mutators drop out: the rest still makes the
+ * rematch. The lobby reads with this alone: by then main.ts has taken the
+ * token.
+ */
+export function parseRematch(raw: string | null): RematchPlan | null {
+  if (!raw) return null;
   try {
-    if (store?.getItem(REMATCH_KEY) !== REMATCH_DUEL) return null;
-    const raw = store.getItem(DUEL_KEY);
-    const o = raw ? (JSON.parse(raw) as Partial<Record<keyof RematchPlan, unknown>> | null) : null;
+    const o = JSON.parse(raw) as Partial<Record<keyof RematchPlan, unknown>> | null;
     if (!o || typeof o !== "object") return null;
     const { role, plan, micMode, hostSide, mapId, mutators } = o;
     if (role !== "host" && role !== "guest") return null;
     if (plan !== "high" && plan !== "low") return null;
-    if (micMode !== "raw" && micMode !== "ec") return null;
     if (hostSide !== "blue" && hostSide !== "red") return null;
     if (typeof mapId !== "string" || !isKnownMapId(mapId)) return null;
     const muts = Array.isArray(mutators) ? mutators.filter((m): m is MutatorId => typeof m === "string" && isMutatorId(m)) : [];
-    return { role, plan, micMode, hostSide, mapId, mutators: muts };
+    return { role, plan, micMode: micMode === "ec" ? "ec" : "raw", hostSide, mapId, mutators: muts };
+  } catch {
+    return null;
+  }
+}
+
+/** The stored rematch with its token (what the next boot sees), or null. */
+export function readRematch(store: Pick<Storage, "getItem"> | null): RematchPlan | null {
+  try {
+    if (store?.getItem(REMATCH_KEY) !== REMATCH_DUEL) return null;
+    return parseRematch(store.getItem(DUEL_KEY));
   } catch {
     return null;
   }

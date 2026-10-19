@@ -128,6 +128,8 @@
 .duelsheet .op-art .op-u { width: 36px; height: 36px; }
 .duelsheet .op-art .op-n { top: 22px; font-size: 13px; }
 .duelsheet .op-name { font-size: 18px; }
+/* what the opener gives (the single-player picker's pills, as one line) */
+.duelsheet .op-gives { font-size: 12px; font-weight: 700; color: var(--dim); line-height: 1.25; }
 .duel-cards.chosen .op-card { animation: none; }
 .duel-cards.chosen .op-card:not(.picked) { opacity: 0.3; transform: scale(0.97); }
 .duel-go {

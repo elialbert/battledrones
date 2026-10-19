@@ -135,7 +135,14 @@ export class Tracker {
    * 1) and for the fits one turn either side (0: −2π, 2: +2π). Beyond about
    * ±500 ppm between the phones a 19 kHz pilot turns by more than π per
    * symbol and the unwrap lands on the wrong turn; across the band's 3 kHz
-   * the wrong turn fits visibly worse, so the receiver keeps the best.
+   * the wrong turn fits visibly worse, so the receiver keeps the best. The
+   * sums only mean that while every symbol is unwrapped on the same turn:
+   * near ±600 ppm the pilots' mean turn lies close to π, and each symbol's
+   * own mean would fall on either side of it by chance, mixing two turns in
+   * the sum (none of the three fits is then the truth: at 50 cm the guest
+   * of a pair 600 ppm apart was never acquired in fast mode). So from the
+   * second symbol on, the pilots are unwrapped against the mean of the
+   * symbols before.
    */
   readonly slopeSum = new Float64Array(3);
   readonly fitErr = new Float64Array(3);
@@ -418,8 +425,10 @@ export class Tracker {
     }
     let s = 0;
     if (wsum > 0) {
-      // unwrap each pilot against the mean slope, then fit through the origin
-      const s0 = Math.atan2(zi, zr) / (fsum / wsum);
+      // unwrap each pilot against a slope, then fit through the origin. The slope is the symbol's own mean, except
+      // while measuring the clock: there it is the mean of the symbols before, so every symbol lands on the same turn
+      // (see slopeSum)
+      const s0 = !this.adapt && this.nslopes > 0 ? this.slopeSum[1]! / this.nslopes : Math.atan2(zi, zr) / (fsum / wsum);
       let num = 0;
       let den = 0;
       let sa = 0;

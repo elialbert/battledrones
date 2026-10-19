@@ -100,6 +100,13 @@ const duelPractice = ["loop", "relay"].includes(new URLSearchParams(location.sea
 const canDuel = (): boolean =>
   duelPractice || (window.isSecureContext && typeof AudioWorkletNode === "function" && typeof navigator.mediaDevices?.getUserMedia === "function");
 const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend's)";
+/**
+ * sessionStorage: what the next boot skips into (the end screen's Rematch: "1", "spectate", "daily", "op:<id>",
+ * or a sound duel's "duel"). The duel's records.ts owns the key and the duel's token; main.ts may import the
+ * duel's types only, so these literals are tied to them by type (and tests/versus-rematch.test.ts reads them).
+ */
+const REMATCH_KEY: typeof DuelLobby.REMATCH_KEY = "battledrones.rematch";
+const DUEL_REMATCH: typeof DuelLobby.REMATCH_DUEL = "duel";
 /** iOS's audio session (navigator.audioSession): "play-and-record" from a duel's rematch boot, "auto" again when it's declined. */
 const setAudioSession = (type: "auto" | "play-and-record") => {
   try {
@@ -211,15 +218,15 @@ function showMenu(linkedMap?: string | null): void {
   // "Rematch" from an end screen: what to skip straight into (read below)
   let token: string | null = null;
   try {
-    token = sessionStorage.getItem("battledrones.rematch");
-    sessionStorage.removeItem("battledrones.rematch");
+    token = sessionStorage.getItem(REMATCH_KEY);
+    sessionStorage.removeItem(REMATCH_KEY);
   } catch {
     /* ignore */
   }
   // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, the link's audio session
   // and link mode; the menu's sound waits for the reconnect tap. (A practice link opens no rig and no guard,
   // so neither: nothing would put the session back.)
-  const duelRematch = token === "duel";
+  const duelRematch = token === DUEL_REMATCH;
   if (duelRematch && !duelPractice) {
     setAudioSession("play-and-record");
     sfx.linkMode = true;
@@ -716,7 +723,10 @@ function showMenu(linkedMap?: string | null): void {
     scr.className = "screen";
     scr.style.position = "fixed"; // (over the menu, which scrolls)
     scr.innerHTML = `<div class="loadbox">
-        <button class="cta big" id="duel-rematch" disabled>Rematch · tap to reconnect<br /><small>(allow the microphone if asked)</small></button>
+        <button class="cta big" id="duel-rematch" disabled>${
+          // (a practice link has no sound to reconnect and asks for no microphone)
+          duelPractice ? "Rematch · tap to start" : "Rematch · tap to reconnect<br /><small>(allow the microphone if asked)</small>"
+        }</button>
         <button class="cta alt" id="duel-menu">Menu</button>
       </div>`;
     menu.appendChild(scr);

@@ -312,6 +312,35 @@ describe("two modems through the room, both transmitting", () => {
   );
 
   it(
+    "hears a friend 600 ppm fast, sending fast from 50 cm, from its first sync, and again within a second of the friend's frame counter jumping",
+    () => {
+      // the far end of the clocks (each phone 300 ppm off): a 19 kHz pilot turns about π a symbol, so which turn the
+      // pilots' slope is on is a close call. A Join detecting the plan, as in the lobby; and mid-match, a stream that
+      // restarted has no previous sync a superframe earlier to pick the turn with. (Seed 13 needs the second try on the
+      // other turn; seed 14 the lock's own clock; both needed the pilots unwrapped on one turn across the clock pass,
+      // without which the host never heard the guest at all in RoomLink with seed 312.)
+      for (const seed of [13, 14]) {
+        const d = new Duplex({ seed, distanceCm: 50, a: { ppm: -300, noise: 1.5e-4 }, b: { sampleRate: 44100, ppm: 300, noise: 1.5e-4 } }, "fast", [{}, { rx: "detect" }]);
+        d.room.run(4);
+        const started = d.sent[1].get(0)![1];
+        const first = d.arrivals(0, 0)[0];
+        expect(first, `seed ${seed} never heard`).toBeDefined();
+        expect(first! - started, `seed ${seed}`).toBeLessThan(1);
+        expect(d.delivery(1, first!, 3.5).frac, `seed ${seed}`).toBeGreaterThanOrEqual(0.95);
+        const resumed = d.room.time + 0.7;
+        d.room.jump(1, 700);
+        d.room.run(4);
+        const again = d.arrivals(0, resumed);
+        expect(again.length, `seed ${seed}`).toBeGreaterThan(20);
+        expect(again[0]! - resumed, `seed ${seed}`).toBeLessThan(1);
+        expect(d.wrong).toEqual([0, 0]);
+        expect(Math.abs(d.m[0].stats().clockPpm! - 600)).toBeLessThan(10);
+      }
+    },
+    60_000
+  );
+
+  it(
     "recovers within 2.5 s of a 1 s capture gap, keeping its timing, and reports the gap",
     () => {
       const d = new Duplex({ seed: 41, distanceCm: 20, a: { ownDb: 30 }, b: { ownDb: 30, sampleRate: 44100, ppm: -200 } }, "robust");

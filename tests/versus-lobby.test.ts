@@ -9,9 +9,12 @@ import type { BandPlan, BandRole, LinkStats, LinkTransport } from "../src/link/t
 import { worldHash } from "../src/sim/checksum";
 import type { World } from "../src/sim/types";
 import {
-  GAIN_MIN, GAIN_STEP, LobbyMachine, QUIET_MS, REMATCH_FALLBACK_MS, ROUTE_GRACE_MS, ROUTE_MS, TIPS_MS, cutDbFor, parseDuelParams, parsePrefs, parseRematch,
-  type DuelRematch, type LobbyEnd, type LobbyEnv, type LobbyLink, type LobbyRig
+  GAIN_MIN, GAIN_QUIET_MS, GAIN_RISE, GAIN_RISE_MS, GAIN_START, GAIN_STEP, GAIN_STEP_MS, LOUD_MS, LOUD_OWN_SNR_DB, LobbyMachine, QUIET_MS, REMATCH_FALLBACK_MS,
+  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, cutDbFor, openerGives, parseDuelParams, parsePrefs, parseRematch, rttLine, tipsText, type DuelRematch,
+  type LobbyEnd, type LobbyEnv, type LobbyLink, type LobbyRig
 } from "../src/versus/lobby";
+import { OPENERS, OPENER_IDS } from "../src/sim/openers";
+import { UNITS } from "../src/sim/balance";
 import { HeldEnd, LoopFriend, LoopLink, lobbyLatencyFor } from "../src/versus/loop-peer";
 import { NOTHING_HEARD_MS, delayFor, packetMs } from "../src/versus/pairing";
 import { RelayTransport, decodeRelayPacket, encodeRelayPacket, type RelayWindow } from "../src/versus/relay-transport";
@@ -85,6 +88,43 @@ describe("the rematch a report stored", () => {
     expect(parseRematch(JSON.stringify({ ...good, mapId: "atlantis" }))).toBeNull();
     // (a mic mode it can't read is the default one)
     expect(parseRematch(JSON.stringify({ ...good, micMode: "loud" }))?.micMode).toBe("raw");
+  });
+});
+
+describe("the lobby's words", () => {
+  it("the 30 s tips: Advanced only where it is offered, and no sound advice on a practice link", () => {
+    const sound = tipsText({ practice: null, rematch: false });
+    expect(sound).toMatch(/volume up/);
+    expect(sound).toMatch(/band Low on the host \(Advanced\)/);
+    // (a rematch keeps its band, and has no Advanced)
+    const rematch = tipsText({ practice: null, rematch: true });
+    expect(rematch).toMatch(/volume up/);
+    expect(rematch).not.toMatch(/Advanced|band Low/);
+    for (const practice of ["loop", "relay"] as const)
+      for (const r of [false, true]) expect(tipsText({ practice, rematch: r })).not.toMatch(/volume|silent switch|Bluetooth|Advanced|headphones/i);
+  });
+
+  it("the meter's round trip, and on the loop the input delay instead", () => {
+    const pairing = (delay: number | null) => ({ config: delay === null ? null : { delay } }) as unknown as NonNullable<Parameters<typeof rttLine>[0]["pairing"]>;
+    const meter = (rttMs: number | null) => ({ snrDb: null, good: 0, bad: 0, rxq: 0, peerRxq: null, rttMs });
+    expect(rttLine({ practice: null, pairing: pairing(4), meter: meter(512.4) })).toBe("Round trip 512 ms");
+    expect(rttLine({ practice: null, pairing: null, meter: meter(null) })).toBe("Round trip: measuring…");
+    expect(rttLine({ practice: "relay", pairing: pairing(4), meter: meter(300) })).toBe("Round trip 300 ms");
+    // (the loop's friend holds the lobby's packets to force &delay: 2999 ms means nothing there)
+    expect(rttLine({ practice: "loop", pairing: pairing(8), meter: meter(2999) })).toBe("Practice link · input delay 800 ms");
+    expect(rttLine({ practice: "loop", pairing: pairing(null), meter: meter(2999) })).toBe("Practice link");
+  });
+
+  it("the opener cards say what each gives, from the same data as the single-player picker", () => {
+    expect(openerGives("blitz")).toBe("Fab Plant · 3 Stingers · 2 Harvesters · −100 scrap");
+    for (const id of OPENER_IDS) {
+      const o = OPENERS[id];
+      const line = openerGives(id);
+      expect(line).toContain(`${o.harvesters} Harvesters`);
+      for (const k of new Set(o.units)) expect(line).toContain(`${o.units.filter((u) => u === k).length} ${UNITS[k].name}s`);
+      if (o.scrap === 0) expect(line).not.toMatch(/scrap/);
+      else expect(line).toMatch(o.scrap > 0 ? `+${o.scrap} scrap` : `−${-o.scrap} scrap`);
+    }
   });
 });
 
@@ -593,30 +633,96 @@ describe("the lobby's logic", () => {
     expect(b.m.state().route).toBe(true);
   });
 
-  it("a loud own signal lowers the gain by 3 dB a second, never below the floor", { timeout: 30_000 }, async () => {
+  /** `n` stats reports, one every 250 ms (the worklet's rate), with this microphone peak. */
+  const reports = async (b: Bench, probe: Probe, n: number, peak: number) => {
+    for (let i = 0; i < n; i++) {
+      probe.peak = peak;
+      probe.sample++;
+      await b.run(250);
+    }
+  };
+  /** Reports in LOUD_MS: the one at its end is the first a run of loud ones acts on. */
+  const RUN = LOUD_MS / 250;
+
+  it("a loud own signal: only the own signal heard well counts, and only a run of 2 s, not a transient", { timeout: 30_000 }, async () => {
     const b = bench({ friend: false });
     await flush();
     b.m.host();
     await flush();
     const probe = b.links[0]!.probe;
-    probe.peak = 0.3;
-    for (let i = 0; i < 5; i++) {
-      probe.sample++;
-      await b.run(250);
+    probe.own = 40;
+    // under −6 dBFS: nothing
+    await reports(b, probe, 3 * RUN, 0.3);
+    // a clap, a knock, a word: loud reports for less than 2 s, then a quiet one, again and again
+    for (let k = 0; k < 4; k++) {
+      await reports(b, probe, RUN, 0.9);
+      await reports(b, probe, 1, 0.2);
     }
     expect(probe.gains).toEqual([]);
+    // loud for long, with the own signal faint (heard, but not well: someone talking, music): not this phone's
+    probe.own = LOUD_OWN_SNR_DB - 5;
+    expect(probe.own).toBeGreaterThanOrEqual(ROUTE_SNR_DB);
+    await reports(b, probe, 4 * RUN, 0.9);
+    // … or not heard at all
+    probe.own = null;
+    await reports(b, probe, 4 * RUN, 0.9);
+    expect(probe.gains).toEqual([]);
     expect(b.m.state().loud).toBe(false);
-    probe.peak = 0.8;
-    for (let i = 0; i < 4 * 12; i++) {
-      probe.sample++;
-      await b.run(250);
-    }
+  });
+
+  it("a loud own signal lowers the gain by 3 dB a second to the floor, and it climbs back by 1 dB every 2 s once quiet", { timeout: 30_000 }, async () => {
+    const b = bench({ friend: false });
+    await flush();
+    b.m.host();
+    await flush();
+    const probe = b.links[0]!.probe;
+    probe.own = 40;
+    await reports(b, probe, RUN, 0.9);
+    expect(probe.gains).toEqual([]);
+    expect(b.m.state().loud).toBe(false);
+    // 2 s of it: −3 dB, then −3 dB a second, never below the floor
+    await reports(b, probe, 1, 0.9);
+    expect(probe.gains).toHaveLength(1);
+    expect(probe.gains[0]).toBeCloseTo(GAIN_START * GAIN_STEP, 6);
     expect(b.m.state().loud).toBe(true);
-    expect(probe.gains[0]).toBeCloseTo(GAIN_STEP, 6);
-    expect(probe.gains[1]).toBeCloseTo(GAIN_STEP ** 2, 6);
-    expect(probe.gains.length).toBeLessThanOrEqual(12);
-    expect(Math.min(...probe.gains)).toBeGreaterThanOrEqual(GAIN_MIN);
-    expect(Math.max(...probe.gains)).toBeLessThanOrEqual(1.1);
+    await reports(b, probe, (10 * GAIN_STEP_MS) / 250, 0.9);
+    expect(probe.gains[1]).toBeCloseTo(GAIN_START * GAIN_STEP ** 2, 6);
+    expect(probe.gains.at(-1)).toBe(GAIN_MIN);
+    expect(probe.gains).toHaveLength(Math.ceil(Math.log(GAIN_MIN / GAIN_START) / Math.log(GAIN_STEP)));
+    // quiet: nothing for 5 s, then 1 dB every 2 s, up to the gain chosen and no further
+    const low = probe.gains.length;
+    await reports(b, probe, GAIN_QUIET_MS / 250 - 1, 0.3);
+    expect(probe.gains).toHaveLength(low);
+    await reports(b, probe, 1, 0.3);
+    expect(probe.gains).toHaveLength(low + 1);
+    expect(probe.gains.at(-1)).toBeCloseTo(GAIN_MIN * GAIN_RISE, 6);
+    await reports(b, probe, GAIN_RISE_MS / 250 - 1, 0.3);
+    expect(probe.gains).toHaveLength(low + 1);
+    await reports(b, probe, 1, 0.3);
+    expect(probe.gains.at(-1)).toBeCloseTo(GAIN_MIN * GAIN_RISE ** 2, 6);
+    expect(b.m.state().loud).toBe(true);
+    await reports(b, probe, (8 * GAIN_RISE_MS) / 250, 0.3);
+    expect(probe.gains.at(-1)).toBe(GAIN_START);
+    expect(probe.gains.slice(low)).toHaveLength(Math.ceil(Math.log(GAIN_START / GAIN_MIN) / Math.log(GAIN_RISE)));
+    expect(Math.min(...probe.gains)).toBe(GAIN_MIN);
+    expect(Math.max(...probe.gains)).toBe(GAIN_START);
+    expect(b.m.state().loud).toBe(false);
+  });
+
+  it("never says the own signal is loud while the route check says the phone can't hear it", { timeout: 30_000 }, async () => {
+    const b = bench({ friend: false });
+    await flush();
+    b.m.host();
+    await flush();
+    const probe = b.links[0]!.probe;
+    probe.own = 40;
+    await reports(b, probe, RUN + 1, 0.9);
+    expect(b.m.state()).toMatchObject({ loud: true, route: false });
+    // the route goes (the sound to the earpiece, say), with the gain still down
+    probe.own = 5;
+    await reports(b, probe, ROUTE_MS / 250 + 1, 0.9);
+    expect(probe.gains.at(-1)).toBeLessThan(GAIN_START);
+    expect(b.m.state()).toMatchObject({ route: true, loud: false });
   });
 
   it("a rematch pairs at once in its role and plan, and falls back to the menu after 60 s with nothing heard", { timeout: 30_000 }, async () => {
@@ -728,7 +834,11 @@ describe("the lobby's logic", () => {
     expect(b.m.state().step).toBe("connecting");
     await flush();
     expect(b.m.state()).toMatchObject({ step: "pairing", role: "host", practice: "loop", fixedRole: true });
+    expect(rttLine(b.m.state())).toBe("Practice link");
     await b.run(20_000, () => b.m.state().step === "picking");
+    // (the loop's round trip is its friend's hold: the paired view names the input delay agreed instead)
+    expect(b.m.state().meter!.rttMs).not.toBeNull();
+    expect(rttLine(b.m.state())).toBe(`Practice link · input delay ${b.m.state().pairing!.config!.delay * 100} ms`);
     b.m.pick(b.m.state().pairing!.offered[0]!);
     await b.run(20_000, () => b.m.state().step === "started");
     expect(b.begun.length).toBe(1);

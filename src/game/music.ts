@@ -183,8 +183,13 @@ export class Music {
    * nobody won (Robot Love's draw), a sweet sting on the tonic major, and
    * settle on a quiet coda. Returns false when music is off (play the SFX
    * jingle instead).
+   *
+   * `love: false` is a draw that isn't Robot Love's (a sound duel's two
+   * resigns on one tick, SOUND-DUEL.md "Resign"): the score settles on the
+   * held tonic and its coda with no sting, since the love sting would tell of
+   * hearts that never showed. Victory and defeat don't change with it.
    */
-  finale(kind: "victory" | "defeat" | "draw"): boolean {
+  finale(kind: "victory" | "defeat" | "draw", o: { love?: boolean } = {}): boolean {
     if (this.finished) return true;
     if (!this.running || !this.e || !this.g) return false;
     this.finished = true;
@@ -192,7 +197,7 @@ export class Music {
     const t = this.nextBeat(0.04);
     this.renderEvents(this.composer.closeGates(), t);
     this.renderChord(this.composer.holdTonic(kind !== "defeat", 64), t, true);
-    this.playStinger(kind, t, true);
+    if (kind !== "draw" || o.love !== false) this.playStinger(kind, t, true);
     this.g.ambience.stop(t + 2);
     return true;
   }

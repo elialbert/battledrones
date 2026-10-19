@@ -32,9 +32,24 @@
  * now() − currentTime × 1000. That only grows when the context stops while
  * time goes on (a busy main thread reads currentTime as fresh as ever, so a
  * late message doesn't fake it). Once the readings have stood more than
- * SKIP_MIN_MS above their lowest for SKIP_CONFIRM_MS, the step is a stretch
- * the modem neither heard nor played, and the transport posts it as
- * {t:"skip", frames}. The modem takes it as a jump of its frame counter: it
+ * SKIP_MIN_MS above their lowest for SKIP_CONFIRM_MS, and stopped moving,
+ * the step is a stretch the modem neither heard nor played, and the
+ * transport posts it as {t:"skip", frames}. Stopped moving: the lowest
+ * reading of the first half of the last SKIP_CONFIRM_MS and the lowest of
+ * the second agree within SETTLE_MS, and the skip is the lower of the two.
+ * Readings run late, never early, so the lowest of a few is the truest; but
+ * one taken while the stall was still going on (a message read late, while
+ * currentTime stood still) is early for the step it ends at: taken as the
+ * step, it left a 200 ms stop of Chromium's audio service skipped 33–97 ms
+ * short in 4 stops of 8, the rest too small to skip ever after, and the
+ * modem's frame counter off by it. And a render thread that catches up
+ * renders what it owes late, faster than real time, so the readings fall
+ * back: frames it did render are not a skip. Both show as a floor still
+ * moving, rising or falling, so neither goes over until it stands. (A
+ * context that stands for SKIP_CONFIRM_MS before it catches up, or one
+ * catching up at under SETTLE_MS a half, can't be told from one that lost
+ * the time; nor can a reading late in both halves alike.)
+ * The modem takes a skip as a jump of its frame counter: it
  * starts a new superframe, so the friend hears this phone again about half
  * a second after the skip whatever the phase, and its receiver takes the
  * stretch as a gap of known length, keeping its lock, which is right if the
@@ -115,8 +130,17 @@ export interface WorkletTransportOptions {
 const KEEP = 256;
 /** How far (ms) the context's clock must fall behind this link's, and stay, to count as a stretch it did not render. */
 const SKIP_MIN_MS = 100;
-/** How long (ms of this link's clock, two readings at least) it must stay there first. */
+/** How long (ms of this link's clock) it must stay there first, with a reading in each half of the last this-many ms. */
 const SKIP_CONFIRM_MS = 200;
+/**
+ * The lowest readings of the two halves agree within this (ms) once the step
+ * stands. Above a reading's own spread (a few ms on a desktop, where the
+ * lowest of a half is rarely late by more), below a render thread catching
+ * up at 1.15× real time.
+ */
+const SETTLE_MS = 15;
+/** Readings past the step kept (a ring): a few seconds of messages, many more than SKIP_CONFIRM_MS needs. */
+const STEP_READINGS = 64;
 /**
  * Added to every skip (ms). A receiver window that lands early sits in the
  * cyclic prefix, one that lands late takes in the next symbol: in the room
@@ -170,10 +194,12 @@ export class WorkletTransport implements LinkTransport {
   private readonly lags = new Float64Array(LAG_READINGS);
   private lagCount = 0;
   private lagNext = 0;
-  /** Readings in a row more than SKIP_MIN_MS above the baseline: how many, the lowest, the first's time. */
-  private behindN = 0;
-  private behindMin = 0;
-  private behindSince = 0;
+  /** Readings in a row more than SKIP_MIN_MS above the baseline: the newest STEP_READINGS (a ring: when, and how far behind), how many, and when the first came. */
+  private readonly stepAt = new Float64Array(STEP_READINGS);
+  private readonly stepD = new Float64Array(STEP_READINGS);
+  private stepN = 0;
+  private stepNext = 0;
+  private stepSince = 0;
   private readonly inbox: LinkPacket[] = [];
   private readonly starts: number[] = [];
   private readonly gaps: { at: number; ms: number }[] = [];
@@ -351,26 +377,35 @@ export class WorkletTransport implements LinkTransport {
     for (let i = 0; i < this.lagCount; i++) lag = Math.min(lag, this.lags[i]!);
     if (this.lagCount === 0 || d < lag + SKIP_MIN_MS) {
       this.keepLag(d);
-      this.behindN = 0;
+      this.stepN = this.stepNext = 0;
       return;
     }
-    if (this.behindN === 0 || d > this.behindMin + SKIP_MIN_MS) {
-      // a step (or a second one on top of it): its readings start here
-      this.behindN = 1;
-      this.behindMin = d;
-      this.behindSince = now;
-      return;
+    // a step: its readings start here (a second step on top of it only keeps the floor moving a while longer)
+    if (this.stepN === 0) this.stepSince = now;
+    this.stepAt[this.stepNext] = now;
+    this.stepD[this.stepNext] = d;
+    this.stepNext = (this.stepNext + 1) % STEP_READINGS;
+    this.stepN = Math.min(this.stepN + 1, STEP_READINGS);
+    if (now - this.stepSince < SKIP_CONFIRM_MS) return;
+    // the lowest reading of each half of the last SKIP_CONFIRM_MS: the step stands once they agree (a half without a
+    // reading reads Infinity, which agrees with nothing)
+    let older = Infinity;
+    let newer = Infinity;
+    for (let i = 0; i < this.stepN; i++) {
+      const age = now - this.stepAt[i]!;
+      if (age > SKIP_CONFIRM_MS) continue;
+      if (age >= SKIP_CONFIRM_MS / 2) older = Math.min(older, this.stepD[i]!);
+      else newer = Math.min(newer, this.stepD[i]!);
     }
-    this.behindN++;
-    this.behindMin = Math.min(this.behindMin, d);
-    if (now - this.behindSince < SKIP_CONFIRM_MS) return;
-    // the lowest reading since the step against the lowest before it (readings run late, never early, and the few
-    // since the step sit no nearer the truth than the many before it, so this errs long, if anything), and the lead
-    this.post({ t: "skip", frames: Math.round(((this.behindMin - lag + SKIP_LEAD_MS) * this.sr) / 1000) });
+    if (!(Math.abs(older - newer) <= SETTLE_MS)) return;
+    // the lowest reading of the settled step against the lowest before it (readings run late, never early, and the
+    // few since the step sit no nearer the truth than the many before it, so this errs long, if anything), and the lead
+    const step = Math.min(older, newer);
+    this.post({ t: "skip", frames: Math.round(((step - lag + SKIP_LEAD_MS) * this.sr) / 1000) });
     // the clocks stand apart by the step from now on
     this.lagCount = this.lagNext = 0;
-    this.keepLag(this.behindMin);
-    this.behindN = 0;
+    this.keepLag(step);
+    this.stepN = this.stepNext = 0;
   }
 
   private keepLag(d: number): void {

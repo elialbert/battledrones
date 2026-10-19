@@ -739,7 +739,9 @@ export class GameScene {
         // (Robot Love: a draw resolves on its own sweet sting; its chime has already rung for music-off)
         const draw = this.world.winner === "draw";
         const outcome = draw ? "draw" : finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
-        if (!music.finale(outcome) && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
+        // (a duel's draw is Robot Love's only when two Goliaths fell in love: both resigning has no love sting, SOUND-DUEL.md "Resign")
+        const played = this.interactive ? music.finale(outcome, { love: !!this.world.love }) : music.finale(outcome);
+        if (!played && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
       });
     }
   }

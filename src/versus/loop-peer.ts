@@ -25,7 +25,9 @@
  *    `&latency` the match's one-way latency. The air itself runs at the
  *    smaller of the two latencies. Without `&delay`, D comes from the latency
  *    as it would over the air (250 ms: D = 4). A pairing that starts over
- *    after GO keeps the match's latency;
+ *    after GO keeps the match's latency. The lobby's round trip is the hold's
+ *    doing, so on the loop the lobby's meter names the agreed input delay
+ *    instead (lobby.ts rttLine);
  *  - `&loss` is Bernoulli loss both ways from the first GO on: the lobby
  *    pairs on a clean link, so its starting mode (fast at the air's 30 dB),
  *    and with it a forced D, comes out as asked;

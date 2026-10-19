@@ -180,7 +180,13 @@ export interface DuelReportView {
   relink: ReconnectPhase | null;
   /** The friend's reloaded page is in the lobby: "tap Rematch". */
   friendInLobby: boolean;
-  link: { good: number; bad: number; stallMs: number; orderDelayMs: number | null };
+  /**
+   * The link's quality: packets heard, stall time, and the order delay as a
+   * player feels it (Lockstep.orderWait: from the drain to this phone stepping
+   * the order, mean and worst; null before any order). Not D × 100 ms, which
+   * every order would read and the pause menu already shows.
+   */
+  link: { good: number; bad: number; stallMs: number; orders: { meanMs: number; worstMs: number } | null };
 }
 
 const SYNC_TEXT: Record<DuelReportView["sync"], { text: string; cls: string }> = {
@@ -193,6 +199,13 @@ const SYNC_TEXT: Record<DuelReportView["sync"], { text: string; cls: string }> =
 };
 
 const secs = (ms: number) => (ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`);
+/** Under a second in ms, then in seconds. */
+const span = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : secs(ms));
+
+/** "620 ms average · 1.4 s worst", or "–" before any order. */
+export function ordersLine(o: DuelReportView["link"]["orders"]): string {
+  return o ? `${span(o.meanMs)} average · ${span(o.worstMs)} worst` : "–";
+}
 
 function syncLine(v: DuelReportView): string {
   const t = SYNC_TEXT[v.sync];
@@ -243,7 +256,7 @@ export function duelReportSection(view: () => DuelReportView, hooks: Pick<Overla
         <table class="duel-link">
           <tr><td>Packets heard</td><td>${l.good} good · ${l.bad} bad</td></tr>
           <tr><td>Waiting on the link</td><td>${secs(l.stallMs)}</td></tr>
-          <tr><td>Average order delay</td><td>${l.orderDelayMs === null ? "–" : `${Math.round(l.orderDelayMs)} ms`}</td></tr>
+          <tr><td>Order delay</td><td>${ordersLine(l.orders)}</td></tr>
         </table>`;
     },
     mount: (el) => {

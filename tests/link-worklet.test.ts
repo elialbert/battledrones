@@ -395,6 +395,52 @@ describe("WorkletTransport", () => {
     expect(skips()).toEqual([]);
   });
 
+  it("skips what a stall settles at, not a reading taken while it lasted; nothing for a context that catches up", () => {
+    const { tr, ctx, clock, sent, from } = fakeTransport();
+    const skips = () => sent().flatMap((m) => (m.t === "skip" ? [m.frames] : []));
+    /** A message from the worklet `ms` on, read with the context's clock `behind` ms behind this one (against where it began). */
+    const read = (ms: number, behind: number) => {
+      clock.t += ms;
+      ctx.currentTime = (tr.now() - behind) / 1000;
+      from({ t: "slot", sample: 0, index: 0, key: 1 });
+    };
+    const settle = (level: number, n = 40) => {
+      for (let i = 0; i < n; i++) read(50, level + ((i * 7) % 5));
+    };
+    settle(0);
+    // Chromium's audio service stopped for 224 ms: a message posted just before is read 127 ms into it, currentTime
+    // standing still; then the context runs again, 224 ms behind for good. Taken as the step, the 127 would leave the
+    // other 97 under SKIP_MIN_MS, never to go over
+    read(50, 127);
+    read(100, 224 + 2);
+    read(50, 224);
+    read(50, 224 + 3);
+    // (the step has stood 200 ms, but the 127 is still the lowest of the first half)
+    expect(skips()).toEqual([]);
+    read(50, 224 + 1);
+    expect(skips()).toEqual([Math.round((224 + 3) * 48)]);
+    settle(224);
+    expect(skips()).toEqual([]);
+    // a render thread held up 300 ms renders what it owes faster than real time, a little at a time: the frames came,
+    // late, so none of it is a skip
+    let behind = 524;
+    while (behind > 224) {
+      read(50, behind + ((behind * 7) % 5));
+      behind -= 12;
+    }
+    settle(224);
+    expect(skips()).toEqual([]);
+    // one whose clock runs at half speed for 600 ms, then at full speed 300 ms behind: one skip, once it stands
+    for (let i = 1; i <= 12; i++) read(50, 224 + 25 * i);
+    expect(skips()).toEqual([]);
+    for (let i = 0; i < 3; i++) read(50, 524 + ((i * 3) % 5));
+    expect(skips()).toEqual([]);
+    for (let i = 0; i < 2; i++) read(50, 524 + ((i * 3) % 5));
+    expect(skips()).toEqual([Math.round((300 + 3) * 48)]);
+    settle(524);
+    expect(skips()).toEqual([]);
+  });
+
   it("close posts close and disconnects; nothing comes through after it", () => {
     const { tr, node, sent, from } = fakeTransport();
     from({ t: "slot", sample: 0, index: 0, key: null });

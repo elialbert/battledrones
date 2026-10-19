@@ -21,8 +21,10 @@
  * Practice links (every build): `?duel=loop` pairs with an in-page friend
  * over PacketAir (loop-peer.ts), `?duel=relay&seat=host|guest` through the
  * page functions __duelOut / __duelIn (relay-transport.ts). Neither opens the
- * rig or the guard, and both expose window.__duel = { state, tick, trail(),
- * hash(), result } for test harnesses.
+ * rig or the guard, and both expose window.__duel = { state, tick, delay,
+ * trail(), trails(from), hash(), result } for test harnesses (delay and
+ * trails beyond the spec: the smoke's checks follow D, and compare the trail
+ * at every tick).
  *
  * Where the spec is silent:
  *  - the lobby keeps its own settings (localStorage battledrones.duelprefs):
@@ -39,9 +41,18 @@
  *    (the self-monitor hasn't locked) counts from one superframe (2.05 s)
  *    after the link started, the time it needs to hear its own first sync.
  *    Practice links have no own signal and skip it;
- *  - loud own signal: a stats report whose microphone peak is above −6 dBFS
- *    drops the transmit gain by 3 dB, at most once a second, down to 0.25.
- *    The gain starts at 1 and the lobby never raises it (the cap is 1.1);
+ *  - loud own signal: it is this phone's own signal that matters, so a stats
+ *    report counts as loud only when its microphone peak is above −6 dBFS
+ *    while the self-monitor hears the own signal well (ownSnrDb ≥ 20 dB: a
+ *    peak with the own signal faint is some other sound), and only an
+ *    unbroken run of them for 2 s acts (a clap, a knock or a word is over by
+ *    then). Then the transmit gain drops by 3 dB, at most once a second, down
+ *    to 0.5 (−6 dB: what brings a peak just over −6 dBFS well under it,
+ *    while the friend still hears this phone within 6 dB of its usual).
+ *    Once 5 s pass with no loud report it climbs back by 1 dB every 2 s to
+ *    the gain the lobby chose, 1 (the modem is offered up to 1.1). The note
+ *    shows while the gain is below 1, never with the route warning, which
+ *    says the opposite. The gain the lobby leaves at GO goes into the match;
  *  - "nothing heard": the pairing's own 8 s hint offers the one-tap role
  *    switch (not in a rematch or on a relay seat: roles are fixed there);
  *    after 30 s since the role was tapped with still nothing of the other
@@ -69,6 +80,14 @@
  *    friend's rxq of this phone while its frames do (PEER_HEARD_MS);
  *  - a retry ("Pairing failed: tap to retry") starts the tips' 30 s and a
  *    rematch's 60 s again, as the pairing starts its 8 s hint again;
+ *  - the tips leave band Low (Advanced) out of a rematch, which keeps its
+ *    band and has no Advanced, and on a practice link speak of the page and
+ *    the relay instead of the volume, the silent switch and Bluetooth;
+ *  - on the loop the meter's round trip would be the friend's hold, which
+ *    forces &delay (seconds, at a long one): its line names the input delay
+ *    the pairing agreed instead. The relay's round trip is the relay's own;
+ *  - the opener cards say what each opener gives, as the single-player
+ *    picker's pills do, from the same data (openerGives);
  *  - the guard is put on this machine's plan whenever a link starts, not
  *    trusted to be as the tap left it (main.ts takes no Duel or Rematch tap
  *    while a lobby is open or still saying the end, so two lobbies never
@@ -84,15 +103,17 @@ import { gameMode } from "../game/mode";
 import type { ModemStats } from "../link/modem/core";
 import { CAPTURE_OK_MS, RigError, type MicMode, type Rig, type RigErrorReason } from "../link/rig";
 import type { BandPlan, BandRole, LinkTransport } from "../link/transport";
+import { BUILDINGS, UNITS } from "../sim/balance";
 import { worldHash } from "../sim/checksum";
-import { isKnownMapId, mapById } from "../sim/maps";
+import { mapById } from "../sim/maps";
 import { OPENERS, type OpenerId } from "../sim/openers";
-import { MUTATORS, isMutatorId, type MutatorId } from "../sim/rules";
-import type { Faction } from "../sim/types";
+import { MUTATORS, type MutatorId } from "../sim/rules";
+import type { Faction, UnitKind } from "../sim/types";
 import { fullscreen } from "../ui/fullscreen";
 import { VersusFeed } from "./feed";
 import { LoopLink, type LoopParams } from "./loop-peer";
 import { NOTHING_HEARD_MESSAGE, NOTHING_HEARD_MS, VERSION_MESSAGE, type HostOffer, type PairingState } from "./pairing";
+import { DUEL_KEY, parseRematch, type RematchPlan } from "./records";
 import { RelayTransport } from "./relay-transport";
 import { PEER_HEARD_MS, RX_SILENT_MS, Session } from "./session";
 
@@ -185,49 +206,22 @@ function savePrefs(p: LobbyPrefs): void {
   }
 }
 
-/** sessionStorage: "duel" makes the next boot a duel rematch, and battledrones.duel holds it (SOUND-DUEL.md "Rematch"). */
-export const REMATCH_TOKEN_KEY = "battledrones.rematch";
-export const REMATCH_KEY = "battledrones.duel";
+/**
+ * The rematch's storage (SOUND-DUEL.md "Rematch"): sessionStorage REMATCH_KEY
+ * = REMATCH_DUEL makes the next boot a duel rematch (main.ts takes it, its
+ * literals tied to these by type), and DUEL_KEY holds the rematch, written
+ * by records.ts writeRematch and read here with its parseRematch.
+ */
+export { DUEL_KEY, REMATCH_DUEL, REMATCH_KEY, parseRematch } from "./records";
 
 /** A rematch as the report's Rematch stored it: the same roles and band plan, the sides swapped (hostSide is already the new one). */
-export interface DuelRematch {
-  role: BandRole;
-  plan: BandPlan;
-  micMode: MicMode;
-  hostSide: Faction;
-  mapId: string;
-  mutators: MutatorId[];
-}
-
-/** The stored rematch, or null if there is none or it doesn't read as one. */
-export function parseRematch(raw: string | null): DuelRematch | null {
-  if (!raw) return null;
-  try {
-    const o = JSON.parse(raw) as Partial<Record<keyof DuelRematch, unknown>> | null;
-    if (!o || typeof o !== "object") return null;
-    const { role, plan, micMode, hostSide, mapId, mutators } = o;
-    if (role !== "host" && role !== "guest") return null;
-    if (plan !== "high" && plan !== "low") return null;
-    if (hostSide !== "blue" && hostSide !== "red") return null;
-    if (typeof mapId !== "string" || !isKnownMapId(mapId)) return null;
-    return {
-      role,
-      plan,
-      micMode: micMode === "ec" ? "ec" : "raw",
-      hostSide,
-      mapId,
-      mutators: Array.isArray(mutators) ? mutators.filter(isMutatorId) : []
-    };
-  } catch {
-    return null;
-  }
-}
+export type DuelRematch = RematchPlan;
 
 /** The stored rematch (`take`: and forget it, so a reload after it is a plain boot). */
 function readRematch(take: boolean): DuelRematch | null {
   try {
-    const r = parseRematch(sessionStorage.getItem(REMATCH_KEY));
-    if (take) sessionStorage.removeItem(REMATCH_KEY);
+    const r = parseRematch(sessionStorage.getItem(DUEL_KEY));
+    if (take) sessionStorage.removeItem(DUEL_KEY);
     return r;
   } catch {
     return null;
@@ -387,13 +381,22 @@ export const ROUTE_SNR_DB = 10;
 export const ROUTE_MS = 3000;
 /** No own-signal reading counts only from this long after the link started: the self-monitor's first sync. */
 export const ROUTE_GRACE_MS = 2050;
-/** A microphone peak above −6 dBFS … */
+/** Loud own signal: a stats report whose microphone peak is above −6 dBFS … */
 export const LOUD_PEAK = 10 ** (-6 / 20);
-/** … drops the gain by 3 dB, at most once per GAIN_STEP_MS, down to GAIN_MIN; GAIN_MAX caps it. */
+/** … while the self-monitor hears this phone's own signal at least this well (a peak with the own signal faint is some other sound) … */
+export const LOUD_OWN_SNR_DB = 20;
+/** … in every report for this long (a clap, a knock or a word has gone by then) … */
+export const LOUD_MS = 2000;
+/** … drops the gain by 3 dB, at most once per GAIN_STEP_MS, down to GAIN_MIN (−6 dB: the friend still hears this phone within 6 dB of its usual). */
 export const GAIN_STEP = 10 ** (-3 / 20);
 export const GAIN_STEP_MS = 1000;
-export const GAIN_MIN = 0.25;
-export const GAIN_MAX = 1.1;
+export const GAIN_MIN = 0.5;
+/** The gain the lobby chooses (the modem's default; the modem is offered up to 1.1) … */
+export const GAIN_START = 1;
+/** … and climbs back to, by 1 dB at most once per GAIN_RISE_MS, once no loud report has come for GAIN_QUIET_MS. */
+export const GAIN_RISE = 10 ** (1 / 20);
+export const GAIN_RISE_MS = 2000;
+export const GAIN_QUIET_MS = 5000;
 /** Nothing heard this long after the role was tapped: tips. */
 export const TIPS_MS = 30_000;
 /** A rematch with nothing heard this long falls back to the menu. */
@@ -423,10 +426,12 @@ export class LobbyMachine {
   private guardPlan: BandPlan | null;
   private routeSince: number | null = null;
   private route = false;
-  private gain = 1;
+  private gain = GAIN_START;
+  /** When the gain last changed, the unbroken run of loud reports started (null: none now), and the last loud report came. */
   private gainAt = -Infinity;
+  private loudSince: number | null = null;
+  private loudAt = -Infinity;
   private peakSample = -1;
-  private loud = false;
 
   constructor(private readonly env: LobbyEnv) {
     // (the tap turned the guard on in the high plan: practice links have none)
@@ -593,7 +598,8 @@ export class LobbyMachine {
       tips: live && !this.selfTest && p !== null && !p.heard && now - this.sessionAt >= TIPS_MS,
       quiet: live && !this.selfTest && !error && (before || this.step === "go") && p !== null && p.heard && p.sinceHeardMs >= QUIET_MS,
       route: this.route,
-      loud: this.loud,
+      // (the route warning says the phone can't hear itself: a note that it hears itself loudly would contradict it)
+      loud: this.gain < GAIN_START && !this.route,
       meter: link
         ? {
             snrDb: link.sinceRx <= RX_SILENT_MS ? link.snrDb : null,
@@ -666,9 +672,11 @@ export class LobbyMachine {
     this.link = link;
     this.linkAt = now;
     this.sessionAt = now;
-    this.gain = 1;
+    this.gain = GAIN_START;
+    this.gainAt = -Infinity;
+    this.loudSince = null;
+    this.loudAt = -Infinity;
     this.peakSample = -1;
-    this.loud = false;
     this.session = new Session({ transport: link, role, build: env.build, random: env.random, ...(role === "host" ? { host: this.offer() } : {}) });
     this.step = selfTest ? "self-test" : "pairing";
     // (a Join that detects keeps the guard it has until its link locks on a plan)
@@ -685,16 +693,24 @@ export class LobbyMachine {
     if (bad) this.routeSince ??= now;
     else this.routeSince = null;
     this.route = this.routeSince !== null && now - this.routeSince >= ROUTE_MS;
+    // the loud own signal, once per stats report (the worklet's, every 250 ms; none while they're stale)
     const ms = link.modemStats?.();
-    if (ms && ms.sample !== this.peakSample) {
-      this.peakSample = ms.sample;
-      if (ms.inputPeak > LOUD_PEAK && now - this.gainAt >= GAIN_STEP_MS && this.gain > GAIN_MIN) {
-        this.gain = Math.min(GAIN_MAX, Math.max(GAIN_MIN, this.gain * GAIN_STEP));
-        this.gainAt = now;
-        this.loud = true;
-        link.setGain?.(this.gain);
-      }
+    if (!ms || ms.sample === this.peakSample) return;
+    this.peakSample = ms.sample;
+    if (ms.inputPeak > LOUD_PEAK && own !== null && own >= LOUD_OWN_SNR_DB) {
+      this.loudSince ??= now;
+      this.loudAt = now;
+    } else this.loudSince = null;
+    let gain = this.gain;
+    if (this.loudSince !== null && now - this.loudSince >= LOUD_MS) {
+      if (now - this.gainAt >= GAIN_STEP_MS) gain = Math.max(GAIN_MIN, gain * GAIN_STEP);
+    } else if (gain < GAIN_START && now - this.loudAt >= GAIN_QUIET_MS && now - this.gainAt >= GAIN_RISE_MS) {
+      gain = Math.min(GAIN_START, gain * GAIN_RISE);
     }
+    if (gain === this.gain) return;
+    this.gain = gain;
+    this.gainAt = now;
+    link.setGain?.(gain);
   }
 
   /** The guard on `plan` (`force`: even if it should be on it already). */
@@ -783,7 +799,11 @@ export function reconnect(o: LobbyOptions): void {
 export interface DuelProbe {
   readonly state: string;
   readonly tick: number;
+  /** The input delay D the pairing agreed (null before the match). */
+  readonly delay: number | null;
   trail(): number | null;
+  /** The hash trail after every tick stepped from `from` on: [tick, trail] (VersusFeed.trails). */
+  trails(from: number): [number, number][];
   hash(): string | null;
   readonly result: { end: string; winner: Faction | "draw" | null; resigned: Faction | null; tick: number | null; endCheck: string; desync: boolean } | null;
 }
@@ -813,8 +833,17 @@ const RIG_ADVICE: Partial<Record<RigErrorReason, string>> = {
   "no-worklet": "Try another browser."
 };
 
-const TIPS =
-  "Still nothing? Turn the volume up and the silent switch off. Unplug headphones and turn Bluetooth off. Keep the phones 10–30 cm apart. Or try band Low on the host (Advanced).";
+/**
+ * The 30 s tips: the sound's, with band Low (Advanced) only where Advanced
+ * is offered (not in a rematch, which keeps its band); a practice link has
+ * no sound to turn up, only the other page (the relay) or the page itself.
+ */
+export function tipsText(v: Pick<LobbyView, "practice" | "rematch">): string {
+  if (v.practice === "loop") return "Still nothing? Reload the page and tap Duel again.";
+  if (v.practice === "relay") return "Still nothing? Check that the other page is in the lobby and the relay connects the two.";
+  const sound = "Still nothing? Turn the volume up and the silent switch off. Unplug headphones and turn Bluetooth off. Keep the phones 10–30 cm apart.";
+  return v.rematch ? sound : `${sound} Or try band Low on the host (Advanced).`;
+}
 const ROUTE_TEXT =
   "This phone can't hear its own signal: sound may be going to the earpiece or Bluetooth, or it can't play this band. Unplug headphones, turn the volume up, or switch the host to band Low.";
 const QUIET_TEXT = "Your friend's phone has gone quiet. Bring the phones closer, or tap Cancel if your friend left.";
@@ -833,13 +862,30 @@ function mapLine(mapId: string, mutators: readonly MutatorId[]): string {
   return `<p class="duel-map"><b>🗺 ${name}</b></p><p class="duel-muts">${muts}</p>`;
 }
 
+/**
+ * What an opener gives, as the single-player picker's pills say it
+ * (src/ui/openers.ts), from the same data (OPENERS, and the building and unit
+ * names): "Fab Plant · 3 Stingers · 2 Harvesters · −100 scrap".
+ */
+export function openerGives(id: OpenerId): string {
+  const o = OPENERS[id];
+  const parts = [BUILDINGS[o.building].name];
+  const counts = new Map<UnitKind, number>();
+  for (const k of o.units) counts.set(k, (counts.get(k) ?? 0) + 1);
+  for (const [k, n] of counts) parts.push(`${n} ${UNITS[k].name}s`);
+  parts.push(`${o.harvesters} Harvesters`);
+  if (o.scrap > 0) parts.push(`+${o.scrap} scrap`);
+  if (o.scrap < 0) parts.push(`−${-o.scrap} scrap`);
+  return parts.join(" · ");
+}
+
 function openerCard(id: OpenerId, side: Faction, picked: boolean): string {
   const o = OPENERS[id];
   const unit = o.units[0] ?? "harvester";
   const n = o.units.length || o.harvesters;
   return `<button class="op-card op-${id}${picked ? " picked" : ""}" data-act="pick" data-id="${id}">
       <div class="op-art"><img class="op-b" src="${iconUrl(o.building, side)}" alt="" draggable="false"/><img class="op-u" src="${iconUrl(unit, side)}" alt="" draggable="false"/><span class="op-n">×${n}</span></div>
-      <div class="op-text"><b class="op-name">${esc(o.name)}</b><span class="op-tag">${esc(o.tagline)}</span></div>
+      <div class="op-text"><b class="op-name">${esc(o.name)}</b><span class="op-tag">${esc(o.tagline)}</span><span class="op-gives">${esc(openerGives(id))}</span></div>
     </button>`;
 }
 
@@ -860,6 +906,21 @@ function meterHtml(v: LobbyView): string {
     </div>`;
 }
 
+/**
+ * The meter's last line: the round trip, except on the loop, whose friend
+ * holds the lobby's packets to force &delay (loop-peer.ts), so its round trip
+ * can read seconds and says nothing of the match: it names the input delay
+ * the pairing agreed instead.
+ */
+export function rttLine(v: Pick<LobbyView, "practice" | "pairing" | "meter">): string {
+  if (v.practice === "loop") {
+    const d = v.pairing?.config?.delay;
+    return d === undefined ? "Practice link" : `Practice link · input delay ${d * 100} ms`;
+  }
+  const rtt = v.meter?.rttMs ?? null;
+  return rtt === null ? "Round trip: measuring…" : `Round trip ${Math.round(rtt)} ms`;
+}
+
 /** The meter's numbers and bars, every frame. */
 function fillMeter(root: HTMLElement, v: LobbyView): void {
   const m = v.meter;
@@ -870,7 +931,7 @@ function fillMeter(root: HTMLElement, v: LobbyView): void {
   };
   set("rx", `${m.snrDb === null ? "–" : `${Math.round(m.snrDb)} dB`} · ${m.good} good`);
   set("tx", m.peerRxq === null ? "–" : `${m.peerRxq * 3}+ dB`);
-  set("rtt", m.rttMs === null ? "Round trip: measuring…" : `Round trip ${Math.round(m.rttMs)} ms`);
+  set("rtt", rttLine(v));
   const bars = root.querySelectorAll<HTMLElement>(".dm-bar");
   const qs = v.step === "self-test" ? [m.rxq] : [m.rxq, m.peerRxq];
   bars.forEach((b, i) => {
@@ -948,7 +1009,7 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
       const hint = v.switchRole
         ? `<div class="duel-hint"><p>${NOTHING_HEARD_MESSAGE}.</p><button class="cta alt" data-act="switch">Switch to ${v.role === "host" ? "Join" : "Host"}</button></div>`
         : "";
-      const tips = v.tips ? `<p class="duel-hint">${TIPS}</p>` : "";
+      const tips = v.tips ? `<p class="duel-hint">${tipsText(v)}</p>` : "";
       return {
         body: `<p class="sh-sub duel-place">${PLACEMENT}</p><p class="duel-status">${status}</p>${quiet}${meterHtml(v)}${hint}${tips}${notes.join("")}`,
         actions: back + cancel
@@ -1211,7 +1272,11 @@ function exposeProbe(machine: () => LobbyMachine | null, feed: () => VersusFeed 
     get tick() {
       return feed()?.world.tick ?? -1;
     },
+    get delay() {
+      return feed()?.result.delay ?? null;
+    },
     trail: () => feed()?.session.lockstep?.trail() ?? null,
+    trails: (from) => feed()?.trails(from) ?? [],
     hash: () => {
       const f = feed();
       return f ? worldHash(f.world) : null;

@@ -323,6 +323,16 @@ export interface LockstepStatus {
   framesBad: number;
   /** Mean ticks from an order being drained (or the queued one it replaced) to the turn it was sealed in; null before any. */
   orderDelay: number | null;
+  /**
+   * What a player feels of it: real time (the link's clock) from each command
+   * being drained (the tick after its tap; for one that replaced queued
+   * orders, the oldest of theirs, as orderDelay counts) to this phone stepping
+   * the turn it was sealed in, so the queue's wait and every stall on the way
+   * count. Each piece of a split order counts once. Mean and worst (ms); null
+   * before any. (A tap made during a stall waits in the Controller until the
+   * stall ends, unseen here.)
+   */
+  orderWait: { meanMs: number; worstMs: number } | null;
   /** Frames in the rotation: the segments with unacknowledged turns (1 when there are none). */
   segments: number;
 }
@@ -391,6 +401,8 @@ interface Sealed {
   /** Its encoding, copied into every frame that describes the turn. */
   bits: Uint8Array;
   nbits: number;
+  /** When each of its commands was drained (the link's clock), as the order wait counts from: see LockstepStatus.orderWait. */
+  drainedAt?: number[];
 }
 
 const other = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
@@ -508,6 +520,11 @@ export class Lockstep {
   private framesBad = 0;
   private delaySum = 0;
   private delayCount = 0;
+  /** The order wait: when each tick a queued command counts from drained (the link's clock), and the waits of the commands stepped. */
+  private readonly drainedAt = new Map<number, number>();
+  private waitSum = 0;
+  private waitCount = 0;
+  private waitWorst = 0;
   private readonly stepped: [number, Faction, Command[]][] = [];
 
   private dirty = true;
@@ -570,7 +587,17 @@ export class Lockstep {
   afterStep(tick: number, worldHash32: number, decided: Decision | null): void {
     if (tick !== this.tick) throw new Error(`lockstep is at tick ${this.tick}, not ${tick}`);
     this.trailValue = foldTrail(this.trailValue, worldHash32 >>> 0);
-    const mine = this.mine.get(tick)?.cmds ?? [];
+    const sealed = this.mine.get(tick);
+    if (sealed?.drainedAt) {
+      const now = this.now();
+      for (const at of sealed.drainedAt) {
+        const wait = Math.max(0, now - at);
+        this.waitSum += wait;
+        this.waitCount++;
+        this.waitWorst = Math.max(this.waitWorst, wait);
+      }
+    }
+    const mine = sealed?.cmds ?? [];
     const theirs = this.theirs.get(tick) ?? [];
     for (const [side, cmds] of this.local === "blue" ? ([["blue", mine], ["red", theirs]] as const) : ([["blue", theirs], ["red", mine]] as const))
       if (cmds.length) this.stepped.push([tick, side, cmds]);
@@ -603,6 +630,8 @@ export class Lockstep {
    */
   private seal(T: number, drained: readonly Command[]): void {
     const ctx = { local: this.local, width: this.map.width, height: this.map.height };
+    // (the order wait counts from here: enqueue stamps what it queues with this tick)
+    if (drained.length) this.drainedAt.set(this.tick, this.now());
     for (const c of drained) this.enqueue(canonicalize(c, ctx));
     this.trim();
     // the newest segment's frame as it stands: from its oldest unacknowledged turn (T when it has none) to T − 1
@@ -637,6 +666,7 @@ export class Lockstep {
     const wr = new BitWriter();
     let prev: readonly number[] | null = null;
     let count = 0;
+    const drainedAt: number[] = [];
     while (this.queue.length && count < TURN_COMMANDS_MAX) {
       const q = this.queue[0]!;
       const turnBits = wr.nbits + commandBits(q.command, this.map, prev);
@@ -647,13 +677,17 @@ export class Lockstep {
       prev = encodeCommand(wr, q.command, this.map, prev);
       this.delaySum += T - q.at;
       this.delayCount++;
+      drainedAt.push(this.drainedAt.get(q.at) ?? this.now());
       this.queue.shift();
       count++;
     }
+    // (the drain times no queued command counts from any more: ticks go in ascending)
+    const oldest = this.queue.reduce((t, q) => Math.min(t, q.at), Infinity);
+    for (const t of this.drainedAt.keys()) if (t < oldest) this.drainedAt.delete(t);
     const bits = wr.bytes();
     // the decoded form, as the peer will read it: both phones step exactly this
     const cmds = count ? decodeCommands(new BitReader(bits, wr.nbits), count, this.map, this.local) : [];
-    this.mine.set(T, { cmds, bits, nbits: wr.nbits });
+    this.mine.set(T, { cmds, bits, nbits: wr.nbits, ...(count ? { drainedAt } : {}) });
     // (an empty T always joins, unless a garbage frame stretched the window past its bound: then it starts a segment
     // even past K, since a turn can't be refused)
     if (place(count, wr.nbits) !== "joins") this.segs.push(T);
@@ -1175,6 +1209,7 @@ export class Lockstep {
       framesIn: this.framesIn,
       framesBad: this.framesBad,
       orderDelay: this.delayCount ? this.delaySum / this.delayCount : null,
+      orderWait: this.waitCount ? { meanMs: this.waitSum / this.waitCount, worstMs: this.waitWorst } : null,
       segments: this.openSegments()
     };
   }

@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { replay } from "../src/arena/record";
 import { planTicks } from "../src/game/awareness";
 import { Controller, buildView } from "../src/game/controller";
-import { parseRecord } from "../src/game/replay";
+import { ReplayFeed, parseRecord } from "../src/game/replay";
 import { PacketAir } from "../src/link/packet-air";
 import type { LostReason, MicMode, RigState } from "../src/link/rig";
 import type { BandRole } from "../src/link/transport";
 import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
 import { BUILDINGS, UNITS } from "../src/sim/balance";
+import { OPENERS } from "../src/sim/openers";
 import { worldHash } from "../src/sim/checksum";
 import { hash32 } from "../src/sim/rand";
 import { step } from "../src/sim/sim";
@@ -16,6 +17,7 @@ import { hqOf, spawnUnit } from "../src/sim/world";
 import { setupWorld } from "../src/sim/setup";
 import type { AbortReason } from "../src/game/GameScene";
 import { VersusFeed, liftGroupsFirst, type DuelRig, type FeedEnv } from "../src/versus/feed";
+import { ordersLine } from "../src/versus/hud";
 import { RECORD_KEY, REMATCH_KEY, readRematch, readTally } from "../src/versus/records";
 import { Session } from "../src/versus/session";
 
@@ -449,6 +451,53 @@ describe("VersusFeed as GameScene drives it", () => {
   });
 });
 
+describe("the report's order delay", () => {
+  it("is the real time from the drain to this phone's step, a stall on the way included", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 29 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    const p = r.host;
+    const D = p.s.result()!.delay;
+    const side = p.feed!.local;
+    const hq = hqOf(p.feed!.world, side)!;
+    expect(p.feed!.reportView().link.orders).toBeNull();
+    const rallies = () => [...p.stepped.values()].flat().filter((c) => c.type === "rally" && c.faction === side).length;
+    // an order on a clear link lands D ticks after its drain: about D × 100 ms
+    p.ctrl!.enqueue({ type: "rally", faction: side, buildingId: hq.id, x: 20.5, y: 21.5 });
+    runUntil(r, () => rallies() === 1, 3000);
+    const one = p.feed!.reportView().link.orders!;
+    expect(one.meanMs).toBe(one.worstMs);
+    expect(Math.abs(one.meanMs - D * 100)).toBeLessThanOrEqual(60);
+    // the friend's game holds (its link runs on): the host steps on through the friend's turns it holds, D past
+    // the friend's tick. An order drained once the host is ahead of the friend is sealed past them, so it waits
+    // out the stall: from its drain to the step, 2 s of hold and the friend's next turn's trip
+    r.guest.hold = true;
+    const g = tickOf(r.guest);
+    runUntil(r, () => tickOf(p) > g, 2000);
+    const drains = p.drains.length;
+    p.ctrl!.enqueue({ type: "rally", faction: side, buildingId: hq.id, x: 22.5, y: 21.5 });
+    runUntil(r, () => p.drains.length > drains, 1000);
+    expect(p.drains.at(-1)! + D).toBeGreaterThan(ls(p).ackThrough);
+    runFor(r, 2000);
+    expect(rallies()).toBe(1);
+    expect(ls(p).stalled).toBe(true);
+    r.guest.hold = false;
+    runUntil(r, () => rallies() === 2, 5000);
+    const both = p.feed!.reportView().link.orders!;
+    expect(both.worstMs).toBeGreaterThanOrEqual(2000);
+    expect(both.worstMs).toBeLessThanOrEqual(3000);
+    expect(both.meanMs).toBeCloseTo((one.meanMs + both.worstMs) / 2, 6);
+    // (the lockstep's count in ticks still says D: it never sees the stall)
+    expect(ls(p).orderDelay).toBe(D);
+    expect(p.feed!.reportView().link.orders).toEqual(ls(p).orderWait);
+  });
+
+  it("reads as the mean and the worst", () => {
+    expect(ordersLine(null)).toBe("–");
+    expect(ordersLine({ meanMs: 620.4, worstMs: 1420 })).toBe("620 ms average · 1.4 s worst");
+    expect(ordersLine({ meanMs: 412, worstMs: 12_400 })).toBe("412 ms average · 12 s worst");
+  });
+});
+
 describe("orders in flight", () => {
   it("count as applied in the build bar until the tick they land", { timeout: 60_000 }, () => {
     const r = pair({ seed: 23 });
@@ -517,6 +566,12 @@ describe("the duel's record", () => {
     const rec = red.feed!.record();
     expect(rec.end).toEqual({ tick: tickOf(red), winner: "red", reason: "resign" });
     expect(replay(parseRecord(JSON.stringify(rec))).divergedAt).toBeNull();
+    // the battle viewer labels the phones plainly; the record keeps its seats
+    const viewer = new ReplayFeed(parseRecord(JSON.stringify(rec)), null, false);
+    const hostSide: Faction = red.role === "host" ? "red" : "blue";
+    const guestSide: Faction = hostSide === "red" ? "blue" : "red";
+    expect(rec.seats[hostSide].player).toBe("sound-duel:host");
+    expect(viewer.labels).toEqual({ [hostSide]: `Host phone · ${OPENERS[rec.openers[hostSide]!].name}`, [guestSide]: `Guest phone · ${OPENERS[rec.openers[guestSide]!].name}` });
     // Menu on blue, Rematch on red: the end goes out, then the page reloads (once), the record untouched
     blue.feed!.duel.menu();
     red.feed!.duel.rematch();

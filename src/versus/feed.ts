@@ -72,7 +72,11 @@
  *    config and nonces, D, the tick, both trails' checkpoints and the end
  *    reports (Lockstep.debug), and the turn log;
  *  - in-flight orders (Controller.inFlight) come off as their turn is
- *    stepped, and all of them at an abort.
+ *    stepped, and all of them at an abort;
+ *  - a practice link keeps the hash trail after every tick (trails(), the
+ *    relay smoke's window.__duel.trails): read from outside after each frame,
+ *    the trail missed every tick a frame stepped two of, which a lossy link's
+ *    stalls make common.
  */
 import type { BattleRecord } from "../arena/record";
 import type { Controller } from "../game/controller";
@@ -286,6 +290,8 @@ export class VersusFeed implements MatchFeed {
   private stepping: Command[] | null = null;
   /** This phone's lifts sent and not stepped yet (lift groups first), with the tick each was drained on. */
   private readonly lifts: (LiftInFlight & { at: number })[] = [];
+  /** A practice link's hash trail after each tick stepped (index: the tick); null on a sound link. */
+  private readonly trailLog: number[] | null;
 
   private userPaused = false;
   /** The tick a resign was ordered on (null: none), and whether it was "Resign and leave". */
@@ -309,6 +315,7 @@ export class VersusFeed implements MatchFeed {
     this.result = r;
     this.rig = o.rig;
     this.practice = o.practice;
+    this.trailLog = o.practice ? [] : null;
     this.onExit = o.onExit;
     this.onFrame = o.onFrame ?? null;
     this.env = { ...browserEnv(), ...o.env };
@@ -407,6 +414,10 @@ export class VersusFeed implements MatchFeed {
       if (theirs.length > 0) this.turns.push([t, side, theirs]);
     }
     this.session.afterStep(t, parseInt(hash, 16), w.winner ? { winner: w.winner, resigned: w.resigned ?? null } : null);
+    if (this.trailLog) {
+      const trail = this.session.lockstep?.trail();
+      if (trail !== undefined) this.trailLog[t] = trail;
+    }
     if (w.tick % HASH_EVERY === 0) this.hashes.push([w.tick, hash]);
     const mine = cmds.filter((c) => c.faction === this.local);
     this.scene?.ctrl.landed(mine);
@@ -664,6 +675,14 @@ export class VersusFeed implements MatchFeed {
     return this.turns.slice();
   }
 
+  /** A practice link's hash trail after each tick stepped from `from` on, [tick, trail] (none on a sound link). */
+  trails(from = 0): [number, number][] {
+    const out: [number, number][] = [];
+    const log = this.trailLog ?? [];
+    for (let t = Math.max(0, from); t < log.length; t++) if (log[t] !== undefined) out.push([t, log[t]!]);
+    return out;
+  }
+
   /** The match as a battle record (Save battle): it replays exactly in the battle viewer. */
   record(): BattleRecord {
     const r = this.result;
@@ -712,7 +731,7 @@ export class VersusFeed implements MatchFeed {
       relink: this.linkPhase === "ok" || this.exiting || this.aborted === "lost" ? null : this.linkPhase,
       // (a lobby frame after the friend's game frames: its page reloaded into the lobby)
       friendInLobby: !!ls && ls.peerInLobby && ls.framesIn > 0 && !this.exiting,
-      link: { good: st.link.rxOk, bad: st.link.rxBad, stallMs: ls?.stallMs ?? 0, orderDelayMs: ls && ls.orderDelay !== null ? ls.orderDelay * 100 : null }
+      link: { good: st.link.rxOk, bad: st.link.rxBad, stallMs: ls?.stallMs ?? 0, orders: ls?.orderWait ?? null }
     };
   }
 }

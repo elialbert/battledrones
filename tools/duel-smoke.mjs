@@ -20,7 +20,7 @@
 //      friend stalls within D ticks: "Friend paused"), then, past tick
 //      MATCH_TICKS, the guest resigns from the pause menu.
 //      Both must decide on the same tick with the same world hash and hash
-//      trail (sampled at every tick both pages were seen on), show the report
+//      trail (compared at every tick of the match), show the report
 //      (VICTORY / DEFEAT, "In sync ✓", "Practice link (no sound)") and save
 //      the same battle (Save battle: turns and the hash every 100 ticks).
 //      No win/loss record is written on a practice link.
@@ -42,9 +42,22 @@
 //  - each page's own animation frames are slowed to one every RAF_MS by an
 //    init script, and the smoke steps the scene undrawn
 //    (__bd.scene.step(100, 1, false)), drawing only for --shots;
-//  - the hash trails are compared at every tick both pages were sampled at
-//    (two per step call), on top of the lockstep's own checkpoints and end
-//    check, the final world hash and the saved battles' hash every 100 ticks.
+//  - the hash trails are compared at every tick of the match, from each
+//    page's own log (window.__duel.trails: read from outside after each step,
+//    the trail missed every tick a step took two of, which a lossy link's
+//    stalls make common), on top of the lockstep's own checkpoints and end
+//    check, the final world hash and the saved battles' hash every 100 ticks;
+//  - "the match goes on" (at the start, after the outage, after the pause)
+//    means both pages step 2D + 1 more ticks: more than D proves the friend's
+//    new turns arrived (a phone holds at most D of them ahead), twice over.
+//    How long that takes is the link's business (latency, loss, D) and the
+//    smoke's (two pages on one renderer), so the checks follow them: a page
+//    held on one tick for STUCK_MS fails (a stall that never ends, a stuck
+//    page), and so does a match slower on average than TICK_MS a tick (one
+//    that crawls), where a slow link passes;
+//  - --shots waits for the cards' and the report's entrance animations (CSS:
+//    the slowed frames don't hold them) and takes the screenshot with any
+//    finite one left fast-forwarded, so nothing is caught mid-way.
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
@@ -76,6 +89,24 @@ const RAF_MS = 4000;
 const MATCH_TICKS = 320;
 for (const [k, v] of Object.entries({ seed: SEED, loss: LOSS, latency: LATENCY, jitter: JITTER, outage: OUTAGE }))
   if (!Number.isFinite(v) || v < 0) throw new Error(`--${k} must be a number ≥ 0`);
+if (LOSS >= 1) throw new Error("--loss must be below 1");
+/**
+ * The most a page may be held on one tick with nothing wrong (ms): the
+ * smoke's own 6 s (the two pages share one software renderer, and each draws
+ * its own frame every RAF_MS), the turn's trip and its ack's (LATENCY +
+ * JITTER each way), and a robust packet period (200 ms) for each loss in a
+ * row the relay's draws can make: k in a row has odds LOSS^k at a packet, so
+ * one in a million allows log(1e-6) / log(LOSS) of them.
+ */
+const LOSS_RUN = LOSS > 0 ? Math.ceil(Math.log(1e-6) / Math.log(LOSS)) : 0;
+const STUCK_MS = 6000 + 2 * (LATENCY + JITTER) + 200 * LOSS_RUN;
+/**
+ * The most a tick may take on average over a progress check (ms), at input
+ * delay D: the link's share (a turn's trip with that run of losses, spread
+ * over the D turns a phone holds ahead) and the smoke's (two steps of a page
+ * every 400 ms or so, at the slowest seen; about 3 ticks a second is usual).
+ */
+const tickMs = (D) => (LATENCY + JITTER + 200 * LOSS_RUN) / D + 400;
 
 let server = null;
 if (!urlArg) {
@@ -213,16 +244,28 @@ for (const name of ["host", "guest"]) {
   const errors = [];
   page.on("console", (m) => { if (m.type() === "error") errors.push(`${name}: ${m.text()}`); });
   page.on("pageerror", (e) => errors.push(`${name}: ${String(e)}`));
-  phones[name] = { name, context, page, errors, trail: new Map() };
+  phones[name] = { name, context, page, errors, trail: new Map(), seen: -1, tick: -1 };
 }
 await air.attach("host", "guest", phones.host.page);
 await air.attach("guest", "host", phones.guest.page);
 const both = (fn) => Promise.all([fn(phones.host), fn(phones.guest)]);
-/** A screenshot (--shots), the battlefield drawn first. */
+/**
+ * A screenshot (--shots), the battlefield drawn first. The opener cards and
+ * the report come in with CSS animations: it waits up to 5 s for the finite
+ * ones to finish, and the screenshot fast-forwards any still running.
+ */
 const shot = async (p, label) => {
   if (!shots) return;
   await p.page.evaluate(() => window.__bd?.scene?.step(0, 1)).catch(() => undefined);
-  await p.page.screenshot({ path: `${SHOT_DIR}/duel-${label}-${p.name}.png` });
+  await p.page
+    .waitForFunction(
+      () => document.getAnimations().every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity),
+      null,
+      // (polled by timer: the page's animation frames are slowed)
+      { timeout: 5000, polling: 100 }
+    )
+    .catch(() => undefined);
+  await p.page.screenshot({ path: `${SHOT_DIR}/duel-${label}-${p.name}.png`, animations: "disabled" });
 };
 /** The text of the first element `sel` finds now ("" if none: no waiting for it). */
 const text = (p, sel) => p.page.evaluate((q) => document.querySelector(q)?.innerText ?? "", sel).catch(() => "");
@@ -262,6 +305,9 @@ await phones.guest.page.locator(".duel-role[data-act=join]").tap();
   check(/you play blue/i.test(h.line) && /you play red/i.test(g.line), `sides: host "${h.line}", guest "${g.line}"`);
   check(/Riverlands/.test(h.map) && h.map === g.map, `the map: host "${h.map}", guest "${g.map}" (the host's Riverlands)`);
   check(/Rapid Fab/.test(h.muts) && h.muts === g.muts, `the mutators: host "${h.muts}", guest "${g.muts}" (the host's Rapid Fab)`);
+  // (each card says what its opener gives, as the single-player picker does)
+  const gives = await phones.host.page.locator(".duel-cards .op-card .op-gives").allInnerTexts();
+  check(gives.length > 0 && gives.every((t) => / · \d+ Harvesters/.test(t)), `the cards don't say what each opener gives: ${JSON.stringify(gives)}`);
   await both((p) => shot(p, "1-paired"));
 }
 await both(cancel);
@@ -294,28 +340,30 @@ check((await player(phones.host)) === "blue" && (await player(phones.guest)) ===
 }
 check((await phones.host.page.locator(".duel-wrap").count()) === 0, "the lobby sheet stayed up into the match");
 
-/** Every tick a page was seen at, with its hash trail there: both pages must agree wherever both were seen. */
-const sample = (p, list) => {
-  for (const [tick, trail] of list) if (tick >= 0 && trail !== null) p.trail.set(tick, trail);
+/** The hash trail after every tick a page stepped (its own log, read as it grows): both pages must agree at every tick. */
+const sample = (p, r) => {
+  if (!r) return;
+  p.tick = r.tick;
+  for (const [tick, trail] of r.trails) {
+    p.trail.set(tick, trail);
+    p.seen = Math.max(p.seen, tick);
+  }
 };
 /**
- * Two frames of 100 ms on each page in a match, undrawn (a tick each at most:
- * the lockstep holds it to the turns that have arrived), and its tick and
- * trail after each. A page on the menu or reloading is left alone.
+ * Two frames of 100 ms on each page in a match, undrawn (the lockstep holds
+ * them to the turns that have arrived), then its tick and the trail of the
+ * ticks stepped since the last look. A page on the menu or reloading is left
+ * alone.
  */
 const stepBoth = () =>
   both((p) =>
     p.page
-      .evaluate(() => {
-        if (!window.__bd?.scene || !window.__duel) return [];
-        const seen = [];
-        for (let i = 0; i < 2; i++) {
-          window.__bd.scene.step(100, 1, false);
-          seen.push([window.__duel.tick, window.__duel.trail()]);
-        }
-        return seen;
-      })
-      .then((s) => sample(p, s), () => undefined)
+      .evaluate((from) => {
+        if (!window.__bd?.scene || !window.__duel) return null;
+        for (let i = 0; i < 2; i++) window.__bd.scene.step(100, 1, false);
+        return { tick: window.__duel.tick, trails: window.__duel.trails(from) };
+      }, p.seen + 1)
+      .then((r) => sample(p, r), () => undefined)
   );
 /** Advance both pages for `ms` of real time (the link sets the pace). */
 async function run(ms, until = null) {
@@ -330,10 +378,41 @@ async function run(ms, until = null) {
 const tick = (p) => p.page.evaluate(() => window.__duel.tick);
 const ticks = () => both(tick);
 
-await run(3000);
-const [t0h, t0g] = await ticks();
-log(`ticks after 3 s: host ${t0h}, guest ${t0g}`);
-check(t0h > 5 && t0g > 5, "the match doesn't advance");
+/**
+ * Step both pages until each is `n` ticks past where it is now (see the
+ * header). False, and a failure saying `what`, if a page short of its mark is
+ * held on one tick for STUCK_MS, or it all takes longer than n ticks of
+ * tickMs(D) after that.
+ */
+async function goesOn(what, n) {
+  const from = await ticks();
+  const held = from.map(() => Date.now());
+  const last = from.slice();
+  const T = Date.now();
+  const limit = STUCK_MS + n * tickMs(D);
+  for (;;) {
+    await stepBoth();
+    const now = [phones.host.tick, phones.guest.tick];
+    if (now.every((t, i) => t >= from[i] + n)) {
+      log(`${what}: host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]} in ${((Date.now() - T) / 1000).toFixed(1)} s`);
+      return true;
+    }
+    if (Date.now() - T > limit)
+      return check(false, `${what}: ${n} ticks took over ${(limit / 1000).toFixed(1)} s (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D})`);
+    for (const i of [0, 1]) {
+      if (now[i] !== last[i]) [last[i], held[i]] = [now[i], Date.now()];
+      else if (now[i] < from[i] + n && Date.now() - held[i] > STUCK_MS)
+        return check(false, `${what}: the ${i ? "guest" : "host"} was held on tick ${now[i]} for ${STUCK_MS} ms (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D})`);
+    }
+    await sleep(30);
+  }
+}
+
+/** The input delay the pairing agreed: the progress checks ask for 2D + 1 ticks. */
+const D = await phones.host.page.evaluate(() => window.__duel.delay);
+check(D >= 3 && D <= 8 && D === (await phones.guest.page.evaluate(() => window.__duel.delay)), `the input delay: ${D}`);
+log(`D ${D}; a page held on one tick for ${STUCK_MS} ms fails, as do ${tickMs(D).toFixed(0)} ms a tick on average`);
+await goesOn("the match goes on", 2 * D + 1);
 // the openers both picked are in both worlds
 {
   const kinds = await both((p) => p.page.evaluate(() => [...window.__bd.world.buildings.values()].map((b) => `${b.faction}:${b.kind}`).sort().join(",")));
@@ -382,11 +461,7 @@ if (OUTAGE > 0) {
     return false;
   });
   check(OUTAGE < 1500 || waited, "the guest didn't show \"Waiting for your friend…\" in the outage");
-  const before = await ticks();
-  await run(4000);
-  const after = await ticks();
-  log(`after the outage: host ${before[0]} → ${after[0]}, guest ${before[1]} → ${after[1]}`);
-  check(after[0] > before[0] + 10 && after[1] > before[1] + 10, "the match didn't go on after the outage");
+  await goesOn("after the outage", 2 * D + 1);
 }
 
 // pause: the host pauses; the guest stalls within D ticks and says so
@@ -394,8 +469,7 @@ log("pause");
 await phones.host.page.locator("#btn-menu").tap();
 check(await phones.host.page.evaluate(() => window.__bd.ctrl.paused), "the pause button didn't pause");
 const pauseLine = await text(phones.host, "#pause .time");
-const D = Math.round(Number(/🔊 (\d+) ms/.exec(pauseLine)?.[1] ?? NaN) / 100);
-check(/vs your friend · 🔊 \d+ ms/.test(pauseLine) && D >= 3 && D <= 8, `the pause line: "${pauseLine}"`);
+check(/vs your friend · 🔊 \d+ ms/.test(pauseLine) && Number(/🔊 (\d+) ms/.exec(pauseLine)?.[1]) === D * 100, `the pause line: "${pauseLine}" (D ${D})`);
 check((await phones.host.page.locator("#p-resign").count()) === 1, "no Resign in the pause menu");
 check((await phones.host.page.locator("#p-quit, #p-fog").count()) === 0, "the duel's pause menu offers Quit or the fog toggle");
 await shot(phones.host, "3-paused");
@@ -414,11 +488,7 @@ check(guestHeld2 === guestHeld && guestHeld <= hostAt + D + 1, `the friend didn'
 check(friendPaused, "the friend didn't show \"Friend paused\"");
 await shot(phones.guest, "3-friend-paused");
 await phones.host.page.locator("#p-resume").tap();
-await run(4000);
-{
-  const [h, g] = await ticks();
-  check(h > hostHeld + 10 && g > guestHeld + 10, `the match didn't go on after the pause: host ${h}, guest ${g}`);
-}
+await goesOn("after the pause", 2 * D + 1);
 
 // more orders, then the guest resigns from the pause menu
 for (const p of [phones.host, phones.guest])
@@ -427,8 +497,10 @@ for (const p of [phones.host, phones.guest])
     const ids = [...w.units.values()].filter((u) => u.faction === me && u.kind !== "harvester").map((u) => u.id);
     if (ids.length) ctrl.enqueue({ type: "attackMove", faction: me, unitIds: ids, x: w.width / 2, y: w.height / 2 });
   });
-const long = await run(90000, async () => (await ticks()).every((t) => t >= MATCH_TICKS));
-check(long, `the match didn't reach tick ${MATCH_TICKS}: ${JSON.stringify(await ticks())}`);
+{
+  const [h, g] = await ticks();
+  await goesOn(`on to tick ${MATCH_TICKS}`, MATCH_TICKS - Math.min(h, g));
+}
 log("the guest resigns");
 await phones.guest.page.locator("#btn-menu").tap();
 await phones.guest.page.locator("#p-resign").tap();
@@ -454,12 +526,18 @@ const synced = await run(15000, async () => (await both((p) => text(p, ".duel-sy
   check(end[0].tick === end[1].tick && end[0].hash === end[1].hash && end[0].trail === end[1].trail, "the two worlds differ at the end");
   check(synced && res.every((r) => r?.endCheck === "ok"), `the end check: ${JSON.stringify(res.map((r) => r?.endCheck))}`);
 }
-// the hash trail wherever both pages were seen at the same tick
+// the hash trail at every tick of the match, through the deciding one, on both pages
 {
-  const common = [...phones.host.trail.keys()].filter((t) => phones.guest.trail.has(t));
-  const differ = common.filter((t) => phones.host.trail.get(t) !== phones.guest.trail.get(t));
-  log(`trails: ${phones.host.trail.size} host and ${phones.guest.trail.size} guest ticks seen, ${common.length} in common`);
-  check(common.length >= MATCH_TICKS * 0.6, `too few ticks seen on both pages (${common.length})`);
+  await stepBoth();
+  const last = await phones.host.page.evaluate(() => window.__duel.result?.tick ?? -1);
+  const missing = [];
+  const differ = [];
+  for (let t = 0; t <= last; t++) {
+    if (!phones.host.trail.has(t) || !phones.guest.trail.has(t)) missing.push(t);
+    else if (phones.host.trail.get(t) !== phones.guest.trail.get(t)) differ.push(t);
+  }
+  log(`trails: ${phones.host.trail.size} host and ${phones.guest.trail.size} guest ticks, compared through tick ${last}`);
+  check(last >= MATCH_TICKS && missing.length === 0, `ticks with no trail on a page (through ${last}): ${missing.slice(0, 10).join(", ")}`);
   check(differ.length === 0, `the hash trails differ at ticks ${differ.slice(0, 10).join(", ")}`);
 }
 // the report
@@ -469,6 +547,10 @@ const synced = await run(15000, async () => (await both((p) => text(p, ".duel-sy
   check(/VICTORY/.test(heads[0]) && /DEFEAT/.test(heads[1]), "the report's headline isn't VICTORY / DEFEAT");
   for (const h of heads) check(/vs your friend · Riverlands · .* · practice link \(no sound\)/.test(h), `the report's line: "${h}"`);
   for (const p of [phones.host, phones.guest]) {
+    // (the order delay as felt: from the tap's drain to the step, mean and worst)
+    const link = await text(p, ".duel-link");
+    log(`${p.name}'s link: ${JSON.stringify(link)}`);
+    check(/Order delay\s+[\d.]+ m?s average · [\d.]+ m?s worst/.test(link), `the ${p.name}'s report has no order delay: ${JSON.stringify(link)}`);
     check(/Practice link \(no sound\)/.test(await text(p, ".duel-rec")), "the report doesn't say practice link");
     check((await p.page.locator("#duel-save").count()) === 1 && (await p.page.locator("#menu").count()) === 1, "Save battle or Main menu missing");
     check((await p.page.evaluate(() => localStorage.getItem("battledrones.soundduel"))) === null, "a practice link wrote the win/loss record");
