@@ -10,7 +10,8 @@ import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
 import { buildingCenter, domainOf } from "../sim/world";
 import { sfx } from "./audio";
-import { Controller, PLAYER, type TapHit } from "./controller";
+import { Controller, ENEMY, PLAYER, type TapHit } from "./controller";
+import { applyOpenersCanonical, composeTick } from "./local-side";
 import { GestureRecognizer, isHoldRelease, type GesturePointer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions, unchartedMatch } from "./mode";
@@ -56,6 +57,8 @@ const DEFAULT_ZOOM = 42;
 const EDGE_PAD = 2;
 /** Radius of an order's waypoint ring (CSS px). */
 const WAYPOINT_PX = 7;
+/** Production meters in the producer's side colour (blue is blue on both phones of a sound duel). */
+const METER: Record<Faction, string> = { blue: "#6eb0ff", red: "#ff7a6a" };
 /** Box-select dashes (CSS px), their dark rims (each 1 px longer at both ends), and none. */
 const DASH = [6, 4];
 const DASH_RIM = [8, 2];
@@ -92,7 +95,7 @@ export interface MatchFeed {
 export class GameScene {
   world!: World;
   ctrl!: Controller;
-  /** Red's commander (null in Last Stand and survival ops: the waves have none). */
+  /** The enemy commander, playing ENEMY (null in Last Stand and survival ops: the waves have none). */
   private ai: AiState | null = null;
   private blueAi: AiState | null = null;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
@@ -411,6 +414,10 @@ export class GameScene {
     (window as unknown as Record<string, unknown>).__bd = {
       world: this.world,
       ctrl: this.ctrl,
+      /** The side this page commands (red under `?side=red`, or a sound duel's red phone). */
+      get player() {
+        return PLAYER;
+      },
       cam: rig,
       scene: this,
       three: { stage: this.stage, terrain: this.terrain, THREE },
@@ -526,13 +533,14 @@ export class GameScene {
     rig.placeAt((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, sx, sy);
   }
 
-  /** The player picked an opener: both sides get theirs and the clock starts. */
+  /** The player picked an opener: both sides get theirs (blue's first, as in a duel) and the clock starts. */
   private startWithOpener(id: OpenerId): void {
     if (!this.holdStart) return;
-    const mine = applyOpener(this.world, PLAYER, id);
-    const red = this.ai && allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
-    if (red) applyOpener(this.world, "red", red);
-    tickFog(this.world);
+    const picks: Partial<Record<Faction, OpenerId>> = { [PLAYER]: id };
+    // (the rules alone decide what's allowed, so the AI's pick is the same before or after ours lands)
+    const theirs = this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
+    if (theirs) picks[ENEMY] = theirs;
+    const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
     this.holdStart = false;
     // roll-out flourish on everything that just arrived
     const b = mine.buildingId !== null ? this.world.buildings.get(mine.buildingId) : null;
@@ -621,9 +629,10 @@ export class GameScene {
         const fed = this.feed ? this.feed.commands(this.world.tick) : null;
         if (this.feed && !fed) break; // (a live battle: the next round isn't played yet)
         this.snapshotPrev();
-        const blue = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
-        const red = this.ai ? tickAi(this.world, "red", this.ai) : []; // (Last Stand: the waves have no commander)
-        step(this.world, fed ?? [...blue, ...red]);
+        // our orders (a spectator's: blue's commander) and the enemy commander's, stepped blue's first
+        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
+        const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
+        step(this.world, fed ?? composeTick(PLAYER, mine, theirs));
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
         this.feed?.afterTick(this.world, false);
@@ -1094,7 +1103,7 @@ export class GameScene {
       const s = rig.project(p.x, p.y, p.h);
       if (s.behind) continue;
       const mw = Math.min(90, Math.max(44, 1.6 / rig.worldPerPx(p.x, p.y)));
-      this.juice.meter(ctx, s.x - mw / 2, s.y + 6, mw, 4, 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE), "#6eb0ff");
+      this.juice.meter(ctx, s.x - mw / 2, s.y + 6, mw, 4, 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE), METER[u.faction]);
     }
     for (const b of w.buildings.values()) {
       const size = BUILDINGS[b.kind].size;
@@ -1113,7 +1122,7 @@ export class GameScene {
       if (head && (b.faction === PLAYER || BUILDINGS[b.kind].alwaysVisible)) {
         const total = UNITS[head.kind].buildTime * TICK_RATE;
         const s = rig.project(p.x, b.ty + size, p.h - 0.4);
-        if (!s.behind) this.juice.meter(ctx, s.x - bw / 2, s.y - 8, bw, 4, 1 - head.remaining / total, b.faction === PLAYER ? "#6eb0ff" : "#ff7a6a");
+        if (!s.behind) this.juice.meter(ctx, s.x - bw / 2, s.y - 8, bw, 4, 1 - head.remaining / total, METER[b.faction]);
       }
     }
     // veterancy chevrons float above the unit, on the device pixel grid (crisp, and no shimmer as the camera glides)

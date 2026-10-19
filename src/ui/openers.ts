@@ -1,7 +1,8 @@
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { OPENERS, OPENER_IDS, type OpenerId } from "../sim/openers";
-import type { UnitKind } from "../sim/types";
+import type { Faction, UnitKind } from "../sim/types";
 import { sfx } from "../game/audio";
+import { PLAYER } from "../game/controller";
 import { fullscreen } from "./fullscreen";
 
 /**
@@ -17,12 +18,14 @@ export interface OpenerPickerOptions {
   blocked?(id: OpenerId): string | null;
   /** Why an opener suits this map especially (a badge on its card), or null. */
   recommended?(id: OpenerId): string | null;
+  /** Whose paint the cards' art is in (default: the side we play, PLAYER). */
+  side?: Faction;
 }
 
-const ICON = (kind: string) => `assets/icons/${kind}.webp`;
+const ICON = (kind: string, side: Faction) => `assets/icons/${side === "red" ? "red/" : ""}${kind}.webp`;
 
 /** What each card promises, as icon pills. */
-function pills(id: OpenerId): string {
+function pills(id: OpenerId, side: Faction): string {
   const o = OPENERS[id];
   const items: { icon?: string; label: string; cls?: string }[] = [{ icon: o.building, label: BUILDINGS[o.building].name }];
   const counts = new Map<UnitKind, number>();
@@ -34,25 +37,26 @@ function pills(id: OpenerId): string {
   return items
     .map(
       (it) =>
-        `<span class="op-pill ${it.cls ?? ""}">${it.icon ? `<img src="${ICON(it.icon)}" alt="" draggable="false"/>` : `<i>⚙</i>`}${it.label}</span>`
+        `<span class="op-pill ${it.cls ?? ""}">${it.icon ? `<img src="${ICON(it.icon, side)}" alt="" draggable="false"/>` : `<i>⚙</i>`}${it.label}</span>`
     )
     .join("");
 }
 
 /** The hero image cluster: the building with its units stacked in front. */
-function art(id: OpenerId): string {
+function art(id: OpenerId, side: Faction): string {
   const o = OPENERS[id];
   const unit = o.units[0] ?? "harvester";
   const n = o.units.length || o.harvesters;
   return `<div class="op-art">
-      <img class="op-b" src="${ICON(o.building)}" alt="" draggable="false"/>
-      <img class="op-u" src="${ICON(unit)}" alt="" draggable="false"/>
+      <img class="op-b" src="${ICON(o.building, side)}" alt="" draggable="false"/>
+      <img class="op-u" src="${ICON(unit, side)}" alt="" draggable="false"/>
       <span class="op-n">×${n}</span>
     </div>`;
 }
 
 export function showOpenerPicker(opts: OpenerPickerOptions): { destroy(): void } {
   const root = document.getElementById("hud")!;
+  const side = opts.side ?? PLAYER;
   const el = document.createElement("div");
   el.className = "openers";
   el.innerHTML = `
@@ -65,11 +69,11 @@ export function showOpenerPicker(opts: OpenerPickerOptions): { destroy(): void }
       ${OPENER_IDS.map(
         (id, i) => `
         <button class="op-card op-${id}" data-id="${id}">
-          ${art(id)}
+          ${art(id, side)}
           <div class="op-text">
             <b class="op-name">${OPENERS[id].name}</b>
             <span class="op-tag">${OPENERS[id].tagline}</span>
-            <div class="op-pills">${pills(id)}</div>
+            <div class="op-pills">${pills(id, side)}</div>
           </div>
           <span class="op-key">${i + 1}</span>
         </button>`

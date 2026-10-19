@@ -10,14 +10,10 @@ import type { BattleRecord } from "../../src/arena/record";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-/** sha256 of every file under the given src directories (sorted paths and contents). */
+/** sha256 of every file under the given src directories or files (sorted paths and contents). */
 function treeHash(root: string, dirs: string[]): string {
   const h = createHash("sha256");
-  const walk = (dir: string): string[] =>
-    readdirSync(dir).sort().flatMap((n) => {
-      const p = join(dir, n);
-      return statSync(p).isDirectory() ? walk(p) : [p];
-    });
+  const walk = (p: string): string[] => (statSync(p).isDirectory() ? readdirSync(p).sort().flatMap((n) => walk(join(p, n))) : [p]);
   for (const d of dirs) {
     let files: string[] = [];
     try {
@@ -42,7 +38,7 @@ export function simHash(root = ROOT): string {
 
 /** The sim plus the sound-duel code (SOUND-DUEL.md): two phones pair only when this matches. */
 export function duelHash(root = ROOT): string {
-  return treeHash(root, ["src/sim", "src/versus", "src/link"]);
+  return treeHash(root, ["src/sim", "src/versus", "src/link", "src/game/local-side.ts"]);
 }
 
 export function gitCommit(root = ROOT): string | null {

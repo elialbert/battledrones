@@ -6,6 +6,7 @@ import { sfx } from "./game/audio";
 import { music } from "./game/music";
 import { loadTerrainArt, mapThumbUrl } from "./game/assets";
 import { GameScene, type MatchFeed } from "./game/GameScene";
+import { setLocalSide } from "./game/controller";
 import { gameMode, loadSettings, saveSettings, unchartedMatch, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
@@ -105,6 +106,12 @@ async function startGame(feed?: MatchFeed): Promise<void> {
   if (bar) bar.style.width = "100%";
   // (let the full bar paint before the scene build blocks the main thread)
   await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  // /?side=red, in every build: a skirmish played as red against a blue AI, the side a sound duel's
+  // other phone plays (SOUND-DUEL.md "Playing red"). Not Last Stand, an op or the Daily Op, which
+  // are set up for blue, nor a watched match; a fed match (a replay, a duel) brings its own side.
+  // (before the scene: its presenters copy the side as they are built)
+  const asRed = new URLSearchParams(location.search).get("side") === "red";
+  if (asRed && !feed && gameMode.mode === "skirmish" && !gameMode.spectator && !gameMode.daily && !gameMode.op) setLocalSide("red");
   const scene = new GameScene(document.getElementById("game")!, dpr(), art, feed);
   window.addEventListener("resize", () => scene.resize());
   window.addEventListener("orientationchange", () => setTimeout(() => scene.resize(), 200));

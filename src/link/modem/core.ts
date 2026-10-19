@@ -1,0 +1,373 @@
+/**
+ * ModemCore (SOUND-DUEL.md "The modem" > ModemCore API): the whole acoustic
+ * modem behind one process(input, output) call per audio block, the same in
+ * the AudioWorklet, in the simulated room and in Node tests. It transmits in
+ * one band and receives in another (or the same, for the one-phone
+ * self-test), all the time.
+ *
+ * Each call renders exactly its block from the oscillator bank, writes the
+ * input into the history ring, lets the trackers fold in what they can
+ * within a budget, and runs at most one deferred heavy job (a Viterbi decode
+ * first, else one FFT of the sync search). Nothing is allocated in process()
+ * after construction; take(), takeSlots(), takeGaps() and stats() build the
+ * messages.
+ *
+ * Allowed globals only (the worklet's rule): no timers, performance, self,
+ * import.meta, TextEncoder or crypto anywhere under src/link/modem.
+ *
+ * The frame. process() takes an optional third argument, the block's first
+ * frame (the worklet's currentFrame). Without it blocks are taken as
+ * back to back. A frame ahead of the expected one is a jump: the frames in
+ * between were never rendered or captured, so the transmitter skips them
+ * (and restarts its superframe at the next symbol boundary) and the
+ * receiver zero-fills them as a gap of known length.
+ *
+ * A capture gap alone (blocks of digital silence, or of non-finite samples:
+ * the microphone, not the audio thread, failed) leaves the transmitter be.
+ * The spec restarts the superframe after any local gap, but here the output
+ * was rendered on time all along, so the friend's lock on it is intact, and
+ * a restart would only make the friend lose a superframe re-acquiring it.
+ *
+ * Plan detection. A Join (rx "detect") searches both plans' host bands, and
+ * until it locks it transmits in the high plan's guest band (16–19 kHz),
+ * whatever plan it was given, when the rate carries it: the low plan's guest
+ * band ends 25 Hz below the high host band, and its own loud signal there
+ * would bury the host's sync in the very band it is searching.
+ */
+import type { BandPlan, BandRole, ModemMode } from "../transport";
+import { crcKey } from "./crc";
+import { clampGain, MIN_RATE, rateProblem, timing, type Timing } from "./params";
+import { InputRing } from "./ring";
+import { Receiver } from "./rx";
+import { SelfMonitor } from "./monitor";
+import { SyncSearch, type CorrBand } from "./sync";
+import { allBandTables, bandKey } from "./tables";
+import { Transmitter } from "./tx";
+
+export type { BandPlan, BandRole, ModemMode } from "../transport";
+
+export interface ModemConfig {
+  sampleRate: number;
+  plan: BandPlan;
+  tx: BandRole;
+  /** The band received: the other role's, the same (self-test), or "detect" (Join in the lobby: either plan's host band). */
+  rx: BandRole | "detect";
+  gain?: number;
+}
+
+export interface RxPacket {
+  bits: Uint8Array;
+  nbits: number;
+  mode: ModemMode;
+  snrDb: number;
+  /** Input frame of the first sample of the packet's first (nominal, N-sample) DFT window. */
+  sample: number;
+  plan: BandPlan;
+  session: boolean;
+}
+
+export interface ModemStats {
+  sample: number;
+  locked: boolean;
+  plan: BandPlan;
+  rxMode: ModemMode | null;
+  txMode: ModemMode;
+  snrDb: number | null;
+  rxOk: number;
+  rxBad: number;
+  syncs: number;
+  /** The friend's sample clock against this phone's, while locked: positive when it runs fast (ppm). */
+  clockPpm: number | null;
+  txPackets: number;
+  ownSnrDb: number | null;
+  loopbackMs: number | null;
+  /** Transmitted samples clipped at ±0.9 (a fault). */
+  clips: number;
+  /** The largest |input| since the last stats(). */
+  inputPeak: number;
+}
+
+/** A capture gap: once when it starts (frames 0), once with its length when input resumes. */
+export interface GapEvent {
+  sample: number;
+  frames: number;
+}
+
+/** Tone-samples of DFT work per call: the lock's tracker live needs about 15,000 at 48 kHz. */
+const BUDGET = 48_000;
+const MONITOR_BUDGET = 8_000;
+/** Blocks longer than this are processed in pieces. */
+const PIECE = 512;
+const NONE: never[] = Object.freeze([]) as unknown as never[];
+
+export class ModemCore {
+  private readonly t: Timing;
+  private cfg: Required<ModemConfig>;
+  private readonly ring = new InputRing();
+  private readonly search: SyncSearch;
+  private readonly tx: Transmitter;
+  private readonly rx: Receiver;
+  private readonly mon: SelfMonitor;
+  /** Each band's correlator, and the receive band lists, looked up without building keys (no allocation on the audio thread). */
+  private readonly corrs: Record<BandPlan, Record<BandRole, CorrBand | null>>;
+  private readonly single: Record<BandPlan, Record<BandRole, CorrBand[]>>;
+  private readonly detectSet: CorrBand[];
+  private pendingRx = false;
+  private keys: [number, number] | null = null;
+  private started = false;
+  private next = 0;
+  private inGap = false;
+  private gapStart = 0;
+  private gapLen = 0;
+  private peak = 0;
+  private readonly gapSample = new Float64Array(16);
+  private readonly gapFrames = new Float64Array(16);
+  private gapCount = 0;
+
+  constructor(cfg: ModemConfig) {
+    const problem = rateProblem(cfg.sampleRate, cfg.plan);
+    if (problem) throw new RangeError(problem);
+    this.cfg = { ...cfg, plan: detectPlan(cfg), gain: clampGain(cfg.gain, 1) };
+    this.t = timing(cfg.sampleRate);
+    const tables = allBandTables(this.t);
+    this.search = new SyncSearch(this.t, tables);
+    this.tx = new Transmitter(this.t, tables, this.cfg.plan, cfg.tx, this.cfg.gain, "robust");
+    this.rx = new Receiver(this.t, this.ring, this.search);
+    this.mon = new SelfMonitor(this.t);
+    // every receive configuration's band list, made now so a switch never allocates
+    const c = (plan: BandPlan, role: BandRole) => this.search.corr.get(bandKey(plan, role)) ?? null;
+    this.corrs = { high: { host: c("high", "host"), guest: c("high", "guest") }, low: { host: c("low", "host"), guest: c("low", "guest") } };
+    const list = (x: CorrBand | null) => (x ? [x] : []);
+    this.single = {
+      high: { host: list(this.corrs.high.host), guest: list(this.corrs.high.guest) },
+      low: { host: list(this.corrs.low.host), guest: list(this.corrs.low.guest) }
+    };
+    this.detectSet = [this.corrs.high.host, this.corrs.low.host].filter((x): x is CorrBand => x !== null);
+    this.applyRx();
+  }
+
+  /** The receive bands and the monitor's band for the current config. */
+  private applyRx(): void {
+    const { plan, tx, rx } = this.cfg;
+    const bands = rx === "detect" ? this.detectSet : this.single[plan][rx];
+    const own = this.corrs[plan][tx]!;
+    this.rx.configure(bands, rx === "detect", own);
+    this.mon.configure(own);
+    this.applyKeys();
+    this.pendingRx = false;
+  }
+
+  private applyKeys(): void {
+    if (!this.keys) {
+      this.tx.setSessionKey(null);
+      this.rx.sessionKey = null;
+      return;
+    }
+    const [h, g] = this.keys;
+    const { tx, rx } = this.cfg;
+    this.tx.setSessionKey(crcKey(tx, h, g));
+    this.rx.sessionKey = crcKey(rx === "detect" ? "host" : rx, h, g);
+  }
+
+  process(input: Float32Array, output: Float32Array, frame?: number): void {
+    const n = output.length;
+    const f0 = frame ?? this.next;
+    for (let i = 0; i < n; i += PIECE) this.block(input, output, i, Math.min(PIECE, n - i), f0 + i);
+  }
+
+  private block(input: Float32Array, output: Float32Array, off: number, n: number, frame: number): void {
+    if (!this.started) {
+      this.started = true;
+      this.ring.reset(frame);
+      this.next = frame;
+    }
+    if (this.pendingRx) this.applyRx();
+    if (frame !== this.next) {
+      if (frame > this.next) {
+        // a jump: those frames were never rendered nor captured
+        const lost = frame - this.next;
+        this.endGap();
+        this.gapEvent(this.next, 0);
+        this.gapEvent(this.next, lost);
+        this.ring.skip(lost);
+        this.tx.jumped();
+      } else {
+        // the counter went back: start over from here
+        this.endGap();
+        this.ring.reset(frame);
+        this.search.restart();
+        this.tx.resetTimeline();
+        this.mon.reset();
+        this.applyRx();
+      }
+      this.next = frame;
+    }
+    // a live microphone hearing its own speaker never gives digital silence: a block of it is missing input,
+    // and so is a block holding a NaN or an infinity (which would otherwise spread through every sum it meets)
+    let silent = true;
+    let finite = true;
+    let peak = this.peak;
+    for (let i = off; i < off + n; i++) {
+      const v = input[i]!;
+      if (v !== 0) silent = false;
+      if (v - v !== 0) finite = false;
+      const a = v < 0 ? -v : v;
+      if (a > peak && a < Infinity) peak = a;
+    }
+    this.peak = peak;
+    if (silent || !finite) {
+      if (!this.inGap) {
+        this.inGap = true;
+        this.gapStart = frame;
+        this.gapLen = 0;
+        this.gapEvent(frame, 0);
+      }
+      this.gapLen += n;
+      this.ring.skip(n);
+    } else {
+      this.endGap();
+      this.ring.write(input, off, off + n);
+    }
+    this.tx.process(output, off, n, frame);
+    this.rx.step(BUDGET);
+    this.mon.step(this.tx, this.search, this.ring, MONITOR_BUDGET);
+    // one deferred heavy job: a waiting decode first, else the sync search's next FFT
+    if (!this.rx.runDecode()) this.search.runJob(this.ring);
+    if (this.rx.detected) this.planFound(this.rx.detected);
+    this.next = frame + n;
+  }
+
+  private endGap(): void {
+    if (!this.inGap) return;
+    this.inGap = false;
+    this.gapEvent(this.gapStart, this.gapLen);
+  }
+
+  private gapEvent(sample: number, frames: number): void {
+    if (this.gapCount === this.gapSample.length) return;
+    this.gapSample[this.gapCount] = sample;
+    this.gapFrames[this.gapCount] = frames;
+    this.gapCount++;
+  }
+
+  /** Join's plan detection locked on `plan`'s host band: transmit in its guest band and keep receiving there. */
+  private planFound(plan: BandPlan): void {
+    this.rx.detected = null;
+    this.rx.detecting = false;
+    if (this.cfg.rx !== "detect") return;
+    this.cfg.plan = plan;
+    this.cfg.rx = "host";
+    this.tx.reconfigure(plan, this.cfg.tx, this.cfg.gain);
+    // keep the lock that found it: only the monitor and the keys move
+    const own = this.corrs[plan][this.cfg.tx]!;
+    this.mon.configure(own);
+    this.search.setBands(this.single[plan].host, own, this.ring.end);
+    this.applyKeys();
+  }
+
+  /** The frame every packet repeats from its next start, until replaced. MSB-first, nbits ≤ capacity(). */
+  setPayload(bits: Uint8Array, nbits: number): void {
+    if (nbits > this.capacity() || nbits < 0) throw new RangeError(`a ${nbits}-bit payload in a ${this.capacity()}-bit packet`);
+    this.tx.setPayload(bits, nbits);
+  }
+
+  /** The transmit mode from the next superframe. */
+  setTxMode(mode: ModemMode): void {
+    this.tx.setMode(mode);
+  }
+
+  /** Enable the session CRC for game frames (both directions). */
+  setSessionKey(hostNonce: number, guestNonce: number): void {
+    this.keys = [hostNonce, guestNonce];
+    this.applyKeys();
+  }
+
+  /** Change plan, roles or gain. The transmitter switches at its next symbol boundary, the receiver at the next block. */
+  reconfigure(cfg: Partial<ModemConfig>): void {
+    if (cfg.sampleRate !== undefined && cfg.sampleRate !== this.cfg.sampleRate) throw new RangeError("a ModemCore's sample rate is fixed");
+    const plan = cfg.plan ?? this.cfg.plan;
+    const problem = rateProblem(this.cfg.sampleRate, plan);
+    if (problem) throw new RangeError(problem);
+    const next: Required<ModemConfig> = {
+      sampleRate: this.cfg.sampleRate,
+      plan,
+      tx: cfg.tx ?? this.cfg.tx,
+      rx: cfg.rx ?? this.cfg.rx,
+      gain: clampGain(cfg.gain, this.cfg.gain)
+    };
+    next.plan = detectPlan(next);
+    const rxChanged = next.plan !== this.cfg.plan || next.tx !== this.cfg.tx || next.rx !== this.cfg.rx;
+    this.cfg = next;
+    this.tx.reconfigure(next.plan, next.tx, next.gain);
+    if (rxChanged) this.pendingRx = true;
+    this.applyKeys();
+  }
+
+  /** Payload bits per packet: constant for a plan. */
+  capacity(): number {
+    return this.tx.capacity();
+  }
+
+  /** Packets decoded since the last call. */
+  take(): RxPacket[] {
+    const rx = this.rx;
+    if (rx.heldCount === 0) return NONE;
+    const out: RxPacket[] = [];
+    while (rx.heldCount > 0) {
+      const h = rx.held[rx.heldHead]!;
+      rx.heldHead = (rx.heldHead + 1) % rx.held.length;
+      rx.heldCount--;
+      out.push({ bits: h.bits.slice(0, (h.nbits + 7) >> 3), nbits: h.nbits, mode: h.mode, snrDb: h.snrDb, sample: h.sample, plan: h.plan, session: h.session });
+    }
+    return out;
+  }
+
+  /** Packet starts since the last call: the frame each packet's first symbol starts at, and a running packet number. */
+  takeSlots(): { sample: number; index: number }[] {
+    const tx = this.tx;
+    if (tx.slotCount === 0) return NONE;
+    const out: { sample: number; index: number }[] = [];
+    for (let i = 0; i < tx.slotCount; i++) out.push({ sample: tx.slotFrames[i]!, index: tx.slotIndex[i]! });
+    tx.slotCount = 0;
+    return out;
+  }
+
+  /** Capture gaps since the last call (the worklet's {t:"gap"} messages). */
+  takeGaps(): GapEvent[] {
+    if (this.gapCount === 0) return NONE;
+    const out: GapEvent[] = [];
+    for (let i = 0; i < this.gapCount; i++) out.push({ sample: this.gapSample[i]!, frames: this.gapFrames[i]! });
+    this.gapCount = 0;
+    return out;
+  }
+
+  stats(): ModemStats {
+    const rx = this.rx;
+    const eps = rx.eps;
+    const peak = this.peak;
+    this.peak = 0;
+    return {
+      sample: this.next,
+      locked: rx.locked,
+      plan: this.cfg.plan,
+      rxMode: rx.locked ? rx.rxMode : null,
+      txMode: this.tx.airMode,
+      snrDb: rx.locked ? rx.snrDb : null,
+      rxOk: rx.rxOk,
+      rxBad: rx.rxBad,
+      syncs: rx.syncs,
+      // ε̂ is the stretch of the friend's symbols on our clock: a clock fast by x stretches them by 1/(1 + x) − 1
+      clockPpm: eps === null ? null : (1 / (1 + eps) - 1) * 1e6,
+      txPackets: this.tx.txPackets,
+      ownSnrDb: this.mon.ownSnrDb,
+      loopbackMs: this.mon.loopbackMs,
+      clips: this.tx.clips,
+      inputPeak: peak
+    };
+  }
+}
+
+/** The plan a ModemCore starts on: a Join detecting the plan starts on the high one wherever the rate carries it (see above). */
+function detectPlan(cfg: ModemConfig): BandPlan {
+  return cfg.rx === "detect" && cfg.sampleRate >= MIN_RATE.high ? "high" : cfg.plan;
+}

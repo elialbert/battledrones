@@ -163,6 +163,28 @@ const SHORT: Partial<Record<UnitKind | BuildingKind, string>> = {
 const MINIMAP_PX = 256;
 /** Under Uncharted, unscouted ground on the minimap: solid (the usual shroud's colour, opaque). */
 const MINIMAP_SHROUD = "rgb(5,7,12)";
+/**
+ * Minimap marks in side colours, not friend and foe: blue is blue on both
+ * phones of a sound duel. Unit blips come in two tints of each side's colour,
+ * the brighter one for our own army so it still stands out. Blue's own tint
+ * and red's foe tint are the two the minimap always used, so blue's player
+ * sees it exactly as before; a red player sees red lifted a step and blue
+ * dimmed by about the same step (7 L*), still clear of blue's building fill.
+ */
+const MINIMAP_SIDE: Record<Faction, { building: string; own: string; foe: string; ring: string; goliath: string; goliathRim: string }> = {
+  blue: { building: "#3d8bff", own: "#9fd0ff", foe: "#78bcff", ring: "rgba(159,208,255,0.6)", goliath: "#cfe8ff", goliathRim: "#1d4f8f" },
+  red: { building: "#ff4a3a", own: "#ffccc2", foe: "#ffb0a0", ring: "rgba(255,140,120,0.6)", goliath: "#ff7a66", goliathRim: "#5a0f08" }
+};
+
+/**
+ * The minimap blip of one of side `f`'s units, as `pov`'s player sees it. A
+ * spectator (null) has no army of its own and sees what blue's player sees,
+ * which is what spectators have always seen.
+ */
+export function minimapDot(f: Faction, pov: Faction | null): string {
+  const side = MINIMAP_SIDE[f];
+  return f === (pov ?? "blue") ? side.own : side.foe;
+}
 
 /**
  * Under Uncharted, the minimap's unexplored tiles as solid rects (x, y, w, h, … in px of an S-px
@@ -203,8 +225,8 @@ export function revealHtml(mapId: string): string {
     </div></div>`;
 }
 
-/** A portrait in a side's paint: the enemy's units and buildings (or either side's, to a spectator) show red. */
-const icon = (kind: string, f: Faction = "blue") => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
+/** A portrait in a side's paint (ours unless told otherwise): red's units and buildings show red, whoever is looking. */
+const icon = (kind: string, f: Faction = PLAYER) => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
 
 export function createHud(api: HudApi): Hud {
   const root = document.getElementById("hud")!;
@@ -1173,35 +1195,32 @@ export function createHud(api: HudApi): Hud {
     const enemyBuildings = fogOn
       ? [...w.fog[PLAYER].known.values()]
       : [...w.buildings.values()].filter((b) => b.faction !== PLAYER);
-    mctx.fillStyle = "#ff4a3a";
     for (const kb of enemyBuildings) {
       const size = BUILDINGS[kb.kind].size;
+      mctx.fillStyle = MINIMAP_SIDE[kb.faction].building;
       mctx.fillRect(kb.tx * k, kb.ty * k, size * k, size * k);
     }
-    mctx.fillStyle = "#3d8bff";
     for (const b of w.buildings.values()) {
       if (b.faction !== PLAYER) continue;
       const size = BUILDINGS[b.kind].size;
+      mctx.fillStyle = MINIMAP_SIDE[b.faction].building;
       mctx.fillRect(b.tx * k, b.ty * k, size * k, size * k);
     }
     const goliaths: Unit[] = [];
     for (const u of w.units.values()) {
-      if (u.faction === PLAYER) mctx.fillStyle = "#9fd0ff";
-      else {
-        // (in sight, and not a Sniper Team hidden in the woods; an enemy Goliath can't hide)
-        if (fogOn && !unitSeenBy(w, PLAYER, u)) continue;
-        mctx.fillStyle = "#ffb0a0";
-      }
+      // (in sight, and not a Sniper Team hidden in the woods; an enemy Goliath can't hide)
+      if (u.faction !== PLAYER && fogOn && !unitSeenBy(w, PLAYER, u)) continue;
+      mctx.fillStyle = minimapDot(u.faction, api.ctrl.spectator ? null : PLAYER);
       if (u.goliath) goliaths.push(u);
       else mctx.fillRect(u.x * k - 2, u.y * k - 2, 4, 4);
     }
     // Goliaths on top: a big outlined diamond (anchored ones ringed with their build ring)
     for (const u of goliaths) {
-      const own = u.faction === PLAYER;
+      const side = MINIMAP_SIDE[u.faction];
       const x = u.x * k;
       const y = u.y * k;
       if (isRooted(u)) {
-        mctx.strokeStyle = own ? "rgba(159,208,255,0.6)" : "rgba(255,140,120,0.6)";
+        mctx.strokeStyle = side.ring;
         mctx.lineWidth = 1;
         mctx.beginPath();
         mctx.arc(x, y, Math.max(7, (GOLIATH.buildRing + GOLIATH.footprint / 2) * k), 0, Math.PI * 2);
@@ -1215,9 +1234,9 @@ export function createHud(api: HudApi): Hud {
       mctx.lineTo(x, y + r);
       mctx.lineTo(x - r, y);
       mctx.closePath();
-      mctx.fillStyle = own ? "#cfe8ff" : "#ff7a66";
+      mctx.fillStyle = side.goliath;
       mctx.fill();
-      mctx.strokeStyle = own ? "#1d4f8f" : "#5a0f08";
+      mctx.strokeStyle = side.goliathRim;
       mctx.lineWidth = 2.5;
       mctx.stroke();
     }

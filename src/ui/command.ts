@@ -43,7 +43,8 @@ const HINTS_KEY = "battledrones.cmdhints";
 /** Build-button and tab badges refresh this often (ms). */
 const BADGE_MS = 250;
 
-const icon = (kind: string) => `assets/icons/${kind}.webp`;
+/** A squad chip's portrait, in our side's paint (red's art when we play red). */
+const icon = (kind: string) => `assets/icons/${PLAYER === "red" ? "red/" : ""}${kind}.webp`;
 
 /**
  * Build-bar tab of each build option (for the tab's ⚔ dot): a unit sits on

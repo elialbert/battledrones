@@ -219,6 +219,7 @@ npm run dev            # Vite dev server
 npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into dist/
 npm run smoke          # headless Playwright test of the real touch flow (against dist/)
+npm run smoke -- --side=red   # the same flow playing red against a blue AI (SOUND-DUEL.md)
 npm run build:pages    # build current game + all version tags into _site/
 npm run balance duels  # cost-equal unit duel matrix
 npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --classic / --no-objectives),

@@ -44,7 +44,7 @@ monitor, two-way link meter) and listed under *Before launch*:
 | Modulation | OFDM with 25 Hz tone spacing (40 ms symbols + 10 ms cyclic prefix). "Fast" uses differential QPSK; "robust" uses differential BPSK over twice as many symbols per packet |
 | Payload | The same in both modes, so a mode switch never changes what fits: 188 bits per packet (high plan) or 186 (low). Fast packets take 100 ms (high) or 200 ms (low); robust packets take twice as long |
 | Coding | Convolutional code (K=7, rate ½, 133/171), soft Viterbi with an agreement gate, interleaving, CRC-16 per packet |
-| Transport model | Latest state: each packet carries the newest frame the upper layer handed over, repeated until replaced. No ARQ: frames re-describe every unacknowledged turn |
+| Transport model | Latest state: each packet carries one of the newest frames the upper layer handed over, repeated until replaced. No ARQ: frames re-describe every unacknowledged turn. When the unacknowledged turns outgrow one packet, they are split into up to K segments that the packets take in rotation (see "Segments and rotation") |
 | Replay protection | Turns are accepted once each (high-water mark). Game packets use a CRC keyed to the pairing's two nonces, so a recording of another match fails its CRC. Pairing needs a fresh nonce echoed back. Jamming can't be prevented, only survived: lockstep stalls, it never desyncs |
 | Sides | The host plays blue unless a rematch swapped it. Rematches swap sides, never roles or bands |
 | Colours, camera | Fixed side colours (blue is blue on both phones), north up on both |
@@ -123,15 +123,30 @@ A turn is one tick (100 ms). The input delay is D ticks, fixed for the match.
   `worldHash32` folded in.
 - **Sealing.** Before stepping tick `t`, the phone seals its own turn `t + D`:
   it drains the controller, canonicalizes and splits the commands (codec), and
-  appends them to its pending queue. Then it moves commands from the front of
+  adds them to its pending queue. Then it moves commands from the front of
   the queue into turn `t + D` under the window rule. Sealing happens exactly
   once per tick, before the stall check. While paused or after the match has
   ended, nothing new is sealed.
+- **Pending queue.** First in, first out, with three rules. They act on the
+  sender before encoding, so they cannot desync anything:
+  - a `resign` goes to the front, so it lands D ticks later whatever waits;
+  - a newer order replaces queued (not yet sealed) orders it overrides
+    outright: a `move` or `attackMove` replaces queued `move`, `attackMove`,
+    `attack`, `harvest` and `stop`; an `attack` replaces queued `attack`; a
+    `stop` replaces queued `stop`. It replaces a queued command only when it
+    names every unit of it and nothing queued in between names any of them
+    (a Condor named as a carrier and a Goliath named as a lift target count
+    as named). Only whole queued commands are dropped;
+  - of a newer order's pieces, those whose units have waited longest go
+    first, so no unit waits for ever behind the rest while orders come faster
+    than the link carries them. Each queue entry keeps, per unit, when that
+    unit started waiting; `queuedTicks` in `status()` is the oldest such wait.
 - **Window rule.** Move the queue's front command into turn T only while two
   things hold:
-  - the frame describing `peerAck + 1 … T` still fits in `capacity`, counting
-    its header, a 21-bit checkpoint reserve, and every sealed turn's gap,
-    count and command bits;
+  - the unacknowledged turns `peerAck + 1 … T` still fit in at most K
+    segments (see "Segments and rotation"), each segment's frame within
+    `capacity`, counting its header, a 21-bit checkpoint reserve, and every
+    turn's gap, count and command bits;
   - turn T stays at or under `TURN_MAX = capacity − 57` bits and 15 commands.
 
   If the front command does not fit, T is sealed with what it has (perhaps
@@ -151,12 +166,47 @@ queued" when it holds more than 2 s of turns.
 
 ### Frames
 
-Each phone keeps its newest frame and hands it to `transport.send()` whenever
-one of these changes: a turn is sealed, a packet changes `ackThrough` or
-`peerAck`, or the pause or end state changes. The transport repeats it until
-it is replaced. A frame describes `from = min(peerAck + 1, newestSealed)`
-through `to`. That is always at least one turn; the receiver ignores turns it
-already holds.
+Each phone keeps its newest frames, one per segment, and hands the list to
+`transport.send()` whenever one of these changes: a turn is sealed, a packet
+changes `ackThrough` or `peerAck`, or the pause or end state changes. The
+transport repeats them until they are replaced. Together the frames describe
+`from = min(peerAck + 1, newestSealed)` through `newestSealed`. That is
+always at least one turn; the receiver ignores turns it already holds.
+
+### Segments and rotation
+
+With one frame per packet, everything in flight must fit in one packet:
+about 120 bits of orders per round trip, roughly 300 bit/s of a link that
+carries 1,880. A 30-unit order (about 190 bits, three 96-bit pieces) would
+then take three round trips to land. Segments let a burst use more of the
+link:
+
+- **Segments.** The sender's unacknowledged turns are cut into at most K
+  segments of consecutive turns, each small enough for one frame. Segment
+  boundaries are fixed when turns are sealed: a newly sealed turn joins the
+  newest segment if that segment's frame still fits, and otherwise starts a
+  new segment. An ack only trims the oldest segment's start or drops whole
+  segments, so a segment's frame never grows after it is cut.
+- **Frames.** Each segment is one frame, `from = max(segment start,
+  peerAck + 1)` through the segment's end (the newest segment ends at
+  `newestSealed`). Every frame carries the current header state (paused, end,
+  rxq, tickLag, ack) and the checkpoint when it fits; the end report rides in
+  the newest segment's frame. Its `key` is the segment's start turn.
+- **Rotation.** The transport sends one frame per packet. After a packet
+  carrying key k, the next packet carries the first frame in the list whose
+  key is greater than k, wrapping to the first. One frame repeats in every
+  packet, which is the common case: with no burst in flight, all unacknowledged
+  turns fit one segment and nothing changes from plain latest state.
+- **K.** `K = clamp(D − 2, 1, 4)`. Rotation adds up to K − 1 packets to the
+  time the newest turn waits for the air, and the input delay D has room for
+  about D − 2 ticks of it beyond the one-way trip, so a burst does not stall
+  the peer in good conditions. The window rule enforces K, so the queue
+  absorbs anything beyond it.
+- **Receiving out of order.** The receiver keeps turns from any accepted frame
+  whose `from` lies within 128 turns past `ackThrough`, and records which turns
+  each frame described (empty or not). `ackThrough` then advances through
+  every contiguous turn it holds. A lost segment costs one rotation, not one
+  per later segment.
 
 Game frame, MSB-first (`UE` = unsigned Exp-Golomb, `SE` = signed, see the
 codec):
@@ -180,17 +230,18 @@ if end = 3:  endTick 16, endTrail 16
 ```
 
 - **Unwrapping.** A mod-65536 field is unwrapped to the value nearest the
-  receiver's expectation: the peer's last known `to` for `to`, and its own
-  current tick for ticks. `hashIdx` is unwrapped to the checkpoint nearest its
-  own `tick / 50`.
+  receiver's expectation: its own `ackThrough` for `to` (only accepted turns
+  move it, so stale and garbage frames cannot shift it), and its own current
+  tick for ticks. `hashIdx` is unwrapped to the checkpoint nearest its own
+  `tick / 50`.
 - **Bounds.** The two phones' ticks never differ by more than D + 1, so
   `tickLag` lies in [−D−1, D] and `ack` in [−2D−1, 3D+1]. A frame describing
   one turn therefore has at most 57 header bits.
-- **Accepting turns.** The receiver takes turns only from a frame whose `from`
-  is at most `ackThrough + 1`. It ignores turns it holds, stores the rest, and
-  raises `ackThrough` to `to`.
+- **Accepting turns.** See "Receiving out of order" above. The receiver
+  ignores turns it holds, stores the rest, and advances `ackThrough`.
 - **Rejecting frames.** It rejects the whole frame on any codec error, `to`
-  more than 200 turns from expected, or span > 64.
+  more than 200 turns from expected, span > 64, a turn past `to`, a turn of
+  more than 15 commands, or a `from` below 0.
 - **`peerAck`** only increases.
 
 ### Hash trail and the end of the match
@@ -206,7 +257,12 @@ After each step:
   until then. A mismatch makes the phone end the match as desync, and its
   frames then carry `end = 2`.
 - **Decided match.** When the world is decided after stepping T, frames carry
-  `end = 3, endTick = T, endTrail = trail(T)`. The report shows "Checking
+  `end = 3, endTick = T, endTrail = trail(T)`. From then on the phone's frames
+  describe its turns after T as empty (no phone ever steps one), so the end
+  report always fits once the peer holds turn T. Until then a frame with no
+  room for both its oldest unacknowledged turn and the report says `end = 0`
+  for the moment: the turns come first. A decided phone that learns of a
+  desync any other way reports the end check as "mismatch". The report shows "Checking
   sync…" until the peer's end checkpoint arrives:
   - "In sync ✓" if it matches;
   - desync ("no contest") if it differs;
@@ -277,8 +333,12 @@ Lossless for canonical commands, and stateless across turns.
   stop, anchor, packUp, board, unload) whose encoding exceeds `C_MAX = 96`
   bits is split greedily into consecutive commands of the same type and
   parameters, each at most 96 bits, keeping order. `lift` is never split. The
-  sim applies these per unit, so this is behaviour-identical and desync-safe,
-  and every command fits in an empty turn.
+  sim applies these per unit, so this is desync-safe, and every command fits
+  in an empty turn. It is behaviour-identical too, with one exception the sim
+  closes: a Goliath whose lift is still hooking obeys a move only when its
+  Condors are named in the same command (`src/sim/lift.ts`), so the sim lets
+  a named hooking Goliath release its lift whenever that side names its
+  Condors in the same tick.
 
 ### Layout of one command (no faction)
 
@@ -350,8 +410,8 @@ go 1          then theirs 2: the peer's pick as this phone holds it
 The longest frame is 155 bits, which fits a packet.
 
 - **Build check.** `build` is the first 16 bits of `__DUEL_HASH__`, a sha256
-  that vite.config defines over `src/sim/**`, `src/versus/**` and
-  `src/link/**`. `proto` is a separate version number, so the lobby can say
+  that vite.config defines over `src/sim/**`, `src/versus/**`, `src/link/**`
+  and `src/game/local-side.ts`. `proto` is a separate version number, so the lobby can say
   which phone is older. A mismatch stops pairing with "These phones run
   different versions: reload both".
 - **Link clock.** `ping` and `hold` are stamped at air time. The transport's
@@ -456,26 +516,38 @@ The longest frame is 155 bits, which fits a packet.
   amplitude, over `TCP + TU`, with a raised-cosine fade of
   `TW = round(0.00125 sr)` samples overlapping the next symbol's prefix.
   - The per-tone amplitude puts the band's RMS at −15 dBFS × gain, where
-    `gain ≤ 1.5` (default 1).
-  - A sample beyond ±0.9 is clipped and counted as a fault in the stats; it is
-    not a normal path.
+    `gain ≤ 1.5` (default 1). NaN falls back to 1 (or keeps the previous
+    gain), a negative gain is silence.
+  - A sample beyond ±0.9 is clipped and counted in the stats. 120 tones are
+    nearly Gaussian (σ ≈ 0.18), so ±0.9 is 5σ: gain 1 clips 0–1 times a
+    minute, 1.1 about 0.1/s, 1.25 about 2/s and 1.5 about 30/s. The lobby
+    therefore offers gain only up to 1.1.
   - Synthesis uses a persistent oscillator bank.
 - **Timeline.** The transmit timeline is indexed by the AudioWorklet's
-  `currentFrame`. After a jump of J frames, it skips J samples rather than
-  delaying. After any local gap or underrun it starts a new superframe (a sync
-  symbol) at the next symbol boundary.
-- **Payload.** A packet takes the newest payload delivered before its first
-  symbol starts. Without one, it carries all zeros (an invalid frame, ignored
-  upstream). When a packet latches its payload, the modem emits a `slot` event
-  with that packet's start frame.
+  `currentFrame`, passed to `process()`. After a jump of J frames (output that
+  was never rendered), it skips J samples rather than delaying, and starts a
+  new superframe (a sync symbol) at the next symbol boundary. A frame counter
+  that goes back silences output until the next boundary. A capture gap (an
+  input block that is all zero or not finite) leaves the transmit stream
+  alone: the output was rendered on time, so the friend's lock is intact.
+- **Payload.** The modem holds a list of payloads (`setPayloads`), each with
+  a key. A packet takes, from the newest list delivered before its first
+  symbol starts, the first payload whose key is greater than the last key
+  sent, wrapping to the first ("Segments and rotation"). A list of one repeats
+  in every packet. Without one, it carries all zeros (an invalid frame,
+  ignored upstream). When a packet latches its payload, the modem emits a
+  `slot` event with that packet's start frame and key.
 
 ### Receiver
 
 - **Acquisition.**
-  - The input is band-passed with a real FIR on the receive band.
+  - The input is band-passed with a real FIR on the receive band. Before the
+    band-pass, any FFT bin whose power is more than 30× the median of the
+    band's bins is zeroed, so a steady tone in the band cannot swamp ρ.
   - `ρ(t) = ⟨x_bp, template⟩ / (‖x_bp‖ · ‖template‖)` over the 40 ms useful
     length, for the data-tone templates of A and B (pilots excluded). It is
-    computed by FFT overlap-save, spread across audio blocks.
+    computed by FFT overlap-save, spread across audio blocks; above 96 kHz the
+    FFTs are split into parts, one per call.
   - A candidate is a sample with `ρ ≥ 0.4` that is the maximum within ±50 ms,
     whose pattern beats the other by at least 0.15.
   - Its timing is the first path: the earliest sample within the 15 ms before
@@ -490,16 +562,20 @@ The longest frame is 155 bits, which fits a packet.
     nominal window;
   - taper the first and last β samples (0.5 − 0.5 cos);
   - fold the last β/2 onto the first β/2 and the first β/2 onto the last β/2;
-  - evaluate the N-sample DFT.
+  - evaluate the N-sample DFT. (The implementation evaluates each tone over
+    the N + β tapered samples at their true positions, which equals the fold
+    at ε̂ = 0 and leaks less at ±300 ppm.)
 
   The nominal window starts `TCP − backoff` after the symbol start, with
   `backoff = round(0.001 sr)`. This cuts the phone's own transmission leaking
   through the window to about −80 dB (high plan). The post-echo guard is
   `TCP − TW − backoff − β/2 ≈ 7.1 ms`.
 - **Clock tracking.**
-  - Keep a clock estimate ε̂, initialised from the timing difference between
-    the first two syncs, or from the mean pilot slope of the first 4 symbols.
-  - Evaluate each tone's DFT at `f_k (1 + ε̂)`, not at the bin frequency
+  - Keep a clock estimate ε̂, initialised from the mean pilot slope over the
+    sync and 4 symbols. When the stream's previous sync is still in ρ history
+    one superframe earlier, the timing difference between the two syncs picks
+    which 2π turn of the pilot slope is right.
+  - Evaluate each tone's DFT at `f_k / (1 + ε̂)`, not at the bin frequency
     (Goertzel, or direct with a recurrence).
   - Advance the window by `TS · sr · (1 + ε̂)` per symbol in a fractional
     accumulator. Start it at the rounded position, apply the fractional
@@ -511,16 +587,27 @@ The longest frame is 155 bits, which fits a packet.
     differential product.
   - The sync symbol is skipped in the fit: its pilots are continuous, but its
     data tones are not.
-  - It must track ±300 ppm.
+  - It must track ±300 ppm (it tracks ±700 ppm relative skew).
 - **Soft bits.** Positive values mean bit 0. With `μ` = the mean of `|d̃|`
   over the packet's data tones, and λ clamped to ±4:
   - robust: `λ = Re(d̃) / μ`;
   - fast: `z = d̃ e^{−jπ/4}`, `λ0 = Re(z) / μ`, `λ1 = −Im(z) / μ`.
+  - **Narrowband interference.** A data tone whose mean `|d̃|` over the packet
+    exceeds 2× the median of its 9-tone neighbourhood is weighted by `(2/r)³`
+    and its share of μ is capped at 2× that median. A tone whose signal stands
+    less than 2× above the running mean of its `d̃` (time constant 32
+    symbols; scrambled data averages out, a steady interferer does not) is
+    weighted by `(SIR/2)²`. The pilot slope fit and the pilot SNR weight an
+    outlier pilot (over 2× the median of its 5-pilot neighbourhood) the same
+    way. With no interferer all of this is the plain rule above.
 - **Decoding.** Descramble, deinterleave, soft Viterbi (zero-tail), then:
   - **gate:** re-encode the decoded bits and reject the packet if more than 8%
     disagree with the hard decisions;
   - **CRC:** check the session key first (when set), then 0xFFFF. A game frame
     must match the session key, and a lobby frame 0xFFFF.
+  - **Duplicates:** a delivery whose window start is within 0.75 × the
+    shortest packet of one of the last 8 deliveries is the same packet again
+    (after a timing step) and is dropped.
 - **Quality.** The packet's effective SNR is `1 / mean(phase error²)` over its
   pilots, in dB.
 - **Superframes.**
@@ -532,9 +619,9 @@ The longest frame is 155 bits, which fits a packet.
 - **Gaps.**
   - Gaps of known length are zero-filled. The phone keeps its timing and ε̂,
     and marks packets overlapping the gap as erased.
-  - While transmitting, an input block that is entirely 0.0 counts as missing
-    input: a live microphone that hears its own speaker never produces digital
-    silence.
+  - While transmitting, an input block that is entirely 0.0, or that holds a
+    NaN or infinity, counts as missing input: a live microphone that hears its
+    own speaker never produces digital silence.
   - After a gap on either phone, good packets must resume within 2.5 s.
 - **Self-monitor.** A second, pilots-only receiver locks onto this phone's own
   transmission at its own microphone. It reports:
@@ -544,7 +631,9 @@ The longest frame is 155 bits, which fits a packet.
   receiver decodes the phone's own packets: a one-phone check of the whole
   chain.
 - **Plan detection (Join).** In the lobby the guest searches both plans' host
-  bands until it locks, then sets its plan.
+  bands until it locks, then sets its plan. Until then it transmits in the
+  high plan's guest band whenever the rate allows (clear of both host bands),
+  and `capacity()` is 188.
 
 ### CPU rules
 
@@ -577,16 +666,19 @@ export interface ModemStats {
   snrDb: number | null; rxOk: number; rxBad: number; syncs: number; clockPpm: number | null; txPackets: number;
   ownSnrDb: number | null; loopbackMs: number | null; clips: number; inputPeak: number;
 }
+export interface OutFrame { bits: Uint8Array; nbits: number; key: number }
 export class ModemCore {
   constructor(cfg: ModemConfig);
-  process(input: Float32Array, output: Float32Array): void;     // same length (128 in the worklet)
-  setPayload(bits: Uint8Array, nbits: number): void;            // MSB-first, nbits ≤ capacity
+  process(input: Float32Array, output: Float32Array, frame?: number): void;  // same length (128 in the worklet); frame = currentFrame
+  setPayloads(frames: readonly OutFrame[]): void;               // MSB-first, each nbits ≤ capacity; keys ascending; rotated per packet
   setTxMode(mode: ModemMode): void;                             // from the next superframe
   setSessionKey(hostNonce: number, guestNonce: number): void;    // enables the session CRC
   reconfigure(cfg: Partial<ModemConfig>): void;                  // at the next symbol boundary
   capacity(): number;                                            // constant per plan
-  take(): RxPacket[];
-  takeSlots(): { sample: number; index: number }[];
+  take(): RxPacket[];                                            // these three return a shared frozen
+  takeSlots(): { sample: number; index: number; key: number }[]; // empty array when there is nothing:
+  takeGaps(): { sample: number; frames: number }[];              // never mutate it
+  rateProblem(): string | null;
   stats(): ModemStats;
 }
 ```
@@ -603,9 +695,10 @@ export interface LinkStats {
   locked: boolean; snrDb: number | null; rxOk: number; rxBad: number; txMode: ModemMode; rxMode: ModemMode | null;
   sinceRx: number; ownSnrDb: number | null; loopbackMs: number | null; plan: BandPlan;
 }
+export interface OutFrame { bits: Uint8Array; nbits: number; key: number }
 export interface LinkTransport {
   capacity(): number;
-  send(bits: Uint8Array, nbits: number): void;    // repeated in every packet until replaced
+  send(frames: readonly OutFrame[]): void;        // one per packet in key rotation, repeated until replaced
   poll(): LinkPacket[];
   /** Packet starts since the last call, on this link's clock (lobby frames are stamped at air time). */
   slots(): number[];
@@ -653,11 +746,11 @@ export interface LinkTransport {
   more than 40 dB quieter, and channel 0 otherwise. It never sums two live
   microphones, which comb-filters.
 - **Messages.**
-  - Main → worklet: `{t:"payload", bits, nbits}`, `{t:"mode", mode}`,
+  - Main → worklet: `{t:"payload", frames}`, `{t:"mode", mode}`,
     `{t:"session", hostNonce, guestNonce}`,
     `{t:"config", plan, tx, rx, gain}`, `{t:"close"}` (after which `process()`
     returns false).
-  - Worklet → main: `{t:"rx", ...RxPacket}`, `{t:"slot", sample, index}`,
+  - Worklet → main: `{t:"rx", ...RxPacket}`, `{t:"slot", sample, index, key}`,
     `{t:"stats", ...ModemStats}` (about 4 per second), and
     `{t:"gap", sample, frames}` (once when a gap starts, once with its total
     when capture resumes).
@@ -724,6 +817,13 @@ master → high-pass ~300 Hz → guardGain (−GUARD_CUT_DB) → compressor → 
 - **Cut.** `GUARD_CUT_DB` is 10 dB, or 0 on iOS in raw mode, where the page's
   sound already goes to the quieter earpiece. `setMuted` keeps controlling
   master only.
+- **Level.** The FIR only keeps the game's own sound out of the receive band.
+  Loud game audio also hurts through the speaker's nonlinearity and by
+  pushing the microphone towards clipping: in the room model, game audio at
+  −20 dBFS RMS after the guard with the own path at +40 dB cut delivery to
+  84–90%. So the compressor after the cut works as a limiter, and the cut and
+  limiter are set so that a loud battle mix leaves delivery at least 98% in
+  that case (tests/link-guard.test.ts measures it).
 - **Speech.** A transient `sfx.linkMode` (never saved) turns spoken lines off:
   the announcer, `radioCheck()` and the speech priming listener skip speech,
   and `speechSynthesis.cancel()` runs on entry.
@@ -952,13 +1052,13 @@ Long tests set explicit timeouts (60–180 s).
 | `tests/resign.test.ts` | Resign, a draw on a mutual resign, and setup and hashing shared with records (done) |
 | `tests/local-side.test.ts` | `setupWorld` gives the same world whoever is local; `applyOpenersCanonical` and `composeTick` are canonical for both local sides; a red Controller issues red commands |
 | `tests/versus-codec.test.ts` | Bit I/O and Exp-Golomb. For every command `c` in a corpus from AI-vs-AI arena matches (several maps and mutators, showcase records) plus hand-written cases for every type, with `k = canonicalize(c)`: `canonicalize(k)` deep-equals `k`, and `decode(encode(k))` deep-equals `k` (Object.is per scalar, element-wise for unitIds). Split pieces are ≤ 96 bits and keep order. Malformed inputs are rejected. The enum tables are complete |
-| `tests/versus-lockstep.test.ts` | Two worlds and two `Lockstep`s through `PacketAir`, normal-difficulty AIs on both sides for 5 game minutes: identical hash trails at every tick. Run at 0%, 10% and 30% loss, and with 3 s dropouts; with bursts of 30-unit orders; with pause; resign ends both on the same tick; a desync injected into one world is caught at the next checkpoint or the end check; leave and end frames work; stall time is bounded; the saved BattleRecord round-trips through `parseRecord` and `replay()` with no divergence |
+| `tests/versus-lockstep.test.ts` | Two worlds and two `Lockstep`s through `PacketAir`, normal-difficulty AIs on both sides for 5 game minutes: identical hash trails at every tick. Run at 0%, 10% and 30% loss, and with 3 s dropouts; with bursts of 30-unit orders; with pause; resign ends both on the same tick; a desync injected into one world is caught at the next checkpoint or the end check; leave and end frames work; stall time is bounded; the saved BattleRecord round-trips through `parseRecord` and `replay()` with no divergence. Segments: a 30-unit order lands in one rotation; out-of-order segments are kept; rotation never raises stall time against K = 1 at 0% loss |
 | `tests/versus-pairing.test.ts` | Two `Pairing`s over `PacketAir` agree on config, seed, D and openers; a build mismatch is refused; duplicate, stale or out-of-order lobby frames are harmless; both-Host is detected; a recorded HELLO from another session can't complete pairing |
 | `tests/versus-feed.test.ts` | VersusFeed with a real Controller and fake clock: a stall consumes no input, sealing happens once per tick, the order is canonical with the local side red, and nothing is sealed while paused |
 | `tests/versus-imports.test.ts` | The import rules above |
 | `tests/link-fec.test.ts` | CRC-16 known vectors and the session keys; convolutional code plus Viterbi corrects scattered errors; the gate rejects random input (0 false accepts in 10⁶ garbage packets); the interleaver properties for all four plan/mode cases; distinct, non-zero PN seeds |
 | `tests/link-modem.test.ts` | Two `ModemCore`s through `Room`, transmitting at once, own path +40 dB with unaligned symbols, h2/h3/h5 speaker nonlinearity, and a game-audio jammer through the guard, at 48/48 and 48/44.1 kHz and ±300 ppm. Robust ≥ 99% good at "20 cm" and ≥ 95% at "40 cm" (with an 8–15 ms reflection cluster); fast ≥ 98% at "20 cm". Also: acquisition from 50 random starts never locks off the true timing; a 40 ms and a 700 ms jump on the sender recover within one superframe; a 1 s capture gap recovers within 2.5 s; mode switches; plan detection; self-monitor and self-test; latency bounds `(TS + P·TS) + 128/sr + room delay`; the CPU benchmark |
-| `tests/link-guard.test.ts` | The FIR guard's response for both plans at 44.1 and 48 kHz |
+| `tests/link-guard.test.ts` | The FIR guard's response for both plans at 44.1 and 48 kHz, and delivery with a loud battle mix through the guard at own path +40 dB |
 | `tests/duel-fullstack.test.ts` | Pairing, then a 90 s duel through `RoomLink` with AIs on both phones: identical hash trails, and at least 90% of ticks without a stall after the first 2 s |
 | `tools/worklet-smoke.mjs` | The built worklet decodes both ways in Chromium |
 | `tools/duel-smoke.mjs` | Two pages through the relay, end to end |

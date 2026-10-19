@@ -10,7 +10,21 @@ import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHo
 import { engageable } from "../sim/combat";
 import { Squads } from "./squads";
 
-export const PLAYER: Faction = "blue";
+/**
+ * The side this device commands, and the other one. Live bindings: every
+ * importer reads the current value, so a sound duel's guest (or `?side=red`)
+ * plays red with no other change. Set once with setLocalSide, before
+ * `new GameScene`: the scene's presenters, its fog and the Controller's
+ * squads copy the side when they are built.
+ */
+export let PLAYER: Faction = "blue";
+export let ENEMY: Faction = "red";
+
+/** Command `f` from now on (SOUND-DUEL.md "Playing red"); a page reload starts over as blue. */
+export function setLocalSide(f: Faction): void {
+  PLAYER = f;
+  ENEMY = f === "blue" ? "red" : "blue";
+}
 
 /**
  * Is this one of the player's fighting units (⚔ Select army, 💤 Idle)? Not a

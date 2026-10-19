@@ -35,9 +35,11 @@ export function createObjectivePill(world: World, player: Faction, spectator: bo
   let lastLife = "";
   if (o.uplinks.length === 0) el.querySelector<HTMLElement>(".ol")!.hidden = true;
   if (o.dropSites.length === 0) dropEl.hidden = true;
-  // pips run from our side of the map to theirs
-  const hq = hqOf(world, spectator ? "blue" : player);
-  const home = hq ? buildingCenter(hq) : { x: 0, y: world.height };
+  // pips run from our side of the map to theirs (with no HQ, under Nomads: from our corner, blue's
+  // bottom left or red's top right, as the maps are mirrored)
+  const side = spectator ? "blue" : player;
+  const hq = hqOf(world, side);
+  const home = hq ? buildingCenter(hq) : side === "red" ? { x: world.width, y: 0 } : { x: 0, y: world.height };
   const order = [...o.uplinks].sort(
     (a, b) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b.x - home.x, b.y - home.y)
   );
