@@ -107,8 +107,8 @@ const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend'
  */
 const REMATCH_KEY: typeof DuelLobby.REMATCH_KEY = "battledrones.rematch";
 const DUEL_REMATCH: typeof DuelLobby.REMATCH_DUEL = "duel";
-/** iOS's audio session (navigator.audioSession): "play-and-record" from a duel's rematch boot, "auto" again when it's declined. */
-const setAudioSession = (type: "auto" | "play-and-record") => {
+/** iOS's audio session (navigator.audioSession): back to "auto" at a duel's rematch boot and when it's declined. */
+const setAudioSession = (type: "auto") => {
   try {
     const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
     if (session) session.type = type;
@@ -223,12 +223,14 @@ function showMenu(linkedMap?: string | null): void {
   } catch {
     /* ignore */
   }
-  // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, the link's audio session
-  // and link mode; the menu's sound waits for the reconnect tap. (A practice link opens no rig and no guard,
-  // so neither: nothing would put the session back.)
+  // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, link mode, and the audio
+  // session back to "auto". Safari keeps a page's session type across a reload, and a context made while it is
+  // play-and-record can take its rate from a snapshot of 16 kHz: the rig makes its context first and only then
+  // sets play-and-record (src/link/rig.ts "The rate"). The menu's sound waits for the reconnect tap. (A
+  // practice link opens no rig and no guard, so neither.)
   const duelRematch = token === DUEL_REMATCH;
   if (duelRematch && !duelPractice) {
-    setAudioSession("play-and-record");
+    setAudioSession("auto");
     sfx.linkMode = true;
   }
   // ?map=<id> (a shared random map, or any built-in): preselect it and keep it as the pick

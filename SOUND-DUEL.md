@@ -920,15 +920,29 @@ link, once its detection has locked, is rebuilt on the plan it found with
 `rx: "host"`.
 
 - **Open.** `openRig({ micMode })` runs synchronously inside the tap. It:
-  - sets `navigator.audioSession.type = "play-and-record"`;
-  - creates an AudioContext (`latencyHint: "interactive"`, default rate),
-    resumes it and plays a 1-sample silent buffer;
+  - creates an AudioContext (`latencyHint: "interactive"`, default rate);
+  - then sets `navigator.audioSession.type = "play-and-record"`;
+  - resumes the context and plays a 1-sample silent buffer;
   - requests a wake lock;
   - starts getUserMedia;
   - returns a promise that resolves when the microphone is connected.
 
   After getUserMedia it calls `ctx.resume()` again and checks that the state
   is `"running"`; if not, the lobby shows "Tap to start sound".
+- **The rate.** Safari gives a new context a snapshot of the shared audio
+  session's rate, refreshed only when the session activates, and resamples
+  the context's output to that snapshot on its way to the speaker (WebKit's
+  `RemoteAudioDestinationProxy`), so asking the constructor for 48 kHz only
+  changes the label. Setting play-and-record (voice-chat mode) before
+  creating the context left that snapshot at 16000 Hz on an iPhone that gave
+  the radio probe 48000. Hence the order above, and: once the microphone is
+  in (capture activates the session), a context whose rate can't carry the
+  high plan is replaced by a new one, which reads the rate afresh and may
+  start without a tap while the page captures; the microphone is asked for
+  again if its own format was fixed at the low rate. What is still too low
+  after that is the true rate. The lobby's error names the context's rate,
+  or the microphone's (`getSettings().sampleRate`) when that is the low one
+  (a Bluetooth headset).
 - **Mic modes.**
   - `raw` (default): `{echoCancellation: false, noiseSuppression: false,
     autoGainControl: false, channelCount: {ideal: 1}}`.
@@ -1133,7 +1147,8 @@ does nothing. With an interactive feed, GameScene behaves as follows:
   mutators }`, then reloads.
 - **Boot.** On boot, `main.ts` sees `"duel"`. Before any audio context exists,
   it:
-  - sets `navigator.audioSession.type = "play-and-record"`;
+  - sets `navigator.audioSession.type = "auto"` (Safari keeps a page's type
+    across a reload, and the rig must make its context before play-and-record);
   - sets `sfx.linkMode`;
   - prefetches the lobby chunk;
   - shows one button, "Rematch · tap to reconnect (allow the microphone if

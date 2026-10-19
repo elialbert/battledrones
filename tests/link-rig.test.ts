@@ -162,8 +162,9 @@ class FakeStream {
 class FakeDevices extends Emitter {
   /** The next getUserMedia's answer ("hold": it waits in `held` until granted). */
   answer: "grant" | "deny" | "missing" | "hang" | "hold" = "grant";
-  /** The rate the next streams' tracks report. */
+  /** The rate the next streams' tracks report: one from `micRates` per grant while it lasts, then `micRate`. */
   micRate: number | undefined = undefined;
+  micRates: number[] = [];
   readonly streams: FakeStream[] = [];
   /** Requests answered "hold": call one to grant it. */
   readonly held: (() => void)[] = [];
@@ -180,7 +181,7 @@ class FakeDevices extends Emitter {
   }
   private grant(c: MediaStreamConstraints): MediaStream {
     const s = new FakeStream(c);
-    s.track.rate = this.micRate;
+    s.track.rate = this.micRates.length ? this.micRates.shift() : this.micRate;
     this.streams.push(s);
     return s as unknown as MediaStream;
   }
@@ -290,8 +291,10 @@ interface World {
   contexts: FakeCtx[];
   /** The next context's settings. */
   nextCtx: Partial<Pick<FakeCtx, "sampleRate" | "resumeMode" | "audioWorklet">>;
-  /** A context asked for a rate: gets it ("ok"), the browser throws ("throw"), or it comes at the device's anyway ("ignore"). */
-  askedRate: "ok" | "throw" | "ignore";
+  /** The rate of contexts made once a microphone request has been granted (Safari reads the session's rate afresh when capture activates it); undefined: nextCtx's. */
+  rateAfterMic: number | undefined;
+  /** The audio session's type when each context was made. */
+  sessionAtContext: string[];
   noAudio: boolean;
   /** How loadWorklet answers ("hold": it waits in `heldWorklets` until loaded). */
   worklet: "ok" | "fail" | "hold";
@@ -307,17 +310,18 @@ function world(): World {
   const session = { type: "auto" };
   const doc = Object.assign(new Emitter(), { visibilityState: "visible" as DocumentVisibilityState });
   const w: World = {
-    clock, devices, wake, session, doc, contexts: [], nextCtx: {}, askedRate: "ok", noAudio: false, worklet: "ok", heldWorklets: [],
+    clock, devices, wake, session, doc, contexts: [], nextCtx: {}, rateAfterMic: undefined, sessionAtContext: [], noAudio: false, worklet: "ok", heldWorklets: [],
     env: null as unknown as RigEnv
   };
   w.env = {
     navigator: { mediaDevices: devices, wakeLock: wake, audioSession: session },
     document: doc,
-    createContext: (opts) => {
+    createContext: () => {
       if (w.noAudio) return null;
-      if (opts?.sampleRate && w.askedRate === "throw") throw new Error("NotSupportedError");
-      const c = Object.assign(new FakeCtx(), w.nextCtx, opts?.sampleRate && w.askedRate === "ok" ? { sampleRate: opts.sampleRate } : {});
+      const after = w.devices.streams.length > 0 && w.rateAfterMic !== undefined ? { sampleRate: w.rateAfterMic } : {};
+      const c = Object.assign(new FakeCtx(), w.nextCtx, after);
       w.contexts.push(c);
+      w.sessionAtContext.push(session.type);
       return c as unknown as AudioContext;
     },
     now: clock.now,
@@ -456,16 +460,13 @@ describe("the link", () => {
   });
 
   it("reports a rate the modem can't use with the modem's sentence, and a failed worklet as a new version", async () => {
-    // (a browser that can't make a context at an asked-for rate keeps the device's)
     let w = world();
-    w.askedRate = "throw";
     w.nextCtx = { sampleRate: 22050 };
     let rig = open(w);
     expect(rig.rateProblem("high")).toBe("This phone's audio runs at 22050 Hz, which the sound link can't use");
     const err = await rig.createLink({ ...HOST, plan: "low" }).catch((e: unknown) => e);
     expect(err).toMatchObject({ reason: "rate", message: "This phone's audio runs at 22050 Hz, which the sound link can't use" });
     w = world();
-    w.askedRate = "throw";
     w.nextCtx = { sampleRate: 32000 };
     rig = open(w);
     expect(rig.rateProblem("high")).not.toBeNull();
@@ -478,52 +479,73 @@ describe("the link", () => {
     rig.close();
   });
 
-  it("asks for 48 kHz inside the tap when the device's rate can't carry the high plan (an iPhone left at 16 kHz), and only then", async () => {
-    // the device's rate is fine: one context, never asked for a rate
-    let w = world();
-    let rig = open(w);
+  it("makes its context before switching the session to play-and-record, and only one when the rate is fine", async () => {
+    const w = world();
+    const rig = open(w);
+    expect(w.sessionAtContext).toEqual(["auto"]);
+    expect(w.session.type).toBe("play-and-record");
+    await rig.ready;
     expect(w.contexts.map((c) => c.sampleRate)).toEqual([48000]);
-    await rig.createLink(HOST);
-    rig.close();
-    w = world();
-    w.nextCtx = { sampleRate: 44100 };
-    rig = open(w);
-    expect(w.contexts.map((c) => c.sampleRate)).toEqual([44100]);
-    rig.close();
-    // 16 kHz: a second context at 48 kHz, made and woken in the same synchronous call; the first is closed
-    w = world();
-    w.nextCtx = { sampleRate: 16000 };
-    rig = open(w);
-    expect(w.contexts.map((c) => c.sampleRate)).toEqual([16000, 48000]);
-    expect(w.contexts[0]!.state).toBe("closed");
-    expect(w.contexts[1]!.resumes).toBeGreaterThan(0);
-    expect(w.contexts[1]!.silentStarts).toBe(1);
-    expect(rig.rateProblem("high")).toBeNull();
-    expect(await rig.ready).toBe("running");
-    const link = await rig.createLink(HOST);
-    expect(FakeTransport.made[0]!.cfg).toMatchObject({ sampleRate: 48000 });
-    expect(w.contexts[1]!.sources[0]!.to).toBe(link.node);
-    rig.close();
-    // a browser that ignores the asked-for rate: the device's context stays, and the rate error with it
-    w = world();
-    w.nextCtx = { sampleRate: 16000 };
-    w.askedRate = "ignore";
-    rig = open(w);
-    expect(w.contexts.map((c) => c.state === "closed")).toEqual([false, true]);
-    await expect(rig.createLink(HOST)).rejects.toMatchObject({ reason: "rate", message: "This phone's audio runs at 16000 Hz, which the sound link can't use" });
     rig.close();
   });
 
-  it("rebuilds a context at 48 kHz too when the device's rate has dropped meanwhile", async () => {
+  it("replaces a context made at a rate the high plan can't use with one made once the microphone is in, without a tap", async () => {
+    // Safari snapshots the session's rate into each new context; capture activates the session and reads it afresh
     const w = world();
+    w.nextCtx = { sampleRate: 16000 };
+    w.rateAfterMic = 48000;
+    const rig = open(w);
+    expect(rig.rateProblem("high")).not.toBeNull();
+    expect(await rig.ready).toBe("running");
+    expect(w.contexts.map((c) => c.sampleRate)).toEqual([16000, 48000]);
+    expect(w.contexts[0]!.state).toBe("closed");
+    // woken at once (a capturing page may start a context), and it is the one the link and the microphone use
+    expect(w.contexts[1]!.silentStarts).toBe(1);
+    expect(w.contexts[1]!.state).toBe("running");
+    expect(rig.rateProblem("high")).toBeNull();
+    const link = await rig.createLink(HOST);
+    expect(FakeTransport.made[0]!.cfg).toMatchObject({ sampleRate: 48000 });
+    expect(w.contexts[1]!.sources[0]!.to).toBe(link.node);
+    expect(w.contexts[0]!.sources).toEqual([]);
+    // the old context's state changes no longer count
+    w.contexts[0]!.set("suspended");
+    expect(rig.state).toBe("running");
+    rig.close();
+  });
+
+  it("asks for the microphone again when its own format was fixed at the low rate, and keeps the old one if that fails", async () => {
+    let w = world();
+    w.nextCtx = { sampleRate: 16000 };
+    w.rateAfterMic = 48000;
+    w.devices.micRates = [16000, 48000];
+    let rig = open(w);
+    await rig.ready;
+    expect(w.devices.streams.length).toBe(2);
+    expect(w.devices.streams[0]!.track.stopped).toBe(true);
+    await rig.createLink(HOST);
+    expect(w.contexts[1]!.sources[0]!.stream).toBe(w.devices.streams[1]);
+    rig.close();
+    // the second request refused: the first stream stays, and its rate is reported
+    w = world();
+    w.nextCtx = { sampleRate: 16000 };
+    w.rateAfterMic = 48000;
+    w.devices.micRates = [16000];
+    const gum = w.devices.getUserMedia.bind(w.devices);
+    let n = 0;
+    w.devices.getUserMedia = (c) => (n++ === 0 ? gum(c) : Promise.reject(Object.assign(new Error("denied"), { name: "NotAllowedError" })));
+    rig = open(w);
+    expect(await rig.ready).toBe("running");
+    await expect(rig.createLink(HOST)).rejects.toMatchObject({ reason: "rate", message: "This phone's microphone runs at 16000 Hz, which the sound link can't use" });
+    rig.close();
+  });
+
+  it("keeps the first context, and the rate error, when the rate read afresh is no higher", async () => {
+    const w = world();
+    w.nextCtx = { sampleRate: 16000 };
     const rig = open(w);
     await rig.ready;
-    await rig.createLink(HOST);
-    w.contexts[0]!.set("closed");
-    w.nextCtx = { sampleRate: 16000 };
-    expect(await rig.reconnect()).toBe(true);
-    expect(w.contexts.map((c) => c.sampleRate)).toEqual([48000, 16000, 48000]);
-    expect(FakeTransport.made.at(-1)!.cfg).toMatchObject({ sampleRate: 48000 });
+    expect(w.contexts.map((c) => [c.sampleRate, c.state])).toEqual([[16000, "running"], [16000, "closed"]]);
+    await expect(rig.createLink(HOST)).rejects.toMatchObject({ reason: "rate", message: "This phone's audio runs at 16000 Hz, which the sound link can't use" });
     rig.close();
   });
 
@@ -837,10 +859,8 @@ describe("the lifecycle", () => {
       // the track ended and the context closed: the tap rebuilds and asks for the microphone again
       track.end();
       ctx.set("closed");
-      if (bad === "rate") {
-        w.nextCtx = { sampleRate: 16000 };
-        w.askedRate = "ignore";
-      } else w.worklet = "fail";
+      if (bad === "rate") w.nextCtx = { sampleRate: 16000 };
+      else w.worklet = "fail";
       expect(await rig.reconnect()).toBe(false);
       expect(rig.lastError?.reason).toBe(bad);
       expect(rig.failures).toBe(1);
