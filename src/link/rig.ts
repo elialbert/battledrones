@@ -9,7 +9,8 @@
  * rematch's reconnect button), because only a gesture may start sound and
  * the microphone on a phone. Synchronously it sets the audio session to
  * "play-and-record", creates the context (latency "interactive", the
- * device's rate), resumes it and plays a 1-sample silent buffer, requests
+ * device's rate, or 48 kHz when the device's can't carry the high plan:
+ * makeContext), resumes it and plays a 1-sample silent buffer, requests
  * the wake lock and calls getUserMedia. `ready` settles once the microphone
  * is in: the context is resumed again, and if it still isn't running the
  * rig waits in "tap-to-start" for reconnect() from the next tap.
@@ -42,7 +43,8 @@
  *
  * Errors are RigErrors with a reason the lobby can show: the microphone
  * refused (the rig then closes the context and puts the session back to
- * "auto") or missing, a sample rate the modem can't use, no Web Audio or
+ * "auto") or missing, a sample rate the modem can't use (the context's, or
+ * the microphone's own when the browser reports it), no Web Audio or
  * AudioWorklet, or the worklet failing to load (a stale build: "A new
  * version is ready").
  *
@@ -86,7 +88,7 @@
  *  - only one link at a time: createLink closes the previous one.
  */
 import type { ModemConfig, ModemStats } from "./modem/core";
-import { rateProblem } from "./modem/params";
+import { MIN_RATE, rateProblem } from "./modem/params";
 import type { BandPlan, LinkPacket, LinkStats, LinkTransport, ModemMode, OutFrame } from "./transport";
 import { loadWorklet, WorkletTransport, type WorkletTransportOptions } from "./worklet-transport";
 
@@ -127,6 +129,8 @@ export function micConstraints(mode: MicMode): MediaTrackConstraints {
 /** The ways out of the overlay: Leave is offered after this many failed reconnects. */
 export const LEAVE_AFTER_FAILURES = 2;
 /** The lobby starts lockstep, and the overlay closes, after this much gap-free capture (ms). */
+/** The rate the link's context is asked for when the device's rate can't carry the high plan (see makeContext). */
+export const FORCED_RATE = 48000;
 export const CAPTURE_OK_MS = 1500;
 /** onLost thresholds (ms). */
 const MUTED_MS = 1000;
@@ -167,8 +171,8 @@ export interface RigEnv {
     addEventListener(type: "visibilitychange", fn: () => void): void;
     removeEventListener(type: "visibilitychange", fn: () => void): void;
   } | null;
-  /** A new link context (null: no Web Audio). */
-  createContext(): AudioContext | null;
+  /** A new link context (null: no Web Audio), at the device's rate or the one asked for. */
+  createContext(opts?: { sampleRate?: number }): AudioContext | null;
   now(): number;
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(h: unknown): void;
@@ -184,9 +188,9 @@ export function browserEnv(): RigEnv {
   return {
     navigator: { mediaDevices: nav.mediaDevices, wakeLock: "wakeLock" in nav ? nav.wakeLock : undefined, audioSession: nav.audioSession },
     document,
-    createContext: () => {
+    createContext: (opts) => {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      return AC ? new AC({ latencyHint: "interactive" }) : null;
+      return AC ? new AC({ latencyHint: "interactive", ...(opts?.sampleRate ? { sampleRate: opts.sampleRate } : {}) }) : null;
     },
     now: () => performance.now(),
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
@@ -419,11 +423,7 @@ export class Rig {
     if (session) session.type = "play-and-record";
     // the gesture's part, in the gesture: context, resume, a silent sample, wake lock, microphone
     let problem: RigError | null = null;
-    try {
-      this.context = env.createContext();
-    } catch {
-      this.context = null;
-    }
+    this.context = this.makeContext();
     if (!this.context) problem = new RigError("no-audio");
     else if (!this.context.audioWorklet) problem = new RigError("no-worklet");
     if (this.context) {
@@ -517,7 +517,7 @@ export class Rig {
     if (this.shut()) throw new RigError("no-audio", "The rig was closed");
     const ctx = this.ctx;
     const full: ModemConfig = { ...cfg, sampleRate: ctx.sampleRate };
-    const problem = rateProblem(ctx.sampleRate, full.plan);
+    const problem = rateProblem(ctx.sampleRate, full.plan) ?? this.micRateProblem(full.plan);
     if (problem) throw new RigError("rate", problem);
     if (!ctx.audioWorklet) throw new RigError("no-worklet");
     try {
@@ -583,17 +583,12 @@ export class Rig {
   reconnect(): Promise<boolean> {
     if (this.st === "closed" || this.st === "failed" || this.st === "opening") return Promise.resolve(false);
     if (this.reconnecting) return this.reconnecting;
-    const env = this.env;
     // the gesture's part, synchronously
     let ctx = this.ctx;
     const rebuild = ctx.state === "closed" || this.rebuildNext;
     let fresh: AudioContext | null = null;
     if (rebuild) {
-      try {
-        fresh = env.createContext();
-      } catch {
-        fresh = null;
-      }
+      fresh = this.makeContext();
       if (fresh) ctx = fresh;
     }
     this.rebuilding = fresh;
@@ -655,6 +650,65 @@ export class Rig {
   /** Closed meanwhile (read across an await, where the compiler's narrowing doesn't hold). */
   private shut(): boolean {
     return this.st === "closed";
+  }
+
+  /**
+   * The link's context, made inside the tap: at the device's rate, unless
+   * that rate can't carry the high plan, in which case one at 48 kHz.
+   *
+   * An iPhone hands a new context whatever rate its audio hardware is at,
+   * and the game may have left the hardware low: the announcer primes iOS
+   * speech synthesis with a silent utterance on the first touch (its
+   * capture-phase listener runs before the Duel button's click), and a
+   * context made after that has read 16000 Hz, where nothing above 8 kHz
+   * exists (the probe page, which speaks nothing, got 48000 on the same
+   * phone). A context asked for 48 kHz is resampled to the hardware, and
+   * opening the microphone brings an iPhone's hardware back to 48 kHz; when
+   * it doesn't (a Bluetooth headset's call audio), the microphone's own rate
+   * says so (micRateProblem). Only a rate the high plan can't use is
+   * overridden: forcing 48 kHz on a 44.1 kHz phone would add a resampler for
+   * nothing. A browser that can't make the context asked for keeps the
+   * device's, and the rate error stands.
+   */
+  private makeContext(): AudioContext | null {
+    const env = this.env;
+    let ctx: AudioContext | null = null;
+    try {
+      ctx = env.createContext();
+    } catch {
+      ctx = null;
+    }
+    if (!ctx || ctx.sampleRate >= MIN_RATE.high) return ctx;
+    let forced: AudioContext | null = null;
+    try {
+      forced = env.createContext({ sampleRate: FORCED_RATE });
+    } catch {
+      forced = null;
+    }
+    if (!forced) return ctx;
+    if (forced.sampleRate !== FORCED_RATE) {
+      closeContext(forced);
+      return ctx;
+    }
+    closeContext(ctx);
+    return forced;
+  }
+
+  /**
+   * The microphone's own rate, when the browser reports one, can't carry
+   * `plan`: the hardware captures at it whatever the context's rate (a
+   * Bluetooth headset holds an iPhone at 16 kHz), so the friend's band
+   * never reaches the modem.
+   */
+  private micRateProblem(plan: BandPlan): string | null {
+    let sr: number | undefined;
+    try {
+      sr = this.track?.getSettings?.().sampleRate;
+    } catch {
+      sr = undefined;
+    }
+    if (typeof sr !== "number" || !Number.isFinite(sr) || sr <= 0 || sr >= MIN_RATE[plan]) return null;
+    return `This phone's microphone runs at ${sr} Hz, which the sound link can't use`;
   }
 
   /** resume() and a 1-sample silent buffer: what a gesture must do for sound to start on a phone. */
