@@ -366,7 +366,7 @@ export class Arena {
         if (w.tick % HASH_EVERY === 0) this.record.hashes.push([w.tick, worldHash(w)]);
       }
       this.logRound(start);
-      if (w.winner) this.record.end = endOf(w.tick, w.winner);
+      if (w.winner) this.record.end = endOf(w.tick, w.winner, w.resigned);
       else if (w.tick >= this.maxTicks) this.record.end = { tick: w.tick, winner: null, reason: "time" };
     }
     this.record.tick = w.tick;

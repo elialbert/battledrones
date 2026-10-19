@@ -606,7 +606,9 @@ export type FxEvent =
       ids: [number, number];
       x: number;
       y: number;
-    };
+    }
+  /** `faction` resigned (a sound duel): the other side wins this tick. */
+  | { type: "resign"; faction: Faction };
 
 /**
  * A capturable Uplink relay (objectives.ts). Not a building: nothing
@@ -782,6 +784,8 @@ export interface World {
   lifeline?: Record<Faction, LifelineSlot> | null;
   /** Robot Love: the two Goliaths that fell in love and ended the match in a draw, where and when (goliath.ts tickLove). */
   love?: { ids: [number, number]; x: number; y: number; tick: number } | null;
+  /** The side that resigned, when a `resign` command decided the match. */
+  resigned?: Faction | null;
 }
 
 /** One side's free-Condor clock (lifeline.ts). */
@@ -826,4 +830,6 @@ export type Command =
    * it (lift.ts). Then `move` flies the lift, `unload` sets it down (at x, y
    * if given) and `stop` hovers it.
    */
-  | { type: "lift"; faction: Faction; unitIds: number[]; goliathId: number };
+  | { type: "lift"; faction: Faction; unitIds: number[]; goliathId: number }
+  /** `faction` gives up: the other side wins on this tick (a sound duel's Resign, SOUND-DUEL.md). */
+  | { type: "resign"; faction: Faction };

@@ -117,6 +117,19 @@ function applyCommand(w: World, c: Command): void {
     case "calldown":
       applyCalldown(w, c);
       break;
+    case "resign":
+      // the other side wins this tick; both resigning in the same tick is a draw
+      // (step() returns before any command once a winner is set, so only a
+      // resign earlier in this same batch can have decided it)
+      if (!w.winner) {
+        w.winner = c.faction === "blue" ? "red" : "blue";
+        w.resigned = c.faction;
+      } else if (w.winner === c.faction) {
+        w.winner = "draw";
+        w.resigned = null;
+      }
+      w.fx.push({ type: "resign", faction: c.faction });
+      break;
     default:
       applyEconomyCommand(w, c);
   }
