@@ -7,15 +7,20 @@ primary_region = "sjc"
 
 [env]
   PORT = "8080"
-  # Comma-separated origins the relay accepts; unset: any
-  # ALLOWED_ORIGINS = "https://simonw.github.io"
+  # The origins the relay accepts are in server.py (DEFAULT_ORIGINS); set
+  # this to replace them, "*" standing for any host or port characters:
+  # ALLOWED_ORIGINS = "https://simonw.github.io,https://*.simonw.workers.dev,http://localhost:*"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Scale to zero: Fly stops the machine when no sockets are open and starts
-  # it again (a second or two) on the next connection
-  auto_stop_machines = "stop"
+  # Scale to zero: every few minutes Fly's proxy checks for open
+  # connections, and with none it suspends the machine (a memory snapshot,
+  # no CPU or RAM billed). The next connection resumes it in a few hundred
+  # milliseconds; a cold start after a deploy takes a second or two. The
+  # server closes forgotten sockets (server.py LONELY_SECONDS and
+  # MAX_AGE_SECONDS) so that "none" comes round.
+  auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
 

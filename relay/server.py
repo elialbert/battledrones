@@ -17,11 +17,18 @@ A second socket for a seat that is already taken replaces the first (closed
 with 4001), so a page that reloads or changes network gets its seat back
 before the old socket times out.
 
-Close codes the client can act on:
+So that a forgotten tab can't keep the machine awake (Fly stops it only
+when no sockets are open), a seat waits at most LONELY_SECONDS for the
+other one, and no socket stays longer than MAX_AGE_SECONDS.
+
+Close codes the client can act on (it should not reconnect after 4002, 4003
+or 4010):
     4000  bad path (not /<code>/host or /<code>/guest)
     4001  replaced by a newer socket for the same seat
+    4002  open too long (MAX_AGE_SECONDS)
     4003  origin not allowed
     4008  sending too fast
+    4010  alone in the room too long (LONELY_SECONDS)
     4013  relay full
 """
 
@@ -42,13 +49,50 @@ MAX_MESSAGE_BYTES = 1024
 RATE_PER_SECOND = 50
 BURST = 100
 MAX_ROOMS = int(os.environ.get("MAX_ROOMS", "2000"))
-# Comma-separated; unset or empty: any origin
-ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+LONELY_SECONDS = float(os.environ.get("LONELY_SECONDS", "600"))
+MAX_AGE_SECONDS = float(os.environ.get("MAX_AGE_SECONDS", "7200"))
+# How often each socket checks those two
+WATCH_SECONDS = 10.0
+# A dead socket (a phone that lost signal, with nothing to say so) fails to
+# answer a ping, and is gone within two pings and a close wait: 45 s
+PING_SECONDS = 20.0
+CLOSE_SECONDS = 5.0
+# Comma-separated; "*" stands for one or more host or port characters, and
+# ALLOWED_ORIGINS="*" alone allows anything (no Origin header included)
+DEFAULT_ORIGINS = "https://simonw.github.io,https://*.simonw.workers.dev"
+
+
+def origin_pattern(origins: str) -> re.Pattern | None:
+    """A regex for a comma-separated list of origin patterns (None: any)."""
+    parts = [o.strip() for o in origins.split(",") if o.strip()]
+    if "*" in parts:
+        return None
+    alts = (re.escape(p).replace(r"\*", "[A-Za-z0-9.-]+") for p in parts)
+    return re.compile("^(?:" + "|".join(alts) + ")$")
+
+
+ORIGINS = origin_pattern(os.environ.get("ALLOWED_ORIGINS", DEFAULT_ORIGINS))
 
 log = logging.getLogger("relay")
 
-# room code -> {"host": socket, "guest": socket}
-rooms: dict[str, dict[str, ServerConnection]] = {}
+
+class Room:
+    def __init__(self) -> None:
+        # "host" and "guest" -> socket
+        self.seats: dict[str, ServerConnection] = {}
+        # when the room last had fewer than two seats filled
+        self.alone_since = time.monotonic()
+
+    def evict(self, seat: str, ws: ServerConnection) -> None:
+        """Take ws out of its seat, if it is still there."""
+        if self.seats.get(seat) is ws:
+            if len(self.seats) == 2:
+                self.alone_since = time.monotonic()
+            del self.seats[seat]
+
+
+# room code -> Room
+rooms: dict[str, Room] = {}
 # close() tasks in flight (asyncio keeps only weak references to tasks)
 background: set[asyncio.Task] = set()
 
@@ -70,8 +114,25 @@ def process_request(connection: ServerConnection, request):
     return None
 
 
+async def watch(ws: ServerConnection, room: Room, seat: str) -> None:
+    """Close ws when it has been alone or open too long."""
+    opened = time.monotonic()
+    while True:
+        await asyncio.sleep(WATCH_SECONDS)
+        now = time.monotonic()
+        if now - opened > MAX_AGE_SECONDS:
+            code, reason = 4002, "open too long"
+        elif len(room.seats) < 2 and now - room.alone_since > LONELY_SECONDS:
+            code, reason = 4010, "alone too long"
+        else:
+            continue
+        room.evict(seat, ws)
+        close_later(ws, code, reason)
+        return
+
+
 async def handler(ws: ServerConnection) -> None:
-    if ALLOWED_ORIGINS and ws.request.headers.get("Origin") not in ALLOWED_ORIGINS:
+    if ORIGINS is not None and not ORIGINS.match(ws.request.headers.get("Origin") or ""):
         await ws.close(4003, "origin not allowed")
         return
     match = PATH.match(ws.request.path)
@@ -84,29 +145,30 @@ async def handler(ws: ServerConnection) -> None:
         if len(rooms) >= MAX_ROOMS:
             await ws.close(4013, "relay full")
             return
-        room = rooms[code] = {}
-    old = room.get(seat)
-    room[seat] = ws
+        room = rooms[code] = Room()
+    old = room.seats.get(seat)
+    room.seats[seat] = ws
     if old is not None:
         close_later(old, 4001, "replaced")
     log.info("join %s %s (%d rooms)", code, seat, len(rooms))
 
+    watcher = asyncio.create_task(watch(ws, room, seat))
     tokens, last = float(BURST), time.monotonic()
     try:
         async for message in ws:
-            if room.get(seat) is not ws:
-                # replaced, or closed for sending too fast: keep reading,
-                # since the close handshake waits behind what is queued
+            if room.seats.get(seat) is not ws:
+                # evicted (replaced, too fast, alone or open too long): keep
+                # reading, since the close handshake waits behind what is queued
                 continue
             now = time.monotonic()
             tokens = min(BURST, tokens + (now - last) * RATE_PER_SECOND)
             last = now
             if tokens < 1:
-                del room[seat]
+                room.evict(seat, ws)
                 close_later(ws, 4008, "sending too fast")
                 continue
             tokens -= 1
-            peer = room.get(other(seat))
+            peer = room.seats.get(other(seat))
             if peer is not None:
                 try:
                     await peer.send(message)
@@ -117,9 +179,9 @@ async def handler(ws: ServerConnection) -> None:
         # (a dropped connection, or one this relay closed with a 4xxx code)
         pass
     finally:
-        if room.get(seat) is ws:
-            del room[seat]
-        if not room and rooms.get(code) is room:
+        watcher.cancel()
+        room.evict(seat, ws)
+        if not room.seats and rooms.get(code) is room:
             del rooms[code]
         log.info("leave %s %s (%d rooms)", code, seat, len(rooms))
 
@@ -132,9 +194,9 @@ def relay(host: str = "0.0.0.0", port: int = 8080):
         port,
         process_request=process_request,
         max_size=MAX_MESSAGE_BYTES,
-        # dead sockets (a phone that lost signal) free their seat within ~40 s
-        ping_interval=20,
-        ping_timeout=20,
+        ping_interval=PING_SECONDS,
+        ping_timeout=PING_SECONDS,
+        close_timeout=CLOSE_SECONDS,
     )
 
 

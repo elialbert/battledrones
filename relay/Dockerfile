@@ -1,8 +1,8 @@
-FROM python:3.13-slim
+FROM ghcr.io/astral-sh/uv:0.11.32-python3.13-trixie-slim
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never PYTHONUNBUFFERED=1
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 COPY server.py .
-ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
-CMD ["python", "server.py"]
+CMD [".venv/bin/python", "server.py"]

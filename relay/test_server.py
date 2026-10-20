@@ -2,10 +2,16 @@ import asyncio
 import http.client
 
 import pytest
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
 import server
+
+GAME = "https://simonw.github.io"
+
+
+def connect(url, origin=GAME):
+    return ws_connect(url, origin=origin)
 
 
 def run(test):
@@ -96,16 +102,72 @@ def test_sending_too_fast_is_closed():
     run(t)
 
 
-def test_origin_allow_list(monkeypatch):
-    monkeypatch.setattr(server, "ALLOWED_ORIGINS", ["https://simonw.github.io"])
-
+@pytest.mark.parametrize(
+    "origin,allowed",
+    [
+        ("https://simonw.github.io", True),
+        ("https://battledrones.simonw.workers.dev", True),
+        ("https://preview.battledrones.simonw.workers.dev", True),
+        (None, False),
+        ("http://simonw.github.io", False),
+        ("https://simonw.github.io.evil.example", False),
+        ("https://evil.github.io", False),
+        ("https://simonw.workers.dev", False),
+        ("https://evilsimonw.workers.dev", False),
+        ("https://x.simonw.workers.dev.evil.example", False),
+        ("https://other.workers.dev", False),
+    ],
+)
+def test_origins(origin, allowed):
     async def t(url, port):
-        async with connect(f"{url}/K7QM2XP4/host", origin="https://evil.example") as ws:
-            assert await closed_with(ws) == 4003
-        async with connect(f"{url}/K7QM2XP4/host", origin="https://simonw.github.io") as a:
-            async with connect(f"{url}/K7QM2XP4/guest", origin="https://simonw.github.io") as b:
+        async with connect(f"{url}/K7QM2XP4/host", origin=origin) as a:
+            if not allowed:
+                assert await closed_with(a) == 4003
+                return
+            async with connect(f"{url}/K7QM2XP4/guest") as b:
                 await a.send("ok")
                 assert await asyncio.wait_for(b.recv(), 2) == "ok"
+
+    run(t)
+
+
+def test_origin_patterns():
+    assert server.origin_pattern("*") is None
+    local = server.origin_pattern("http://localhost:*, https://simonw.github.io")
+    assert local.match("http://localhost:5173")
+    assert local.match("https://simonw.github.io")
+    assert not local.match("http://localhost:5173/x")
+    assert not local.match("http://localhost")
+
+
+def test_alone_too_long(monkeypatch):
+    monkeypatch.setattr(server, "WATCH_SECONDS", 0.05)
+    monkeypatch.setattr(server, "LONELY_SECONDS", 0.2)
+
+    async def t(url, port):
+        async with connect(f"{url}/K7QM2XP4/host") as host:
+            assert await closed_with(host) == 4010
+        # a pair is never alone; when one leaves, the other's wait starts then
+        async with connect(f"{url}/AAAAAA/host") as host:
+            async with connect(f"{url}/AAAAAA/guest") as guest:
+                await asyncio.sleep(0.4)
+                await host.send("still here")
+                assert await asyncio.wait_for(guest.recv(), 2) == "still here"
+            started = asyncio.get_running_loop().time()
+            assert await closed_with(host) == 4010
+            assert asyncio.get_running_loop().time() - started >= 0.15
+
+    run(t)
+
+
+def test_open_too_long(monkeypatch):
+    monkeypatch.setattr(server, "WATCH_SECONDS", 0.05)
+    monkeypatch.setattr(server, "MAX_AGE_SECONDS", 0.3)
+
+    async def t(url, port):
+        async with connect(f"{url}/K7QM2XP4/host") as host, connect(f"{url}/K7QM2XP4/guest") as guest:
+            assert await closed_with(host) == 4002
+            assert await closed_with(guest) == 4002
 
     run(t)
 
@@ -116,6 +178,35 @@ def test_relay_full(monkeypatch):
     async def t(url, port):
         async with connect(f"{url}/AAAAAA/host"), connect(f"{url}/BBBBBB/host") as ws:
             assert await closed_with(ws) == 4013
+
+    run(t)
+
+
+def test_a_silent_socket_is_dropped(monkeypatch):
+    """A client that never answers pings (a phone gone from the network) frees its seat and the room."""
+    monkeypatch.setattr(server, "PING_SECONDS", 0.2)
+    monkeypatch.setattr(server, "CLOSE_SECONDS", 0.2)
+
+    async def t(url, port):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            b"GET /K7QM2XP4/host HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+            b"Origin: https://simonw.github.io\r\n\r\n"
+        )
+        assert (await reader.readline()).startswith(b"HTTP/1.1 101")
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if "K7QM2XP4" in server.rooms:
+                break
+        assert "K7QM2XP4" in server.rooms
+        # (never read again, so never pong)
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if not server.rooms:
+                break
+        assert server.rooms == {}
+        writer.close()
 
     run(t)
 
