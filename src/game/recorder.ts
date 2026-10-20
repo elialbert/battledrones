@@ -24,8 +24,8 @@
  *  - a match not decided (the record is made mid-match) has no end, and its
  *    `tick` says how far it was played.
  */
-import type { BattleRecord, SeatInfo } from "../arena/record";
-import { endOf, HASH_EVERY } from "../arena/record";
+// (types only from the arena: the viewer and the arena load on demand, tests/arena.test.ts)
+import type { BattleEnd, BattleRecord, SeatInfo } from "../arena/record";
 import { worldHash } from "../sim/checksum";
 import type { MatchOptions } from "../sim/maps";
 import type { OpenerId } from "../sim/openers";
@@ -36,6 +36,18 @@ declare const __SIM_HASH__: string | undefined;
 const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
 
 const SIDES = ["blue", "red"] as const;
+
+/** A world hash goes into the record every this many ticks: the arena's rate (arena/record.ts HASH_EVERY), which the viewer checks. */
+export const HASH_EVERY = 100;
+
+/**
+ * How a decided world ends its record: arena/record.ts endOf, which this
+ * may not import (tests/resign.test.ts holds the two together).
+ */
+export function recordEnd(tick: number, winner: Faction | "draw", resigned?: Faction | null): BattleEnd {
+  if (winner === "draw") return { tick, winner: null, reason: resigned === null ? "resign" : "love" };
+  return { tick, winner, reason: resigned ? "resign" : "hq" };
+}
 
 export class MatchRecorder {
   private openers: Partial<Record<Faction, OpenerId>> = {};
@@ -68,7 +80,7 @@ export class MatchRecorder {
   record(w: World): BattleRecord {
     const income: Partial<Record<Faction, number>> = {};
     for (const f of SIDES) if (w.factions[f].incomeMult !== 1) income[f] = w.factions[f].incomeMult;
-    const end = w.winner ? endOf(w.tick, w.winner, w.resigned) : null;
+    const end = w.winner ? recordEnd(w.tick, w.winner, w.resigned) : null;
     const o = this.opts;
     return {
       v: 1,

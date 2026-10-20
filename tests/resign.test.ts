@@ -5,6 +5,8 @@ import { setupWorld } from "../src/sim/setup";
 import { step } from "../src/sim/sim";
 import type { Faction } from "../src/sim/types";
 import { battleRecord, duelEnd } from "../src/versus/records";
+import { HASH_EVERY as RECORDER_HASH_EVERY, recordEnd } from "../src/game/recorder";
+import { HASH_EVERY as ARENA_HASH_EVERY } from "../src/arena/record";
 
 const SETUP = { map: "riverlands", seed: 42, mutators: [], openers: { blue: "blitz", red: "airwing" } } as const;
 
@@ -45,6 +47,11 @@ describe("resign (sound duels)", () => {
     for (const winner of ["blue", "red", "draw"] as const)
       for (const resigned of [undefined, "blue", "red", null] as (Faction | null | undefined)[])
         expect(duelEnd(100, winner, resigned), `${winner} ${resigned}`).toEqual(endOf(100, winner, resigned));
+    // (and the game's own recorder, which may not import the arena either: tests/arena.test.ts)
+    for (const winner of ["blue", "red", "draw"] as const)
+      for (const resigned of [undefined, null, "blue", "red"] as const)
+        expect(recordEnd(100, winner, resigned), `${winner} ${resigned}`).toEqual(endOf(100, winner, resigned));
+    expect(RECORDER_HASH_EVERY).toBe(ARENA_HASH_EVERY);
   });
 
   it("keeps a duel record both sides resigned in a draw by resign when it is re-simulated", () => {

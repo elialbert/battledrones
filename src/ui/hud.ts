@@ -1407,11 +1407,11 @@ export function createHud(api: HudApi): Hud {
     if (!record) return say("Nothing to copy");
     try {
       void navigator.clipboard.writeText(JSON.stringify(record)).then(
-        () => say("✓ Copied: paste it into 🎬 Watch a replay"),
-        () => say("Couldn't copy: this browser doesn't allow it")
+        () => say("Copied"),
+        () => say("Couldn't copy")
       );
     } catch {
-      say("Couldn't copy: this browser doesn't allow it");
+      say("Couldn't copy");
     }
   }
 
