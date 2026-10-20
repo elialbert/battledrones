@@ -664,17 +664,22 @@ describe("the worklet's processor", () => {
       while (f < 10 * 48000) step();
       const v8 = (await import(/* @vite-ignore */ "node:v8" as string)) as { getHeapSpaceStatistics(): { space_name: string; space_used_size: number }[] };
       const young = () => v8.getHeapSpaceStatistics().find((x) => x.space_name === "new_space")!.space_used_size;
+      // The steady state: V8 optimizes on background threads, later on a loaded machine (CI runs test
+      // files in parallel), and until then every float the hot loops touch is boxed (about 560 bytes a
+      // block 10 s in, here, on Node 24). So measure 5 s windows until one is clear of that, up to 80 s,
+      // and judge the lowest; a window with a scavenge in it says nothing and is skipped.
       let perBlock = Infinity;
       const posted0 = port.count;
-      for (let attempt = 0; attempt < 4; attempt++) {
+      const f0 = f;
+      for (let attempt = 0; attempt < 16 && !(perBlock < 64); attempt++) {
         const h0 = young();
-        const end = f + 10 * 48000;
+        const end = f + 5 * 48000;
         while (f < end) step();
         const h1 = young();
-        if (h1 >= h0) perBlock = Math.min(perBlock, (h1 - h0) / ((10 * 48000) / 128));
+        if (h1 >= h0) perBlock = Math.min(perBlock, (h1 - h0) / ((5 * 48000) / 128));
       }
       // about 14 messages a second (5 packets, 5 slots, 4 stats): a few hundred bytes each, ~10 bytes a block
-      expect(port.count - posted0).toBeGreaterThan(40 * 10);
+      expect(port.count - posted0).toBeGreaterThan(10 * ((f - f0) / 48000));
       expect(perBlock, `${perBlock.toFixed(1)} bytes per block`).toBeLessThan(64);
     },
     60_000

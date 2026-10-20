@@ -83,6 +83,19 @@ export class CorrBand {
   readonly tNorm: number;
   readonly rhoA = new Float32Array(RHO_SIZE);
   readonly rhoB = new Float32Array(RHO_SIZE);
+  /**
+   * The same histories read as their IEEE-754 bit patterns, for the scans
+   * that pick a maximum (a candidate's ±50 ms, a re-correlation's window, the
+   * self-monitor's search). ρ is a magnitude over a norm, never negative, so
+   * the patterns order exactly as the floats do; and up to ρ = 1 they are
+   * below 2^30, so V8 keeps them as small integers. That matters because
+   * these scans run about once per sync, too rarely for V8 to optimize them
+   * in time: unoptimized, every float they read or returned was boxed on the
+   * heap, about 40 kB per sync (tests/link-worklet.test.ts's allocation
+   * check failed on Node 24 at 107 bytes per block).
+   */
+  private readonly bitsA = new Int32Array(this.rhoA.buffer);
+  private readonly bitsB = new Int32Array(this.rhoB.buffer);
   /** ρ is known for decimated indices [from, done). */
   from = 0;
   done = 0;
@@ -168,6 +181,20 @@ export class CorrBand {
     return n >= this.from && n < this.done ? v : v * 0;
   }
 
+  /** peak(n) as its bit pattern (0 outside what is known): for comparing only, allocation-free unoptimized too (bitsA). */
+  peakBits(n: number): number {
+    if (n < this.from || n >= this.done) return 0;
+    const a = this.bitsA[n & RHO_MASK]!;
+    const b = this.bitsB[n & RHO_MASK]!;
+    return a > b ? a : b;
+  }
+
+  /** rho(mode, n) as its bit pattern (0 outside what is known): for comparing only (bitsA). */
+  rhoBits(mode: ModemMode, n: number): number {
+    if (n < this.from || n >= this.done) return 0;
+    return (mode === "robust" ? this.bitsA : this.bitsB)[n & RHO_MASK]!;
+  }
+
   /** Feed the detector the new values [n0, n1); push candidates. */
   detect(n0: number, n1: number, W: number, F: number, out: CandidateQueue): void {
     for (let n = n0; n < n1; n++) {
@@ -185,8 +212,9 @@ export class CorrBand {
   }
 
   private finalize(c: number, W: number, F: number, out: CandidateQueue): void {
+    const rb = this.peakBits(c);
+    for (let i = c - W; i <= c + W; i++) if (this.peakBits(i) > rb) return;
     const r = this.peak(c);
-    for (let i = c - W; i <= c + W; i++) if (this.peak(i) > r) return;
     const a = this.rho("robust", c);
     const b = this.rho("fast", c);
     if (Math.abs(a - b) < RHO_MARGIN) return;
@@ -625,14 +653,15 @@ export class SyncSearch {
     const mid = Math.round(e / DECIM);
     if (c.done <= mid + this.R) return false;
     let best = mid - this.R;
-    let r = -Infinity;
+    let rb = -1;
     for (let n = mid - this.R; n <= mid + this.R; n++) {
-      const v = c.peak(n);
-      if (v > r) {
-        r = v;
+      const v = c.peakBits(n);
+      if (v > rb) {
+        rb = v;
         best = n;
       }
     }
+    const r = c.peak(best);
     out.rho = r;
     out.mode = null;
     out.t = e;
@@ -651,14 +680,16 @@ export class SyncSearch {
     const n1 = Math.floor(to / DECIM);
     if (c.done < n1) return false;
     let best = n0;
-    let r = -Infinity;
+    let rb = -1;
     for (let n = n0; n < n1; n++) {
-      const v = c.rho(mode, n);
-      if (v > r) {
-        r = v;
+      const v = c.rhoBits(mode, n);
+      if (v > rb) {
+        rb = v;
         best = n;
       }
     }
+    // (an empty range keeps -Infinity, as before)
+    const r = n1 > n0 ? c.rho(mode, best) : -Infinity;
     out.rho = r;
     out.mode = mode;
     out.t = r > 0 ? c.firstPath(best, mode, this.F) : from;
