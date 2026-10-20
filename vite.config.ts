@@ -64,8 +64,14 @@ export default defineConfig({
     chunkSizeWarningLimit: 1600,
     // the engine in its own chunk: game updates don't re-download three.js
     rollupOptions: {
-      // the game, plus the standalone vehicles reference page, battle record viewer and radio probe
-      input: { main: "index.html", vehicles: "vehicles.html", records: "record-viewer.html", probe: "radio-probe.html" },
+      // the game, plus the standalone vehicles reference page, 3D models page, battle record viewer and radio probe
+      input: {
+        main: "index.html",
+        vehicles: "vehicles.html",
+        models: "models.html",
+        records: "record-viewer.html",
+        probe: "radio-probe.html"
+      },
       output: { manualChunks: { three: ["three"] } }
     }
   },
