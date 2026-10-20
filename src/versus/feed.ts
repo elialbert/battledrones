@@ -29,7 +29,11 @@
  * ticks (or a queue's wait) after its tap, so a select-all right after it
  * would find no lift in the world yet, then split, and its Goliath piece
  * would land on a lift hooking on by then: the feed also counts the lifts it
- * sent and hasn't stepped yet (LiftInFlight).
+ * sent and hasn't stepped yet (LiftInFlight). The Controller's own taps never
+ * send such a lift's members anywhere while it hooks on or is on its way (it
+ * holds the order until the lift is up, as single player does:
+ * Controller.ahead), so this is for orders made otherwise (an AI driving the
+ * Controller, as the tests do).
  *
  * Engine-free where it can be: the browser's pieces (timers, document,
  * storage, reload) come through FeedEnv, and what it needs of the scene
@@ -71,8 +75,16 @@
  *  - "Copy debug info" copies JSON: the build, role and side, the agreed
  *    config and nonces, D, the tick, both trails' checkpoints and the end
  *    reports (Lockstep.debug), and the turn log;
- *  - in-flight orders (Controller.inFlight) come off as their turn is
- *    stepped, and all of them at an abort;
+ *  - every order this phone drains is in flight (Controller.inFlight) until
+ *    its turn is stepped, not only placement and production: the build bar,
+ *    the power panel and the Controller's own reads (a lift, a boarding, an
+ *    anchor, a sale, a rally point, a calldown) take it as landed, so a tap
+ *    that builds on the one before does what it does in single player. One
+ *    the lockstep replaced in its queue before it went out never lands: once
+ *    a drain leaves the queue empty and that tick + D is stepped, whatever
+ *    was drained by then and is still in flight comes off. All of them come
+ *    off at an abort. A building placed isn't taken as landed: the sim gives
+ *    it its id, so what it unlocks, and a queue at it, wait until it lands;
  *  - a practice link keeps the hash trail after every tick (trails(), the
  *    relay smoke's window.__duel.trails): read from outside after each frame,
  *    the trail missed every tick a frame stepped two of, which a lossy link's
@@ -290,6 +302,14 @@ export class VersusFeed implements MatchFeed {
   private stepping: Command[] | null = null;
   /** This phone's lifts sent and not stepped yet (lift groups first), with the tick each was drained on. */
   private readonly lifts: (LiftInFlight & { at: number })[] = [];
+  /**
+   * Ticks whose drain left the lockstep nothing waiting for room in a turn,
+   * oldest first: all drained by then is sealed for that tick + D at the
+   * latest, or was replaced in the queue and never goes out. Once that turn
+   * is stepped, whatever of it the Controller still has in flight comes off
+   * (Controller.settled).
+   */
+  private readonly drainedAll: number[] = [];
   /** A practice link's hash trail after each tick stepped (index: the tick); null on a sound link. */
   private readonly trailLog: number[] | null;
 
@@ -393,12 +413,15 @@ export class VersusFeed implements MatchFeed {
     if (!scene || this.closed || this.aborted) return null;
     // (paused since the last pump: nothing is sealed, whoever calls)
     this.syncPause(scene);
+    let sealed = false;
     const cmds = this.session.commandsFor(tick, () => {
+      sealed = true;
       const drained = scene.ctrl.drainCommands();
       const out = liftGroupsFirst(this.world, drained, this.lifts);
       for (const c of drained) if (c.type === "lift") this.lifts.push({ goliathId: c.goliathId, condors: c.unitIds.slice(), at: tick });
       return out;
     });
+    if (sealed && this.session.lockstep?.status().queued === 0) this.drainedAll.push(tick);
     this.stepping = cmds;
     return cmds;
   }
@@ -421,6 +444,9 @@ export class VersusFeed implements MatchFeed {
     if (w.tick % HASH_EVERY === 0) this.hashes.push([w.tick, hash]);
     const mine = cmds.filter((c) => c.faction === this.local);
     this.scene?.ctrl.landed(mine);
+    let through: number | null = null;
+    while (this.drainedAll.length > 0 && this.drainedAll[0]! + this.result.delay <= t) through = this.drainedAll.shift()!;
+    if (through !== null) this.scene?.ctrl.settled(through);
     // (the lifts that landed are in the world now; one the codec dropped, naming too many Condors, never lands)
     for (const c of mine)
       if (c.type === "lift") {
@@ -575,7 +601,7 @@ export class VersusFeed implements MatchFeed {
     if (this.aborted) return;
     this.aborted = reason;
     this.settle(reason === "desync" ? "noContest" : "abandoned");
-    this.scene?.ctrl.inFlight?.splice(0);
+    this.scene?.ctrl.dropInFlight();
     this.scene?.abort(reason, reason === "desync" ? this.debugInfo() : undefined);
   }
 

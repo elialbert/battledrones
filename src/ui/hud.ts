@@ -1129,11 +1129,12 @@ export function createHud(api: HudApi): Hud {
       if (anchor) chips.push(anchor);
       // (unarmed Condors, lifts and anchored Goliaths have no fights to skip: Move only would
       // change nothing; on a phone the Unload or anchor chip takes its place in a mixed
-      // selection, so the row stays one row)
-      const lifting = new Set(lifts.flatMap((g) => [g.id, ...g.goliath!.lift!.carriers]));
+      // selection, so the row stays one row. A sound duel: as the orders on their way leave them)
+      const lifting = ctrl.liftMembers();
+      const ahead = ctrl.ahead();
       const marchers = [...ctrl.selectedUnits].some((id) => {
         const u = w.units.get(id);
-        return !!u && !isTransport(u.kind) && !lifting.has(id) && !isRooted(u);
+        return !!u && !isTransport(u.kind) && !lifting.has(id) && !isRooted(ahead.unit(u));
       });
       if (marchers && (!narrow || (!unload && !anchor) || ctrl.forceMove))
         chips.push({

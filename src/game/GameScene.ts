@@ -1231,9 +1231,9 @@ export class GameScene {
       const st = BUILDINGS[sb.kind];
       const c = buildingCenter(sb);
       if (st.range > 0) g.lineStyle(1.2, 0xffffff, 0.3).strokeCircle(c.x, c.y, st.range + size / 2);
-      if (sb.rally) {
-        g.lineStyle(1.5, 0xffe066, 0.8).lineBetween(c.x, c.y, sb.rally.x, sb.rally.y).strokeCircle(sb.rally.x, sb.rally.y, 0.16);
-      }
+      // (a sound duel: a new rally point still on its way already shows)
+      const rally = this.ctrl.ahead().rally(sb.id) ?? sb.rally;
+      if (rally) g.lineStyle(1.5, 0xffe066, 0.8).lineBetween(c.x, c.y, rally.x, rally.y).strokeCircle(rally.x, rally.y, 0.16);
     }
     // Goliaths' build rings, threat rings and anchoring arcs (read through the fog: they're always seen)
     this.entities.goliathMarks(this.view.over, this.ctrl.selectedUnits);

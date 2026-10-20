@@ -15,7 +15,7 @@ import { dailyOp, today, type DailyOp } from "./game/daily";
 import { opById, type OpDef } from "./sim/ops";
 import type { MutatorId } from "./sim/rules";
 import { mountMenuOps } from "./ui/ops";
-import { fullscreen } from "./ui/fullscreen";
+import { fullscreen, resetAudioSession } from "./ui/fullscreen";
 import { appUpdate, mountUpdatePill } from "./ui/update";
 import { scrollCue } from "./ui/hscroll";
 import { showReplayPicker } from "./ui/replay-picker";
@@ -83,6 +83,11 @@ function setupPageZoomRescue(): void {
   });
 }
 setupPageZoomRescue();
+// iOS's audio session back to "auto" before any audio context exists, on every boot: a sound duel's page that
+// went without letting it go (its rig sets play-and-record) left it so for this one, as Safari keeps the type
+// in the tab while this page reads "auto" (ui/fullscreen.ts resetAudioSession). A context made under it can
+// take a low rate (src/link/rig.ts "The rate"); the rig sets play-and-record again only after making its own.
+resetAudioSession();
 // a rematch or Menu reload dropped full screen: ask again on the first tap
 fullscreen.restoreOnGesture();
 // a new build: the menu offers to reload into it (ui/update.ts)
@@ -107,15 +112,6 @@ const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend'
  */
 const REMATCH_KEY: typeof DuelLobby.REMATCH_KEY = "battledrones.rematch";
 const DUEL_REMATCH: typeof DuelLobby.REMATCH_DUEL = "duel";
-/** iOS's audio session (navigator.audioSession): back to "auto" at a duel's rematch boot and when it's declined. */
-const setAudioSession = (type: "auto") => {
-  try {
-    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
-    if (session) session.type = type;
-  } catch {
-    /* ignore */
-  }
-};
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -223,16 +219,13 @@ function showMenu(linkedMap?: string | null): void {
   } catch {
     /* ignore */
   }
-  // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, link mode, and the audio
-  // session back to "auto". Safari keeps a page's session type across a reload, and a context made while it is
-  // play-and-record can take its rate from a snapshot of 16 kHz: the rig makes its context first and only then
-  // sets play-and-record (src/link/rig.ts "The rate"). The menu's sound waits for the reconnect tap. (A
-  // practice link opens no rig and no guard, so neither.)
+  // a sound duel's Rematch (SOUND-DUEL.md "Rematch"): before any audio context exists, link mode (the boot has
+  // put the audio session back to "auto" already: Safari keeps a page's session type across a reload, and a
+  // context made while it is play-and-record can take its rate from a snapshot of 16 kHz, src/link/rig.ts "The
+  // rate"). The menu's sound waits for the reconnect tap. (A practice link opens no rig and no guard, so no
+  // link mode.)
   const duelRematch = token === DUEL_REMATCH;
-  if (duelRematch && !duelPractice) {
-    setAudioSession("auto");
-    sfx.linkMode = true;
-  }
+  if (duelRematch && !duelPractice) sfx.linkMode = true;
   // ?map=<id> (a shared random map, or any built-in): preselect it and keep it as the pick
   if (linkedMap && isKnownMapId(linkedMap)) {
     gameMode.mapId = linkedMap;
@@ -677,8 +670,8 @@ function showMenu(linkedMap?: string | null): void {
     syncDuelBtn();
     rematchScreen?.remove();
     rematchScreen = null;
-    // (the rig's close() already did, if one was opened; the rematch boot's Menu opened none)
-    setAudioSession("auto");
+    // (the rig's close() already did, if one was opened, and so did the boot; the rematch boot's Menu opened none)
+    resetAudioSession();
     sfx.linkMode = false;
     sfx.unlockOnGesture();
     music.play("menu", biomeOf(shownMap()));
@@ -690,8 +683,11 @@ function showMenu(linkedMap?: string | null): void {
     duelLive = true;
     syncDuelBtn();
     const tap = d.tapPlan(rematch);
-    const rig = tap.practice ? null : d.openRig({ micMode: tap.micMode });
+    // the game's context before the rig's play-and-record, as the rig's own (src/link/rig.ts "The rate"): from
+    // the menu the first touch has made it already and this only resumes it, but the rematch boot makes none
+    // until this tap, and after the rig it would be born under play-and-record
     sfx.unlock();
+    const rig = tap.practice ? null : d.openRig({ micMode: tap.micMode });
     if (!tap.practice)
       try {
         sfx.setLinkGuard("high", { cutDb: tap.cutDb });

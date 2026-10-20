@@ -320,16 +320,17 @@ export class CommandUi {
     }
   }
 
-  /** The lift tip's moment: two empty Condors selected while we have a Goliath walking. */
+  /** The lift tip's moment: two empty Condors selected while we have a Goliath walking (a lift on its way counts as begun). */
   private liftMoment(): boolean {
     const w = this.h.world;
+    const ahead = this.h.ctrl.ahead();
     let empty = 0;
     for (const id of this.h.ctrl.selectedUnits) {
       const u = w.units.get(id);
-      if (u && u.faction === PLAYER && canCarry(u)) empty++;
+      if (u && u.faction === PLAYER && canCarry(ahead.unit(u))) empty++;
     }
     if (empty < 2) return false;
-    for (const u of w.units.values()) if (u.goliath && u.faction === PLAYER && canWalk(u)) return true;
+    for (const u of w.units.values()) if (u.goliath && u.faction === PLAYER && canWalk(ahead.unit(u))) return true;
     return false;
   }
 

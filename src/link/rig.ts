@@ -20,13 +20,18 @@
  * the context's output to that same snapshot on its way to the speaker: a
  * context created at 16000 Hz has nothing above 8 kHz on the air, whatever
  * the hardware runs at, and asking the constructor for 48000 only changes
- * the label (WebKit RemoteAudioDestinationProxy). Switching the session to
- * play-and-record (Safari's voice-chat mode) before the context exists has
- * left that snapshot at 16000 on an iPhone whose radio-probe page, creating
- * its context first, got 48000. So the context comes first; and when its
- * rate still can't carry the high plan, a context made once the microphone
- * has activated the session reads the rate afresh (settleRate), and replaces
- * it — Safari lets a capturing page start one without a new tap.
+ * the label (WebKit RemoteAudioDestinationProxy). An iPhone whose
+ * radio-probe page got 48000 gave this rig's context 16000. Two things could
+ * have left that snapshot low, and both are guarded against, since only a
+ * device can tell which it was: the session switched to play-and-record
+ * (Safari's voice-chat mode) before the context was made, so the context
+ * comes first here; or play-and-record left over from an earlier page,
+ * since Safari keeps the type across reloads in a tab while the new page
+ * reads "auto" (so every boot and every reload puts it back: main.ts,
+ * fullscreen.ts resetAudioSession). And when the context's rate still can't
+ * carry the high plan, a context made once the microphone has activated the
+ * session reads the rate afresh (settleRate), and replaces it — Safari lets
+ * a capturing page start one without a new tap.
  *
  * The link. createLink(cfg) loads the worklet (once per context), makes a
  * WorkletTransport and connects the microphone to its node. What it returns

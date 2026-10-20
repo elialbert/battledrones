@@ -122,9 +122,26 @@
 }
 .duel-mut.none { color: var(--dim); }
 .duel-cards { display: flex; flex-direction: column; gap: 8px; }
-.duelsheet .op-card { min-height: 80px; width: 100%; }
-.duelsheet .op-art { flex-basis: 64px; height: 64px; }
-.duelsheet .op-art .op-b { width: 48px; height: 48px; }
+/* One card a row, art beside the text, in both orientations. The single-player picker's landscape rules
+   (src/ui/style.css: three cards side by side, art over text, `flex: 1 1 0`) match these cards too, and in
+   this column they shrank each card to its min-height with its text spilling over the next card, where a
+   tap picked that one. So the portrait card is set here in full (as it is without those rules): sized by its
+   content in the column, art beside the text. */
+.duelsheet .op-card {
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-height: 80px;
+  width: 100%;
+  padding: 10px 14px 10px 10px;
+  text-align: left;
+  border-top: 1px solid var(--line-hi);
+  border-left: 4px solid var(--accent);
+}
+.duelsheet .op-text { align-items: normal; }
+.duelsheet .op-art { flex: 0 0 64px; width: 64px; height: 64px; }
+.duelsheet .op-art .op-b { left: 0; width: 48px; height: 48px; }
 .duelsheet .op-art .op-u { width: 36px; height: 36px; }
 .duelsheet .op-art .op-n { top: 22px; font-size: 13px; }
 .duelsheet .op-name { font-size: 18px; }

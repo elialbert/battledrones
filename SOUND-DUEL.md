@@ -954,9 +954,13 @@ link, once its detection has locked, is rebuilt on the plan it found with
   session's rate, refreshed only when the session activates, and resamples
   the context's output to that snapshot on its way to the speaker (WebKit's
   `RemoteAudioDestinationProxy`), so asking the constructor for 48 kHz only
-  changes the label. Setting play-and-record (voice-chat mode) before
-  creating the context left that snapshot at 16000 Hz on an iPhone that gave
-  the radio probe 48000. Hence the order above, and: once the microphone is
+  changes the label. An iPhone that gave the radio probe 48000 gave the rig's
+  context 16000 Hz. Two things could have left that snapshot low, and only a
+  device can tell which it was, so both are guarded against: play-and-record
+  (voice-chat mode) set before creating the context (hence the order above),
+  or play-and-record left over from an earlier page, since Safari keeps the
+  type across reloads in a tab while the new page reads "auto" (hence the
+  reset at every boot and reload, "Rematch" > "Boot"). And once the microphone is
   in (capture activates the session), a context whose rate can't carry the
   high plan is replaced by a new one, which reads the rate afresh and may
   start without a tap while the page captures; the microphone is asked for
@@ -1052,8 +1056,10 @@ master → high-pass 300 Hz → guardGain (−(GUARD_CUT_DB + makeup)) → limit
   the menu mounts where the capabilities exist. The "🔊 Duel a friend (sound)"
   button (Skirmish tab) stays disabled until the chunk has loaded.
 - **The tap.** The click handler runs synchronously, in this order:
-  1. `duel.openRig({ micMode })`;
-  2. `sfx.unlock()`;
+  1. `sfx.unlock()` (the game's context before the rig's play-and-record, as
+     the rig's own, "The rate": from the menu the first touch made it and this
+     only resumes it, but the rematch boot makes none until this tap);
+  2. `duel.openRig({ micMode })`;
   3. `sfx.setLinkGuard("high")`;
   4. `music.stop()`;
   5. `void fullscreen.enter()` (last: it consumes the activation);
@@ -1138,9 +1144,14 @@ does nothing. With an interactive feed, GameScene behaves as follows:
     own pauses left out) and the sync status.
 
   The actions are Rematch, Save battle and Menu.
-- **In flight.** Controller keeps an `inFlight` list of placement and
-  production orders sealed but not yet applied. The build bar treats them as
-  applied, so a second tap within the delay does not re-enter placement.
+- **In flight.** Controller keeps an `inFlight` list of every order this
+  phone drained and hasn't stepped yet. The build bar, the power panel and
+  the Controller's own reads (`Controller.ahead()`: a lift, a boarding, an
+  anchor, a sale, a rally point, a calldown) treat them as applied, so a
+  second tap within the delay does what it does in single player. One the
+  lockstep replaced in its queue and never sent comes off once that turn is
+  stepped, and all of them at an abort. A building placed counts only once
+  it lands (the sim gives it its id).
 
 ### Records
 
@@ -1168,10 +1179,14 @@ does nothing. With an interactive feed, GameScene behaves as follows:
 - **The tap.** Rematch writes sessionStorage `battledrones.rematch = "duel"`
   and `battledrones.duel = { role, plan, micMode, hostSide: flipped, mapId,
   mutators }`, then reloads.
-- **Boot.** On boot, `main.ts` sees `"duel"`. Before any audio context exists,
-  it:
-  - sets `navigator.audioSession.type = "auto"` (Safari keeps a page's type
-    across a reload, and the rig must make its context before play-and-record);
+- **Boot.** Every boot sets `navigator.audioSession.type = "auto"` before any
+  audio context exists (`main.ts`, at module load): Safari keeps the type a
+  page set across a reload or a navigation in the tab while the new page reads
+  `"auto"`, and the rig must make its context before play-and-record. Every
+  reload (`fullscreen.reload`) does the same before the page goes, and the
+  lobby closes the rig on `pagehide` (not into the back-forward cache) until
+  the match's feed takes it over. On boot, `main.ts` sees `"duel"`. Before any
+  audio context exists, it:
   - sets `sfx.linkMode`;
   - prefetches the lobby chunk;
   - shows one button, "Rematch · tap to reconnect (allow the microphone if

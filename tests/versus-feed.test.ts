@@ -7,13 +7,14 @@ import { PacketAir } from "../src/link/packet-air";
 import type { LostReason, MicMode, RigState } from "../src/link/rig";
 import type { BandRole } from "../src/link/transport";
 import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
-import { BUILDINGS, UNITS } from "../src/sim/balance";
+import { BUILDINGS, POWERS, UNITS } from "../src/sim/balance";
 import { OPENERS } from "../src/sim/openers";
 import { worldHash } from "../src/sim/checksum";
+import { cooldownTicks, powerStatus } from "../src/sim/powers";
 import { hash32 } from "../src/sim/rand";
 import { step } from "../src/sim/sim";
 import type { Command, Faction, Unit, UnitKind, World } from "../src/sim/types";
-import { hqOf, spawnUnit } from "../src/sim/world";
+import { hqOf, passable, regionAt, spawnUnit } from "../src/sim/world";
 import { setupWorld } from "../src/sim/setup";
 import type { AbortReason } from "../src/game/GameScene";
 import { VersusFeed, liftGroupsFirst, type DuelRig, type FeedEnv } from "../src/versus/feed";
@@ -84,6 +85,8 @@ interface Opts {
   raw?: boolean;
   /** A phone's audio rig (default none, as on a practice link). */
   rigs?: Partial<Record<BandRole, DuelRig>>;
+  /** The host's map (default riverlands). */
+  map?: string;
 }
 
 interface Run {
@@ -93,9 +96,9 @@ interface Run {
   opts: Opts;
 }
 
-function phone(role: BandRole, air: PacketAir, seed: number, frameMs: number): Phone {
+function phone(role: BandRole, air: PacketAir, seed: number, frameMs: number, map = "riverlands"): Phone {
   const link = role === "host" ? air.a : air.b;
-  const s = new Session({ transport: link, role, build: BUILD, random: rng(seed), ...(role === "host" ? { host: { map: "riverlands", mutators: [] } } : {}) });
+  const s = new Session({ transport: link, role, build: BUILD, random: rng(seed), ...(role === "host" ? { host: { map, mutators: [] } } : {}) });
   return {
     role, s, feed: null, ctrl: null, frameMs, next: 0, last: 0, acc: 0, cardsAt: null, hold: false, drains: [], stepped: new Map(),
     aborts: [], skips: 0, exits: 0, reloads: 0, local: new Mem(), session: new Mem(), ai: null, aiTick: -1
@@ -104,7 +107,7 @@ function phone(role: BandRole, air: PacketAir, seed: number, frameMs: number): P
 
 function pair(opts: Opts): Run {
   const air = new PacketAir({ seed: opts.seed, clockOffsetMs: [0, 31_337], mode: "robust", latencyMs: 250, phaseMs: [30, 170] });
-  const r: Run = { air, host: phone("host", air, opts.seed * 2 + 1, 16), guest: phone("guest", air, opts.seed * 2 + 2, 11), opts };
+  const r: Run = { air, host: phone("host", air, opts.seed * 2 + 1, 16, opts.map), guest: phone("guest", air, opts.seed * 2 + 2, 11), opts };
   r.guest.next = 5;
   runUntil(r, () => !!r.host.feed && !!r.guest.feed, 60_000);
   return r;
@@ -165,6 +168,7 @@ function frame(p: Phone, r: Run): void {
       f.afterTick(w);
     }
   }
+  ctrl.prune(); // (GameScene, every frame: pending lift and drop orders go out from here)
   f.frame(dt);
 }
 
@@ -390,7 +394,8 @@ describe("VersusFeed as GameScene drives it", () => {
     blue.ctrl!.enqueue({ type: "lift", faction: "blue", unitIds: ids.condors, goliathId: ids.g });
     const d0 = blue.drains.length;
     runUntil(r, () => blue.drains.length > d0, 2000);
-    // the lift is sealed, D ticks from landing: the world doesn't know of it yet, and the select-all comes now
+    // the lift is sealed, D ticks from landing: the world doesn't know of it yet, and the select-all comes now (an order
+    // as an AI gives it: a tap on the map holds it for the lift instead, "taps that build on your own last order")
     expect(w.units.get(ids.g)!.goliath!.lift).toBeNull();
     const hq = hqOf(w, "blue")!;
     const to = { x: (Math.floor((hq.tx + 14.5) * 16) + 0.5) / 16, y: (Math.floor((hq.ty - 14.5) * 16) + 0.5) / 16 };
@@ -448,6 +453,10 @@ describe("VersusFeed as GameScene drives it", () => {
     const n = Math.min(tickOf(r.host), tickOf(r.guest));
     const upTo = (p: Phone) => p.feed!.turnLog().filter(([t]) => t < n);
     expect(upTo(r.host)).toEqual(upTo(r.guest));
+    // the AIs stop: every order they gave through the Controller comes off its in-flight list (split by the codec,
+    // regrouped for a lift, or replaced in the lockstep's queue before it went out)
+    for (const p of [r.host, r.guest]) p.ai = null;
+    runUntil(r, () => [r.host, r.guest].every((p) => p.ctrl!.inFlight!.length === 0), 10_000);
   });
 });
 
@@ -556,12 +565,199 @@ describe("orders in flight", () => {
     expect(view().scrap).toBe(f.scrap);
   });
 
+  it("come off when the lockstep replaced them in its queue before they went out", { timeout: 60_000 }, () => {
+    const all: number[] = [];
+    const prepare = (w: World) => {
+      const hq = hqOf(w, "blue")!;
+      for (let i = 0; i < 30; i++) all.push(spawnUnit(w, "stinger", "blue", hq.tx + 6 + (i % 6), hq.ty - 4 - Math.floor(i / 6)).id);
+    };
+    const r = pair({ seed: 61, prepare });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    // a 30-unit move every tick for 3 s: more than a turn holds, so they queue, and each replaces the one before it
+    let given = 0;
+    let queued = 0;
+    for (let i = 0; i < 30; i++) {
+      ctrl.enqueue({ type: "move", faction: "blue", unitIds: all, x: 20.5 + (i % 2) * 4, y: 20.5 });
+      given++;
+      const d = blue.drains.length;
+      runUntil(r, () => blue.drains.length > d, 2000);
+      queued = Math.max(queued, ls(blue).queued);
+    }
+    expect(queued).toBeGreaterThan(0);
+    runUntil(r, () => ls(blue).queued === 0, 20_000);
+    // (some never went out: fewer units were moved than were told to)
+    let moved = 0;
+    for (const cmds of blue.stepped.values()) for (const c of cmds) if (c.type === "move" && c.faction === "blue") moved += c.unitIds.length;
+    expect(moved).toBeLessThan(given * all.length);
+    runUntil(r, () => ctrl.inFlight!.length === 0, 10_000);
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+  });
+
   it("are nothing without an interactive feed", () => {
     const c = new Controller(setupLikeWorld());
     c.enqueue({ type: "startBuilding", faction: "blue", building: "fab-plant" });
     c.drainCommands();
     expect(c.inFlight).toBeNull();
     expect(c.view().pending).toBeNull();
+  });
+});
+
+describe("taps that build on your own last order, the world D ticks behind", () => {
+  // The Controller's own taps on blue's phone (this process's PLAYER), the second one while the first is sealed but
+  // not stepped yet: it must do what single player does a tick after the first (Controller.ahead()).
+
+  /** Blue's orders as its phone stepped them, in order: "type:units", or "rally:producer". */
+  const blueOrders = (p: Phone): string[] =>
+    [...p.stepped.values()].flat().filter((c) => c.faction === "blue").map((c) => `${c.type}:${"unitIds" in c ? c.unitIds.join(",") : c.type === "rally" ? c.buildingId : ""}`);
+  const list = (...ids: number[]) => ids.sort((a, b) => a - b).join(",");
+  /** The phone drains the tap just given (sealed D ticks on): `stale` checks its world doesn't have it yet. */
+  function sealedNotLanded(r: Run, p: Phone, stale: () => boolean): void {
+    const d = p.drains.length;
+    runUntil(r, () => p.drains.length > d, 2000);
+    expect(stale(), "the world already has the first tap's order").toBe(true);
+  }
+  /** A point on the codec's 1/16-tile grid. */
+  const grid = (x: number, y: number) => ({ x: (Math.floor(x * 16) + 0.5) / 16, y: (Math.floor(y * 16) + 0.5) / 16 });
+  /** Unit `id` is as `ok` says on both phones. */
+  const onBoth = (r: Run, id: number, ok: (u: Unit, w: World) => boolean) =>
+    [r.host, r.guest].every((p) => {
+      const u = p.feed!.world.units.get(id);
+      return !!u && ok(u, p.feed!.world);
+    });
+  /** Blue's Goliath and two empty Condors a few tiles off (riverlands). */
+  const liftParty = (ids: { g: number; a: number; b: number }) => (w: World) => {
+    const hq = hqOf(w, "blue")!;
+    ids.g = spawnUnit(w, "goliath", "blue", hq.tx + 4, hq.ty - 8).id;
+    ids.a = spawnUnit(w, "condor", "blue", hq.tx + 8, hq.ty - 9).id;
+    ids.b = spawnUnit(w, "condor", "blue", hq.tx + 9, hq.ty - 9).id;
+  };
+  /** Open ground north-east of blue's HQ. */
+  const away = (w: World) => grid(hqOf(w, "blue")!.tx + 16.3, hqOf(w, "blue")!.ty - 16.3);
+
+  it("lift, then a tap on the map: the lift flies there once it is up", { timeout: 60_000 }, () => {
+    const ids = { g: 0, a: 0, b: 0 };
+    const r = pair({ seed: 41, prepare: liftParty(ids) });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    const w = blue.feed!.world;
+    const g = w.units.get(ids.g)!;
+    ctrl.selectUnits([ids.a, ids.b]);
+    ctrl.tapWorld(g.x, g.y, { kind: "ownUnit", id: ids.g });
+    expect(ctrl.selectedUnits).toEqual(new Set([ids.a, ids.b, ids.g]));
+    sealedNotLanded(r, blue, () => g.goliath!.lift === null);
+    const to = away(w);
+    ctrl.tapWorld(to.x, to.y, { kind: "ground" });
+    expect(ctrl.tip).toBeNull();
+    runUntil(r, () => onBoth(r, ids.g, (u) => u.goliath!.lift?.phase === "carrying" && Math.hypot(u.x - to.x, u.y - to.y) < 0.5), 60_000);
+    // nothing named the lift while it was on its way or hooking on (that calls it off): the move went to it once up
+    expect(blueOrders(blue)).toEqual([`lift:${list(ids.a, ids.b)}`, `move:${ids.g}`]);
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+  });
+
+  it("stop on a lift hooking on, then a tap on the map: the lift is off and all three go", { timeout: 60_000 }, () => {
+    const ids = { g: 0, a: 0, b: 0 };
+    const r = pair({ seed: 43, prepare: liftParty(ids) });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    const w = blue.feed!.world;
+    const g = w.units.get(ids.g)!;
+    ctrl.selectUnits([ids.a, ids.b]);
+    ctrl.tapWorld(g.x, g.y, { kind: "ownUnit", id: ids.g });
+    runUntil(r, () => onBoth(r, ids.g, (u) => u.goliath!.lift?.phase === "hooking"), 10_000);
+    ctrl.stopSelected();
+    sealedNotLanded(r, blue, () => g.goliath!.lift?.phase === "hooking");
+    const to = away(w);
+    ctrl.tapWorld(to.x, to.y, { kind: "ground" });
+    runUntil(r, () => blueOrders(blue).length >= 3, 10_000);
+    runFor(r, 500);
+    const all = list(ids.g, ids.a, ids.b);
+    expect(blueOrders(blue)).toEqual([`lift:${list(ids.a, ids.b)}`, `stop:${all}`, `attackMove:${all}`]);
+    for (const id of [ids.g, ids.a, ids.b]) expect(onBoth(r, id, (u) => u.order.type === "attackMove" && u.order.x === to.x && u.order.y === to.y), `unit ${id}`).toBe(true);
+    expect(onBoth(r, ids.g, (u) => u.goliath!.lift === null)).toBe(true);
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+  });
+
+  it("anchor, then a tap on the map: it stays dug in and takes a rally point", { timeout: 60_000 }, () => {
+    const ids = { g: 0, a: 0, b: 0 };
+    const r = pair({ seed: 47, prepare: liftParty(ids) });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    const w = blue.feed!.world;
+    const g = w.units.get(ids.g)!;
+    ctrl.selectUnits([ids.g]);
+    expect(ctrl.toggleAnchor()).toBe("anchor");
+    sealedNotLanded(r, blue, () => g.goliath!.mode === "walking");
+    // (what the ⚓ chip and the G key read: digging in, so a second press would pack it up)
+    expect(ctrl.goliathsSelected().map((u) => u.goliath!.mode)).toEqual(["anchoring"]);
+    const to = away(w);
+    ctrl.tapWorld(to.x, to.y, { kind: "ground" });
+    expect(ctrl.lastFeedback?.kind).toBe("rally");
+    runUntil(r, () => onBoth(r, ids.g, (u) => u.goliath!.mode === "anchored"), 20_000);
+    expect(blueOrders(blue)).toEqual([`anchor:${ids.g}`, `rally:${ids.g}`]);
+    expect(onBoth(r, ids.g, (u) => u.order.type === "idle" && u.goliath!.rally?.x === to.x && u.goliath!.rally.y === to.y)).toBe(true);
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+  });
+
+  it("board, then a tap on an island: the squads drop there once aboard", { timeout: 90_000 }, () => {
+    const ids = { c: 0, s: [] as number[] };
+    const r = pair({
+      seed: 53,
+      map: "archipelago",
+      prepare: (w) => {
+        const hq = hqOf(w, "blue")!;
+        ids.s = [spawnUnit(w, "trooper", "blue", hq.tx + 1.5, hq.ty - 3.5).id, spawnUnit(w, "trooper", "blue", hq.tx + 2.5, hq.ty - 3.5).id];
+        ids.c = spawnUnit(w, "condor", "blue", hq.tx + 4.5, hq.ty - 3.5).id;
+      }
+    });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    const w = blue.feed!.world;
+    const hq = hqOf(w, "blue")!;
+    // the island ground nearest blue's HQ a squad can stand on
+    let isl = { tx: -1, ty: -1, d: Infinity };
+    for (let ty = 0; ty < w.height; ty++)
+      for (let tx = 0; tx < w.width; tx++) {
+        const d = Math.hypot(tx - hq.tx, ty - hq.ty);
+        if (d < isl.d && ctrl.onIsland(tx, ty) && passable(w, tx, ty, "foot")) isl = { tx, ty, d };
+      }
+    const region = regionAt(w, isl.tx, isl.ty, "foot");
+    const c = w.units.get(ids.c)!;
+    ctrl.selectUnits(ids.s);
+    ctrl.tapWorld(c.x, c.y, { kind: "ownUnit", id: ids.c });
+    expect(ctrl.selectedUnits).toEqual(new Set(ids.s));
+    sealedNotLanded(r, blue, () => ids.s.every((id) => w.units.get(id)!.order.type !== "board"));
+    ctrl.tapWorld(isl.tx + 0.5, isl.ty + 0.5, { kind: "ground" });
+    expect(ctrl.tip).toBe("Boarding: they'll drop there once they're aboard");
+    runUntil(r, () => ids.s.every((id) => onBoth(r, id, (u, pw) => regionAt(pw, Math.floor(u.x), Math.floor(u.y), "foot") === region)), 80_000);
+    expect(blueOrders(blue)).toEqual([`board:${list(...ids.s)}`, `unload:${ids.c}`]);
+    expect(ls(r.host).desync || ls(r.guest).desync).toBe(false);
+  });
+
+  it("a calldown on its way reads as fired: the meter paid, the power cooling down, until it lands", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 59, prepare: (w) => (w.powers.meter.blue = 90) });
+    const blue = sideOf(r, "blue");
+    const ctrl = blue.ctrl!;
+    const w = blue.feed!.world;
+    const hq = hqOf(w, "blue")!;
+    expect(ctrl.powerStatus("barrage").ready).toBe(true);
+    ctrl.enqueue({ type: "calldown", faction: "blue", power: "barrage", x: hq.tx + 5.5, y: hq.ty - 4.5 });
+    const fired = () => {
+      expect(ctrl.powerStatus("barrage")).toMatchObject({ ready: false, cooldown: cooldownTicks("barrage") });
+      expect(ctrl.powerBlocker("barrage")).toBe(`Barrage recharging: ${POWERS.barrage.cooldown} s`);
+      // (the meter trickles up meanwhile)
+      expect(ctrl.powerMeter()).toBeCloseTo(w.powers.meter.blue - POWERS.barrage.cost, 9);
+      expect(ctrl.powerBlocker("emp")).toBe("EMP needs 40 charge (30)");
+    };
+    // (not drained yet, then sealed: the panel offers neither again)
+    fired();
+    sealedNotLanded(r, blue, () => w.powers.active.length === 0);
+    fired();
+    runUntil(r, () => w.powers.active.length > 0, 3000);
+    expect(ctrl.inFlight).toEqual([]);
+    expect(ctrl.powerStatus("barrage")).toEqual(powerStatus(w, "blue", "barrage"));
+    expect(ctrl.powerMeter()).toBe(w.powers.meter.blue);
+    expect(Math.floor(ctrl.powerMeter())).toBe(30);
   });
 });
 

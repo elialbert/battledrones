@@ -1,5 +1,5 @@
 import { POWERS, TICK_RATE, UNITS } from "../sim/balance";
-import { POWER_KINDS, POWER_NAMES, podCrew, powerBlocker, powerStatus, targetBlocker } from "../sim/powers";
+import { POWER_KINDS, POWER_NAMES, podCrew, targetBlocker } from "../sim/powers";
 import { rulesOf } from "../sim/rules";
 import type { PowerKind, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
@@ -162,7 +162,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
         sfx.play("click", 0.5);
         return;
       }
-      const why = powerBlocker(w, PLAYER, p);
+      const why = api.ctrl.powerBlocker(p);
       if (why) {
         api.notify(why, "bad");
         btn.classList.remove("nope");
@@ -181,10 +181,11 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     const pod = btns.get("droppod")!.b;
     const podOff = podCrew(w, PLAYER).length === 0;
     if (pod.hidden !== podOff) pod.hidden = podOff;
-    const m = Math.floor(w.powers.meter[PLAYER]);
+    // (a sound duel: the calldowns on their way count as fired, Controller.powerStatus)
+    const m = Math.floor(api.ctrl.powerMeter());
     if (meterEl.textContent !== String(m)) meterEl.textContent = String(m);
     for (const [p, v] of btns) {
-      const st = powerStatus(w, PLAYER, p);
+      const st = api.ctrl.powerStatus(p);
       let k: number;
       let tag: string;
       let state: string;
@@ -209,7 +210,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
       for (const s of ["locked", "cool", "ready", "charging"]) v.b.classList.toggle(s, s === state);
     }
     // a power is ready: point at the buttons (once per device, when the hint queue gets to it)
-    const anyReady = () => POWER_KINDS.some((p) => p !== "hammer" && !btns.get(p)!.b.hidden && powerStatus(w, PLAYER, p).ready);
+    const anyReady = () => POWER_KINDS.some((p) => p !== "hammer" && !btns.get(p)!.b.hidden && api.ctrl.powerStatus(p).ready);
     if (!hinted && anyReady())
       api.offerHint?.({
         id: "calldowns",
@@ -226,7 +227,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
         }
       });
     // an armed power that stopped being usable disarms itself
-    if (targeting && powerBlocker(w, PLAYER, targeting)) arm(null);
+    if (targeting && api.ctrl.powerBlocker(targeting)) arm(null);
     // building placement takes over the next tap
     if (targeting && api.ctrl.placing) arm(null);
   }
@@ -241,7 +242,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     tapWorld(x, y) {
       if (!targeting) return false;
       const p = targeting;
-      const why = powerBlocker(w, PLAYER, p) ?? targetBlocker(w, PLAYER, p, x, y);
+      const why = api.ctrl.powerBlocker(p) ?? targetBlocker(w, PLAYER, p, x, y);
       if (why) {
         api.notify(why, "bad");
         aimAt = { x, y };

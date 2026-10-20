@@ -8,8 +8,8 @@
  * starts here: main.ts reaches src/versus and src/link only through
  * `import("./versus/lobby")`.
  *
- *   the Duel tap (main.ts, synchronously):  const t = duel.tapPlan()
- *     const rig = t.practice ? null : duel.openRig({ micMode: t.micMode }); sfx.unlock()
+ *   the Duel tap (main.ts, synchronously):  const t = duel.tapPlan(); sfx.unlock()
+ *     const rig = t.practice ? null : duel.openRig({ micMode: t.micMode })
  *     t.practice || sfx.setLinkGuard("high", { cutDb: t.cutDb }); music.stop(); void fullscreen.enter()
  *     duel.showLobby({ host: menu, rig, shownMap, mutators, start, onClose })
  *   the rematch's reconnect tap: the same with tapPlan(true), then duel.reconnect({ … })
@@ -103,6 +103,11 @@
  *    while a lobby is open or still saying the end, so two lobbies never
  *    share it);
  *  - a version error names the older phone when the protocols differ;
+ *  - the page going away while the lobby holds the rig (its Reload, the
+ *    player's own reload, a navigation) closes the rig at once, with no end
+ *    said (closeRigOnPageGone): the rig puts iOS's audio session back to
+ *    "auto", which Safari would otherwise keep as play-and-record for the
+ *    next page in the tab. From the match on, VersusFeed's pagehide does it;
  *  - window.__duel.state is the lobby's step (LobbyStep) until the feed is
  *    built, then the session's phase; result is null until the match begins,
  *    then the lockstep's end, decision and end check.
@@ -799,6 +804,21 @@ export interface LobbyOptions {
   onClose: (why: LobbyEnd) => void;
 }
 
+/**
+ * Until the match takes the rig over (VersusFeed has its own pagehide) or the
+ * lobby lets it go: the page going away, not into the back-forward cache,
+ * closes the rig, putting iOS's audio session back to "auto" (the
+ * microphone and the context would go with the page anyway; the session
+ * type would not). Returns the listener's removal.
+ */
+export function closeRigOnPageGone(win: Pick<Window, "addEventListener" | "removeEventListener">, rig: Pick<Rig, "close">): () => void {
+  const gone = (e: Event) => {
+    if (!(e as PageTransitionEvent).persisted) rig.close();
+  };
+  win.addEventListener("pagehide", gone);
+  return () => win.removeEventListener("pagehide", gone);
+}
+
 /** The lobby, after the Duel tap. */
 export function showLobby(o: LobbyOptions): void {
   run(o, null);
@@ -1117,6 +1137,7 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
       <div class="sh-actions duel-actions"></div>
     </div>`;
   o.host.appendChild(wrap);
+  const offPageGone = o.rig ? closeRigOnPageGone(window, o.rig) : () => undefined;
   const body = wrap.querySelector<HTMLElement>(".duel-body")!;
   const actions = wrap.querySelector<HTMLElement>(".duel-actions")!;
 
@@ -1194,11 +1215,13 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
         ...(onFrame ? { onFrame } : {})
       });
       feed = f;
+      offPageGone();
       closeSheet();
       o.start(f);
       if (f.world.mapId !== gameMode.mapId) console.error(`sound duel: the feed's map ${f.world.mapId} isn't the game's ${gameMode.mapId}`);
     },
     released: (why) => {
+      offPageGone();
       dropPractice();
       o.onClose(why);
     }
