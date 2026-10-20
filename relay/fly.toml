@@ -7,9 +7,6 @@ primary_region = "sjc"
 
 [env]
   PORT = "8080"
-  # The origins the relay accepts are in server.py (DEFAULT_ORIGINS); set
-  # this to replace them, "*" standing for any host or port characters:
-  # ALLOWED_ORIGINS = "https://simonw.github.io,https://*.simonw.workers.dev,http://localhost:*"
 
 [http_service]
   internal_port = 8080

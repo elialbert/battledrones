@@ -39,7 +39,10 @@ WS  /<code>/<seat>       join room <code> as seat "host" or "guest"
   from scaling to zero (below).
 - Only the game's own pages may connect: `https://simonw.github.io` and
   `https://*.simonw.workers.dev`. A socket from anywhere else, or with no
-  `Origin` header, is closed with 4003.
+  `Origin` header, is closed with 4003. The list is hard-coded (`ORIGIN` in
+  `server.py`), so a page served from `localhost` can't use the relay. This
+  stops other web pages from using it, but not other programs, which can
+  send any `Origin` they like.
 
 Close codes. The client should not reconnect after 4002, 4003 or 4010:
 
@@ -48,7 +51,7 @@ Close codes. The client should not reconnect after 4002, 4003 or 4010:
 | 4000 | Bad path: not `/<code>/host` or `/<code>/guest` |
 | 4001 | Replaced by a newer socket for the same seat |
 | 4002 | Open too long (`MAX_AGE_SECONDS`) |
-| 4003 | Origin not allowed (`ALLOWED_ORIGINS`) |
+| 4003 | Origin not allowed |
 | 4008 | Sending too fast: more than a burst of 100, then 50 a second |
 | 4010 | Alone in the room too long (`LONELY_SECONDS`) |
 | 4013 | Relay full (`MAX_ROOMS`) |
@@ -58,12 +61,6 @@ Close codes. The client should not reconnect after 4002, 4003 or 4010:
 Environment variables:
 
 - `PORT`: the port to listen on (default 8080).
-- `ALLOWED_ORIGINS`: comma-separated origins to accept, replacing the
-  default `https://simonw.github.io,https://*.simonw.workers.dev`. A `*`
-  stands for one or more host or port characters, so `http://localhost:*`
-  allows a local Vite server on any port. `*` on its own allows anything,
-  including no `Origin` header. This stops other web pages from using the
-  relay, but not other programs, which can send any `Origin` they like.
 - `LONELY_SECONDS`: how long a seat waits alone (default 600).
 - `MAX_AGE_SECONDS`: the longest a socket stays open (default 7200).
 - `MAX_ROOMS`: the most rooms open at once (default 2000).
@@ -74,8 +71,8 @@ With [uv](https://docs.astral.sh/uv/), from this folder:
 
 ```bash
 cd relay
-uv run pytest                                           # the tests
-ALLOWED_ORIGINS='http://localhost:*' uv run server.py   # ws://localhost:8080/K7QM2XP4/host
+uv run pytest       # the tests
+uv run server.py    # ws://localhost:8080/K7QM2XP4/host
 ```
 
 `uv run` creates the environment from `pyproject.toml` and `uv.lock` the
@@ -111,15 +108,6 @@ The game will connect to `wss://battledrones-relay.fly.dev/<code>/<seat>`.
 Fly's proxy terminates TLS, and the server itself speaks plain WebSockets on
 port 8080. If `fly ips list` shows no IPv4 address, add a shared one, which
 is free: `fly ips allocate-v4 --shared`.
-
-To develop the game locally against the deployed relay, add the local
-origin. This replaces the default list, so repeat it:
-
-```bash
-fly secrets set ALLOWED_ORIGINS='https://simonw.github.io,https://*.simonw.workers.dev,http://localhost:*'
-```
-
-`fly secrets unset ALLOWED_ORIGINS` goes back to the default.
 
 ### Scaling to zero
 

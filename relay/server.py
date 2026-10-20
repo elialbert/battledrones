@@ -57,21 +57,8 @@ WATCH_SECONDS = 10.0
 # answer a ping, and is gone within two pings and a close wait: 45 s
 PING_SECONDS = 20.0
 CLOSE_SECONDS = 5.0
-# Comma-separated; "*" stands for one or more host or port characters, and
-# ALLOWED_ORIGINS="*" alone allows anything (no Origin header included)
-DEFAULT_ORIGINS = "https://simonw.github.io,https://*.simonw.workers.dev"
-
-
-def origin_pattern(origins: str) -> re.Pattern | None:
-    """A regex for a comma-separated list of origin patterns (None: any)."""
-    parts = [o.strip() for o in origins.split(",") if o.strip()]
-    if "*" in parts:
-        return None
-    alts = (re.escape(p).replace(r"\*", "[A-Za-z0-9.-]+") for p in parts)
-    return re.compile("^(?:" + "|".join(alts) + ")$")
-
-
-ORIGINS = origin_pattern(os.environ.get("ALLOWED_ORIGINS", DEFAULT_ORIGINS))
+# The game's own pages: https://simonw.github.io and https://*.simonw.workers.dev
+ORIGIN = re.compile(r"^https://(?:simonw\.github\.io|(?:[a-z0-9-]+\.)+simonw\.workers\.dev)$")
 
 log = logging.getLogger("relay")
 
@@ -132,7 +119,7 @@ async def watch(ws: ServerConnection, room: Room, seat: str) -> None:
 
 
 async def handler(ws: ServerConnection) -> None:
-    if ORIGINS is not None and not ORIGINS.match(ws.request.headers.get("Origin") or ""):
+    if not ORIGIN.match(ws.request.headers.get("Origin") or ""):
         await ws.close(4003, "origin not allowed")
         return
     match = PATH.match(ws.request.path)

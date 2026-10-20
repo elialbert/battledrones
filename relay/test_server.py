@@ -116,6 +116,9 @@ def test_sending_too_fast_is_closed():
         ("https://evilsimonw.workers.dev", False),
         ("https://x.simonw.workers.dev.evil.example", False),
         ("https://other.workers.dev", False),
+        ("https://x.simonw.workers.dev/", False),
+        ("https://simonw.github.io:8443", False),
+        ("http://localhost:5173", False),
     ],
 )
 def test_origins(origin, allowed):
@@ -129,15 +132,6 @@ def test_origins(origin, allowed):
                 assert await asyncio.wait_for(b.recv(), 2) == "ok"
 
     run(t)
-
-
-def test_origin_patterns():
-    assert server.origin_pattern("*") is None
-    local = server.origin_pattern("http://localhost:*, https://simonw.github.io")
-    assert local.match("http://localhost:5173")
-    assert local.match("https://simonw.github.io")
-    assert not local.match("http://localhost:5173/x")
-    assert not local.match("http://localhost")
 
 
 def test_alone_too_long(monkeypatch):
