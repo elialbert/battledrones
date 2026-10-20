@@ -769,6 +769,11 @@ export class VersusFeed implements MatchFeed {
     return out;
   }
 
+  /** The same, for the end screen's Copy replay JSON (MatchFeed.battleRecord). */
+  battleRecord(): BattleRecord {
+    return this.record();
+  }
+
   /** The match as a battle record (Save battle): it replays exactly in the battle viewer. */
   record(): BattleRecord {
     const r = this.result;

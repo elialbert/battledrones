@@ -2,14 +2,17 @@
 // and drives the REAL input paths with taps: pick an opener card, construct
 // + place a building (tap moves the ghost, tapping the ghost builds), queue
 // a Stinger, select it on the canvas, save it as squad 1 and order it around,
-// open an info card, pause/resume. Fails on any console error.
+// open an info card, pause/resume; then the match so far as a battle record
+// must replay exactly (tools/check-record.ts). Fails on any console error.
 // --side=red plays the same flow as red against a blue AI (/?side=red, SOUND-DUEL.md
 // "Playing red"); every check asks the page which side it plays (window.__bd.player).
 // Usage: node tools/smoke.mjs [width] [height] [--shots] [url] [--side=red]
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../dist");
@@ -218,6 +221,17 @@ await ff(600);
 const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction !== window.__bd.player).length > 2);
 if (!aiActive) fail("AI built nothing in the first minutes");
 await shot("late");
+
+// 7. the match so far as a battle record (the end screen's Copy replay JSON): it replays exactly on this sim
+{
+  const json = await world(() => JSON.stringify(window.__bd.scene.battleRecord()));
+  const file = join(tmpdir(), `smoke-record-${process.pid}.json`);
+  writeFileSync(file, json);
+  const r = spawnSync("npx", ["vite-node", join(dirname(fileURLToPath(import.meta.url)), "check-record.ts"), file], { encoding: "utf8" });
+  const said = `${r.stdout}${r.stderr}`.trim().split("\n").filter((l) => /RECORD/.test(l)).join(" ");
+  if (r.status !== 0 || !/RECORD OK/.test(said)) fail(`the battle record didn't replay: ${said || r.stderr}`);
+  else console.log(said);
+}
 
 if (errors.length) fail(`console errors: ${JSON.stringify(errors.slice(0, 10))}`);
 console.log(process.exitCode ? "SMOKE FAILED" : `SMOKE OK (${w}x${h}, ${side})`);

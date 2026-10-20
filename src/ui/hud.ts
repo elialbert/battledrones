@@ -55,6 +55,8 @@ export interface HudApi {
   uncharted?: boolean;
   /** A sound duel (an interactive feed): its pause menu and report buttons. Absent in single player and replays. */
   duel?: DuelHud;
+  /** The match as a battle record (GameScene.battleRecord): the end screen's Copy replay JSON. Null: none to copy. */
+  battleRecord?: () => object | null;
 }
 
 /**
@@ -123,6 +125,9 @@ export interface Hud {
 type Tab = "build" | "ground" | "infantry" | "air";
 /** The duel exit a pause menu is asking about. */
 type DuelAsk = "resign" | "resign-leave" | "leave";
+
+/** The end screen's button that copies the match's battle record. */
+const COPY_REPLAY = "📋 Copy replay JSON";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "build", label: "Base", icon: "🏗" },
@@ -1390,6 +1395,26 @@ export function createHud(api: HudApi): Hud {
     mctx.stroke();
   }
 
+  /** Copy replay JSON: the record on the clipboard, and the button says how it went for a moment. */
+  function copyReplay(): void {
+    const btn = endEl.querySelector<HTMLButtonElement>("#copy-replay");
+    const say = (text: string) => {
+      if (!btn) return;
+      btn.textContent = text;
+      setTimeout(() => btn.isConnected && (btn.textContent = COPY_REPLAY), 2500);
+    };
+    const record = api.battleRecord?.() ?? null;
+    if (!record) return say("Nothing to copy");
+    try {
+      void navigator.clipboard.writeText(JSON.stringify(record)).then(
+        () => say("✓ Copied: paste it into 🎬 Watch a replay"),
+        () => say("Couldn't copy: this browser doesn't allow it")
+      );
+    } catch {
+      say("Couldn't copy: this browser doesn't allow it");
+    }
+  }
+
   function showEnd(winner: Faction | "draw" | null, opts?: EndOpts): void {
     over = true;
     // (a duel can end while its pause menu is up: the friend left, or the worlds drifted apart)
@@ -1402,10 +1427,16 @@ export function createHud(api: HudApi): Hud {
     }
     const rematch = () => relaunch(rematchToken());
     const duel = api.duel;
+    // every end screen: the match as JSON for 🎬 Watch a replay (one played here, a duel, or the replay itself)
+    const replay = api.battleRecord ? [{ id: "copy-replay", label: COPY_REPLAY, cls: "alt", on: () => copyReplay() }] : [];
     // (Last Stand only ends one way; a draw anywhere goes to the report, titled DRAW)
     if (surv && !ops && winner !== "draw" && winner !== null) {
       surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());
       if (uncharted) endEl.querySelector(".panel > .time")?.insertAdjacentHTML("afterend", revealHtml(w.mapId));
+      for (const a of replay) {
+        endEl.querySelector("#menu")?.insertAdjacentHTML("beforebegin", `<button id="${a.id}" class="cta ${a.cls}">${a.label}</button>`);
+        endEl.querySelector(`#${a.id}`)?.addEventListener("click", a.on);
+      }
       shield(endEl);
       return;
     }
@@ -1423,6 +1454,7 @@ export function createHud(api: HudApi): Hud {
         enemy: api.enemy,
         onRematch: rematch,
         onMenu: () => fullscreen.reload(),
+        after: [...replay, ...(opts?.actions ?? [])],
         ...(ops?.reportOpts() ?? {}),
         // a sound duel: You and Friend, its own buttons (each leaves the duel before it reloads)
         ...(duel
@@ -1431,7 +1463,7 @@ export function createHud(api: HudApi): Hud {
               via: duel.practice ? "practice link (no sound)" : duel.online ? "online" : "over sound",
               onRematch: () => duel.rematch(),
               onMenu: () => duel.menu(),
-              after: [...duel.actions(), ...(opts?.actions ?? [])]
+              after: [...duel.actions(), ...replay, ...(opts?.actions ?? [])]
             }
           : {}),
         ...(opts?.head ? { head: opts.head } : {})
