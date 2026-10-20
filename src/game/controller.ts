@@ -1,16 +1,31 @@
-import { BUILDINGS, TICK_RATE, UNITS } from "../sim/balance";
-import { producerCap, producersOf, type Producer } from "../sim/economy";
-import { anchorBlocker, canWalk, goliathReachAt } from "../sim/goliath";
+import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
+import { paidFor, producerCap, producersOf, type Producer } from "../sim/economy";
+import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
 import { placementBlocker, snapPlacement } from "../sim/placement";
+import { POWER_NAMES, powerBlocker, powerCost, powerStatus, type PowerStatus } from "../sim/powers";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
-import type { BuildingKind, Command, Faction, Unit, UnitKind, World } from "../sim/types";
+import type { BuildingKind, Command, Faction, GoliathMode, PendingBuilding, PowerKind, Unit, UnitKind, UnitOrder, World } from "../sim/types";
 import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { Squads } from "./squads";
 
-export const PLAYER: Faction = "blue";
+/**
+ * The side this device commands, and the other one. Live bindings: every
+ * importer reads the current value, so a sound duel's guest (or `?side=red`)
+ * plays red with no other change. Set once with setLocalSide, before
+ * `new GameScene`: the scene's presenters, its fog and the Controller's
+ * squads copy the side when they are built.
+ */
+export let PLAYER: Faction = "blue";
+export let ENEMY: Faction = "red";
+
+/** Command `f` from now on (SOUND-DUEL.md "Playing red"); a page reload starts over as blue. */
+export function setLocalSide(f: Faction): void {
+  PLAYER = f;
+  ENEMY = f === "blue" ? "red" : "blue";
+}
 
 /**
  * Is this one of the player's fighting units (⚔ Select army, 💤 Idle)? Not a
@@ -53,12 +68,287 @@ export const isProducer = (kind: BuildingKind): boolean => PRODUCERS.has(kind);
  * Goliaths, as sim/economy.ts producersOf lists them). Null when every queue
  * is full.
  */
-export function pickProducer(w: World, kind: UnitKind, selected: ReadonlySet<number>): Producer | null {
-  const open = producersOf(w, PLAYER, kind).filter((p) => p.queue.length < producerCap(kind));
+export function pickProducer(w: World, kind: UnitKind, selected: ReadonlySet<number>, view?: BuildView): Producer | null {
+  // (a sound duel: orders on their way count as queued already, and a producer sold or packing up is gone, BuildView)
+  const len = (p: Producer) => p.queue.length + (view?.extra(p.id) ?? 0);
+  const open = producersOf(w, PLAYER, kind).filter((p) => len(p) < producerCap(kind) && !view?.closed(p.id));
   const picked = open.filter((p) => p.goliath && selected.has(p.id));
   let best: Producer | null = null;
-  for (const p of picked.length > 0 ? picked : open) if (!best || p.queue.length < best.queue.length) best = p;
+  for (const p of picked.length > 0 ? picked : open) if (!best || len(p) < len(best)) best = p;
   return best;
+}
+
+/**
+ * A side's construction, scrap and queues as the build bar shows them: the
+ * world's, with the placement and production orders still on their way
+ * applied (Controller.inFlight). In a sound duel an order lands D ticks after
+ * the tap, and the bar must not offer the same tap again meanwhile: a placed
+ * building is no longer ready to place, one started is under construction,
+ * a unit ordered is queued and paid for, a building sold is paid back and
+ * gone, an anchored Goliath packing up trains no more. Without orders in
+ * flight it is the world's own state.
+ */
+export interface BuildView {
+  scrap: number;
+  pending: PendingBuilding | null;
+  /** Units queued at producer `id` beyond its queue in the world (of `kind` only, when given; negative: cancels on their way). */
+  extra(id: number, kind?: UnitKind): number;
+  /** Is producer `id` gone (sold), or a Goliath packing up (it trains only anchored)? */
+  closed(id: number): boolean;
+}
+
+/** buildView's rules: each order as the sim would take it now (economy.ts), in the order they were given. */
+export function buildView(w: World, side: Faction, orders: readonly Command[] | null): BuildView {
+  const f = w.factions[side];
+  if (!orders?.length) return { scrap: f.scrap, pending: f.pending, extra: () => 0, closed: () => false };
+  let scrap = f.scrap;
+  let pending: PendingBuilding | null = f.pending;
+  const queued: { id: number; kind: UnitKind; n: number; paid: number }[] = [];
+  const closed = new Set<number>();
+  for (const c of orders)
+    switch (c.type) {
+      case "startBuilding":
+        if (!pending && scrap >= BUILDINGS[c.building].cost) {
+          scrap -= BUILDINGS[c.building].cost;
+          pending = { kind: c.building, remaining: BUILDINGS[c.building].buildTime * TICK_RATE, ready: false };
+        }
+        break;
+      case "cancelBuilding":
+        if (pending) scrap += BUILDINGS[pending.kind].cost;
+        pending = null;
+        break;
+      case "placeBuilding":
+        if (pending?.ready) pending = null;
+        break;
+      case "produce": {
+        const cost = unitCost(w, side, c.unit);
+        if (scrap >= cost && !closed.has(c.buildingId)) {
+          scrap -= cost;
+          queued.push({ id: c.buildingId, kind: c.unit, n: 1, paid: cost });
+        }
+        break;
+      }
+      case "cancelProduce": {
+        // (one of ours still on its way goes first; else one the world holds, refunded)
+        let i = -1;
+        for (let k = queued.length - 1; k >= 0; k--)
+          if (queued[k]!.id === c.buildingId && queued[k]!.kind === c.unit && queued[k]!.n > 0) {
+            i = k;
+            break;
+          }
+        if (i >= 0) {
+          scrap += queued[i]!.paid;
+          queued.splice(i, 1);
+        } else {
+          scrap += UNITS[c.unit].cost;
+          queued.push({ id: c.buildingId, kind: c.unit, n: -1, paid: 0 });
+        }
+        break;
+      }
+      case "sell": {
+        // (economy.ts sellBuilding: its health's share of the price, and what its queue paid: ours on the way
+        // in, the cancels on the way, refunded already, out)
+        const b = w.buildings.get(c.buildingId);
+        if (!b || b.faction !== side || b.kind === "hq" || closed.has(b.id)) break;
+        let paid = b.queue.reduce((s, q) => s + paidFor(q), 0);
+        for (let k = queued.length - 1; k >= 0; k--)
+          if (queued[k]!.id === b.id) {
+            paid += queued[k]!.n > 0 ? queued[k]!.paid : -UNITS[queued[k]!.kind].cost;
+            queued.splice(k, 1);
+          }
+        scrap += Math.floor(BUILDINGS[b.kind].cost * ECONOMY.sellRefund * (b.hp / BUILDINGS[b.kind].hp) + paid);
+        closed.add(b.id);
+        break;
+      }
+      case "packUp":
+        for (const id of c.unitIds) {
+          const g = w.units.get(id)?.goliath;
+          if (g && (g.mode === "anchored" || g.mode === "anchoring")) closed.add(id);
+        }
+        break;
+    }
+  return {
+    scrap,
+    pending,
+    extra: (id, kind) => queued.reduce((n, q) => n + (q.id === id && (kind === undefined || q.kind === kind) ? q.n : 0), 0),
+    closed: (id) => closed.has(id)
+  };
+}
+
+/**
+ * The player's units as the Controller reads them (Controller.ahead()): the
+ * world's, with this side's own orders still on their way applied, in the
+ * order they were given. In a sound duel an order lands D ticks after the
+ * tap (later while the link holds it up), and a tap that builds on the one
+ * before must find that one done, as single player does a tick later: two
+ * Condors sent to lift a Goliath and then the map tapped fly the lift there
+ * once it is up; squads sent to board and then an island tapped drop there
+ * once aboard; a Goliath told to anchor and then the map tapped stays dug in
+ * and sets a rally point; a second ⚓ packs it up. So every read that decides
+ * such a tap goes through here: each unit's order, a Goliath's mode and lift,
+ * a building sold, a rally point moved, the calldowns fired. The rules are
+ * the sim's (sim.ts applyCommand, lift.ts routeLiftCommand and
+ * applyLiftCommand, transport.ts, goliath.ts), taken as succeeding where they
+ * hang on the ground (an anchor the Controller checked when it sent it): an
+ * order the sim then refuses just never shows once it lands. Only reads
+ * change here: what is sent, and how the sim applies it, never do. With no
+ * orders on their way it is the world as it is.
+ */
+export interface OrdersAhead {
+  /** Unit `u` with its order, and a Goliath's mode and lift, as the orders on their way leave them: a copy, or `u` itself when none touches it. */
+  unit(u: Unit): Unit;
+  /** The lift `u` belongs to (liftOf): its Goliath as unit() has it, or null. */
+  liftOf(u: Unit): Unit | null;
+  /** Is building `id` sold by an order on its way? */
+  sold(id: number): boolean;
+  /** Producer `id`'s rally point as the newest order on its way sets it (null: none does). */
+  rally(id: number): { x: number; y: number } | null;
+  /** The calldowns on their way, oldest first. */
+  readonly fired: readonly PowerKind[];
+}
+
+const IDLE: UnitOrder = { type: "idle" };
+/** The orders a lift takes (lift.ts LiftOrder): they call off one still hooking on when they name its Condors. */
+const isLiftOrder = (c: Command): boolean => c.type === "move" || c.type === "attackMove" || c.type === "unload" || c.type === "stop";
+
+/** ordersAhead's rules, over the world's units and the commands in the order they were given. */
+export function ordersAhead(w: World, orders: readonly Command[] | null): OrdersAhead {
+  if (!orders?.length) return { unit: (u) => u, liftOf: (u) => liftOf(w, u), sold: () => false, rally: () => null, fired: [] };
+  const copies = new Map<number, Unit>();
+  const sold = new Set<number>();
+  const rally = new Map<number, { x: number; y: number }>();
+  const fired: PowerKind[] = [];
+  /** Unit `id` as the orders so far leave it. */
+  const get = (id: number): Unit | undefined => copies.get(id) ?? w.units.get(id);
+  /** Unit `u`'s copy to change (its Goliath state copied too: nothing of the world's is ever touched). */
+  const edit = (u: Unit): Unit => {
+    let c = copies.get(u.id);
+    if (!c) {
+      c = u.goliath ? { ...u, goliath: { ...u.goliath } } : { ...u };
+      copies.set(u.id, c);
+    }
+    return c;
+  };
+  /** goliath.ts setMode: the transition starts from the top, so the HUD's progress reads 0%. */
+  const setMode = (u: Unit, mode: GoliathMode, seconds: number) => {
+    const g = edit(u).goliath!;
+    g.mode = mode;
+    g.modeTicks = Math.round(seconds * TICK_RATE);
+  };
+  /** lift.ts liftedBy, on the units as the orders so far leave them. */
+  const liftedByNow = (c: Unit): Unit | null => {
+    if (c.order.type !== "lift") return null;
+    const g = get(c.order.goliathId);
+    return g?.goliath?.lift?.carriers.includes(c.id) ? g : null;
+  };
+  /** The units command `c` names that are its side's, as they stand now. */
+  const named = (c: Extract<Command, { unitIds: number[] }>, lifting?: ReadonlySet<number>): Unit[] => {
+    const out: Unit[] = [];
+    for (const id of c.unitIds) {
+      const u = get(id);
+      if (u && u.faction === c.faction && !lifting?.has(id)) out.push(u);
+    }
+    return out;
+  };
+  for (const c of orders) {
+    // a lift's own orders first (lift.ts routeLiftCommand): they leave its members out of the rest, and one
+    // naming the Condors of a lift still hooking on calls it off (its Condors go idle and take the order)
+    const lifting = new Set<number>();
+    if ("unitIds" in c && c.type !== "lift")
+      for (const id of c.unitIds) {
+        // (each as it stands now: a Condor named earlier may have called this one's lift off)
+        const u = get(id);
+        if (!u || u.faction !== c.faction) continue;
+        const g = u.goliath?.lift ? u : liftedByNow(u);
+        const lift = g?.goliath?.lift;
+        if (!g || !lift) continue;
+        lifting.add(u.id);
+        if (lift.phase !== "hooking" || u.goliath || !isLiftOrder(c)) continue;
+        for (const id of lift.carriers) {
+          const k = get(id);
+          if (k?.order.type === "lift" && k.order.goliathId === g.id) edit(k).order = IDLE;
+        }
+        edit(g).goliath!.lift = null;
+        lifting.delete(u.id);
+        lifting.delete(g.id);
+      }
+    switch (c.type) {
+      case "move":
+      case "attackMove":
+        for (const u of named(c, lifting)) {
+          const e = edit(u);
+          e.order = { type: c.type, x: c.x, y: c.y };
+          // (goliath.ts orderedToMove: an anchored Goliath packs up first)
+          if (e.goliath && !e.goliath.lift && (e.goliath.mode === "anchored" || e.goliath.mode === "anchoring")) setMode(e, "packing", GOLIATH.packTime);
+        }
+        break;
+      case "attack":
+        for (const u of named(c, lifting)) edit(u).order = { type: "attack", targetId: c.targetId };
+        break;
+      case "harvest": {
+        const tx = Math.floor(c.x);
+        const ty = Math.floor(c.y);
+        if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height || !isResource(w, tileIndex(w, tx, ty))) break;
+        for (const u of named(c, lifting)) if (u.kind === "harvester") edit(u).order = { type: "harvest", fieldX: tx, fieldY: ty, phase: "toField" };
+        break;
+      }
+      case "stop":
+        for (const u of named(c, lifting)) edit(u).order = IDLE;
+        break;
+      case "board": {
+        const carrier = get(c.carrierId);
+        if (!carrier || carrier.faction !== c.faction || !isTransport(carrier.kind)) break;
+        for (const u of named(c)) if (isInfantry(u.kind)) edit(u).order = { type: "board", carrierId: carrier.id, ticks: 0 };
+        break;
+      }
+      case "unload":
+        for (const u of named(c, lifting)) if (isLoaded(u)) edit(u).order = { type: "unload", x: c.x ?? u.x, y: c.y ?? u.y, hover: -1 };
+        break;
+      case "anchor":
+        for (const u of named(c))
+          if (u.goliath && !u.goliath.lift && u.goliath.mode === "walking") {
+            edit(u).order = IDLE;
+            setMode(u, "anchoring", GOLIATH.anchorTime);
+          }
+        break;
+      case "packUp":
+        for (const u of named(c)) if (u.goliath?.mode === "anchored" || u.goliath?.mode === "anchoring") setMode(u, "packing", GOLIATH.packTime);
+        break;
+      case "lift": {
+        const g = get(c.goliathId);
+        if (!g || g.faction !== c.faction || !g.goliath) break;
+        const condors = named(c).filter((u, i, all) => canCarry(u) && all.indexOf(u) === i);
+        if (liftBlocker(condors, g)) break;
+        // (the two nearest, ties to the earlier-built)
+        condors.sort((a, b) => dist(a, g) - dist(b, g) || a.id - b.id);
+        const [a, b] = condors as [Unit, Unit];
+        for (const k of [a, b]) edit(k).order = { type: "lift", goliathId: g.id };
+        const e = edit(g);
+        e.order = IDLE;
+        e.goliath!.lift = { carriers: [a.id, b.id], phase: "hooking", dest: null, setDown: false };
+        break;
+      }
+      case "sell":
+        sold.add(c.buildingId);
+        break;
+      case "rally":
+        rally.set(c.buildingId, { x: c.x, y: c.y });
+        break;
+      case "calldown":
+        fired.push(c.power);
+        break;
+    }
+  }
+  return {
+    unit: (u) => copies.get(u.id) ?? u,
+    liftOf: (u) => {
+      const a = copies.get(u.id) ?? u;
+      return a.goliath?.lift ? a : liftedByNow(a);
+    },
+    sold: (id) => sold.has(id),
+    rally: (id) => rally.get(id) ?? null,
+    fired
+  };
 }
 
 /**
@@ -73,6 +363,43 @@ export type TapFeedback = {
   x: number;
   y: number;
 } | null;
+
+/** The same point, as the codec gives it back (snapped to the centre of its 1/16-tile cell); both missing counts too. */
+const samePoint = (a: { x?: number; y?: number }, b: { x?: number; y?: number }): boolean =>
+  a.x === undefined || b.x === undefined ? a.x === b.x : Math.abs(a.x - b.x) <= 1 / 16 && Math.abs(a.y! - b.y!) <= 1 / 16;
+
+/** The same order, its unit list aside (its faction too: the codec stamps the sender's side). */
+function sameOrder(a: Command, b: Command): boolean {
+  if (a.type !== b.type) return false;
+  switch (a.type) {
+    case "startBuilding":
+      return b.type === a.type && a.building === b.building;
+    case "placeBuilding":
+      return b.type === a.type && a.tx === b.tx && a.ty === b.ty;
+    case "produce":
+    case "cancelProduce":
+      return (b.type === "produce" || b.type === "cancelProduce") && a.buildingId === b.buildingId && a.unit === b.unit;
+    case "move":
+    case "attackMove":
+    case "harvest":
+    case "unload":
+      return samePoint(a, b as typeof a);
+    case "attack":
+      return b.type === a.type && a.targetId === b.targetId;
+    case "board":
+      return b.type === a.type && a.carrierId === b.carrierId;
+    case "lift":
+      return b.type === a.type && a.goliathId === b.goliathId;
+    case "sell":
+      return b.type === a.type && a.buildingId === b.buildingId;
+    case "rally":
+      return b.type === a.type && a.buildingId === b.buildingId && samePoint(a, b);
+    case "calldown":
+      return b.type === a.type && a.power === b.power && samePoint(a, b);
+    default:
+      return true;
+  }
+}
 
 /**
  * Bridges input/HUD and the sim: owns the player's selection, the command
@@ -99,19 +426,120 @@ export class Controller {
   tip: string | null = null;
   /** Three saved control groups (squad chips, keys 1–3). */
   readonly squads = new Squads(PLAYER);
+  /**
+   * Orders drained but not applied yet, oldest first, each with the tick it
+   * was drained on, while an interactive feed (a sound duel) carries them:
+   * they land D ticks after the tap, or later while the link holds them up.
+   * Null where orders apply at the next tick (single player, replays). The
+   * build bar counts them as applied (view()), and so do the Controller's own
+   * reads (ahead()); the feed takes each off as the tick it lands in is
+   * stepped (landed()), and those it knows can no longer land (settled()).
+   */
+  private flights: { c: Command; at: number }[] | null = null;
+  /** No new orders (a sound duel's resign is on its way). */
+  locked = false;
   private queue: Command[] = [];
+  /** Bumped whenever the orders not applied yet change: ahead() is rebuilt on the next read. */
+  private version = 0;
+  private aheadAt = "";
+  private aheadCache: OrdersAhead | null = null;
 
   constructor(public world: World) {}
 
   drainCommands(): Command[] {
     const cmds = this.queue;
     this.queue = [];
+    if (this.flights) for (const c of cmds) this.flights.push({ c, at: this.world.tick });
+    this.version++;
     return cmds;
   }
 
   enqueue(cmd: Command): void {
-    if (this.spectator) return;
+    if (this.spectator || this.locked) return;
     this.queue.push(cmd);
+    this.version++;
+  }
+
+  /** Track orders in flight from now on (an interactive feed). */
+  trackInFlight(): void {
+    this.flights ??= [];
+  }
+
+  /** The orders on their way, oldest first (null without an interactive feed). */
+  get inFlight(): Command[] | null {
+    return this.flights?.map((f) => f.c) ?? null;
+  }
+
+  /**
+   * This side's commands that a step just applied: their in-flight copies
+   * come off, the oldest of each that matches, as the lockstep keeps their
+   * order. The codec splits a long unit list into pieces the lockstep may
+   * seal into turns of their own: each piece takes just its units off.
+   */
+  landed(applied: readonly Command[]): void {
+    const fl = this.flights;
+    if (!fl?.length) return;
+    for (const c of applied) {
+      if (!("unitIds" in c)) {
+        const i = fl.findIndex((f) => sameOrder(f.c, c));
+        if (i >= 0) fl.splice(i, 1);
+        continue;
+      }
+      let left: readonly number[] = c.unitIds;
+      for (let i = 0; i < fl.length && left.length > 0; i++) {
+        const f = fl[i]!.c;
+        if (!("unitIds" in f) || !sameOrder(f, c) || !f.unitIds.some((id) => left.includes(id))) continue;
+        const rest = f.unitIds.filter((id) => !left.includes(id));
+        left = left.filter((id) => !f.unitIds.includes(id));
+        if (rest.length > 0) fl[i] = { c: { ...f, unitIds: rest }, at: fl[i]!.at };
+        else fl.splice(i--, 1);
+      }
+    }
+    this.version++;
+  }
+
+  /**
+   * Everything drained on tick `through` or before has landed or never will
+   * (the feed knows: the lockstep had none of it waiting, and its turn is
+   * stepped): what is still in flight from then was replaced in the
+   * lockstep's queue before it went out, and comes off.
+   */
+  settled(through: number): void {
+    const fl = this.flights;
+    if (!fl?.length || fl[0]!.at > through) return;
+    this.flights = fl.filter((f) => f.at > through);
+    this.version++;
+  }
+
+  /** No order on its way will land (the match ended without a result). */
+  dropInFlight(): void {
+    this.flights?.splice(0);
+    this.version++;
+  }
+
+  /** The orders not applied yet: those in flight, then those not drained yet (a stall drains nothing). */
+  private unapplied(): Command[] | null {
+    return this.flights && [...this.flights.map((f) => f.c), ...this.queue];
+  }
+
+  /** The player's construction, scrap and queues as the build bar shows them (BuildView). */
+  view(): BuildView {
+    return buildView(this.world, PLAYER, this.unapplied());
+  }
+
+  /**
+   * The player's units as this Controller reads them (OrdersAhead): with an
+   * interactive feed, as the orders not applied yet leave them; else the
+   * world's. Built once per tick and change of orders.
+   */
+  ahead(): OrdersAhead {
+    if (!this.flights) return ordersAhead(this.world, null);
+    const at = `${this.world.tick}/${this.version}`;
+    if (at !== this.aheadAt || !this.aheadCache) {
+      this.aheadCache = ordersAhead(this.world, this.unapplied());
+      this.aheadAt = at;
+    }
+    return this.aheadCache;
   }
 
   /**
@@ -159,7 +587,8 @@ export class Controller {
 
   /** The combat units ⚔ Select army grabs: every one the player owns but anchored Goliaths (they stay put). */
   armyIds(): number[] {
-    return [...this.world.units.values()].filter((u) => isArmyUnit(u) && !isRooted(u)).map((u) => u.id);
+    const a = this.ahead();
+    return [...this.world.units.values()].filter((u) => isArmyUnit(u) && !isRooted(a.unit(u))).map((u) => u.id);
   }
 
   /** Select every combat unit the player owns (anchored Goliaths aside). */
@@ -173,8 +602,12 @@ export class Controller {
    * not idle.
    */
   idleArmy(): number[] {
+    const a = this.ahead();
     return [...this.world.units.values()]
-      .filter((u) => isArmyUnit(u) && u.order.type === "idle" && canWalk(u))
+      .filter((u) => {
+        const now = a.unit(u);
+        return isArmyUnit(u) && now.order.type === "idle" && canWalk(now);
+      })
       .map((u) => u.id);
   }
 
@@ -246,6 +679,8 @@ export class Controller {
       else if (!this.boardTap(hit.id)) this.selectUnits([hit.id]);
       return;
     }
+    // (a building being sold is gone: a tap there is a tap on the ground)
+    if (hit.kind === "ownBuilding" && this.ahead().sold(hit.id)) hit = { kind: "ground" };
     if (hit.kind === "ownBuilding") {
       // with units selected, tapping our own building just moves them there
       if (this.selectedUnits.size === 0) {
@@ -256,10 +691,11 @@ export class Controller {
     }
     if (hit.kind === "enemy" && this.selectedUnits.size > 0) {
       const lifting = this.liftMembers();
+      const a = this.ahead();
       // only those that can get in range of it (not a tank at an enemy on an island; not a Goliath on a lift)
       const attackers = this.selectedAttackers(hit.targetsAir).filter((id) => {
         const u = w.units.get(id);
-        return !!u && !lifting.has(id) && (isRooted(u) ? inReachFromHere(w, u, hit.id) : engageable(w, u, hit.id));
+        return !!u && !lifting.has(id) && (isRooted(a.unit(u)) ? inReachFromHere(w, u, hit.id) : engageable(w, u, hit.id));
       });
       if (attackers.length > 0) {
         this.enqueue({ type: "attack", faction: PLAYER, unitIds: attackers, targetId: hit.id });
@@ -357,7 +793,7 @@ export class Controller {
   /** Is unit `id` an anchored Goliath (or one digging in)? */
   private rooted(id: number): boolean {
     const u = this.world.units.get(id);
-    return !!u && isRooted(u);
+    return !!u && isRooted(this.ahead().unit(u));
   }
 
   private rootTipped = -1e9;
@@ -372,7 +808,7 @@ export class Controller {
 
   // ------------------------------------------------------------- Goliaths --
 
-  /** The player's selected Goliaths standing on the ground (not hooked onto Condors or carried). */
+  /** The player's selected Goliaths standing on the ground (not hooked onto Condors or carried), as ahead() has them. */
   goliathsSelected(): Unit[] {
     return this.selectedOwn().filter((u) => !!u.goliath && !u.goliath.lift);
   }
@@ -437,11 +873,16 @@ export class Controller {
     const p = this.pendingDrop;
     if (!p) return;
     const w = this.world;
+    const a = this.ahead();
     const ready: number[] = [];
     p.carriers = p.carriers.filter((id) => {
       const c = w.units.get(id);
       if (!c) return false;
-      const walking = [...w.units.values()].some((u) => u.order.type === "board" && u.order.carrierId === id);
+      // (squads still walking to it, or told to and the order still on its way)
+      const walking = [...w.units.values()].some((u) => {
+        const o = a.unit(u).order;
+        return o.type === "board" && o.carrierId === id;
+      });
       if (walking) return true;
       if (isLoaded(c)) ready.push(id);
       return false;
@@ -527,18 +968,23 @@ export class Controller {
   /** Orders for lifts still hooking on, by Goliath id: sent once they are up (see prune). */
   private pendingLifts = new Map<number, { x: number; y: number; setDown: boolean }>();
 
-  /** The lifts (by their Goliaths) the selection takes part in: a Goliath on one, or a Condor of its pair. */
+  /**
+   * The lifts (by their Goliaths, as ahead() has them) the selection takes
+   * part in: a Goliath on one, or a Condor of its pair. A lift still on its
+   * way is one hooking on.
+   */
   liftsSelected(): Unit[] {
+    const a = this.ahead();
     const out: Unit[] = [];
     for (const u of this.selectedOwn()) {
-      const g = liftOf(this.world, u);
-      if (g && g.faction === PLAYER && !out.includes(g)) out.push(g);
+      const g = a.liftOf(u);
+      if (g && g.faction === PLAYER && !out.some((o) => o.id === g.id)) out.push(g);
     }
     return out;
   }
 
   /** Every unit of the selected lifts (the Goliaths and both Condors of each pair). */
-  private liftMembers(): Set<number> {
+  liftMembers(): Set<number> {
     const ids = new Set<number>();
     for (const g of this.liftsSelected()) {
       ids.add(g.id);
@@ -567,10 +1013,13 @@ export class Controller {
     return members;
   }
 
-  /** Lifts that were given an order while hooking on and are up now: send it. */
+  /** Lifts that were given an order while hooking on (or while the lift was on its way) and are up now: send it. */
   private firePendingLifts(): void {
+    if (this.pendingLifts.size === 0) return;
+    const a = this.ahead();
     for (const [id, p] of this.pendingLifts) {
-      const lift = this.world.units.get(id)?.goliath?.lift;
+      const g = this.world.units.get(id);
+      const lift = g && a.unit(g).goliath?.lift;
       if (lift?.phase === "hooking") continue;
       this.pendingLifts.delete(id);
       if (!lift) continue; // (called off, or it fell)
@@ -619,8 +1068,9 @@ export class Controller {
   boardTap(id: number): boolean {
     if (this.spectator || this.placing) return false;
     const w = this.world;
-    const tapped = w.units.get(id);
-    if (!tapped || tapped.faction !== PLAYER) return false;
+    const unit = w.units.get(id);
+    if (!unit || unit.faction !== PLAYER) return false;
+    const tapped = this.ahead().unit(unit);
     const sel = this.selectedOwn();
     const squads = sel.filter((u) => isInfantry(u.kind));
     // a loaded Condor over our own island garrison: the tap reinforces it, it doesn't pick the garrison up
@@ -660,20 +1110,24 @@ export class Controller {
     return true;
   }
 
-  /** Seats on Condor `c` not already promised to squads walking to it (other than `riders`). */
+  /** Seats on Condor `c` (as ahead() has it) not already promised to squads walking to it, or told to (other than `riders`). */
   private openSeats(c: Unit, riders: readonly Unit[]): number {
+    const a = this.ahead();
     let promised = 0;
-    for (const u of this.world.units.values())
-      if (u.order.type === "board" && u.order.carrierId === c.id && !riders.includes(u)) promised++;
+    for (const u of this.world.units.values()) {
+      const o = a.unit(u).order;
+      if (o.type === "board" && o.carrierId === c.id && !riders.some((r) => r.id === u.id)) promised++;
+    }
     return freeSeats(c) - promised;
   }
 
-  /** The player's own selected units on the field. */
+  /** The player's own selected units on the field, as ahead() has them (the orders on their way applied). */
   private selectedOwn(): Unit[] {
+    const a = this.ahead();
     const out: Unit[] = [];
     for (const id of this.selectedUnits) {
       const u = this.world.units.get(id);
-      if (u && u.faction === PLAYER) out.push(u);
+      if (u && u.faction === PLAYER) out.push(a.unit(u));
     }
     return out;
   }
@@ -682,6 +1136,39 @@ export class Controller {
     if (this.selectedBuilding !== null)
       this.enqueue({ type: "sell", faction: PLAYER, buildingId: this.selectedBuilding });
     this.selectedBuilding = null;
+  }
+
+  // -------------------------------------------------------------- powers --
+
+  /** The player's Command meter, less the calldowns on their way (ahead()). */
+  powerMeter(): number {
+    let m = this.world.powers.meter[PLAYER];
+    for (const p of this.ahead().fired) m -= powerCost(p);
+    return m;
+  }
+
+  /**
+   * Power `p` as the power panel shows it (sim/powers.ts powerStatus), the
+   * calldowns on their way counted as fired: the meter paid, and a power
+   * fired cooling down from the start (its cooldown starts as it lands).
+   */
+  powerStatus(p: PowerKind): PowerStatus {
+    const st = powerStatus(this.world, PLAYER, p);
+    const fired = this.ahead().fired;
+    if (fired.length === 0) return st;
+    const cooldown = st.locked > 0 ? 0 : fired.includes(p) ? st.cooldownTotal : st.cooldown;
+    const charge = st.cost === 0 ? 1 : Math.min(1, Math.max(0, this.powerMeter()) / st.cost);
+    return { ...st, cooldown, charge, ready: st.ready && cooldown === 0 && charge >= 1 };
+  }
+
+  /** Why power `p` can't be fired now (sim/powers.ts powerBlocker, with powerStatus's calldowns on their way), or null. */
+  powerBlocker(p: PowerKind): string | null {
+    const why = powerBlocker(this.world, PLAYER, p);
+    if (why || this.ahead().fired.length === 0) return why;
+    const st = this.powerStatus(p);
+    if (st.cooldown > 0) return `${POWER_NAMES[p]} recharging: ${Math.ceil(st.cooldown / TICK_RATE)} s`;
+    if (st.charge < 1) return `${POWER_NAMES[p]} needs ${st.cost} charge (${Math.floor(this.powerMeter())})`;
+    return null;
   }
 
   /** Selected units able to shoot at the given domain (air or ground). */

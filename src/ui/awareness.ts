@@ -3,7 +3,8 @@
  * wiring in src/game/awareness-view.ts):
  *
  * - a speed chip beside the clock (1× → 1.5× → 2×, spectators 4×), and the
- *   clock itself as a press-and-hold fast-forward (3×);
+ *   clock itself as a press-and-hold fast-forward (3×); neither at a fixed
+ *   speed (a sound duel);
  * - a slim tug-of-war battle meter under the clock with a "Turning point!"
  *   flash;
  * - up to three pulsing, tappable edge arrows pointing at off-screen
@@ -38,6 +39,8 @@ export interface AwarenessLayout {
 
 export interface AwarenessUiHooks {
   spectator: boolean;
+  /** The game runs at 1× and can't be changed (a sound duel): no speed chip, and the clock isn't held to fast-forward. */
+  fixedSpeed?: boolean;
   onCycleSpeed(): void;
   onHold(held: boolean): void;
   onArrow(key: string): void;
@@ -115,11 +118,11 @@ export function mountAwareness(root: HTMLElement, h: AwarenessUiHooks): Awarenes
     clock.replaceWith(tempo);
     tempo.appendChild(clock);
   }
-  tempo.appendChild(speed);
+  if (!h.fixedSpeed) tempo.appendChild(speed);
   speed.addEventListener("click", () => h.onCycleSpeed());
   shield(speed);
   let pid: number | null = null;
-  if (clock) {
+  if (clock && !h.fixedSpeed) {
     clock.classList.add("holdable");
     clock.title = "Hold to fast-forward (3×)";
     const release = () => {

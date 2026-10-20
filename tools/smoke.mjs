@@ -3,7 +3,9 @@
 // + place a building (tap moves the ghost, tapping the ghost builds), queue
 // a Stinger, select it on the canvas, save it as squad 1 and order it around,
 // open an info card, pause/resume. Fails on any console error.
-// Usage: node tools/smoke.mjs [width] [height] [--shots] [url]
+// --side=red plays the same flow as red against a blue AI (/?side=red, SOUND-DUEL.md
+// "Playing red"); every check asks the page which side it plays (window.__bd.player).
+// Usage: node tools/smoke.mjs [width] [height] [--shots] [url] [--side=red]
 import { chromium } from "playwright-core";
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
@@ -17,7 +19,10 @@ const MIME = {
   ".png": "image/png", ".webp": "image/webp", ".json": "application/json",
   ".webmanifest": "application/manifest+json"
 };
-const [, , w = "390", h = "844", shots = "", urlArg] = process.argv;
+const sideArg = process.argv.slice(2).find((a) => a.startsWith("--side="));
+const side = sideArg ? sideArg.slice("--side=".length) : "blue";
+if (side !== "blue" && side !== "red") throw new Error(`--side must be blue or red, not ${side}`);
+const [w = "390", h = "844", shots = "", urlArg] = process.argv.slice(2).filter((a) => a !== sideArg);
 let server = null;
 if (!urlArg) {
   server = createServer((req, res) => {
@@ -30,7 +35,9 @@ if (!urlArg) {
   });
   await new Promise((r) => server.listen(8899, r));
 }
-const url = urlArg ?? "http://localhost:8899/";
+const target = new URL(urlArg ?? "http://localhost:8899/");
+if (side === "red") target.searchParams.set("side", "red");
+const url = target.href;
 
 const exe = ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p));
 const browser = await chromium.launch({
@@ -42,7 +49,7 @@ const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 page.on("pageerror", (e) => errors.push(String(e)));
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
-const shot = async (name) => { if (shots) await page.screenshot({ path: `${SHOT_DIR}/smoke-${name}-${w}x${h}.png` }); };
+const shot = async (name) => { if (shots) await page.screenshot({ path: `${SHOT_DIR}/smoke-${name}-${w}x${h}${side === "red" ? "-red" : ""}.png` }); };
 /** Run the game loop n × 100 ms of sim time without waiting in real time. */
 const ff = (n) => page.evaluate((k) => window.__bd.scene.step(100, k), n);
 const world = (fn, arg) => page.evaluate(fn, arg);
@@ -57,13 +64,18 @@ await page.waitForSelector(".op-card", { timeout: 30000 });
 await page.waitForTimeout(600);
 await shot("openers");
 if ((await world(() => window.__bd.world.tick)) !== 0) fail("the sim ran before an opener was picked");
+const player = await world(() => window.__bd.player);
+if (player !== side) fail(`the page plays ${player}, not ${side}`);
+// the cards show our own side's paint
+const cardArt = await page.locator(".op-card img").evaluateAll((els) => els.map((e) => e.getAttribute("src")));
+if (!cardArt.length || !cardArt.every((src) => src.includes("/red/") === (side === "red"))) fail(`opener card art not in ${side}'s paint: ${JSON.stringify(cardArt)}`);
 // Air Wing leaves the Fab Plant to build by hand below
 await page.locator(".op-card[data-id=airwing]").tap();
 await page.waitForFunction(() => window.__bd?.world?.tick > 5, null, { timeout: 30000 });
 const opened = await world(() => {
-  const w = window.__bd.world;
-  const mine = (k) => [...w.units.values()].filter((u) => u.faction === "blue" && u.kind === k).length;
-  return { airpad: [...w.buildings.values()].some((b) => b.faction === "blue" && b.kind === "airpad"), wasps: mine("wasp"), harvesters: mine("harvester") };
+  const { world: w, player: me } = window.__bd;
+  const mine = (k) => [...w.units.values()].filter((u) => u.faction === me && u.kind === k).length;
+  return { airpad: [...w.buildings.values()].some((b) => b.faction === me && b.kind === "airpad"), wasps: mine("wasp"), harvesters: mine("harvester") };
 });
 if (!opened.airpad || opened.wasps !== 3 || opened.harvesters !== 2) fail(`Air Wing opener not applied: ${JSON.stringify(opened)}`);
 await page.waitForTimeout(500);
@@ -79,14 +91,14 @@ if (t2 - t1 < 15) fail(`sim too slow: ${t2 - t1} ticks in 3s`);
 
 // the starting harvester goes to work on its own
 await ff(60);
-const mining = await world(() => [...window.__bd.world.units.values()].some((u) => u.faction === "blue" && u.kind === "harvester" && u.order.type === "harvest"));
+const mining = await world(() => [...window.__bd.world.units.values()].some((u) => u.faction === window.__bd.player && u.kind === "harvester" && u.order.type === "harvest"));
 if (!mining) fail("starting harvester is not harvesting");
 
 // 1. construct a Fab Plant from the build bar (real tap)
 const btn = (name) => page.locator(".bb", { has: page.locator(".nm", { hasText: new RegExp(`^${name}$`) }) });
 await btn("Fab").tap();
 await ff(2);
-const pending = await world(() => window.__bd.world.factions.blue.pending?.kind);
+const pending = await world(() => window.__bd.world.factions[window.__bd.player].pending?.kind);
 if (pending !== "fab-plant") fail(`Fab tap did not start construction (pending=${pending})`);
 await ff(110); // 10 s build
 await btn("Fab").tap(); // ready: enter placement mode
@@ -95,7 +107,7 @@ if (placing !== "fab-plant") fail(`ready Fab tap did not enter placement (placin
 // tap a valid spot near the HQ, found via the sim's own rules
 const spot = await world(() => {
   const { world: w, cam, toScreen } = window.__bd;
-  const hq = [...w.buildings.values()].find((b) => b.faction === "blue" && b.kind === "hq");
+  const hq = [...w.buildings.values()].find((b) => b.faction === window.__bd.player && b.kind === "hq");
   for (let r = 1; r < 7; r++)
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
@@ -110,7 +122,7 @@ const spot = await world(() => {
 });
 if (!spot) fail("no valid Fab spot found");
 else {
-  const isPlaced = () => world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === "blue" && b.kind === "fab-plant"));
+  const isPlaced = () => world(() => [...window.__bd.world.buildings.values()].some((b) => b.faction === window.__bd.player && b.kind === "fab-plant"));
   // on touch a tap moves the ghost there (no build yet) …
   await page.touchscreen.tap(spot.sx, spot.sy);
   await page.waitForTimeout(350); // let the double-tap window lapse
@@ -130,10 +142,10 @@ await shot("placed");
 await page.locator(".tab[data-tab=ground]").tap();
 await btn("Stinger").tap();
 await ff(3);
-const queued = await world(() => [...window.__bd.world.buildings.values()].some((b) => b.kind === "fab-plant" && b.faction === "blue" && b.queue.length > 0));
+const queued = await world(() => [...window.__bd.world.buildings.values()].some((b) => b.kind === "fab-plant" && b.faction === window.__bd.player && b.queue.length > 0));
 if (!queued) fail("Stinger tap did not queue production");
 await ff(80);
-const sid = await world(() => [...window.__bd.world.units.values()].find((u) => u.faction === "blue" && u.kind === "stinger")?.id);
+const sid = await world(() => [...window.__bd.world.units.values()].find((u) => u.faction === window.__bd.player && u.kind === "stinger")?.id);
 if (!sid) fail("no Stinger was produced");
 
 // 3. select it by tapping it on the canvas, then order it somewhere
@@ -160,6 +172,10 @@ if (sid) {
   await page.mouse.up();
   const squad = await world(() => window.__bd.ctrl.squads.slots[0]);
   if (!squad.includes(sid)) fail(`holding squad chip 1 did not save the Stinger (squad=${JSON.stringify(squad)})`);
+  // the chip shows the squad's portrait, in our side's paint, from the next frame
+  await page.waitForFunction(() => !!document.querySelector(".sq .sqi:not([hidden])"), null, { timeout: 5000 }).catch(() => {});
+  const chip = await page.locator(".sq .sqi").first().getAttribute("src");
+  if (!chip?.includes("stinger") || chip.includes("/red/") !== (side === "red")) fail(`squad chip not in ${side}'s paint: ${chip}`);
   // tap open ground: a spot next to the Stinger that no HUD toast or banner is covering
   const ground = await page.evaluate(({ sx, sy }) => {
     for (const [dx, dy] of [[60, -60], [60, 60], [-60, 60], [-60, -60], [90, 0], [-90, 0]]) {
@@ -199,11 +215,11 @@ if (await world(() => window.__bd.ctrl.paused)) fail("resume did not unpause");
 // 6. the AI must be doing something
 await ff(600);
 // (HQ + its opener factory are free: it must have built something since)
-const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction === "red").length > 2);
+const aiActive = await world(() => [...window.__bd.world.buildings.values()].filter((b) => b.faction !== window.__bd.player).length > 2);
 if (!aiActive) fail("AI built nothing in the first minutes");
 await shot("late");
 
 if (errors.length) fail(`console errors: ${JSON.stringify(errors.slice(0, 10))}`);
-console.log(process.exitCode ? "SMOKE FAILED" : `SMOKE OK (${w}x${h})`);
+console.log(process.exitCode ? "SMOKE FAILED" : `SMOKE OK (${w}x${h}, ${side})`);
 await browser.close();
 server?.close();

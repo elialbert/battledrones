@@ -1,4 +1,5 @@
 import { UNITS } from "../sim/balance";
+import { mapById } from "../sim/maps";
 import { POWER_KINDS, POWER_NAMES } from "../sim/powers";
 import type { Faction, FactionStats, World } from "../sim/types";
 import {
@@ -23,12 +24,18 @@ import { callsignOf, killsLabel, stars } from "../game/heroes";
  *
  * Extension point: addReportSection() lets later features (career medals…)
  * add a block without touching this file's layout code.
+ *
+ * A sound duel's report (`opponent` set) names the sides You and Friend,
+ * heads its line "vs your friend · <map> · <time> · over sound", and its tip
+ * says nothing of difficulty or the AI; its own section (the record, the
+ * link, the sync check) comes from src/versus through addReportSection. A
+ * duel that ended with no result has no winner (null) and a head override.
  */
 
 export interface ReportOpts {
   world: World;
-  /** Who won, or "draw" (Robot Love: two enemy Goliaths fell in love, World.love). */
-  winner: Faction | "draw";
+  /** Who won, or "draw" (Robot Love: two enemy Goliaths fell in love, World.love); null: no result (a sound duel cut short, with `head`). */
+  winner: Faction | "draw" | null;
   /** The local player's side (the report's point of view unless spectating). */
   pov: Faction;
   spectator: boolean;
@@ -44,6 +51,11 @@ export interface ReportOpts {
   /** Extra buttons before Rematch (Ops: "Next op"), and Rematch's own label. */
   actions?: { id: string; label: string; cls?: string; on(): void }[];
   rematchLabel?: string;
+  /** Extra buttons between Rematch and the menu (a sound duel: Save battle, Copy debug info). */
+  after?: { id: string; label: string; cls?: string; on(): void }[];
+  /** A sound duel: who the other side is ("your friend"), and how the phones were linked ("over sound"). */
+  opponent?: string;
+  via?: string;
 }
 
 export interface ReportContext extends ReportOpts {
@@ -80,7 +92,7 @@ export function addReportSection(s: ReportSection): () => void {
 const icon = (kind: string, f: Faction) => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
 const short = (n: number) => (n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 const sideName = (f: Faction, ctx: ReportOpts) =>
-  ctx.spectator ? (f === "blue" ? "Blue" : "Red") : f === ctx.pov ? "You" : "Enemy";
+  ctx.spectator ? (f === "blue" ? "Blue" : "Red") : f === ctx.pov ? "You" : ctx.opponent ? "Friend" : "Enemy";
 
 // ---------------------------------------------------------------- chart ---
 
@@ -220,11 +232,12 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
  * when nobody did — Robot Love, whose lovers get a 💘 note — styled neither
  * as a win nor as a loss.
  */
-export function headline(o: { winner: Faction | "draw"; pov: Faction; spectator: boolean; love: boolean }): {
+export function headline(o: { winner: Faction | "draw" | null; pov: Faction; spectator: boolean; love: boolean }): {
   title: string;
   cls: "win" | "lose" | "draw";
   note: string | null;
 } {
+  if (o.winner === null) return { title: "NO RESULT", cls: "draw", note: null };
   if (o.winner === "draw") return { title: "DRAW", cls: "draw", note: o.love ? "💘 They fell in love" : null };
   if (o.spectator) return { title: `${o.winner.toUpperCase()} WINS`, cls: o.winner === "blue" ? "win" : "lose", note: null };
   const won = o.winner === o.pov;
@@ -235,6 +248,11 @@ function headHtml(ctx: ReportContext): string {
   if (ctx.head) return `<h1 class="${ctx.head.cls}">${escapeHtml(ctx.head.title)}</h1><p class="time">${escapeHtml(ctx.head.sub)}</p>`;
   const spec = ctx.spectator;
   const h = headline({ winner: ctx.winner, pov: ctx.pov, spectator: spec, love: !!ctx.world.love });
+  if (ctx.opponent && !spec) {
+    // (a sound duel: "vs your friend · Riverlands · 7:42 · over sound")
+    const line = `vs ${ctx.opponent} · ${mapById(ctx.world.mapId).name} · ${fmtTime(ctx.secs)} · ${ctx.via ?? "over sound"}`;
+    return `<h1 class="${h.cls}">${h.title}</h1><p class="time">${h.note ? `${h.note} · ` : ""}${escapeHtml(line)}</p>`;
+  }
   const vs = spec
     ? escapeHtml(`${ctx.strategies?.blue ?? "Blue"} vs ${ctx.strategies?.red ?? "Red"}`)
     : `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`;
@@ -393,12 +411,17 @@ function tipHtml(ctx: ReportContext): string | null {
     return `<div class="aar-story">${line("blue")}${line("red")}</div>`;
   }
   if (ctx.world.ops) return null; // an op's section shows its own tip and the stars still to earn
+  if (ctx.winner === null) return null; // (no result: nothing was decided to learn from)
   const c = ctx.chronicle;
-  const tip = pickTip({
-    pov: ctx.pov, won: ctx.won, duration: ctx.secs, difficulty: ctx.enemy.difficulty.toLowerCase(),
+  const duel = !!ctx.opponent;
+  let tip = pickTip({
+    pov: ctx.pov, won: ctx.won, duration: ctx.secs, difficulty: duel ? "" : ctx.enemy.difficulty.toLowerCase(),
     built: c.built, firstBuilt: c.firstBuilt, deaths: c.deaths, samples: c.samples, factories: c.factories,
     startGoliaths: c.startGoliaths
   });
+  // (a duel's congratulations: there is no harder AI to try)
+  if (duel && /\bAI\b/.test(tip))
+    tip = ctx.won ? "A clean win. Swap sides and see if you can do it again." : "Scout early and build counters: long-press any build button to see what beats what.";
   return `<p class="aar-tip"><b>Next time</b><span>${escapeHtml(tip)}</span></p>`;
 }
 
@@ -443,13 +466,15 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
   const left = rendered.filter((r) => r.s.col === "left").map(block).join("");
   const right = rendered.filter((r) => r.s.col !== "left").map(block).join("");
   endEl.hidden = false;
+  const button = (a: { id: string; label: string; cls?: string }) => `<button id="${a.id}" class="cta ${a.cls ?? ""}">${escapeHtml(a.label)}</button>`;
   endEl.innerHTML = `
-    <div class="panel aar ${ctx.spectator ? "spec" : ctx.winner === "draw" ? "draw" : ctx.won ? "won" : "lost"}">
+    <div class="panel aar ${ctx.spectator ? "spec" : ctx.winner === "draw" || ctx.winner === null ? "draw" : ctx.won ? "won" : "lost"}">
       <header class="aar-sec aar-head" style="--d:0ms">${headHtml(ctx)}</header>
       <div class="aar-cols"><div class="aar-col l">${left}</div><div class="aar-col r">${right}</div></div>
-      <div class="aar-actions${o.actions?.length ? " more" : ""}">
-        ${(o.actions ?? []).map((a) => `<button id="${a.id}" class="cta ${a.cls ?? ""}">${escapeHtml(a.label)}</button>`).join("")}
+      <div class="aar-actions${o.actions?.length || o.after?.length ? " more" : ""}">
+        ${(o.actions ?? []).map(button).join("")}
         <button id="again" class="cta${o.actions?.length ? " alt" : ""}">${escapeHtml(o.rematchLabel ?? "↻ Rematch")}</button>
+        ${(o.after ?? []).map(button).join("")}
         <button id="menu" class="cta alt">Main menu</button>
       </div>
     </div>`;
@@ -475,7 +500,7 @@ export function showReport(endEl: HTMLElement, o: ReportOpts): void {
     const el = endEl.querySelector<HTMLElement>(`.aar-sec[data-id="${r.s.id}"]`);
     if (el && r.s.mount) r.s.mount(el, ctx);
   }
-  for (const a of o.actions ?? []) endEl.querySelector(`#${a.id}`)?.addEventListener("click", a.on);
+  for (const a of [...(o.actions ?? []), ...(o.after ?? [])]) endEl.querySelector(`#${a.id}`)?.addEventListener("click", a.on);
   endEl.querySelector("#again")!.addEventListener("click", o.onRematch);
   endEl.querySelector("#menu")!.addEventListener("click", o.onMenu);
 }

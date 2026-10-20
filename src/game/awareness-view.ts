@@ -47,6 +47,12 @@ export interface AwarenessHooks {
   pulse?(x: number, y: number, color: number): void;
   /** The HQ-kill cinematic owns the camera: no glides, jumps or edge arrows meanwhile. */
   cinematic?(): boolean;
+  /**
+   * The game runs at 1× and nobody may change it (a sound duel: both phones
+   * play at one speed). No speed chip or hold-to-fast-forward, the stored
+   * speed is ignored, and nothing drops the speed: there is nothing to drop.
+   */
+  fixedSpeed?: boolean;
   /** A glide (an arrow, ⚡, a squad chip) took the camera: the AI vs AI director stands aside. */
   took?(): void;
 }
@@ -87,14 +93,16 @@ export class Awareness {
     } catch {
       /* storage blocked: 1× */
     }
-    this.speed = new GameSpeed(h.spectator, raw);
+    this.speed = new GameSpeed(h.spectator, h.fixedSpeed ? null : raw);
     this.heat = new HeatMap({ world: h.world, player: h.player, spectator: h.spectator });
     this.inbound = new InboundWatch({ world: h.world, player: h.player });
     this.tempo = new TempoGuard({ world: h.world, player: h.player });
     this.ui = mountAwareness(document.getElementById("hud")!, {
       spectator: h.spectator,
+      fixedSpeed: !!h.fixedSpeed,
       onCycleSpeed: () => this.cycleSpeed(),
       onHold: (held) => {
+        if (h.fixedSpeed) return;
         this.speed.held = held;
         this.syncSpeed();
       },
@@ -117,6 +125,7 @@ export class Awareness {
   }
 
   cycleSpeed(): void {
+    if (this.h.fixedSpeed) return;
     this.speed.cycle();
     try {
       localStorage.setItem(SPEED_KEY, this.speed.serialize());
@@ -153,8 +162,8 @@ export class Awareness {
       }
     if (this.h.spectator) return;
     const warnings = this.inbound.events(fx, t);
-    // tempo safety: something needs the player's hands, so back to 1×
-    const drop = this.tempo.check(fx, t, warnings, this.speed.value > 1);
+    // tempo safety: something needs the player's hands, so back to 1× (never off it at a fixed speed)
+    const drop = this.h.fixedSpeed ? null : this.tempo.check(fx, t, warnings, this.speed.value > 1);
     if (drop) this.slowDown(drop, t);
     for (const wn of warnings) this.warn(wn, drop?.cause === "inbound");
   }

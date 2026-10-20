@@ -8,9 +8,10 @@ import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
-import { buildingCenter, domainOf } from "../sim/world";
+import { buildingCenter, domainOf, hqOf } from "../sim/world";
 import { sfx } from "./audio";
-import { Controller, PLAYER, type TapHit } from "./controller";
+import { Controller, ENEMY, PLAYER, type TapHit } from "./controller";
+import { applyOpenersCanonical, composeTick } from "./local-side";
 import { GestureRecognizer, isHoldRelease, strandedPointers, type GesturePointer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions, unchartedMatch } from "./mode";
@@ -24,7 +25,7 @@ import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { CINE_KEY, Director } from "./director";
-import { Finale, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
+import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
 import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
 import { OpsPresenter } from "./ops";
@@ -34,7 +35,7 @@ import { CombatJuice } from "./render/juice-view";
 import { WreckRenderer } from "./render/wrecks";
 import { PowerRenderer } from "./render/powers";
 import { ObjectiveRenderer } from "./render/objectives";
-import { createHud, type Hud } from "../ui/hud";
+import { createHud, type DuelHud, type EndOpts, type Hud } from "../ui/hud";
 import { PlacementView } from "./placement-view";
 import { CommandUi } from "../ui/command";
 import { showOpenerPicker } from "../ui/openers";
@@ -58,15 +59,21 @@ const DEFAULT_ZOOM = 42;
 const EDGE_PAD = 2;
 /** Radius of an order's waypoint ring (CSS px). */
 const WAYPOINT_PX = 7;
+/** Production meters in the producer's side colour (blue is blue on both phones of a sound duel). */
+const METER: Record<Faction, string> = { blue: "#6eb0ff", red: "#ff7a6a" };
 /** Box-select dashes (CSS px), their dark rims (each 1 px longer at both ends), and none. */
 const DASH = [6, 4];
 const DASH_RIM = [8, 2];
 const NO_DASH: number[] = [];
 
 /**
- * A match played from outside instead of by the AI commanders: the dev-only
- * battle viewer (src/game/replay.ts, AGENT-BATTLES.md "Watching") feeds a
- * recorded agent battle through this. Spectator rules apply.
+ * A match played from outside instead of by the AI commanders: the battle
+ * viewer (src/game/replay.ts, AGENT-BATTLES.md "Watching") feeds a recorded
+ * battle through this, and spectator rules apply. A sound duel's feed
+ * (src/versus/feed.ts, SOUND-DUEL.md "MatchFeed and GameScene") is an
+ * interactive one: it sets `local`, and this phone plays that side, its
+ * orders and the friend's arriving through commands(). Every scene branch for
+ * it tests `feed?.local !== undefined`, so watched matches run as before.
  */
 export interface MatchFeed {
   /** The world, set up as the fed match was. */
@@ -83,7 +90,25 @@ export interface MatchFeed {
   frame(deltaMs: number): void;
   /** The latest saved copy of the world at or before `tick`, to rewind to (null: none). */
   keyframe(tick: number): World | null;
+  /** This phone commands this side: an interactive feed (a duel), not a watched match. */
+  readonly local?: Faction;
+  /** Game speed this frame (a duel's slack trim around 1×). */
+  speed?(): number;
+  /** Who the opponent is, for labels ("your friend"). */
+  readonly opponent?: string;
+  /** A duel's pause menu and report buttons (ui/hud.ts DuelHud). */
+  readonly duel?: DuelHud;
 }
+
+/** Why a duel ended with no result (GameScene.abort): the worlds drifted apart, the friend left, or this phone left. */
+export type AbortReason = "desync" | "left" | "lost";
+
+/** The end screen's head for each abort (SOUND-DUEL.md "Hash trail", "Leaving"). */
+const ABORT_HEAD: Record<AbortReason, { title: string; cls: "lose"; sub: string }> = {
+  desync: { title: "OUT OF SYNC", cls: "lose", sub: "No contest: the two phones' games drifted apart" },
+  left: { title: "FRIEND LEFT", cls: "lose", sub: "No result" },
+  lost: { title: "SIGNAL LOST", cls: "lose", sub: "You left · No result" }
+};
 
 /**
  * The battle: the deterministic sim at a fixed 10 Hz, interpolated into a
@@ -94,7 +119,7 @@ export interface MatchFeed {
 export class GameScene {
   world!: World;
   ctrl!: Controller;
-  /** Red's commander (null in Last Stand and survival ops: the waves have none). */
+  /** The enemy commander, playing ENEMY (null in Last Stand and survival ops: the waves have none). */
   private ai: AiState | null = null;
   private blueAi: AiState | null = null;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
@@ -143,6 +168,10 @@ export class GameScene {
   private chevrons: number[] = [];
   private hud!: Hud;
   private ended = false;
+  /** A duel's no-result end (abort): no finale, no report of a winner. */
+  private aborted: AbortReason | null = null;
+  /** An interactive feed (a sound duel): this phone plays feed.local against a friend, not an AI. */
+  private readonly interactive: boolean;
   /** The clock waits for the player's opener pick. */
   private holdStart = false;
   private simSeconds = 0;
@@ -168,6 +197,9 @@ export class GameScene {
     document.getElementById("loading")?.remove();
     this.world = feed ? feed.world : createMapWorld(gameMode.mapId, matchOptions());
     this.ctrl = new Controller(this.world);
+    const interactive = (this.interactive = feed?.local !== undefined);
+    // (a duel's orders land D ticks after the tap: the build bar counts them meanwhile)
+    if (interactive) this.ctrl.trackInFlight();
     // Uncharted: a generated map played blind, decided once here (a fed match or replay never is)
     const uncharted = !feed && unchartedMatch();
 
@@ -323,9 +355,9 @@ export class GameScene {
     this.targetZoom = rig.zoom;
 
     this.setupInput();
-    // the starting harvester gets to work immediately
+    // the starting harvester gets to work immediately (a duel's openers set every harvester mining already)
     for (const u of this.world.units.values())
-      if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator) {
+      if (u.faction === PLAYER && u.kind === "harvester" && !gameMode.spectator && !interactive) {
         const f = nearestReachableResource(this.world, u.x, u.y, u.faction);
         if (f) this.ctrl.enqueue({ type: "harvest", faction: PLAYER, unitIds: [u.id], x: f.x + 0.5, y: f.y + 0.5 });
       }
@@ -348,7 +380,9 @@ export class GameScene {
       targetChip: () => this.powerUi?.chip() ?? null,
       calldowns: () => this.powerFx.rings(),
       minimapOverlay: (ctx, k) => this.objFx.minimap(ctx, k),
-      strategies: feed
+      strategies: interactive
+        ? null
+        : feed
         ? feed.labels
         : this.blueAi
         ? {
@@ -359,7 +393,8 @@ export class GameScene {
       enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
-      uncharted
+      uncharted,
+      ...(interactive && feed?.duel ? { duel: feed.duel } : {})
     });
 
     this.aware = new Awareness({
@@ -369,6 +404,8 @@ export class GameScene {
       seesUnit: (u) => this.unitVisible(u),
       cinematic: () => !!this.finale,
       pulse: (x, y, col) => this.fx.pulse(x, y, col, 1.4),
+      // (a duel: both phones at 1×, the feed's slack trim aside)
+      fixedSpeed: interactive,
       took: () => this.cine?.hold()
     });
     if (gameMode.spectator) {
@@ -431,6 +468,10 @@ export class GameScene {
     (window as unknown as Record<string, unknown>).__bd = {
       world: this.world,
       ctrl: this.ctrl,
+      /** The side this page commands (red under `?side=red`, or a sound duel's red phone). */
+      get player() {
+        return PLAYER;
+      },
       cam: rig,
       scene: this,
       three: { stage: this.stage, terrain: this.terrain, THREE },
@@ -485,7 +526,7 @@ export class GameScene {
    */
   seek(tick: number): void {
     const feed = this.feed;
-    if (!feed) return;
+    if (!feed || this.interactive) return; // (a duel can't be rewound or skipped)
     const target = Math.max(0, Math.floor(tick));
     if (target < this.world.tick) {
       const kf = feed.keyframe(target);
@@ -546,13 +587,14 @@ export class GameScene {
     rig.placeAt((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, sx, sy);
   }
 
-  /** The player picked an opener: both sides get theirs and the clock starts. */
+  /** The player picked an opener: both sides get theirs (blue's first, as in a duel) and the clock starts. */
   private startWithOpener(id: OpenerId): void {
     if (!this.holdStart) return;
-    const mine = applyOpener(this.world, PLAYER, id);
-    const red = this.ai && allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red"));
-    if (red) applyOpener(this.world, "red", red);
-    tickFog(this.world);
+    const picks: Partial<Record<Faction, OpenerId>> = { [PLAYER]: id };
+    // (the rules alone decide what's allowed, so the AI's pick is the same before or after ours lands)
+    const theirs = this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
+    if (theirs) picks[ENEMY] = theirs;
+    const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
     this.holdStart = false;
     // roll-out flourish on everything that just arrived
     const b = mine.buildingId !== null ? this.world.buildings.get(mine.buildingId) : null;
@@ -673,18 +715,23 @@ export class GameScene {
     this.updateCamera(delta);
 
     if (!this.ctrl.paused && !this.ended && !this.holdStart) {
-      // game speed (1–4×), at most AWARE.maxTicksPerFrame ticks per frame
-      const plan = planTicks(this.acc, delta, this.aware.value);
+      // game speed (1–4×; a duel's slack trim), at most AWARE.maxTicksPerFrame ticks per frame
+      const plan = planTicks(this.acc, delta, this.interactive ? this.feed?.speed?.() ?? 1 : this.aware.value);
       this.acc = plan.acc;
       for (let i = 0; i < plan.ticks; i++) {
         // decided mid-frame: the winning tick's events were handled once, don't replay them
         if (this.world.winner) break;
         const fed = this.feed ? this.feed.commands(this.world.tick) : null;
-        if (this.feed && !fed) break; // (a live battle: the next round isn't played yet)
+        if (this.feed && !fed) {
+          // (a duel stalls on the friend's turn: hold the pose, and no burst of catch-up ticks after)
+          if (this.interactive) this.acc = TICK_MS * 0.999;
+          break; // (a live battle: the next round isn't played yet)
+        }
         this.snapshotPrev();
-        const blue = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.ctrl.drainCommands();
-        const red = this.ai ? tickAi(this.world, "red", this.ai) : []; // (Last Stand: the waves have no commander)
-        step(this.world, fed ?? [...blue, ...red]);
+        // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
+        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
+        const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
+        step(this.world, fed ?? composeTick(PLAYER, mine, theirs));
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
         this.feed?.afterTick(this.world, false);
@@ -746,20 +793,80 @@ export class GameScene {
       // Last Stand always ends in defeat; a new record still gets the fanfare
       const run = this.survival && !gameMode.spectator && !this.world.ops ? finishRun(this.world, this.world.mapId, this.survival.difficulty) : null;
       this.chronicle.finish();
-      settleCareer(this.world, PLAYER); // XP, medals, stars (spectators: no-op)
+      // XP, medals, stars (spectators: no-op; a duel keeps its own record, src/versus/records.ts)
+      if (!this.interactive) settleCareer(this.world, PLAYER);
       this.playFinale(() => {
         // at the flash the score resolves into a fanfare / lament; the SFX jingle covers music-off
         // (Robot Love: a draw resolves on its own sweet sting; its chime has already rung for music-off)
         const draw = this.world.winner === "draw";
         const outcome = draw ? "draw" : finaleOutcome({ won, newRecord: !!run?.isNew, spectator: gameMode.spectator, survival: !!this.survival });
-        if (!music.finale(outcome) && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
+        // (a duel's draw is Robot Love's only when two Goliaths fell in love: both resigning has no love sting, SOUND-DUEL.md "Resign")
+        const played = this.interactive ? music.finale(outcome, { love: !!this.world.love }) : music.finale(outcome);
+        if (!played && !gameMode.spectator && outcome !== "draw") sfx.play(outcome);
       });
     }
   }
 
-  /** Fast-forward helper for tools: `n` frames of `ms` each, drawing only the last. */
-  step(ms = 100, n = 1): void {
-    for (let i = 0; i < n; i++) this.update(ms, i === n - 1);
+  /**
+   * End a duel with no result (SOUND-DUEL.md "Hash trail and the end of the
+   * match", "Leaving"): the two worlds drifted apart, the friend left, or this
+   * phone left ("Leave (no result)"). No finale and no career; selection and
+   * placement go, and the end screen says why, with "Copy debug info" when
+   * `info` is given (a desync). A finale or report already up gives way: an
+   * end check that fails after the result was shown is no contest after all.
+   * The score settles on its quiet coda as at a finale's flash, with no sting
+   * and no SFX jingle (nothing was won or lost): without it the battle score
+   * plays on under the end screen at the intensity the match stopped at, its
+   * mood frozen with the sim clock.
+   */
+  abort(reason: AbortReason, info?: string): void {
+    if (this.aborted) return;
+    this.aborted = reason;
+    this.ended = true;
+    this.finale = null;
+    // (a finale past its flash has resolved the score already: this keeps that)
+    music.finale("draw", { love: false });
+    this.glide = null;
+    this.gest.reset();
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    this.ctrl.locked = true;
+    this.powerUi?.cancel();
+    const opts: EndOpts = { head: ABORT_HEAD[reason] };
+    if (info !== undefined)
+      opts.actions = [
+        {
+          id: "copy-debug",
+          label: "Copy debug info",
+          cls: "alt",
+          on: () => {
+            const ok = () => this.hud.notify("Debug info copied", "good");
+            const no = () => this.hud.notify("Couldn't copy: this browser doesn't allow it", "bad");
+            try {
+              void navigator.clipboard.writeText(info).then(ok, no);
+            } catch {
+              no();
+            }
+          }
+        }
+      ];
+    this.hud.showEnd(null, opts);
+  }
+
+  /** How a duel ended with no result (null: it hasn't, or it was decided). */
+  get abortReason(): AbortReason | null {
+    return this.aborted;
+  }
+
+  /** The match is over here: decided (its finale may still be playing) or aborted. */
+  get over(): boolean {
+    return this.ended;
+  }
+
+  /** Fast-forward helper for tools: `n` frames of `ms` each, drawing only the last (none with `draw` false: tools/duel-smoke.mjs steps two pages that share a software renderer). */
+  step(ms = 100, n = 1, draw = true): void {
+    for (let i = 0; i < n; i++) this.update(ms, draw && i === n - 1);
   }
 
   /**
@@ -793,7 +900,8 @@ export class GameScene {
       x: at.x,
       y: at.y,
       size: at.size,
-      blasts: !opEnd?.byGoal && !love,
+      // (an op won on its goal, Robot Love or a resign: nothing blew up)
+      blasts: !opEnd?.byGoal && !love && at.cause !== "resign",
       love: !!love,
       screenX: rig.width / 2 + free.x,
       screenY: rig.height / 2 + free.y,
@@ -813,6 +921,18 @@ export class GameScene {
       }
     });
     this.zoomBy(zoom / this.targetZoom);
+  }
+
+  /**
+   * Skip the finale still playing and show the end screen now (a duel's
+   * "Resign and leave": the player asked to go). The result banner and its
+   * music come first, as at the flash.
+   */
+  skipFinale(): void {
+    const f = this.finale;
+    const winner = this.world.winner;
+    if (!f || !winner || this.aborted) return;
+    f.update(Math.max(FINALE.doneAt, LOVE_FINALE.doneAt));
   }
 
   // ------------------------------------------------------------- sim glue --
@@ -886,6 +1006,15 @@ export class GameScene {
     if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
+      case "resign": {
+        // (a sound duel) the finale looks at the side that gave up: its HQ, else the middle of its home box
+        if (this.finaleAt?.cause === "resign") break; // (both at once: the first one's)
+        const hq = hqOf(w, ev.faction);
+        const box = hq ? null : homeBox(w, ev.faction);
+        const c = hq ? buildingCenter(hq) : box ? { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 } : { x: w.width / 2, y: w.height / 2 };
+        this.finaleAt = { x: c.x, y: c.y, size: hq ? BUILDINGS.hq.size : 2, cause: "resign" };
+        break;
+      }
       case "shot": {
         const src = w.units.get(ev.sourceId) ?? w.buildings.get(ev.sourceId);
         // (a Goliath is always seen: its guns flash even in the fog)
@@ -1108,9 +1237,9 @@ export class GameScene {
       const st = BUILDINGS[sb.kind];
       const c = buildingCenter(sb);
       if (st.range > 0) g.lineStyle(1.2, 0xffffff, 0.3).strokeCircle(c.x, c.y, st.range + size / 2);
-      if (sb.rally) {
-        g.lineStyle(1.5, 0xffe066, 0.8).lineBetween(c.x, c.y, sb.rally.x, sb.rally.y).strokeCircle(sb.rally.x, sb.rally.y, 0.16);
-      }
+      // (a sound duel: a new rally point still on its way already shows)
+      const rally = this.ctrl.ahead().rally(sb.id) ?? sb.rally;
+      if (rally) g.lineStyle(1.5, 0xffe066, 0.8).lineBetween(c.x, c.y, rally.x, rally.y).strokeCircle(rally.x, rally.y, 0.16);
     }
     // Goliaths' build rings, threat rings and anchoring arcs (read through the fog: they're always seen)
     this.entities.goliathMarks(this.view.over, this.ctrl.selectedUnits);
@@ -1156,7 +1285,7 @@ export class GameScene {
       const s = rig.project(p.x, p.y, p.h);
       if (s.behind) continue;
       const mw = Math.min(90, Math.max(44, 1.6 / rig.worldPerPx(p.x, p.y)));
-      this.juice.meter(ctx, s.x - mw / 2, s.y + 6, mw, 4, 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE), "#6eb0ff");
+      this.juice.meter(ctx, s.x - mw / 2, s.y + 6, mw, 4, 1 - head.remaining / (UNITS[head.kind].buildTime * TICK_RATE), METER[u.faction]);
     }
     for (const b of w.buildings.values()) {
       const size = BUILDINGS[b.kind].size;
@@ -1175,7 +1304,7 @@ export class GameScene {
       if (head && (b.faction === PLAYER || BUILDINGS[b.kind].alwaysVisible)) {
         const total = UNITS[head.kind].buildTime * TICK_RATE;
         const s = rig.project(p.x, b.ty + size, p.h - 0.4);
-        if (!s.behind) this.juice.meter(ctx, s.x - bw / 2, s.y - 8, bw, 4, 1 - head.remaining / total, b.faction === PLAYER ? "#6eb0ff" : "#ff7a6a");
+        if (!s.behind) this.juice.meter(ctx, s.x - bw / 2, s.y - 8, bw, 4, 1 - head.remaining / total, METER[b.faction]);
       }
     }
     // veterancy chevrons float above the unit, on the device pixel grid (crisp, and no shimmer as the camera glides)
@@ -1506,7 +1635,7 @@ export class GameScene {
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
-      else if (e.key === ".") this.aware.cycleSpeed();
+      else if (e.key === "." && !this.interactive) this.aware.cycleSpeed(); // (a duel runs at one speed)
       else if (e.key === "j") this.aware.jump();
       else if (e.key === "c") this.toggleCine();
       else if (/^Digit[1-3]$/.test(e.code)) {

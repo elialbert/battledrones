@@ -10,21 +10,35 @@ import type { BattleRecord } from "../../src/arena/record";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-/** sha256 of every file under src/sim (sorted paths and contents): what decides whether a record replays here. */
-export function simHash(root = ROOT): string {
+/** sha256 of every file under the given src directories or files (sorted paths and contents). */
+function treeHash(root: string, dirs: string[]): string {
   const h = createHash("sha256");
-  const walk = (dir: string): string[] =>
-    readdirSync(dir).sort().flatMap((n) => {
-      const p = join(dir, n);
-      return statSync(p).isDirectory() ? walk(p) : [p];
-    });
-  for (const p of walk(join(root, "src/sim"))) {
-    h.update(relative(root, p).replaceAll("\\", "/"));
-    h.update("\0");
-    h.update(readFileSync(p));
-    h.update("\0");
+  const walk = (p: string): string[] => (statSync(p).isDirectory() ? readdirSync(p).sort().flatMap((n) => walk(join(p, n))) : [p]);
+  for (const d of dirs) {
+    let files: string[] = [];
+    try {
+      files = walk(join(root, d));
+    } catch {
+      continue; // (not there yet)
+    }
+    for (const p of files) {
+      h.update(relative(root, p).replaceAll("\\", "/"));
+      h.update("\0");
+      h.update(readFileSync(p));
+      h.update("\0");
+    }
   }
   return h.digest("hex").slice(0, 16);
+}
+
+/** sha256 of every file under src/sim (sorted paths and contents): what decides whether a record replays here. */
+export function simHash(root = ROOT): string {
+  return treeHash(root, ["src/sim"]);
+}
+
+/** The sim plus the sound-duel code (SOUND-DUEL.md): two phones pair only when this matches. */
+export function duelHash(root = ROOT): string {
+  return treeHash(root, ["src/sim", "src/versus", "src/link", "src/game/local-side.ts"]);
 }
 
 export function gitCommit(root = ROOT): string | null {

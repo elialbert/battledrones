@@ -6,12 +6,16 @@
  * to prove a replay matches. Round-by-round orders, notes and radio lines
  * ride along for the viewer and for reading how each side thought.
  */
-import { createMapWorld } from "../sim/maps";
-import { tickFog } from "../sim/fog";
-import { applyOpener, type OpenerId } from "../sim/openers";
+import { type OpenerId } from "../sim/openers";
 import type { MutatorId } from "../sim/rules";
 import { step } from "../sim/sim";
 import type { Command, Faction, World } from "../sim/types";
+
+// setup and hashing live in the sim, shared with sound duels (SOUND-DUEL.md)
+export { setupWorld } from "../sim/setup";
+export { worldHash } from "../sim/checksum";
+import { setupWorld } from "../sim/setup";
+import { worldHash } from "../sim/checksum";
 
 export const HASH_EVERY = 100;
 
@@ -48,13 +52,23 @@ export interface RoundLog {
 export interface BattleEnd {
   tick: number;
   winner: Faction | null;
-  /** "hq": a side was beaten (its HQ and every Goliath gone); "love": a Robot Love draw (no winner). */
-  reason: "hq" | "time" | "aborted" | "love";
+  /**
+   * "hq": a side was beaten (its HQ and every Goliath gone); "love": a Robot Love draw (no winner);
+   * "resign": a side gave up (a sound duel, SOUND-DUEL.md).
+   */
+  reason: "hq" | "time" | "aborted" | "love" | "resign";
 }
 
-/** How a decided world ends a record: a side won, or (Robot Love) nobody did. */
-export function endOf(tick: number, winner: Faction | "draw"): BattleEnd {
-  return winner === "draw" ? { tick, winner: null, reason: "love" } : { tick, winner, reason: "hq" };
+/**
+ * How a decided world ends a record: a side won, or nobody did. `resigned`
+ * is the world's own: the side that gave up, null when both did on one tick
+ * (a draw by "resign", not Robot Love's), unset otherwise (an HQ, or Robot
+ * Love). The sound duel's duelEnd (src/versus/records.ts, which may not
+ * import this) says the same; tests/resign.test.ts holds them together.
+ */
+export function endOf(tick: number, winner: Faction | "draw", resigned?: Faction | null): BattleEnd {
+  if (winner === "draw") return { tick, winner: null, reason: resigned === null ? "resign" : "love" };
+  return { tick, winner, reason: resigned ? "resign" : "hq" };
 }
 
 export interface BattleRecord {
@@ -98,77 +112,6 @@ export interface Upgrade {
   at: string;
 }
 
-/** The match a record describes, set up as the arena set it up: a skirmish with objectives, both openers dealt, fog drawn. */
-export function setupWorld(r: Pick<BattleRecord, "map" | "seed" | "mutators" | "openers" | "income">): World {
-  const w = createMapWorld(r.map, { seed: r.seed, objectives: true, ...(r.mutators.length ? { mutators: r.mutators } : {}) });
-  for (const f of ["blue", "red"] as const) {
-    const o = r.openers[f];
-    if (o) applyOpener(w, f, o);
-    const m = r.income?.[f];
-    if (m !== undefined) w.factions[f].incomeMult = m;
-  }
-  tickFog(w);
-  return w;
-}
-
-// ------------------------------------------------------------------ hashing ---
-
-const buf = new DataView(new ArrayBuffer(8));
-
-/** FNV-1a over the bytes of numbers. */
-class Fnv {
-  h = 0x811c9dc5;
-  num(n: number): void {
-    buf.setFloat64(0, n);
-    for (let i = 0; i < 8; i++) {
-      this.h ^= buf.getUint8(i);
-      this.h = Math.imul(this.h, 0x01000193);
-    }
-  }
-  str(s: string): void {
-    for (let i = 0; i < s.length; i++) {
-      this.h ^= s.charCodeAt(i) & 0xff;
-      this.h = Math.imul(this.h, 0x01000193);
-    }
-  }
-  hex(): string {
-    return (this.h >>> 0).toString(16).padStart(8, "0");
-  }
-}
-
-/** A hash of everything that matters in the world: any drift shows up within 100 ticks. */
-export function worldHash(w: World): string {
-  const h = new Fnv();
-  h.num(w.tick);
-  h.num(w.nextId);
-  for (const f of ["blue", "red"] as const) {
-    h.num(w.factions[f].scrap);
-    h.num(w.powers.meter[f]);
-    h.num(w.factions[f].pending?.remaining ?? -1);
-  }
-  for (const id of [...w.units.keys()].sort((a, b) => a - b)) {
-    const u = w.units.get(id)!;
-    h.num(id);
-    h.str(u.kind);
-    h.num(u.x);
-    h.num(u.y);
-    h.num(u.hp);
-    h.str(u.order.type);
-    h.num(u.cargo);
-  }
-  for (const id of [...w.buildings.keys()].sort((a, b) => a - b)) {
-    const b = w.buildings.get(id)!;
-    h.num(id);
-    h.num(b.hp);
-    h.num(b.queue.length);
-    h.num(b.queue[0]?.remaining ?? -1);
-  }
-  h.num(w.projectiles.length);
-  h.num(w.wrecks.length);
-  for (const l of w.objectives.uplinks) h.num(l.progress);
-  h.str(w.winner ?? "-");
-  return h.hex();
-}
 
 // ------------------------------------------------------------------- replay ---
 
@@ -230,7 +173,7 @@ export function resimulate(r: BattleRecord, code: { commit: string | null; sim: 
     if (w.tick % HASH_EVERY === 0) hashes.push([w.tick, worldHash(w)]);
   }
   const end: BattleEnd | null = w.winner
-    ? endOf(w.tick, w.winner)
+    ? endOf(w.tick, w.winner, w.resigned)
     : r.end
       ? { tick: w.tick, winner: null, reason: r.end.reason === "aborted" ? "aborted" : "time" }
       : null;

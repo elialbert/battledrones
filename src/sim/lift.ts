@@ -152,14 +152,45 @@ export function applyLiftCommand(w: World, c: Extract<Command, { type: "lift" }>
   g.goliath.lift = { carriers, phase: "hooking", dest: null, setDown: false };
 }
 
+/** The orders a lift takes: they fly it, set it down or hover it, and call off one still hooking on. */
+export type LiftOrder = Extract<Command, { type: "move" | "attackMove" | "unload" | "stop" }>;
+
+const isLiftOrder = (c: Command): c is LiftOrder => c.type === "move" || c.type === "attackMove" || c.type === "unload" || c.type === "stop";
+
+/**
+ * One tick's memory of the orders hooking Goliaths ignored (sim.ts step keeps
+ * one while it applies the tick's commands, then drops it: nothing of it is
+ * in the world, so world hashes and keyframes never see it).
+ *
+ * A Goliath whose lift is still hooking on ignores an order unless its
+ * Condors are named in the same command (that calls the lift off). Sound
+ * duels split a long unit list into several commands (SOUND-DUEL.md
+ * "Canonicalize and split"), so a select-all can name the Goliath in an
+ * earlier piece than its Condors. The Goliath remembers the order for the
+ * rest of the tick and takes it when a later command calls its lift off, so
+ * pieces applied in one tick do what the one command would have. (Pieces the
+ * lockstep seals into different turns are applied a tick or more apart: there
+ * the Goliath still waits, lockstep.ts.)
+ */
+export interface HeldLiftOrders {
+  /** Goliath id → the newest order it ignored this tick, its lift still hooking on. */
+  ignored: Map<number, LiftOrder>;
+  /** Goliaths the command just routed called off that had ignored an order this tick, with that order: the caller applies them. */
+  freed: [number, LiftOrder][];
+}
+
 /**
  * Commands that reach a lift (sim.ts, before the usual handling): `move` /
  * `attackMove` fly it, `unload` sets it down, `stop` hovers — addressed to
  * either Condor, or to the carried Goliath. Any of them called on a lift
  * still hooking on calls it off. Returns the ids it handled (the caller
  * skips them); `attack` and the rest leave a lift's members alone.
+ *
+ * With `held` (sim.ts step), a hooking Goliath that ignores such an order
+ * remembers it in `held.ignored`, and when a later command calls that lift
+ * off, the order moves to `held.freed` for the caller to apply.
  */
-export function routeLiftCommand(w: World, c: Command): Set<number> {
+export function routeLiftCommand(w: World, c: Command, held?: HeldLiftOrders): Set<number> {
   const handled = new Set<number>();
   if (!("unitIds" in c) || c.type === "lift") return handled;
   for (const id of c.unitIds) {
@@ -169,12 +200,18 @@ export function routeLiftCommand(w: World, c: Command): Set<number> {
     const lift = g?.goliath?.lift;
     if (!g || !lift) continue;
     handled.add(id);
-    if (c.type !== "move" && c.type !== "attackMove" && c.type !== "unload" && c.type !== "stop") continue; // (unarmed carriers; a carried Goliath takes no other orders)
+    if (!isLiftOrder(c)) continue; // (unarmed carriers; a carried Goliath takes no other orders)
     if (lift.phase === "hooking") {
       if (u.goliath) continue; // the Goliath waits for its Condors
       release(w, g); // called off before it left the ground
       handled.delete(id); // (this Condor takes the order as usual)
       handled.delete(g.id); // (and so does the Goliath, if it was named before its Condors)
+      const ignored = held?.ignored.get(g.id);
+      if (held && ignored) {
+        // (and the order it ignored earlier this tick, before this one: the newer order still wins)
+        held.ignored.delete(g.id);
+        held.freed.push([g.id, ignored]);
+      }
       continue;
     }
     // (kept over the map: a lift never flies off its edge)
@@ -191,6 +228,9 @@ export function routeLiftCommand(w: World, c: Command): Set<number> {
       lift.setDown = false;
     }
   }
+  // a named Goliath still on a hooking lift ignored this order (its Condors weren't named): it remembers it
+  if (held && isLiftOrder(c))
+    for (const id of handled) if (w.units.get(id)?.goliath?.lift?.phase === "hooking") held.ignored.set(id, c);
   return handled;
 }
 

@@ -9,7 +9,7 @@ import {
 import { ECONOMY, FOG } from "./balance";
 import { tickFog } from "./fog";
 import { applyGoliathCommand, orderedToMove, tickGoliaths, tickLove } from "./goliath";
-import { applyLiftCommand, routeLiftCommand, tickLift } from "./lift";
+import { applyLiftCommand, routeLiftCommand, tickLift, type HeldLiftOrders } from "./lift";
 import { tickLifeline } from "./lifeline";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
 import { tickMovement, vehicleSpots } from "./movement";
@@ -25,7 +25,9 @@ import { isResource, tileIndex } from "./world";
 export function step(w: World, commands: Command[]): void {
   w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
-  for (const c of commands) applyCommand(w, c);
+  // orders a hooking Goliath ignored, kept for this tick's commands only (lift.ts HeldLiftOrders; one command can't need it)
+  const held: HeldLiftOrders | undefined = commands.length > 1 ? { ignored: new Map(), freed: [] } : undefined;
+  for (const c of commands) applyCommand(w, c, held);
   const spots = vehicleSpots(w); // (before anything drives: squads step aside only for a vehicle on the move)
   tickConstruction(w);
   tickProduction(w);
@@ -49,9 +51,12 @@ export function step(w: World, commands: Command[]): void {
   w.tick++;
 }
 
-function applyCommand(w: World, c: Command): void {
+function applyCommand(w: World, c: Command, held?: HeldLiftOrders): void {
   // a Goliath's lift (and its Condors) take their own orders (lift.ts)
-  const lifting = routeLiftCommand(w, c);
+  const lifting = routeLiftCommand(w, c, held);
+  // a Goliath whose lift this command called off takes the order it ignored earlier this tick, as it would have
+  // had that order named its Condors too; then this command applies as usual (lift.ts HeldLiftOrders)
+  if (held) for (const [id, order] of held.freed.splice(0)) applyCommand(w, { ...order, unitIds: [id] });
   switch (c.type) {
     case "move":
     case "attackMove":
@@ -116,6 +121,19 @@ function applyCommand(w: World, c: Command): void {
       break;
     case "calldown":
       applyCalldown(w, c);
+      break;
+    case "resign":
+      // the other side wins this tick; both resigning in the same tick is a draw
+      // (step() returns before any command once a winner is set, so only a
+      // resign earlier in this same batch can have decided it)
+      if (!w.winner) {
+        w.winner = c.faction === "blue" ? "red" : "blue";
+        w.resigned = c.faction;
+      } else if (w.winner === c.faction) {
+        w.winner = "draw";
+        w.resigned = null;
+      }
+      w.fx.push({ type: "resign", faction: c.faction });
       break;
     default:
       applyEconomyCommand(w, c);

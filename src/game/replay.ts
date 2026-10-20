@@ -21,6 +21,7 @@
 import { setupWorld, worldHash, type BattleRecord, type RoundLog } from "../arena/record";
 import { TICK_RATE } from "../sim/balance";
 import { isKnownMapId } from "../sim/maps";
+import { OPENERS, isOpenerId } from "../sim/openers";
 import type { Command, Faction, World } from "../sim/types";
 import { replayPanel, type ReplayPanel } from "../ui/replay";
 import type { GameScene, MatchFeed } from "./GameScene";
@@ -34,6 +35,8 @@ export const BUILD_TAG: string | null = typeof __VERSION_TAG__ === "undefined" ?
 
 /** A keyframe every 30 s of game time. */
 const KEYFRAME_TICKS = 30 * TICK_RATE;
+/** A saved sound duel's seat (src/versus/records.ts, which the viewer may not import): which phone played it. */
+const SOUND_DUEL_SEAT = /^sound-duel:(host|guest)$/;
 
 export const clock = (tick: number) => {
   const s = Math.floor(tick / TICK_RATE);
@@ -70,7 +73,12 @@ export class ReplayFeed implements MatchFeed {
 
   private label(side: Faction): string {
     const opener = this.record.openers[side];
-    return `${this.record.seats[side].player.replace(/^(openai|anthropic|llm):/, "")}${opener ? ` · ${opener}` : ""}`;
+    const player = this.record.seats[side].player;
+    // a saved sound duel (src/versus/records.ts names its seats "sound-duel:host" and "sound-duel:guest"): the phone
+    // and the opener as the game names them, "Host phone · Air Wing"; the record itself stays as it is
+    const phone = SOUND_DUEL_SEAT.exec(player)?.[1];
+    if (phone) return `${phone === "host" ? "Host" : "Guest"} phone${opener ? ` · ${isOpenerId(opener) ? OPENERS[opener].name : opener}` : ""}`;
+    return `${player.replace(/^(openai|anthropic|llm):/, "")}${opener ? ` · ${opener}` : ""}`;
   }
 
   private index(): void {

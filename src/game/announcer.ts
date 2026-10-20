@@ -57,8 +57,10 @@ class Speech {
     this.pick();
     s.addEventListener?.("voiceschanged", () => this.pick());
     // iOS only lets speech start after it was first used inside a gesture
+    // (not in a sound duel's link mode: no speech then, and the listener
+    // stays for the first tap after it)
     const prime = () => {
-      if (this.primed) return;
+      if (this.primed || sfx.linkMode) return;
       this.primed = true;
       this.failures = 0;
       try {
@@ -253,7 +255,8 @@ export function radioCheck(): void {
   if (!sfx.enabled("voice")) return;
   squelch(true);
   const fallback = () => code("info", 2);
-  if (sfx.settings.speech && speech.usable) {
+  // link mode (a sound duel) speaks no words: the code stands in
+  if (sfx.settings.speech && !sfx.linkMode && speech.usable) {
     if (!speech.speak("Radio check", "info", () => squelch(false), fallback)) fallback();
   } else fallback();
 }
@@ -306,16 +309,16 @@ export class Announcer {
     });
     // every banner is read out too (its text is on screen, so no caption)
     this.offAnnounce = onAnnounce((a) => this.announced(a));
-    // the Voice switch (or master mute) cuts a line mid-word
+    // the Voice switch (or master mute, or link mode) cuts a line mid-word
     this.offChange = sfx.onChange(() => {
       if (!this.speechOn) speech.cancel();
     });
     active = this;
   }
 
-  /** May lines be spoken (not just coded)? */
+  /** May lines be spoken (not just coded)? Never in a sound duel's link mode. */
   private get speechOn(): boolean {
-    return sfx.enabled("voice") && sfx.settings.speech;
+    return sfx.enabled("voice") && sfx.settings.speech && !sfx.linkMode;
   }
 
   /** This tick's sim events at sim time `t`. */

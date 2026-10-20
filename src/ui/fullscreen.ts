@@ -7,6 +7,10 @@
  * button reload the page, so a reload made while full screen leaves a note
  * (sessionStorage) and the next page asks again on the first tap or key.
  * Engine-free; the browser surface is injectable for tests.
+ *
+ * Every reload also puts iOS's audio session back to "auto"
+ * (resetAudioSession): a sound duel's page sets it to play-and-record, and
+ * Safari carries that over to the next page in the tab.
  */
 
 const KEY = "battledrones.fullscreen";
@@ -19,7 +23,40 @@ export interface FullscreenEnv {
   win: Pick<Window, "addEventListener" | "removeEventListener">;
   /** sessionStorage, or null where storage is blocked. */
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null;
+  /** navigator.audioSession (Safari 16.4 on), or null where there is none. */
+  audioSession?: AudioSessionLike | null;
   reload(): void;
+}
+
+/** iOS's audio session, as navigator.audioSession has it. */
+export interface AudioSessionLike {
+  type: string;
+}
+
+function browserAudioSession(): AudioSessionLike | null {
+  try {
+    return (navigator as Navigator & { audioSession?: AudioSessionLike }).audioSession ?? null;
+  } catch {
+    return null; // (no navigator)
+  }
+}
+
+/**
+ * Put iOS's audio session back to "auto", on every way out of a page and at
+ * every boot (main.ts). Safari keeps the type a page set across a reload or a
+ * navigation in the same tab: WebKit holds it as an override of the whole web
+ * process's audio category, and a new document resets only the type it reads
+ * back. So after a sound duel's page left play-and-record (src/link/rig.ts),
+ * the next page reads "auto" while its audio still runs as a call, and its
+ * contexts may take the low rate rig.ts "The rate" describes; only a write
+ * clears it. Writing "auto" where nothing else was set changes nothing.
+ */
+export function resetAudioSession(session: AudioSessionLike | null = browserAudioSession()): void {
+  try {
+    if (session) session.type = "auto";
+  } catch {
+    /* ignore */
+  }
 }
 
 function browserEnv(): FullscreenEnv {
@@ -29,15 +66,32 @@ function browserEnv(): FullscreenEnv {
   } catch {
     /* blocked: no restore after a reload */
   }
-  return { doc: document, win: window, storage, reload: () => reloadWithoutLink(window.location) };
+  const rematch = () => {
+    try {
+      return storage?.getItem("battledrones.rematch") ?? null;
+    } catch {
+      return null;
+    }
+  };
+  return { doc: document, win: window, storage, audioSession: browserAudioSession(), reload: () => reloadWithoutLink(window.location, rematch()) };
 }
 
-/** Reload, leaving a replay's `?replay=` link behind (main.ts watchLinked): its Menu buttons mean the menu. */
-export function reloadWithoutLink(loc: Pick<Location, "href" | "reload" | "assign">): void {
+/** What a replay's link (main.ts watchLinked) and a practice duel's (?duel=loop|relay, SOUND-DUEL.md "Dev and test modes") put in the URL. */
+const LINK_PARAMS = ["replay", "follow", "duel", "seat", "delay", "loss", "latency", "side"];
+
+/**
+ * Reload, leaving a replay's `?replay=` link and a practice duel's `?duel=`
+ * parameters behind: their Menu buttons mean the menu. Only such a page
+ * loses `side` too: a single-player `?side=red` reloads as it is (its
+ * Rematch and Menu stay red). A duel's Rematch (`rematch`, the token just
+ * stored, is "duel") keeps the duel's parameters, so a practice rematch is
+ * one again.
+ */
+export function reloadWithoutLink(loc: Pick<Location, "href" | "reload" | "assign">, rematch: string | null = null): void {
   const url = new URL(loc.href);
-  if (!url.searchParams.has("replay")) return loc.reload();
-  url.searchParams.delete("replay");
-  url.searchParams.delete("follow");
+  const q = url.searchParams;
+  if (!q.has("replay") && (!q.has("duel") || rematch === "duel")) return loc.reload();
+  for (const k of LINK_PARAMS) q.delete(k);
   loc.assign(url.href);
 }
 
@@ -64,7 +118,7 @@ export class Fullscreen {
     }
   }
 
-  /** Reload the page (a rematch or the menu), remembering whether the game was full screen. */
+  /** Reload the page (a rematch or the menu), remembering whether the game was full screen, with iOS's audio session back to "auto". */
   reload(): void {
     const env = this.env();
     try {
@@ -73,6 +127,8 @@ export class Fullscreen {
     } catch {
       /* ignore */
     }
+    // (a duel's lobby may still hold the rig here, as at its Reload after a version error; its pagehide closes the rig too)
+    resetAudioSession(env.audioSession ?? null);
     env.reload();
   }
 

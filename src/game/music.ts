@@ -74,6 +74,7 @@ interface Graph {
   takFilter: BiquadFilterNode;
   sting: GainNode;
   reverbSend: GainNode;
+  reverb: ConvolverNode;
   delaySend: GainNode;
   delay: DelayNode;
   ambience: Ambience;
@@ -115,6 +116,8 @@ export class Music {
   private stingerUntil = 0;
   private lastStinger = -Infinity;
   private finished = false;
+  /** A sound duel's link mode: the reverb send is cut (its convolver idles, and nothing smears into the guard). */
+  private dry = false;
 
   /**
    * `manual`: no internal timer; the caller drives pump() (offline renders).
@@ -131,6 +134,16 @@ export class Music {
   setEnabled(on: boolean): void {
     this.enabled = on;
     this.sync();
+  }
+
+  /** Link mode (sfx.linkMode): bypass the reverb send while a sound duel runs. */
+  setLinkMode(on: boolean): void {
+    if (on === this.dry) return;
+    this.dry = on;
+    const g = this.g;
+    if (!g) return;
+    if (on) g.reverbSend.disconnect(g.reverb);
+    else g.reverbSend.connect(g.reverb);
   }
 
   setHidden(hidden: boolean): void {
@@ -170,8 +183,14 @@ export class Music {
    * nobody won (Robot Love's draw), a sweet sting on the tonic major, and
    * settle on a quiet coda. Returns false when music is off (play the SFX
    * jingle instead).
+   *
+   * `love: false` is a draw that isn't Robot Love's (a sound duel's two
+   * resigns on one tick, SOUND-DUEL.md "Resign"), or a duel that ended with no
+   * result (GameScene.abort): the score settles on the held tonic and its
+   * coda with no sting, since the love sting would tell of hearts that never
+   * showed. Victory and defeat don't change with it.
    */
-  finale(kind: "victory" | "defeat" | "draw"): boolean {
+  finale(kind: "victory" | "defeat" | "draw", o: { love?: boolean } = {}): boolean {
     if (this.finished) return true;
     if (!this.running || !this.e || !this.g) return false;
     this.finished = true;
@@ -179,7 +198,7 @@ export class Music {
     const t = this.nextBeat(0.04);
     this.renderEvents(this.composer.closeGates(), t);
     this.renderChord(this.composer.holdTonic(kind !== "defeat", 64), t, true);
-    this.playStinger(kind, t, true);
+    if (kind !== "draw" || o.love !== false) this.playStinger(kind, t, true);
     this.g.ambience.stop(t + 2);
     return true;
   }
@@ -371,7 +390,8 @@ export class Music {
     const reverb = c.createConvolver();
     reverb.buffer = impulse(c, 2.2);
     const reverbSend = gain(1);
-    reverbSend.connect(reverb).connect(gain(0.32, mix));
+    reverb.connect(gain(0.32, mix));
+    if (!this.dry) reverbSend.connect(reverb);
     sting.connect(gain(0.35, reverbSend));
     const delay = c.createDelay(1.5);
     delay.delayTime.value = (60 / MUSIC.battleBpm) * 0.75;
@@ -409,7 +429,7 @@ export class Music {
     const ambience = new Ambience(c, gain(1, muffle));
     return {
       fade, muffle, bed, level, gate, padFilter, padArtic, bassFilter, bassShaper, arpFilter,
-      hatFilter, snareFilter, crashFilter, takFilter, sting, reverbSend, delaySend, delay, ambience
+      hatFilter, snareFilter, crashFilter, takFilter, sting, reverbSend, reverb, delaySend, delay, ambience
     };
   }
 
@@ -877,8 +897,12 @@ function driveCurve(drive: number): Float32Array<ArrayBuffer> {
 export const music = new Music();
 
 sfx.onReady((e) => music.attach({ ctx: e.ctx, out: e.musicIn, noise: e.noise }));
-sfx.onChange(() => music.setEnabled(sfx.enabled("music")));
+sfx.onChange(() => {
+  music.setEnabled(sfx.enabled("music"));
+  music.setLinkMode(sfx.linkMode);
+});
 music.setEnabled(sfx.enabled("music"));
+music.setLinkMode(sfx.linkMode);
 onAnnounce((a) => music.announced(a));
 if (typeof document !== "undefined")
   document.addEventListener("visibilitychange", () => music.setHidden(document.hidden));

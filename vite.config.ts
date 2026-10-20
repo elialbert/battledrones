@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { MAP_ART } from "./src/game/map-art";
-import { simHash } from "./tools/arena/files";
+import { duelHash, simHash } from "./tools/arena/files";
 
 /**
  * Each map's terrain revision: a hash of its painted chunks (art/terrain.py
@@ -52,6 +52,8 @@ export default defineConfig({
     __TERRAIN_REVS__: JSON.stringify(terrainRevisions()),
     // the sim this build plays: the battle viewer checks a record played by other code before it vouches for it
     __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url)))),
+    // a sound duel pairs only two phones running the same sim and duel code (SOUND-DUEL.md)
+    __DUEL_HASH__: JSON.stringify(duelHash(fileURLToPath(new URL(".", import.meta.url)))),
     // the version tag this build is (v11), from tools/build-pages.mjs; null for main and local builds.
     // A record pinned to it (BattleRecord.version) is known to replay exactly, with nothing to check
     __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null)
@@ -62,8 +64,8 @@ export default defineConfig({
     chunkSizeWarningLimit: 1600,
     // the engine in its own chunk: game updates don't re-download three.js
     rollupOptions: {
-      // the game, plus the standalone vehicles reference page and battle record viewer
-      input: { main: "index.html", vehicles: "vehicles.html", records: "record-viewer.html" },
+      // the game, plus the standalone vehicles reference page, battle record viewer and radio probe
+      input: { main: "index.html", vehicles: "vehicles.html", records: "record-viewer.html", probe: "radio-probe.html" },
       output: { manualChunks: { three: ["three"] } }
     }
   },
