@@ -53,6 +53,8 @@ export interface AwarenessHooks {
    * speed is ignored, and nothing drops the speed: there is nothing to drop.
    */
   fixedSpeed?: boolean;
+  /** A glide (an arrow, ⚡, a squad chip) took the camera: the AI vs AI director stands aside. */
+  took?(): void;
 }
 
 /** Camera glide time for arrow / jump taps, ms. */
@@ -220,8 +222,14 @@ export class Awareness {
 
   /** Middle of the visible battlefield (tiles), clear of the HUD. */
   viewCentre(): { x: number; y: number } {
+    const c = this.playCentre();
+    return this.toWorld(c.x, c.y);
+  }
+
+  /** Middle of the visible battlefield on screen (CSS px). */
+  playCentre(): { x: number; y: number } {
     const p = this.ui.layout().play;
-    return this.toWorld((p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
+    return { x: (p.x0 + p.x1) / 2, y: (p.y0 + p.y1) / 2 };
   }
 
   /** Is tile point (x, y) at least `margin` CSS px inside the visible battlefield? */
@@ -234,6 +242,7 @@ export class Awareness {
   /** Glide the camera so (x, y) sits in the middle of the visible battlefield. */
   glideTo(x: number, y: number): void {
     if (this.h.cinematic?.()) return;
+    this.h.took?.();
     const p = this.ui.layout().play;
     const to = this.h.rig.targetFor(x, y, (p.x0 + p.x1) / 2, (p.y0 + p.y1) / 2);
     const rig = this.h.rig;
