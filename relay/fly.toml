@@ -1,0 +1,36 @@
+# The Battle Drones relay (README.md). One machine only: both players of a
+# room must reach the same process, so deploy with --ha=false.
+app = "battledrones-relay"
+primary_region = "sjc"
+
+[build]
+
+[env]
+  PORT = "8080"
+  # Comma-separated origins the relay accepts; unset: any
+  # ALLOWED_ORIGINS = "https://simonw.github.io"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Scale to zero: Fly stops the machine when no sockets are open and starts
+  # it again (a second or two) on the next connection
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 2000
+    hard_limit = 4000
+
+  [[http_service.checks]]
+    grace_period = "5s"
+    interval = "30s"
+    timeout = "2s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
