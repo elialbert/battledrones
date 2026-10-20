@@ -99,6 +99,8 @@ export class CorrBand {
   /** ρ is known for decimated indices [from, done). */
   from = 0;
   done = 0;
+  /** The end (decimated index) of the newest block in which a bin of the band itself was excised (−Infinity: none). */
+  excisedTo = -Infinity;
   // the candidate detector
   private best = -1;
   private bestR = 0;
@@ -167,6 +169,7 @@ export class CorrBand {
     this.from = this.done = n;
     this.best = -1;
     this.bestR = 0;
+    this.excisedTo = -Infinity;
   }
 
   /** ρ of one pattern at decimated index n (0 outside what is known; kept a float, see decode.ts). */
@@ -546,6 +549,7 @@ export class SyncSearch {
         xr[i] = 0;
         xi[i] = 0;
         this.excised++;
+        if (i >= c.inLo && i < c.inHi) c.excisedTo = this.n0 + this.hopD;
       }
     }
   }

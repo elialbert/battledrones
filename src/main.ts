@@ -667,6 +667,9 @@ function showMenu(linkedMap?: string | null): void {
   /** The lobby let the duel's audio go with no match (Cancel, an error, the rematch's fallback), or the rematch was declined: the menu again. */
   const duelClosed = () => {
     duelLive = false;
+    // (a game began from the menu while a lobby still said the end, after a Cancel past GO: the menu and its music
+    // are gone, the game's own music plays, and the lobby has let the rig, the guard and link mode go itself)
+    if (starting) return;
     syncDuelBtn();
     rematchScreen?.remove();
     rematchScreen = null;
@@ -690,7 +693,7 @@ function showMenu(linkedMap?: string | null): void {
     const rig = tap.practice ? null : d.openRig({ micMode: tap.micMode });
     if (!tap.practice)
       try {
-        sfx.setLinkGuard("high", { cutDb: tap.cutDb });
+        sfx.setLinkGuard("high");
       } catch (e) {
         console.warn("link guard:", e); // (the duel goes on without it)
       }

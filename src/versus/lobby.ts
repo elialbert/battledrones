@@ -10,7 +10,7 @@
  *
  *   the Duel tap (main.ts, synchronously):  const t = duel.tapPlan(); sfx.unlock()
  *     const rig = t.practice ? null : duel.openRig({ micMode: t.micMode })
- *     t.practice || sfx.setLinkGuard("high", { cutDb: t.cutDb }); music.stop(); void fullscreen.enter()
+ *     t.practice || sfx.setLinkGuard("high"); music.stop(); void fullscreen.enter()
  *     duel.showLobby({ host: menu, rig, shownMap, mutators, start, onClose })
  *   the rematch's reconnect tap: the same with tapPlan(true), then duel.reconnect({ … })
  *
@@ -110,10 +110,20 @@
  *    next page in the tab. From the match on, VersusFeed's pagehide does it;
  *  - window.__duel.state is the lobby's step (LobbyStep) until the feed is
  *    built, then the session's phase; result is null until the match begins,
- *    then the lockstep's end, decision and end check.
+ *    then the lockstep's end, decision and end check;
+ *  - the modem's errors (the link's onError) are all logged. One after which
+ *    the modem no longer reports (it stopped, or never started: its stats go
+ *    stale at once) ends the lobby as a RigError does, "The sound link
+ *    stopped working" over the modem's own words, the audio let go at once:
+ *    Close and a new Duel tap build a new modem. Without this the route
+ *    check would read the silent modem as a phone that can't hear itself,
+ *    and give the wrong advice. A message the modem refused (it runs on) is
+ *    only logged, as is anything from a link the lobby let go or, once the
+ *    match began, from the match's (its stall pill and Leave are the way out
+ *    there).
  */
 import "./lobby.css";
-import { GUARD_CUT_DB, sfx } from "../game/audio";
+import { sfx } from "../game/audio";
 import { gameMode } from "../game/mode";
 import type { ModemStats } from "../link/modem/core";
 import { CAPTURE_OK_MS, RigError, type MicMode, type Rig, type RigErrorReason } from "../link/rig";
@@ -243,30 +253,19 @@ function readRematch(take: boolean): DuelRematch | null {
   }
 }
 
-/** An iPhone or iPad (iPadOS reports a Mac with touch). */
-function isIos(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-}
-
-/** The guard's cut (SOUND-DUEL.md "Game audio guard" > Cut): 0 on iOS in raw mode, where the page's sound goes to the earpiece. */
-export const cutDbFor = (micMode: MicMode, ios = isIos()): number => (ios && micMode === "raw" ? 0 : GUARD_CUT_DB);
-
 /** What the Duel tap needs before the lobby exists. */
 export interface DuelTap {
   /** The microphone mode to open the rig with: the lobby's setting, or the rematch's. */
   micMode: MicMode;
   /** A practice link: no rig, no guard. */
   practice: PracticeMode | null;
-  /** The band guard's cut (dB). */
-  cutDb: number;
 }
 
 /** For main.ts's Duel tap (`rematch`: the rematch's reconnect tap). */
 export function tapPlan(rematch = false): DuelTap {
   const p = parseDuelParams(location.search);
   const micMode = (rematch ? readRematch(false)?.micMode : null) ?? loadPrefs().micMode;
-  return { micMode, practice: p.mode === "sound" ? null : p.mode, cutDb: cutDbFor(micMode) };
+  return { micMode, practice: p.mode === "sound" ? null : p.mode };
 }
 
 /** Uniform in [0, 1) from the platform's CSPRNG: the pairing's nonces. */
@@ -303,7 +302,8 @@ export type LobbyStep =
   | "closed";
 
 export interface LobbyError {
-  kind: "rig" | "version" | "failed" | "relay" | "left" | "other";
+  /** "modem": the link's modem stopped (its words are the message). */
+  kind: "rig" | "version" | "failed" | "relay" | "left" | "modem" | "other";
   message: string;
   /** A rig error's reason. */
   reason?: RigErrorReason;
@@ -315,6 +315,8 @@ export interface LobbyError {
 export interface LobbyLink extends LinkTransport {
   setGain?(gain: number): void;
   modemStats?(): ModemStats | null;
+  /** The modem's errors (RigLink: the worklet's, kept across rebuilds). */
+  onError?: ((message: string) => void) | null;
 }
 
 /** What the lobby uses of the rig. */
@@ -334,8 +336,8 @@ export interface LobbyEnv {
   practice: PracticeMode | null;
   /** A link in these bands; `offer` is the host's, whoever hosts (the loop's friend may). Rejects with a RigError, or an Error named "RelayError". */
   link(cfg: { plan: BandPlan; tx: BandRole; rx: BandRole | "detect" }, offer: HostOffer): Promise<LobbyLink>;
-  /** The game audio's band guard (null: off). Practice links have none. */
-  guard(plan: BandPlan | null, micMode: MicMode): void;
+  /** The game audio's band guard (null: off), at its full cut whatever the microphone mode (audio.ts GUARD_CUT_DB). Practice links have none. */
+  guard(plan: BandPlan | null): void;
   /** The menu's shownMap() and activeMutators() at the tap, and the side the host plays. */
   offer: { map: string; mutators: MutatorId[]; hostSide: Faction };
   /** Pair at once: a rematch (its role, plan, and the host's map, mutators and side), or a relay seat. */
@@ -424,6 +426,14 @@ export const REMATCH_FALLBACK_MS = 60_000;
 export const QUIET_MS = NOTHING_HEARD_MS;
 
 const otherRole = (r: BandRole): BandRole => (r === "host" ? "guest" : "host");
+
+/** The link's modem stopped, or never started: an error after which it no longer reports. */
+class ModemError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModemError";
+  }
+}
 
 /** The lobby's logic, DOM-free: call update() every frame, read state(), and send it the taps. */
 export class LobbyMachine {
@@ -533,9 +543,8 @@ export class LobbyMachine {
     if (mode === this.env.prefs.micMode) return;
     this.env.prefs.micMode = mode;
     this.env.savePrefs(this.env.prefs);
-    // (the rig keeps the old microphone if the new request fails)
+    // (the rig asks for the old mode again if the new request fails)
     this.env.rig?.setMicMode(mode).catch((e: unknown) => console.warn("microphone mode:", e));
-    if (this.guardPlan) this.env.guard(this.guardPlan, mode);
   }
 
   /** Cancel, or Close on an error: say the end to a friend that may have started, then let the audio go. */
@@ -689,6 +698,7 @@ export class LobbyMachine {
     }
     const now = env.now();
     this.link = link;
+    link.onError = (message) => this.linkError(link, message);
     this.linkAt = now;
     this.sessionAt = now;
     this.gain = GAIN_START;
@@ -736,7 +746,18 @@ export class LobbyMachine {
   private setGuard(plan: BandPlan, force = false): void {
     if (this.env.practice || (plan === this.guardPlan && !force)) return;
     this.guardPlan = plan;
-    this.env.guard(plan, this.env.prefs.micMode);
+    this.env.guard(plan);
+  }
+
+  /**
+   * The modem's error (see the header). WorkletTransport makes the stats of
+   * a modem that stopped stale at once, before it calls onError, so a modem
+   * still reporting has only refused a message.
+   */
+  private linkError(link: LobbyLink, message: string): void {
+    const ours = link === this.link && !this.released && this.step !== "started";
+    if (ours && !link.modemStats?.()) this.fail(new ModemError(message));
+    else console.warn("sound link:", message);
   }
 
   private fail(e: unknown): void {
@@ -744,6 +765,7 @@ export class LobbyMachine {
     console.warn("sound duel:", e);
     if (e instanceof RigError) this.fatal = { kind: "rig", reason: e.reason, message: e.message };
     else if (e instanceof Error && e.name === "RelayError") this.fatal = { kind: "relay", message: e.message };
+    else if (e instanceof ModemError) this.fatal = { kind: "modem", message: e.message };
     else this.fatal = { kind: "other", message: e instanceof Error ? e.message : String(e) };
     this.step = "error";
     this.dropSession();
@@ -782,7 +804,7 @@ export class LobbyMachine {
     this.session?.close();
     this.link?.close();
     this.env.rig?.close();
-    if (this.guardPlan) this.env.guard(null, this.env.prefs.micMode);
+    if (this.guardPlan) this.env.guard(null);
     this.guardPlan = null;
     this.env.released(why);
   }
@@ -1109,6 +1131,11 @@ function errorHtml(v: LobbyView): { body: string; actions: string } {
       return { body: `<p class="duel-err">${esc(e.message)}</p><p class="sh-note">The page has no window.__duelOut: connect it with the relay harness.</p>`, actions: close };
     case "left":
       return { body: `<p class="duel-err">${esc(e.message)}.</p>`, actions: close };
+    case "modem":
+      return {
+        body: `<p class="duel-err">The sound link stopped working.</p><p class="sh-note">Close, then tap Duel to start it again. (${esc(e.message)})</p>`,
+        actions: close + reload
+      };
     default:
       return { body: `<p class="duel-err">Something went wrong: ${esc(e.message)}</p>`, actions: close };
   }
@@ -1190,10 +1217,10 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
       if (!o.rig) throw new RigError("no-audio");
       return o.rig.createLink(cfg);
     },
-    guard: (plan, micMode) => {
+    guard: (plan) => {
       if (practice) return;
       try {
-        sfx.setLinkGuard(plan, { cutDb: cutDbFor(micMode) });
+        sfx.setLinkGuard(plan);
       } catch (e) {
         console.warn("link guard:", e);
       }

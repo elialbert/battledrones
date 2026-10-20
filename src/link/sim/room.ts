@@ -30,7 +30,9 @@
  *    windowed sinc;
  *  - microphone noise, an optional band limit (low-pass), clipping at ±1,
  *    and injected capture gaps: input zeros, or a frame-counter jump (the
- *    audio thread missed J frames: nothing rendered, nothing captured).
+ *    audio thread missed J frames: nothing rendered, nothing captured);
+ *  - optional screen taps: the player's fingers on this phone's glass, which
+ *    its own microphone hears as clicks (see TAP_MS).
  *
  * Calibration. The peer path's levels are tuned so the radio probe's own
  * analysis (21.3 ms symbols, 5.3 ms prefix) reads an effective SNR of about
@@ -84,6 +86,26 @@ export interface RoomSide {
   guard?: BandPlan;
   /** Speaker nonlinearity (default: harmonics about 40–60 dB down at the modem's level); null for a linear speaker. */
   speaker?: SpeakerModel | null;
+  /** Screen taps at this phone, heard by its own microphone (default none). */
+  screenTaps?: ScreenTaps | null;
+}
+
+/**
+ * Screen taps: clicks at seeded random times (a Poisson process, none within
+ * another), each a burst of white noise decaying over TAP_MS. A white click
+ * reaches all the modem's bands alike: its power within a 3 kHz band (the
+ * high plan's) over its 3 ms is about `db` − 17 dB, within a 1.5 kHz band
+ * (the low plan's) `db` − 20. A real tap's sound is mostly below 9 kHz (a
+ * burst at about 8 kHz, then 4 kHz, then a thump: Shumailov et al.,
+ * "Hearing your touch", 2019): quieter than this in the high plan's bands,
+ * perhaps not in the low plan's guest band (8–9.5 kHz). How loud taps
+ * really are at a phone's own microphone is not measured yet.
+ */
+export interface ScreenTaps {
+  /** Taps a second, on average. */
+  perSecond: number;
+  /** The click's level as it starts: the RMS of its noise at onset (dBFS). */
+  db: number;
 }
 
 export interface RoomOptions {
@@ -335,6 +357,10 @@ function gameLoop(sr: number, plan: BandPlan): Float32Array {
   return g;
 }
 
+/** A tap's decay time constant and length (ms). */
+const TAP_TAU_MS = 1;
+export const TAP_MS = 3;
+
 /** Gaussian noise, precomputed: each block reads 128 values from a random place. */
 const NOISE = 1 << 16;
 let noiseTable: Float32Array | null = null;
@@ -455,6 +481,11 @@ class Phone {
   /** Pending: a frame jump, and capture gaps (input frames [from, to) zeroed). */
   jump = 0;
   readonly zeros: [number, number][] = [];
+  /** Screen taps (null: none): their own random stream, so a room without them is the room it always was; the next tap's onset (input frame), and where its noise is read from. */
+  readonly screenTaps: ScreenTaps | null;
+  readonly tapRand: () => number;
+  nextTap = Infinity;
+  tapNoise = 0;
 
   constructor(o: RoomSide, seed: number, endpoint: RoomEndpoint) {
     this.sr = o.sampleRate ?? 48000;
@@ -479,6 +510,17 @@ class Phone {
     }
     this.jamPos = Math.floor(r() * (this.jam?.length ?? 1));
     this.lp = o.lowpassHz ? [new Biquad(this.sr, o.lowpassHz), new Biquad(this.sr, o.lowpassHz)] : null;
+    this.screenTaps = o.screenTaps && o.screenTaps.perSecond > 0 ? o.screenTaps : null;
+    this.tapRand = mulberry(seed ^ 0x7a9b3c1d);
+    if (this.screenTaps) {
+      this.nextTap = this.tapAfter(0);
+      this.tapNoise = Math.floor(this.tapRand() * NOISE);
+    }
+  }
+
+  /** The onset of the tap after frame f (an exponential wait). */
+  tapAfter(f: number): number {
+    return f + Math.max(1, Math.round((-Math.log(1 - this.tapRand()) / this.screenTaps!.perSecond) * this.sr));
   }
 
   /** True time of frame n. */
@@ -708,6 +750,26 @@ export class Room {
     this.onBlock?.(side, f);
   }
 
+  /** Add the screen taps that sound during frames [f, f + 128) to the microphone block. */
+  private tap(p: Phone, f: number): void {
+    const amp = Math.pow(10, p.screenTaps!.db / 20);
+    const len = Math.round((TAP_MS / 1000) * p.sr);
+    const tau = (TAP_TAU_MS / 1000) * p.sr;
+    // p.nextTap is the onset of the tap sounding now, or of the next one
+    while (p.nextTap < f + BLOCK) {
+      const onset = p.nextTap;
+      const to = Math.min(f + BLOCK, onset + len);
+      for (let n = Math.max(f, onset); n < to; n++) {
+        const k = n - onset;
+        p.mic[n - f] = p.mic[n - f]! + amp * Math.exp(-k / tau) * this.noise[(p.tapNoise + k) % NOISE]!;
+      }
+      if (onset + len > f + BLOCK) break;
+      // the next, after this one has died away (a finger doesn't tap twice in 3 ms)
+      p.nextTap = p.tapAfter(onset + len);
+      p.tapNoise = Math.floor(p.tapRand() * NOISE);
+    }
+  }
+
   /** The microphone block of phone `side` at frames [f, f + 128). */
   private hear(side: 0 | 1, f: number): void {
     const p = this.phones[side];
@@ -743,11 +805,12 @@ export class Room {
       for (let j = 0; j < W; j++) acc += table[o + j]! * far[base + j]!;
       mic[i] = mic[i]! + acc;
     }
-    // noise, band limit, clipping, gaps
+    // noise, screen taps, band limit, clipping, gaps
     const nz = this.noise;
     const at = Math.floor(p.rand() * NOISE);
     const sd = p.noise;
     for (let i = 0; i < BLOCK; i++) mic[i] = mic[i]! + sd * nz[at + i]!;
+    if (p.screenTaps) this.tap(p, f);
     if (p.lp) for (let i = 0; i < BLOCK; i++) mic[i] = p.lp[1].run(p.lp[0].run(mic[i]!));
     for (let i = 0; i < BLOCK; i++) mic[i] = Math.min(1, Math.max(-1, mic[i]!));
     for (let z = 0; z < p.zeros.length; z++) {

@@ -164,9 +164,17 @@ export interface GapEvent {
   frames: number;
 }
 
-/** Tone-samples of DFT work per call: the lock's tracker live needs about 15,000 at 48 kHz. */
-const BUDGET = 48_000;
-const MONITOR_BUDGET = 8_000;
+/**
+ * Tone-samples of DFT work per input frame of the block: the lock's tracker
+ * live needs about 99 (120 tones, each over N + β samples a symbol of ts:
+ * the same at any rate), the self-monitor's pilots about 12. The budget
+ * grows with the block, since the work does: a fixed 48,000 a call (a
+ * 128-frame block's share, as here) was less than a 512-frame piece brings
+ * in, and with blocks of 512 or more the lock fell behind by 5% of the time
+ * elapsed until its windows fell off the ring and it heard nothing.
+ */
+const BUDGET = 375;
+const MONITOR_BUDGET = 62.5;
 /** A lock won on a friend not heard for longer than this (s), whose stream started over, restarts this phone's superframe (see above)... */
 const REACQUIRE_S = 1;
 /** ...unless it restarted for that less than this long ago (s), or restarted at all since it last heard the friend. */
@@ -317,8 +325,8 @@ export class ModemCore {
       this.ring.write(input, off, off + n);
     }
     this.tx.process(output, off, n, frame);
-    this.rx.step(BUDGET);
-    this.mon.step(this.tx, this.search, this.ring, MONITOR_BUDGET);
+    this.rx.step(BUDGET * n);
+    this.mon.step(this.tx, this.search, this.ring, MONITOR_BUDGET * n);
     // one deferred heavy job: a waiting decode first, else the sync search's next FFT
     if (!this.rx.runDecode()) this.search.runJob(this.ring);
     if (this.rx.detected) this.planFound(this.rx.detected);

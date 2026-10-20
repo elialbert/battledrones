@@ -51,15 +51,18 @@ export class InputRing {
     this.end += to - from;
   }
 
-  /** Append `n` missing samples as zeros, and remember them as a gap. */
+  /**
+   * Append `n` missing samples as zeros, and remember them as a gap. (Native
+   * fills: a jump of a second or more zeroes up to the whole ring in one
+   * call, which a loop run cold, as it is the first time, took 1–3 ms over.)
+   */
   skip(n: number): void {
     const from = this.end;
     const fill = Math.min(n, RING_SIZE);
-    let p = (this.end + n - fill) % RING_SIZE;
-    for (let i = 0; i < fill; i++) {
-      this.buf[p] = 0;
-      p = p + 1 === RING_SIZE ? 0 : p + 1;
-    }
+    const p = (this.end + n - fill) % RING_SIZE;
+    const q = Math.min(p + fill, RING_SIZE);
+    this.buf.fill(0, p, q);
+    this.buf.fill(0, 0, fill - (q - p));
     this.end += n;
     this.markGap(from, this.end);
   }

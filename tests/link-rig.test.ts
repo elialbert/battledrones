@@ -3,7 +3,7 @@
 // reconnect overlay's tap, mic modes, the wake lock and closing, all against
 // fakes of the browser's pieces (a context, a microphone, a wake lock, the
 // page's visibility, timers on a manual clock) and of the WorkletTransport.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModemConfig, ModemStats } from "../src/link/modem/core";
 import { LEAVE_AFTER_FAILURES, openRig, RigError, RIG_MESSAGES, type MicMode, type RigEnv, type RigTransport } from "../src/link/rig";
 import { PAYLOAD_BITS, type BandPlan, type LinkPacket, type LinkStats, type ModemMode, type OutFrame } from "../src/link/transport";
@@ -192,9 +192,12 @@ class FakeDevices extends Emitter {
 
 class FakeWakeLock {
   requests = 0;
+  /** How the next requests are answered. */
+  answer: "grant" | "refuse" = "grant";
   sentinels: { released: boolean; release(): Promise<void>; addEventListener(): void }[] = [];
   request(): Promise<{ released: boolean; release(): Promise<void>; addEventListener(): void }> {
     this.requests++;
+    if (this.answer === "refuse") return Promise.reject(Object.assign(new Error("refused"), { name: "NotAllowedError" }));
     const s = {
       released: false,
       release() {
@@ -293,6 +296,8 @@ interface World {
   nextCtx: Partial<Pick<FakeCtx, "sampleRate" | "resumeMode" | "audioWorklet">>;
   /** The rate of contexts made once a microphone request has been granted (Safari reads the session's rate afresh when capture activates it); undefined: nextCtx's. */
   rateAfterMic: number | undefined;
+  /** The rates of the next contexts made, one each while it lasts (before rateAfterMic and nextCtx). */
+  ctxRates: number[];
   /** The audio session's type when each context was made. */
   sessionAtContext: string[];
   noAudio: boolean;
@@ -310,7 +315,7 @@ function world(): World {
   const session = { type: "auto" };
   const doc = Object.assign(new Emitter(), { visibilityState: "visible" as DocumentVisibilityState });
   const w: World = {
-    clock, devices, wake, session, doc, contexts: [], nextCtx: {}, rateAfterMic: undefined, sessionAtContext: [], noAudio: false, worklet: "ok", heldWorklets: [],
+    clock, devices, wake, session, doc, contexts: [], nextCtx: {}, rateAfterMic: undefined, ctxRates: [], sessionAtContext: [], noAudio: false, worklet: "ok", heldWorklets: [],
     env: null as unknown as RigEnv
   };
   w.env = {
@@ -318,7 +323,11 @@ function world(): World {
     document: doc,
     createContext: () => {
       if (w.noAudio) return null;
-      const after = w.devices.streams.length > 0 && w.rateAfterMic !== undefined ? { sampleRate: w.rateAfterMic } : {};
+      const after = w.ctxRates.length
+        ? { sampleRate: w.ctxRates.shift()! }
+        : w.devices.streams.length > 0 && w.rateAfterMic !== undefined
+          ? { sampleRate: w.rateAfterMic }
+          : {};
       const c = Object.assign(new FakeCtx(), w.nextCtx, after);
       w.contexts.push(c);
       w.sessionAtContext.push(session.type);
@@ -827,11 +836,88 @@ describe("the lifecycle", () => {
     expect(w.devices.streams[0]!.track.stopped).toBe(true);
     expect(w.contexts[0]!.sources[1]!.to).toBe(FakeTransport.made[0]!.node);
     expect(w.contexts[0]!.sources[0]!.to).toBeNull();
-    // a refused request keeps the old stream
-    w.devices.answer = "deny";
+    // a refused request asks for the old mode again, and keeps it
+    const gum = w.devices.getUserMedia.bind(w.devices);
+    let refuse = 1;
+    w.devices.getUserMedia = (c) => (refuse-- > 0 ? Promise.reject(Object.assign(new Error("denied"), { name: "NotAllowedError" })) : gum(c));
     await expect(rig.setMicMode("raw")).rejects.toMatchObject({ reason: "mic-refused" });
     expect(rig.micMode).toBe("ec");
-    expect(w.devices.streams[1]!.track.stopped).toBe(false);
+    expect(w.devices.streams[1]!.track.stopped).toBe(true);
+    const back = w.devices.streams[2]!;
+    expect((back.constraints.audio as MediaTrackConstraints).echoCancellation).toBe(true);
+    expect(w.contexts[0]!.sources.at(-1)).toMatchObject({ stream: back, to: FakeTransport.made[0]!.node });
+    await w.clock.advance(300);
+    expect(rig.state).toBe("running");
+    // refused both times: no microphone, which the watch reports once the switch is over (the overlay's tap asks again)
+    refuse = 2;
+    await expect(rig.setMicMode("raw")).rejects.toMatchObject({ reason: "mic-refused" });
+    await w.clock.advance(200);
+    expect(rig.lost).toBe("track-ended");
+    expect(await rig.reconnect()).toBe(true);
+    expect(rig.micMode).toBe("ec");
+    expect(w.contexts[0]!.sources.at(-1)).toMatchObject({ stream: w.devices.streams[3], to: FakeTransport.made[0]!.node });
+    rig.close();
+  });
+
+  it("lets the old microphone go before asking for the new mode, one switch at a time, and the watch waits for it", async () => {
+    // Chrome on Android picks its communication mode as the first input stream opens, and leaves it as the last one closes
+    const w = world();
+    const { rig, lost } = await running(w);
+    const live: number[] = [];
+    const gum = w.devices.getUserMedia.bind(w.devices);
+    w.devices.getUserMedia = (c) => {
+      live.push(w.devices.streams.filter((s) => s.track.readyState === "live").length);
+      return gum(c);
+    };
+    w.devices.answer = "hold";
+    const switched = rig.setMicMode("ec");
+    await settle();
+    expect(live).toEqual([0]);
+    // the request takes a while: the stopped track is no loss
+    await w.clock.advance(800);
+    expect(lost).toEqual([]);
+    expect(rig.state).toBe("running");
+    w.devices.held[0]!();
+    await switched;
+    expect(rig.micMode).toBe("ec");
+    expect(w.contexts[0]!.sources.at(-1)).toMatchObject({ stream: w.devices.streams[1], to: FakeTransport.made[0]!.node });
+    // two switches at once: the second waits for the first, and the last one asked for holds
+    w.devices.answer = "grant";
+    await Promise.all([rig.setMicMode("raw"), rig.setMicMode("ec")]);
+    expect(live).toEqual([0, 0, 0]);
+    expect(rig.micMode).toBe("ec");
+    expect((w.devices.streams[3]!.constraints.audio as MediaTrackConstraints).echoCancellation).toBe(true);
+    await w.clock.advance(300);
+    expect(lost).toEqual([]);
+    // a request that doesn't come back: after 3 s the watch calls the microphone gone (the overlay's tap asks again)
+    w.devices.answer = "hang";
+    void rig.setMicMode("raw");
+    await w.clock.advance(2900);
+    expect(lost).toEqual([]);
+    await w.clock.advance(200);
+    expect(lost).toEqual(["track-ended"]);
+    rig.close();
+  });
+
+  it("takes no microphone the link can't use on a mode switch", async () => {
+    const w = world();
+    const { rig, lost } = await running(w);
+    // the new mode's comes at 16 kHz, the old mode's again at 48
+    w.devices.micRates = [16000, 48000];
+    await expect(rig.setMicMode("ec")).rejects.toMatchObject({ reason: "rate", message: "This phone's microphone runs at 16000 Hz, which the sound link can't use" });
+    expect(rig.micMode).toBe("raw");
+    expect(w.devices.streams[1]!.track.stopped).toBe(true);
+    const back = w.devices.streams[2]!;
+    expect((back.constraints.audio as MediaTrackConstraints).echoCancellation).toBe(false);
+    expect(w.contexts[0]!.sources.at(-1)).toMatchObject({ stream: back, to: FakeTransport.made[0]!.node });
+    await w.clock.advance(300);
+    expect(lost).toEqual([]);
+    // both at 16 kHz: none is taken, and the watch reports the microphone gone
+    w.devices.micRate = 16000;
+    await expect(rig.setMicMode("ec")).rejects.toMatchObject({ reason: "rate" });
+    expect(w.devices.streams.slice(3).every((s) => s.track.stopped)).toBe(true);
+    await w.clock.advance(200);
+    expect(lost).toEqual(["track-ended"]);
     rig.close();
   });
 
@@ -866,7 +952,8 @@ describe("the lifecycle", () => {
       expect(rig.failures).toBe(1);
       const asked = w.devices.streams[1]!;
       expect(asked.track.stopped, bad).toBe(true);
-      expect(w.contexts[1]!.state).toBe("closed");
+      // (at a low rate, settleRate's second try made one more: no higher, so let go at once)
+      expect(w.contexts.slice(1).map((c) => [c.sampleRate, c.state])).toEqual(bad === "rate" ? [[16000, "closed"], [16000, "closed"]] : [[48000, "closed"]]);
       rig.close();
       expect(asked.track.readyState).toBe("ended");
     }
@@ -990,6 +1077,172 @@ describe("the lifecycle", () => {
     expect(rig.state).toBe("running");
     await w.clock.advance(3000);
     expect(rig.captureOkMs()).toBe(3000);
+    rig.close();
+  });
+
+  it("keeps a context that moved on after a resume that didn't take (an iOS call ending) rather than rebuilding it", async () => {
+    for (const after of ["running", "suspended"] as const) {
+      const w = world();
+      const { rig, ctx, lost } = await running(w);
+      ctx.resumeMode = "hang";
+      ctx.set("interrupted" as AudioContextState);
+      await w.clock.advance(600);
+      expect(lost).toEqual(["context"]);
+      // a tap during the call: WebKit's resume waits for the interruption to end
+      const ok = rig.reconnect();
+      await w.clock.advance(1000);
+      expect(await ok).toBe(false);
+      // the call ends: the context runs again by itself, or waits suspended for a resume
+      ctx.resumeMode = "run";
+      ctx.set(after);
+      await w.clock.advance(2000);
+      expect(rig.state).toBe("lost");
+      expect(await rig.reconnect(), after).toBe(true);
+      expect(w.contexts, after).toHaveLength(1);
+      expect(FakeTransport.made).toHaveLength(1);
+      expect(rig.failures).toBe(0);
+      rig.close();
+    }
+    // once it has run again, the next interruption's first tap tries a resume before any rebuild
+    const w = world();
+    const { rig, ctx } = await running(w);
+    ctx.resumeMode = "hang";
+    ctx.set("interrupted" as AudioContextState);
+    await w.clock.advance(600);
+    let ok = rig.reconnect();
+    await w.clock.advance(1000);
+    expect(await ok).toBe(false);
+    ctx.set("running");
+    await w.clock.advance(500);
+    ctx.set("interrupted" as AudioContextState);
+    await w.clock.advance(600);
+    ok = rig.reconnect();
+    await w.clock.advance(1000);
+    expect(await ok).toBe(false);
+    expect(w.contexts).toHaveLength(1);
+    // still interrupted at the next tap: that one rebuilds
+    ok = rig.reconnect();
+    expect(w.contexts).toHaveLength(2);
+    expect(await ok).toBe(true);
+    rig.close();
+  });
+
+  it("takes no microphone on a reconnect whose own rate can't carry the plan (a Bluetooth headset joining mid-match), and asks again at each tap", async () => {
+    const w = world();
+    const { rig, lost } = await running(w);
+    const node = FakeTransport.made[0]!.node;
+    // a headset connects: input and output move to it, at 16 kHz
+    w.devices.devices.push({ kind: "audioinput", deviceId: "headset" }, { kind: "audiooutput", deviceId: "headset" });
+    w.devices.micRate = 16000;
+    w.devices.emit("devicechange");
+    await w.clock.advance(300);
+    expect(lost).toEqual(["devicechange"]);
+    for (let i = 1; i <= 2; i++) {
+      expect(await rig.reconnect(), `tap ${i}`).toBe(false);
+      expect(w.devices.streams).toHaveLength(1 + i);
+      expect(w.devices.streams[i]!.track.stopped).toBe(true);
+      expect(rig.lastError).toMatchObject({ reason: "rate", message: "This phone's microphone runs at 16000 Hz, which the sound link can't use" });
+      expect(rig.failures).toBe(i);
+      expect(rig.state).toBe("lost");
+      expect(w.contexts[0]!.sources.at(-1)!.stream).toBe(w.devices.streams[0]);
+    }
+    // the headset goes: the next tap's microphone carries it
+    w.devices.devices = w.devices.devices.filter((d) => d.deviceId !== "headset");
+    w.devices.micRate = 48000;
+    w.devices.emit("devicechange");
+    await settle();
+    expect(await rig.reconnect()).toBe(true);
+    expect(rig.failures).toBe(0);
+    expect(rig.lastError).toBeNull();
+    expect(w.contexts[0]!.sources.at(-1)).toMatchObject({ stream: w.devices.streams[3], to: node });
+    expect(w.devices.streams[0]!.track.stopped).toBe(true);
+    rig.close();
+
+    // a kept microphone that came to report a rate the plan can't use is asked for again at the tap
+    const w2 = world();
+    const r = await running(w2);
+    r.track.rate = 16000;
+    r.ctx.resumeMode = "hang";
+    r.ctx.set("suspended");
+    await w2.clock.advance(600);
+    expect(r.lost).toEqual(["context"]);
+    r.ctx.resumeMode = "run";
+    expect(await r.rig.reconnect()).toBe(true);
+    expect(w2.devices.streams).toHaveLength(2);
+    expect(w2.contexts[0]!.sources.at(-1)).toMatchObject({ stream: w2.devices.streams[1], to: FakeTransport.made[0]!.node });
+    r.rig.close();
+  });
+
+  it("gives a rebuilt context settleRate's second try: one made once the microphone is in, kept when its rate is higher", async () => {
+    const w = world();
+    const { rig, link, ctx, track } = await running(w);
+    link.send([frame(2)]);
+    track.end();
+    ctx.set("closed");
+    // the context made in the tap holds the session's stale low rate; one made once the microphone is in reads the true one
+    w.ctxRates = [16000, 48000];
+    expect(await rig.reconnect()).toBe(true);
+    expect(w.contexts.map((c) => [c.sampleRate, c.state])).toEqual([[48000, "closed"], [16000, "closed"], [48000, "running"]]);
+    expect(rig.ctx).toBe(w.contexts[2] as unknown);
+    expect(w.contexts[2]!.silentStarts).toBe(1);
+    const fresh = FakeTransport.made[1]!;
+    expect(fresh.cfg).toMatchObject({ sampleRate: 48000 });
+    expect(fresh.sent[0]!.map((f) => f.key)).toEqual([2]);
+    expect(w.contexts[2]!.sources[0]).toMatchObject({ stream: w.devices.streams[1], to: fresh.node });
+    expect(w.contexts[1]!.sources).toEqual([]);
+    rig.close();
+  });
+});
+
+describe("the wake lock", () => {
+  /** Open with browserEnv's navigator: the browser's globals stubbed (`helpers`: the engine has Iterator helpers, new in iOS 18.4). */
+  function openWithBrowserNavigator(w: World, nav: { standalone?: boolean; maxTouchPoints?: number }, helpers: boolean) {
+    const { navigator: _, ...env } = w.env;
+    vi.stubGlobal("navigator", { mediaDevices: w.devices, wakeLock: w.wake, audioSession: w.session, ...nav });
+    vi.stubGlobal("document", w.doc);
+    if (!helpers) vi.stubGlobal("Iterator", undefined);
+    try {
+      return openRig({ micMode: "raw", env });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it("counts as missing in an iOS Home Screen app before 18.4, where it is there but does nothing (the lobby says to set Auto-Lock to Never)", async () => {
+    const cases: [{ standalone?: boolean; maxTouchPoints?: number }, boolean, boolean][] = [
+      [{ standalone: true, maxTouchPoints: 5 }, false, false],
+      [{ standalone: true, maxTouchPoints: 5 }, true, true],
+      // Safari itself, a Mac's Dock web app, and other browsers
+      [{ standalone: false, maxTouchPoints: 5 }, false, true],
+      [{ standalone: true, maxTouchPoints: 0 }, false, true],
+      [{ maxTouchPoints: 5 }, true, true]
+    ];
+    for (const [nav, helpers, works] of cases) {
+      const w = world();
+      const rig = openWithBrowserNavigator(w, nav, helpers);
+      const label = JSON.stringify({ ...nav, helpers });
+      expect(rig.wakeLockSupported, label).toBe(works);
+      expect(w.wake.requests, label).toBe(works ? 1 : 0);
+      expect(await rig.ready).toBe("running");
+      expect(rig.hasWakeLock, label).toBe(works);
+      rig.close();
+    }
+  });
+
+  it("counts as missing while its request is refused, and back once one is granted", async () => {
+    const w = world();
+    w.wake.answer = "refuse";
+    const rig = open(w);
+    await rig.ready;
+    expect(rig.wakeLockSupported).toBe(false);
+    expect(rig.hasWakeLock).toBe(false);
+    // visible again: asked again, and granted
+    w.wake.answer = "grant";
+    w.doc.emit("visibilitychange");
+    await settle();
+    expect(w.wake.requests).toBe(2);
+    expect(rig.wakeLockSupported).toBe(true);
+    expect(rig.hasWakeLock).toBe(true);
     rig.close();
   });
 });

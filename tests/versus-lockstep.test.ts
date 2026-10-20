@@ -311,7 +311,33 @@ describe("lockstep turns and frames", () => {
     expect(b.status().peerRxq).toBe(5);
   });
 
-  it("balances the two phones' slack, at 1× on average", () => {
+  it("trims by the slack this phone's packets said, as its friend's frames say theirs: not by its slack since", () => {
+    const { a, b, exchange, advance, now } = wire({ delay: 6 });
+    for (let t = 0; t < 2; t++) {
+      tryStep(b);
+      exchange();
+    }
+    exchange();
+    // a's frames go out in a packet: the trim compares what they said with what b's newest said
+    a.frames();
+    const said = a.status().slack;
+    const peer = a.status().peerSlack!;
+    advance(10);
+    a.slot(now());
+    expect(a.speed()).toBeCloseTo(1 + 0.02 * (said - peer), 12);
+    // a steps: its slack is a tick less, but its packets say what they said until the next one carries new frames
+    tryStep(a);
+    expect(a.status().slack).toBe(said - 1);
+    expect(a.speed()).toBeCloseTo(1 + 0.02 * (said - peer), 12);
+    a.frames();
+    a.slot(now()); // (a packet that started as they were handed over still carried the old ones)
+    expect(a.speed()).toBeCloseTo(1 + 0.02 * (said - peer), 12);
+    advance(10);
+    a.slot(now());
+    expect(a.speed()).toBeCloseTo(1 + 0.02 * (said - 1 - peer), 12);
+  });
+
+  it("balances the two phones' slack, their speeds summing to 2", () => {
     const { a, b, exchange } = wire({ delay: 6 });
     expect(a.speed()).toBe(1); // (no peer frame yet)
     // b runs ahead: it holds fewer of a's turns than a holds of b's

@@ -194,3 +194,14 @@ describe("main.ts, which no test can boot", () => {
     expect(tap.indexOf("sfx.unlock();")).toBeLessThan(tap.indexOf("d.openRig("));
   });
 });
+
+describe("the game's sound under play-and-record", () => {
+  it("is cut by the guard's full GUARD_CUT_DB wherever the duel turns it on: an iPhone plays it from the loudspeaker, raw mode or not", () => {
+    // WebKit sets DefaultToSpeaker on every play-and-record session (AudioSessionIOS.mm, Safari 17 on; later versions
+    // leave it off only for a page that picked the receiver through setSinkId), so no phone gets an earpiece's cut of 0
+    const calls = Object.entries(sources).flatMap(([file, src]) => [...src.matchAll(/\bsfx\.setLinkGuard\(([^)]*)\)/g)].map((m) => ({ file, args: m[1]! })));
+    expect(calls.map((c) => c.file)).toEqual(expect.arrayContaining(["../src/main.ts", "../src/versus/lobby.ts"]));
+    for (const c of calls) expect(c.args, `${c.file}: sfx.setLinkGuard(${c.args})`).not.toMatch(/,/);
+    expect(Object.values(sources).some((s) => /\.setSinkId\(/.test(s))).toBe(false);
+  });
+});

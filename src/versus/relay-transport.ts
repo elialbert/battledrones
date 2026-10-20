@@ -18,9 +18,11 @@
  * CRC-16 the modem would send (src/link/modem/crc.ts: 0xFFFF for lobby
  * frames, the sender's session key for game frames once keyed), then one
  * byte naming the sender's mode (0 robust, 1 fast). The receiver checks it as
- * the modem does: the session key first (when set), then 0xFFFF; a game
- * frame must pass the first and a lobby frame the second, else it is dropped
- * (and counted bad). The harness carries the string as it is.
+ * the modem does, by the frame's type: a game frame must pass the session
+ * key (none before keying), anything else 0xFFFF, else it is dropped (and
+ * counted bad). Never by trying both keys on every frame: a session key can
+ * be 0xFFFF itself (crcKey's fallback), and a lobby frame must still pass
+ * then. The harness carries the string as it is.
  *
  * Where the spec is silent:
  *  - packets arrive as the modem delivers them: `capacity` bits (188), the
@@ -77,7 +79,6 @@ const TICK_MS = 20;
 /** No packet for this long: unlocked. */
 const LOCK_MS = 2500;
 const TYPE_GAME = 0b01;
-const TYPE_LOBBY = 0b10;
 
 const other = (r: BandRole): BandRole => (r === "host" ? "guest" : "host");
 
@@ -272,11 +273,11 @@ export class RelayTransport implements LinkTransport {
       return;
     }
     const bitList = unpack(p.bits, p.nbits);
-    const session = this.rxKey !== null && crc16(bitList, p.nbits, this.rxKey) === p.crc;
-    const plain = !session && crc16(bitList, p.nbits, CRC_INIT) === p.crc;
-    const type = p.bits[0]! >> 6;
-    // (a game frame only under this pairing's key, a lobby frame only under the default: as the modem decides)
-    if ((type === TYPE_GAME && !session) || (type === TYPE_LOBBY && !plain) || (!session && !plain)) {
+    // (each key only for its own type, as the modem decides: a session key of 0xFFFF must not take the lobby's frames)
+    const game = p.bits[0]! >> 6 === TYPE_GAME;
+    const session = game && this.rxKey !== null && crc16(bitList, p.nbits, this.rxKey) === p.crc;
+    const plain = !game && crc16(bitList, p.nbits, CRC_INIT) === p.crc;
+    if (!session && !plain) {
       this.rxBad++;
       return;
     }

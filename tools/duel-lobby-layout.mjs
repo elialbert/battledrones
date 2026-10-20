@@ -3,7 +3,11 @@
 // both orientations, a tablet and a desktop window. At each size it taps
 // Duel, looks at the first step (Host, Join, Advanced, Cancel), taps Host,
 // waits for the opener cards (the loop's friend pairs at once) and looks
-// again.
+// again. Then it picks an opener and, once the match is on, looks at the
+// stall pill (src/versus/hud.ts) in each of its states, with and without
+// Leave: drawn by a copy of the real pill in the real stack, it covers none
+// of the HUD's tap targets as they rest (nothing selected) and stays on the
+// screen. A stalled player still zooms and looks around.
 //
 // What "looks" means, for every tap target in the sheet ([data-act]):
 //  - everything drawn inside it stays inside its box (a card's name, tagline
@@ -30,8 +34,15 @@ const MIME = {
 };
 /** Portrait and landscape phones (the smallest first), a tablet and a desktop window. */
 const SIZES = [
-  [320, 568], [390, 844], [568, 320], [844, 390], [932, 430], [1024, 768], [1280, 800]
+  [320, 568], [375, 667], [390, 844], [568, 320], [640, 360], [667, 320], [667, 375], [740, 360], [844, 390], [932, 430], [1024, 768],
+  [1280, 800]
 ];
+/** The stall pill's lines (src/versus/hud.ts STALL_TEXT) and its Leave, armed or not. */
+const STALLS = [
+  ["Waiting for your friend…", null], ["Waiting for your friend to load…", null], ["Friend paused", "or switched away"],
+  ["Signal lost: bring the phones closer", null]
+];
+const LEAVES = [null, "Leave (no result)", "Tap again to leave"];
 const args = process.argv.slice(2);
 const shots = args.includes("--shots");
 const where = args.find((a) => !a.startsWith("--"));
@@ -135,6 +146,62 @@ function inspect() {
   return out;
 }
 
+/**
+ * In the page, in the match: a copy of the real stall pill in the real
+ * stack, filled as hud.ts fills it, for every line with every Leave; what
+ * each covers of the HUD's tap targets, or whether it leaves the screen. The
+ * real pills are hidden meanwhile (a stall now would stack above the copy),
+ * and all is put back before the page runs again (`keep`: the last copy
+ * stays, for a screenshot). Returns what's wrong, as lines.
+ */
+function inspectPill({ stalls, leaves, keep }) {
+  const out = [];
+  const ov = document.querySelector(".duel-ov");
+  const real = ov?.querySelector(".duel-stall");
+  if (!ov || !real) return ["no stall pill"];
+  const W = document.documentElement.clientWidth;
+  const H = innerHeight;
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && el.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+  };
+  const name = (el) => el.id || el.getAttribute("aria-label") || el.title || el.textContent.trim().slice(0, 20) || el.className;
+  const targets = [...document.querySelectorAll("#hud button, #hud [role=button], #hud .chip, #hud .minimap-wrap, #hud .selpanel")].filter(
+    (el) => !el.closest(".duel-ov, .duel-cover") && shown(el)
+  );
+  const hidden = [...ov.children].map((c) => c.hidden);
+  for (const c of ov.children) c.hidden = true;
+  let last = null;
+  for (const leave of leaves)
+    for (const [text, sub] of stalls) {
+      last?.remove();
+      const p = (last = real.cloneNode(true));
+      p.hidden = false;
+      p.style.animation = "none";
+      p.querySelector("b").textContent = text;
+      const small = p.querySelector("small");
+      small.hidden = !sub;
+      small.textContent = sub ?? "";
+      const btn = p.querySelector(".duel-leave");
+      btn.hidden = !leave;
+      btn.textContent = leave ?? "";
+      ov.prepend(p);
+      const b = p.getBoundingClientRect();
+      const what = `"${text}"${leave ? ` with "${leave}"` : ""} at ${[b.left, b.top, b.right, b.bottom].map(Math.round)}`;
+      if (b.left < 0 || b.top < 0 || b.right > W || b.bottom > H) out.push(`${what} leaves the screen`);
+      for (const t of targets) {
+        const r = t.getBoundingClientRect();
+        if (Math.min(r.right, b.right) - Math.max(r.left, b.left) > 0.5 && Math.min(r.bottom, b.bottom) - Math.max(r.top, b.top) > 0.5)
+          out.push(`${what} covers ${name(t)}`);
+      }
+    }
+  if (!keep) {
+    last?.remove();
+    [...ov.children].forEach((c, i) => (c.hidden = hidden[i]));
+  }
+  return out;
+}
+
 for (const [w, h] of SIZES) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 2, hasTouch: true, serviceWorkers: "block" });
   const page = await ctx.newPage();
@@ -164,6 +231,17 @@ for (const [w, h] of SIZES) {
     await page.evaluate(() => document.querySelector(".duel-cards")?.scrollIntoView({ block: "start" }));
     await page.waitForTimeout(100);
     await shot("cards-scrolled");
+  }
+  await page.locator(".duel-cards .op-card").first().tap();
+  await page.waitForFunction(() => window.__duel?.state === "match", null, { timeout: 60000 });
+  await page.waitForSelector(".duel-ov", { state: "attached", timeout: 30000 });
+  // (the HUD settles: the banner's slot is measured, the opening hints come)
+  await page.waitForTimeout(1500);
+  for (const p of await page.evaluate(inspectPill, { stalls: STALLS, leaves: LEAVES, keep: false })) problems.push(`${at} stall pill: ${p}`);
+  if (shots) {
+    // (the tallest: Signal lost with Leave)
+    await page.evaluate(inspectPill, { stalls: STALLS.slice(-1), leaves: LEAVES.slice(1, 2), keep: true });
+    await shot("stall");
   }
   if (errors.length) problems.push(`${at}: console errors: ${errors.join(" | ")}`);
   await ctx.close();

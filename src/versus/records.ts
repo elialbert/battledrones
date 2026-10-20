@@ -4,10 +4,12 @@
  * as .json), and what a Rematch tap stores for the page it reloads into.
  *
  * Win/loss. localStorage `battledrones.soundduel` holds { w, l, d,
- * abandoned, noContest }. The feed adds one outcome per match, when the
- * match's result is final (or on an abort), and moves it once to no contest
- * if a result counted as "Not verified" turns out out of sync after all;
- * practice links (?duel=loop, ?duel=relay) never write it.
+ * abandoned, noContest }. The feed adds one outcome per match as soon as it
+ * is known (the match decided, or aborted; a page that goes hidden mid-match
+ * counts it as abandoned until then), and moves it over: from that stand-in
+ * to the match's own end, and to no contest if a decided result turns out
+ * out of sync after all; practice links (?duel=loop, ?duel=relay) never
+ * write it.
  *
  * Save battle. The record replays exactly through the battle viewer and the
  * arena tools: the setup the pairing agreed, every non-empty turn as the two
@@ -35,7 +37,8 @@
  *  - an aborted record ends { tick, winner: null, reason: "aborted" } at the
  *    tick reached, and maxTicks is the end tick, so the viewer's seek bar
  *    ends where the match did. Both sides resigning on one tick ends it as a
- *    draw by "resign", not "love" as the arena's endOf has every draw;
+ *    draw by "resign", not "love" (the arena's endOf says the same, so a
+ *    record re-simulated by tools/arena.ts upgrade keeps it);
  *  - the seats name the bands: "sound-duel:host" and "sound-duel:guest"
  *    (the battle viewer labels them "Host phone" and "Guest phone" with the
  *    opener's name: src/game/replay.ts, which may not import this);
@@ -111,7 +114,8 @@ export function addOutcome(o: DuelOutcome, store: Store | null): DuelTally {
 
 /**
  * Recount one match already counted as `from` as `to` instead (a result that
- * turned out to be no contest): returns the record as stored.
+ * turned out to be no contest, or the stand-in abandoned a hidden page
+ * counted, once the match ends): returns the record as stored.
  */
 export function moveOutcome(from: DuelOutcome, to: DuelOutcome, store: Store | null): DuelTally {
   const t = readTally(store);

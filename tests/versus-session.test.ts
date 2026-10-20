@@ -11,7 +11,7 @@ import type { Command, Faction, World } from "../src/sim/types";
 import { readGameFrame } from "../src/versus/lockstep";
 import { delayFor, packetMs, readLobbyFrame, type HostOffer } from "../src/versus/pairing";
 import {
-  ACK_RTT_SPARE_MS, ACK_STALL_MS, END_FRAMES_MS, FAST_AFTER_MAX_MS, FAST_AFTER_MS, PEER_HEARD_MS, ROBUST_AFTER_MS, SWITCH_HOLD_MS, Session, type SessionPhase,
+  ACK_RTT_SPARE_MS, ACK_STALL_MS, END_FRAMES_MS, FAST_AFTER_MAX_MS, FAST_AFTER_MS, PEER_HEARD_MS, ROBUST_AFTER_MS, RX_SILENT_MS, SWITCH_HOLD_MS, Session, type SessionPhase,
   type SessionStatus
 } from "../src/versus/session";
 
@@ -481,7 +481,7 @@ describe("a session from the lobby to the end of the match", () => {
     expect(r.guest.waited.link?.ms ?? 0).toBeLessThan(1000);
   });
 
-  it("starts over cleanly when the pairing restarts after GO: its frame on the link at once, the lobby's mode back, a fresh key", { timeout: 60_000 }, () => {
+  it("starts over cleanly when the pairing restarts after GO: its frame on the link at once, still in the lobby's mode, a fresh key", { timeout: 60_000 }, () => {
     // the guest picks last, so it says GO first: it retries the moment its link is keyed, before its GO goes out
     let old: number | null = null;
     const r = duel({
@@ -507,7 +507,9 @@ describe("a session from the lobby to the end of the match", () => {
     expectSameMatch(r, 300);
     const res = r.guest.s.result()!;
     expect(r.guest.tap.keys.map(({ host, guest }) => [host, guest])).toEqual([[r.guest.tap.keys[0]!.host, old], [res.hostNonce, res.guestNonce]]);
-    expect(r.guest.switchLog.map((x) => [x.to, x.why])).toEqual([["fast", "start"], ["robust", "lobby"], ["fast", "start"]]);
+    // (GO left the mode alone: the starting mode comes with the match, once)
+    expect(r.guest.switchLog.map((x) => [x.to, x.why])).toEqual([["fast", "start"]]);
+    expect(r.guest.tap.modes).toEqual([{ mode: "fast", at: r.guest.begunAt }]);
     // the host never said GO to the old nonce: it took the guest's next incarnation and paired again
     expect(r.host.tap.keys.length).toBe(1);
     expect(r.host.s.status().pairing.restarts).toBe(1);
@@ -753,6 +755,86 @@ describe("the transmit mode during the match", () => {
     expect(pausedHeardMs).toBeGreaterThan(3 * 5000);
     expect(r.host.waited.paused!.ms).toBeGreaterThan(5000);
     for (const p of [r.host, r.guest]) expect(p.switchLog.map((x) => x.why), p.role).toEqual(["start"]);
+  });
+});
+
+/**
+ * From now on the air loses every packet one end sends in fast, while its
+ * robust packets get through: the band, some 3.5 dB wide over RoomLink, where
+ * fast delivers nothing and robust everything ("ab": what the host sends).
+ * PacketAir draws loss per direction whatever the mode, so this wraps its own
+ * draw, which runs at the packet's start with the sender's mode for it set.
+ */
+function loseFast(air: PacketAir, direction: "ab" | "ba"): void {
+  const inner = air as unknown as { lost(d: 0 | 1): boolean; ends: { mode: ModemMode }[] };
+  const lost = inner.lost.bind(air);
+  const d = direction === "ab" ? 0 : 1;
+  inner.lost = (x) => (x === d && inner.ends[x]!.mode === "fast") || lost(x);
+}
+
+describe("the transmit mode from GO to the match", () => {
+  it("says GO in the lobby's mode, and a phone whose fast fails one way still starts and plays, robust that way", { timeout: 120_000 }, () => {
+    // fast fails one way from the start (the lobby is robust, so pairing measures 30 dB and picks fast): the host's
+    // packets, then the guest's, each with either phone picking last (its pick and GO go out in one frame)
+    for (const direction of ["ab", "ba"] as const)
+      for (const hostLast of [false, true]) {
+        const label = `${direction}, ${hostLast ? "host" : "guest"} picks last`;
+        const r = duel({
+          seed: 41, ticks: 300,
+          prepare: (r) => {
+            loseFast(r.air, direction);
+            r.host.pickAfterMs = hostLast ? 1500 : 200;
+            r.guest.pickAfterMs = hostLast ? 200 : 1500;
+          }
+        });
+        expectSameMatch(r, 300);
+        const [weak, fine] = direction === "ab" ? [r.host, r.guest] : [r.guest, r.host];
+        expect(r.host.s.result()!.fast, label).toBe(true);
+        for (const p of [r.host, r.guest]) {
+          // (the lobby's mode until the match began: every lobby frame, GO among them, went out in it)
+          expect(p.tap.modes[0], label).toEqual({ mode: "fast", at: p.begunAt });
+          expect(p.switchLog[0], label).toMatchObject({ to: "fast", why: "start" });
+        }
+        // the phone that isn't heard in fast went robust within a few seconds of its start; its friend never switched
+        expect(weak.switchLog[1], label).toMatchObject({ to: "robust" });
+        expect(weak.switchLog[1]!.at - weak.begunAt!, label).toBeLessThanOrEqual(SWITCH_HOLD_MS + ROBUST_AFTER_MS + 1500);
+        expect(fine.switchLog.map((x) => x.why), label).toEqual(["start"]);
+      }
+  });
+
+  it("goes robust on what the friend's lobby frames say: a friend still in GO, which never heard this phone's GO, starts once robust reaches it", { timeout: 120_000 }, () => {
+    // the guest picks last, so it says GO first; the host starts on it and begins at once, while the guest never hears
+    // the host's GO (a hand over its microphone at just the wrong moments), and the host's fast reaches nobody. The
+    // guest, still in GO, hears nothing more from the host: its frames say so (rxq 0), and they are all the host hears
+    let goneRobust: number | null = null;
+    let guestPhase: string | null = null;
+    const r = duel({
+      seed: 42, ticks: 300,
+      prepare: (r) => {
+        loseFast(r.air, "ab");
+        r.host.pickAfterMs = 200;
+        r.guest.pickAfterMs = 1500;
+        r.guest.tap.drop = isGo;
+      },
+      every: (r) => {
+        if (goneRobust === null && r.host.tap.modes.some((m) => m.mode === "robust")) {
+          goneRobust = r.air.now();
+          guestPhase = r.guest.s.pairing.state().phase;
+        }
+      }
+    });
+    expectSameMatch(r, 300);
+    const h = r.host;
+    // the host began first, in fast, stalled at tick D on its friend "loading", and went robust on the rxq rule
+    // (then fast again once the guest has heard it well for 10 s, which still fails: the match's own rules from there)
+    expect(h.switchLog.slice(0, 2).map((x) => [x.to, x.why])).toEqual([["fast", "start"], ["robust", "rxq"]]);
+    expect(guestPhase).toBe("go");
+    expect(goneRobust! - h.begunAt!).toBeGreaterThanOrEqual(SWITCH_HOLD_MS);
+    expect(goneRobust! - h.begunAt!).toBeLessThanOrEqual(RX_SILENT_MS + ROBUST_AFTER_MS + 1500);
+    expect(h.waited.load!.tick).toBe(h.s.result()!.delay);
+    // and the guest, started on the host's game frames, began after that and plays in fast: its own fast is fine
+    expect(r.guest.begunAt! - 31_337).toBeGreaterThan(goneRobust!);
+    expect(r.guest.switchLog.map((x) => x.why)).toEqual(["start"]);
   });
 });
 
@@ -1050,6 +1132,33 @@ describe("what a stall waits on", () => {
     expect(s.seen.filter((x) => x.why === "link").length).toBeGreaterThanOrEqual(10);
     // (counted from the last new turn all along: the HUD's "Signal lost" shows at once once it reads "link")
     expect(s.seen[s.seen.length - 1]!.ms).toBeGreaterThan(12_000);
+  });
+
+  it("counts the wait for a friend that plays on again from then, not from its last turn before the pause", { timeout: 60_000 }, () => {
+    // the host pauses at 30 s and plays on at 38 s, but its game takes a second to step again (a slow first frame): its
+    // frames say it plays on, with no new turn yet. The friend owed nothing while paused, so the guest's stall is the
+    // link's for that second, and as old as the resume (from the last turn before the pause it read 8 s, "Signal
+    // lost", for as long as the host's next turn took: a moment, which a step's timing sometimes made)
+    const seen: { at: number; why: string; ms: number }[] = [];
+    const r = duel({
+      seed: 26, ticks: 900,
+      every: (r) => {
+        const t = r.air.now();
+        if (t === 30_000) r.host.s.setPaused(true);
+        if (t === 38_000) r.host.s.setPaused(false);
+        r.host.paused = t >= 30_000 && t < 39_000;
+        const w = r.guest.s.status().waiting;
+        if (t >= 38_000 && t <= 39_500 && w) seen.push({ at: t, why: w.why, ms: w.ms });
+      },
+      until: (r) => r.air.now() >= 45_000
+    });
+    expectSameMatch(r, Math.min(r.host.w!.tick, r.guest.w!.tick));
+    // the guest heard the host play on, and waited on the link for its turn: never longer than since the resume
+    const link = seen.filter((x) => x.why === "link");
+    expect(link.length).toBeGreaterThan(200);
+    for (const { at, ms } of link) expect(ms, `at ${at}`).toBeLessThanOrEqual(at - 38_000);
+    // (and the match went on: the guest stood at tick 250 or so through the pause)
+    expect(r.guest.w!.tick).toBeGreaterThan(280);
   });
 
   it("says \"load\" only for the friend's own lobby frames: a friend whose page reloaded mid-match is lost, not loading", { timeout: 60_000 }, () => {

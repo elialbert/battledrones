@@ -31,7 +31,9 @@
  * fullscreen.ts resetAudioSession). And when the context's rate still can't
  * carry the high plan, a context made once the microphone has activated the
  * session reads the rate afresh (settleRate), and replaces it — Safari lets
- * a capturing page start one without a new tap.
+ * a capturing page start one without a new tap. A context a reconnect
+ * rebuilds is made in the tap with play-and-record set, so it gets the same
+ * second try.
  *
  * The link. createLink(cfg) loads the worklet (once per context), makes a
  * WorkletTransport and connects the microphone to its node. What it returns
@@ -54,10 +56,10 @@
  * own context. On visible it re-requests the wake lock and checks at once.
  * reconnect() is the "Tap to reconnect the sound link" overlay's tap: it
  * resumes the context and re-requests the microphone into the existing node
- * if the track ended, is muted or the devices changed, so the modem's state
- * and now() survive; a closed context, or one that failed to resume on the
- * previous tap, is rebuilt. Failures count up (failures), so the overlay can
- * offer Leave after 2.
+ * if the track ended, is muted, the devices changed or its rate can't carry
+ * the link, so the modem's state and now() survive; a closed context, or one
+ * still stuck where an earlier tap's resume left it, is rebuilt. Failures
+ * count up (failures), so the overlay can offer Leave after 2.
  *
  * Errors are RigErrors with a reason the lobby can show: the microphone
  * refused (the rig then closes the context and puts the session back to
@@ -82,13 +84,30 @@
  *    as it is now), nor does the first look when no snapshot has come back
  *    yet (it becomes the snapshot), and a new stream clears an earlier
  *    change. Without enumerateDevices every event counts;
- *  - setMicMode requests the new stream before letting the old one go, and
- *    keeps the old one if the request fails;
- *  - a reconnect after a resume that did not take rebuilds the context
- *    (the context may be stuck "interrupted" for good after a call on iOS),
- *    and so does one whose context is closed; a reconnect counts as failed
- *    when the context isn't running 1 s after the tap or the microphone
- *    request fails, and success resets the count;
+ *  - setMicMode lets the old stream go before requesting the new one:
+ *    Chrome on Android enters its communication mode (call volume, voice
+ *    processing) only as the first input stream opens, if that one has echo
+ *    cancellation, and leaves it only as the last one closes, so a stream
+ *    opened beside the old one would keep the old mode's. If the request
+ *    fails, the old mode is requested again (and the error thrown); with no
+ *    microphone at all, the watch reports the track ended once the switch
+ *    is over. Switches run one at a time, and the watch waits up to 3 s for
+ *    one's request;
+ *  - a microphone whose own rate can't carry the live link's plan (a
+ *    Bluetooth headset that joined mid-match) is never taken mid-link: a
+ *    reconnect fails with the "rate" reason and the next tap asks for the
+ *    microphone again, as does a tap while the kept one can't carry it; a
+ *    mode switch treats it as a failed request;
+ *  - a reconnect rebuilds the context when it is closed, or still in the
+ *    state a resume on an earlier tap did not move it from (iOS may leave it
+ *    "interrupted" for good after a call); one that has moved on since (back
+ *    to "running" by itself as the call ended, or "suspended") is resumed
+ *    and kept. A reconnect counts as failed when the context isn't running
+ *    1 s after the tap or the microphone request fails, and success resets
+ *    the count;
+ *  - a rebuilt context whose rate can't carry the plan gets settleRate's
+ *    second try once the microphone is in: one more context, kept if its
+ *    rate is higher;
  *  - a rebuilt context gets a new modem: packets not yet polled carry over,
  *    but the stats' counters start again and both phones re-acquire (about
  *    2 s). A Join whose detection has locked is rebuilt on the plan it found,
@@ -103,7 +122,11 @@
  *    rebuilt transport counts capture from its own connection;
  *  - "tap-to-start" moves to "running" by itself when the context starts
  *    running without the tap (iOS finishing a slow resume);
- *  - only one link at a time: createLink closes the previous one.
+ *  - only one link at a time: createLink closes the previous one;
+ *  - the wake lock counts as missing (wakeLockSupported false, so the lobby
+ *    says to set Auto-Lock to Never) in an iOS Home Screen app before 18.4,
+ *    where it is there but does nothing (wakeLockIsDud), and while its last
+ *    request was refused.
  */
 import type { ModemConfig, ModemStats } from "./modem/core";
 import { MIN_RATE, rateProblem } from "./modem/params";
@@ -154,6 +177,8 @@ const NOT_RUNNING_MS = 500;
 /** How long to wait on a resume() after the gesture (ms), and before calling a reconnect failed. */
 const RESUME_WAIT_MS = 300;
 const RECONNECT_WAIT_MS = 1000;
+/** How long the watch waits for a mic mode switch's request before calling the microphone gone (ms). */
+const SWITCH_WAIT_MS = 3000;
 /** The watch's poll (ms). */
 const TICK_MS = 100;
 
@@ -198,11 +223,28 @@ export interface RigEnv {
   createTransport(ctx: AudioContext, cfg: ModemConfig, opts: WorkletTransportOptions): RigTransport;
 }
 
+/**
+ * The wake lock is there but does nothing: an iOS Home Screen app before
+ * 18.4, where request() resolves and the screen still dims and locks
+ * (WebKit bug 254545: the lock turned off UIApplication's idle timer, and a
+ * Home Screen app is a view service, not a UIApplication; the Safari 18.4
+ * release notes list "Fixed Wake Lock API for Home Screen Web Apps").
+ * `navigator.standalone`, which only Apple's WebKit has, is true in a Home
+ * Screen app (and in a Mac's Dock web app: no touch screen). The version
+ * comes from the engine, not the user agent (an iPad's names no iOS
+ * version): Iterator helpers shipped in the same release.
+ */
+export function wakeLockIsDud(nav: { standalone?: unknown; maxTouchPoints?: number }, engine: object = globalThis): boolean {
+  if (nav.standalone !== true || !nav.maxTouchPoints) return false;
+  const it = (engine as { Iterator?: { prototype?: { map?: unknown } } }).Iterator;
+  return typeof it?.prototype?.map !== "function";
+}
+
 /** The browser's RigEnv. */
 export function browserEnv(): RigEnv {
-  const nav = navigator as Navigator & { audioSession?: { type: string } };
+  const nav = navigator as Navigator & { audioSession?: { type: string }; standalone?: boolean };
   return {
-    navigator: { mediaDevices: nav.mediaDevices, wakeLock: "wakeLock" in nav ? nav.wakeLock : undefined, audioSession: nav.audioSession },
+    navigator: { mediaDevices: nav.mediaDevices, wakeLock: "wakeLock" in nav && !wakeLockIsDud(nav) ? nav.wakeLock : undefined, audioSession: nav.audioSession },
     document,
     createContext: () => {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -405,13 +447,19 @@ export class Rig {
   private mic: Promise<void>;
   private wake: WakeLockLike | null = null;
   private wakeAsked = false;
+  /** The last wake lock request was refused. */
+  private wakeRefused = false;
   private lostFns = new Set<(reason: LostReason) => void>();
   private lostReason: LostReason | null = null;
   private fails = 0;
   private lastErr: RigError | null = null;
-  /** A resume that did not take: the next reconnect rebuilds the context. */
-  private rebuildNext = false;
+  /** The state a context stayed in when a reconnect's resume did not take: the next reconnect rebuilds it if it is still there. */
+  private stuckIn: string | null = null;
   private reconnecting: Promise<boolean> | null = null;
+  /** The last mic mode switch asked for (the next waits for it). */
+  private switching: Promise<void> | null = null;
+  /** When the switch under way let the old microphone go (the watch waits SWITCH_WAIT_MS for the new one), or null. */
+  private switchedAt: number | null = null;
   private deviceSnapshot: string | null = null;
   private devicesChanged = false;
   /** Counts the microphone requests that resolved: a devicechange from before the latest one is old news. */
@@ -504,9 +552,14 @@ export class Rig {
     return !!this.wake && !this.wake.released;
   }
 
-  /** The browser has the wake lock API (installed iOS apps before 18.4 don't: the lobby says to set Auto-Lock to Never). */
+  /**
+   * The screen can be kept on: there is a wake lock that works (Safari before
+   * 16.4 has none, and an iOS Home Screen app before 18.4 one that does
+   * nothing: browserEnv leaves it out) and its last request wasn't refused.
+   * When not, the lobby says to set Auto-Lock to Never.
+   */
   get wakeLockSupported(): boolean {
-    return !!this.env.navigator.wakeLock;
+    return !!this.env.navigator.wakeLock && !this.wakeRefused;
   }
 
   /** The current loss, while lost. */
@@ -565,17 +618,27 @@ export class Rig {
     return link;
   }
 
-  /** Switch the microphone's processing: re-request it and reconnect the source into the same node. */
-  async setMicMode(mode: MicMode): Promise<void> {
-    await this.mic;
-    if (mode === this.mode && this.track?.readyState === "live") return;
-    const s = await this.requestMic(mode);
-    if (this.st === "closed") {
-      for (const t of s.getTracks()) t.stop();
-      return;
-    }
-    this.mode = mode;
-    this.useStream(s);
+  /**
+   * Switch the microphone's processing: let the old microphone go, request
+   * it in the new mode, and connect it into the same node (switchMic). One
+   * at a time. Rejects, keeping the old mode, when the request fails or
+   * brings a microphone the live link's plan can't use (the old mode is
+   * then requested again).
+   */
+  setMicMode(mode: MicMode): Promise<void> {
+    const before = this.switching;
+    const run = (async () => {
+      await this.mic;
+      // one at a time: two requests open together would decide Chrome's mode between them
+      if (before) await before.catch(() => undefined);
+      await this.switchMic(mode);
+    })();
+    this.switching = run;
+    const done = () => {
+      if (this.switching === run) this.switching = null;
+    };
+    run.then(done, done);
+    return run;
   }
 
   /** Milliseconds of gap-free capture into the live link so far (0: none). */
@@ -596,18 +659,20 @@ export class Rig {
 
   /**
    * The reconnect overlay's tap (and "Tap to start sound"): call inside the
-   * gesture. Resumes the context (rebuilding it when it is closed or the last
-   * resume did not take), re-requests the microphone when it is gone, muted
-   * or the devices changed, and keeps the modem's node when it can. Resolves
-   * true when the link's audio runs again; false counts a failure (see
-   * lastError for the microphone's).
+   * gesture. Resumes the context (rebuilding it when it is closed or still
+   * where the last resume left it), re-requests the microphone when it is
+   * gone, muted, the devices changed or its rate can't carry the link, and
+   * keeps the modem's node when it can. Resolves true when the link's audio
+   * runs again; false counts a failure (see lastError for the microphone's
+   * or the rate's).
    */
   reconnect(): Promise<boolean> {
     if (this.st === "closed" || this.st === "failed" || this.st === "opening") return Promise.resolve(false);
     if (this.reconnecting) return this.reconnecting;
     // the gesture's part, synchronously
     let ctx = this.ctx;
-    const rebuild = ctx.state === "closed" || this.rebuildNext;
+    // (one that has moved on since a resume didn't take, running again by itself or suspended, is resumed and kept)
+    const rebuild = ctx.state === "closed" || ctx.state === this.stuckIn;
     let fresh: AudioContext | null = null;
     if (rebuild) {
       fresh = this.makeContext();
@@ -615,7 +680,9 @@ export class Rig {
     }
     this.rebuilding = fresh;
     this.wakeUp(ctx);
-    const needMic = !this.track || this.track.readyState !== "live" || this.track.muted || this.devicesChanged;
+    // (a kept microphone the live link can't use is asked for again: the route may have moved back)
+    const needMic =
+      !this.track || this.track.readyState !== "live" || this.track.muted || this.devicesChanged || this.linkMicProblem(this.stream) !== null;
     const req = needMic ? this.requestMic(this.mode) : null;
     if (!this.hasWakeLock) this.requestWakeLock();
     const run = async (): Promise<boolean> => {
@@ -623,20 +690,29 @@ export class Rig {
       try {
         if (req) asked = await req;
         if (this.shut()) return false;
+        // a microphone whose own rate can't carry the link (a Bluetooth headset that joined mid-match) isn't taken: the next tap asks again
+        const micProblem = asked ? this.linkMicProblem(asked) : null;
+        if (micProblem) throw new RigError("rate", micProblem);
         if (fresh) {
+          // settleRate's second try: made in the tap, the context may hold the session's stale rate
+          const better = rateProblem(fresh.sampleRate, this.linkPlan()) ? this.higherRate(fresh) : null;
+          if (better) {
+            closeContext(fresh);
+            fresh = this.rebuilding = better;
+          }
           await this.swapContext(fresh, asked);
           if (this.shut()) return false;
         } else if (asked) this.useStream(asked);
         const running = await this.settleResume(this.ctx, RECONNECT_WAIT_MS);
         if (this.shut()) return false;
         if (!running) {
-          this.rebuildNext = true;
+          this.stuckIn = this.ctx.state;
           this.lastErr = null;
           this.fails++;
           this.setRunning(false);
           return false;
         }
-        this.rebuildNext = false;
+        this.stuckIn = null;
         this.fails = 0;
         this.lastErr = null;
         this.lostReason = null;
@@ -695,14 +771,10 @@ export class Rig {
   private async settleRate(s: MediaStream): Promise<MediaStream> {
     const old = this.context;
     if (!old || old.sampleRate >= MIN_RATE.high) return s;
-    const fresh = this.makeContext();
-    if (!fresh || !(fresh.sampleRate > old.sampleRate) || !fresh.audioWorklet) {
-      if (fresh) closeContext(fresh);
-      return s;
-    }
+    const fresh = this.higherRate(old);
+    if (!fresh) return s;
     this.context = fresh;
     this.watchContext(old, fresh);
-    this.wakeUp(fresh);
     closeContext(old);
     if (micRate(s) === null || micRate(s)! >= MIN_RATE.high) return s;
     try {
@@ -720,10 +792,80 @@ export class Rig {
    * Bluetooth headset holds an iPhone at 16 kHz), so the friend's band
    * never reaches the modem.
    */
-  private micRateProblem(plan: BandPlan): string | null {
-    const sr = this.stream ? micRate(this.stream) : null;
+  private micRateProblem(plan: BandPlan, s: MediaStream | null = this.stream): string | null {
+    const sr = s ? micRate(s) : null;
     if (sr === null || sr >= MIN_RATE[plan]) return null;
     return `This phone's microphone runs at ${sr} Hz, which the sound link can't use`;
+  }
+
+  /** micRateProblem for the live link's plan (null when there is no live link). */
+  private linkMicProblem(s: MediaStream | null): string | null {
+    const link = this.link;
+    return link && !link.isClosed ? this.micRateProblem(link.config.plan, s) : null;
+  }
+
+  /** The plan a context must carry: the live link's, or the high one while there is none (as settleRate). */
+  private linkPlan(): BandPlan {
+    const link = this.link;
+    return link && !link.isClosed ? link.config.plan : "high";
+  }
+
+  /**
+   * A context made now, woken, when its rate is higher than `ctx`'s (else
+   * null, and it is closed): once capture has activated the session, Safari
+   * reads the session's rate afresh for a new context, and a page that is
+   * capturing may start one without a tap.
+   */
+  private higherRate(ctx: AudioContext): AudioContext | null {
+    const again = this.makeContext();
+    if (again && again.sampleRate > ctx.sampleRate && again.audioWorklet) {
+      this.wakeUp(again);
+      return again;
+    }
+    if (again) closeContext(again);
+    return null;
+  }
+
+  /**
+   * setMicMode's switch. The old microphone goes first: Chrome on Android
+   * sets its communication mode as the first input stream opens and leaves
+   * it as the last one closes, so a stream opened beside the old one would
+   * keep the old mode's. When the request fails (or brings a microphone the
+   * live link can't use), the old mode is requested again, and without any
+   * microphone the watch reports the track ended once the switch is over.
+   */
+  private async switchMic(mode: MicMode): Promise<void> {
+    if (this.shut() || (mode === this.mode && this.track?.readyState === "live")) return;
+    this.switchedAt = this.env.now();
+    try {
+      for (const t of this.stream?.getTracks() ?? []) t.stop();
+      let s: MediaStream;
+      try {
+        s = await this.requestUsableMic(mode);
+      } catch (e) {
+        const back = this.shut() ? null : await this.requestUsableMic(this.mode).catch(() => null);
+        if (back && !this.shut()) this.useStream(back);
+        else if (back) for (const t of back.getTracks()) t.stop();
+        throw e;
+      }
+      if (this.shut()) {
+        for (const t of s.getTracks()) t.stop();
+        return;
+      }
+      this.mode = mode;
+      this.useStream(s);
+    } finally {
+      this.switchedAt = null;
+    }
+  }
+
+  /** The microphone in `mode`, when the live link's plan can use its rate (else a "rate" RigError, the stream stopped). */
+  private async requestUsableMic(mode: MicMode): Promise<MediaStream> {
+    const s = await this.requestMic(mode);
+    const problem = this.linkMicProblem(s);
+    if (!problem) return s;
+    for (const t of s.getTracks()) t.stop();
+    throw new RigError("rate", problem);
   }
 
   /** resume() and a 1-sample silent buffer: what a gesture must do for sound to start on a phone. */
@@ -867,14 +1009,18 @@ export class Rig {
     const ctx = this.context;
     const running = !!ctx && ctx.state === "running";
     if (!running) this.runningSince = null;
-    else if (this.runningSince === null && this.st === "running") this.runningSince = now;
+    else {
+      // running again (iOS ending an interruption, or finishing a slow resume): it isn't stuck after all, so no rebuild
+      this.stuckIn = null;
+      if (this.runningSince === null && this.st === "running") this.runningSince = now;
+    }
     if (running && this.st === "tap-to-start" && !this.reconnecting) {
-      // the context started without the tap (iOS finishing a slow resume): it isn't stuck after all, so no rebuild
-      this.rebuildNext = false;
       this.fails = 0;
       this.setRunning(true);
     }
-    if (this.st !== "running" || this.reconnecting) return;
+    // (a mic mode switch has let the old track go: its request gets a while before the track counts as ended)
+    const switching = this.switchedAt !== null && now - this.switchedAt < SWITCH_WAIT_MS;
+    if (this.st !== "running" || this.reconnecting || switching) return;
     this.pullGaps();
     const track = this.track;
     if (!track || track.readyState === "ended") return this.lose("track-ended");
@@ -933,13 +1079,16 @@ export class Rig {
             return;
           }
           this.wake = s;
+          this.wakeRefused = false;
         },
         () => {
           this.wakeAsked = false;
+          this.wakeRefused = true;
         }
       );
     } catch {
       this.wakeAsked = false;
+      this.wakeRefused = true;
     }
   }
 

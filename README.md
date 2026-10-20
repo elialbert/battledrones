@@ -216,6 +216,7 @@ the battle differently, says from when and links to the pinned version.
 ```bash
 npm install
 npm run dev            # Vite dev server
+npx vite --config tools/vite-https.config.ts   # the same over HTTPS, for a sound duel on phones (SOUND-DUEL.md)
 npm test               # Vitest suite for the simulation layer
 npm run build          # typecheck + production build into dist/
 npm run smoke          # headless Playwright test of the real touch flow (against dist/)

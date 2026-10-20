@@ -16,9 +16,24 @@
  * soft values scaled by (OUTLIER/r)³ and its share of μ capped at OUTLIER
  * times that median, so one loud tone neither shouts down the code nor
  * shrinks every clean tone's λ; one whose signal stands less than twice
- * over the running mean of its d̃ (the interferer's share, once that stands
- * out of the products' spread) is scaled by the square of half that ratio.
- * With no interferer this is the spec's λ exactly.
+ * over the running mean of its d̃ (the interferer's share, once that mean
+ * rests on STEADY_MIN symbols and stands out of the products' spread) is
+ * scaled by the square of half that ratio. With no interferer this is the
+ * spec's λ exactly.
+ *
+ * Impulses (SOUND-DUEL.md "Soft bits" > Impulses). A screen tap is a click
+ * of a few milliseconds at the phone's own microphone; it spoils one
+ * symbol's DFT, so both differentials that use it, and from about 20 dB over
+ * the friend in its band each click costs about a packet (two of a
+ * high-plan packet's symbols, or one each of two packets:
+ * tests/link-modem.test.ts). Weighting the hit symbols down by their pilots'
+ * phase errors would save most of those packets only if the gate counted
+ * their bits out too, and then it no longer tells garbage from a packet:
+ * with a quarter of a packet's symbols out, noise decodes to 7% disagreement
+ * at the least, and with half of them (a click inside a high-plan packet)
+ * to 0.4%, leaving the CRC alone to judge. So clicks cost their packets: how
+ * loud real taps are in these bands (their sound is mostly below 9 kHz) is
+ * not measured yet.
  */
 import type { BandPlan, ModemMode } from "../transport";
 import { gateErrors, gatePasses, Viterbi } from "./conv";
@@ -26,7 +41,7 @@ import { CRC_BITS } from "./params";
 import { CRC_INIT, crc16 } from "./crc";
 import { ToneWeights } from "./outlier";
 import type { BandTables } from "./tables";
-import { STEADY_FLOOR, type Tracker } from "./tracker";
+import type { Tracker } from "./tracker";
 
 const CLAMP = 4;
 /*
@@ -66,6 +81,14 @@ export class DecodeJob {
 const NEAR = 4;
 /** A tone keeps its full weight while its signal stands over a steady interferer's share by 1/STEADY. */
 const STEADY = 0.5;
+/**
+ * The steady shares are used once their mean rests on this many symbols.
+ * A mean of a few is too rough to tell an interferer from the data, and a
+ * packet's own symbols weigh too much in it: from a trial's first packet's
+ * four alone, a clean tone whose four bits agreed (one in eight) read as
+ * interfered, and was dropped.
+ */
+const STEADY_MIN = 16;
 
 /** Per-tone scratch for softBits, one per receiver (allocated once). */
 export function toneScratch(): ToneWeights {
@@ -92,14 +115,15 @@ export function softBits(tr: Tracker, mode: ModemMode, index: number, job: Decod
   }
   const mu = tw.update(T) / T;
   const gain = tw.gain;
-  // a steady interferer's share of each tone (the running mean of d̃, once it stands out of what its spread leaves in
-  // a mean: tracker.ts): weight the tone by its signal-to-interference ratio
+  // a steady interferer's share of each tone (the mean of d̃, once it rests on STEADY_MIN symbols and stands out of
+  // what its spread leaves in a mean: tracker.ts): weight the tone by its signal-to-interference ratio
   const sr = tr.steadyRe;
   const si = tr.steadyIm;
   const sv = tr.steadyVar;
+  const known = +(tr.steadyN >= STEADY_MIN);
   for (let t = 0; t < T; t++) {
     const j2 = sr[t]! * sr[t]! + si[t]! * si[t]!;
-    const J = Math.sqrt(j2) * +(j2 > STEADY_FLOOR * sv[t]!);
+    const J = Math.sqrt(j2) * +(j2 > tr.steadyFloor * sv[t]!) * known;
     const q = (STEADY * Math.max(mag[t]! - J, 0)) / Math.max(J, 1e-300);
     gain[t] = gain[t]! * Math.min(1, q * q);
   }

@@ -27,8 +27,8 @@
  *    (1 / curve(1))^0.6, about +17 dB at GUARD_LIMITER's −30 dB threshold, so
  *    a plain −10 dB cut in front of it would leave sounds under the limiter
  *    7 dB louder than without the guard. With it taken back, the cut is the
- *    net change for everything the limiter leaves alone (0 dB on iOS in raw
- *    mode really is unchanged), and the limiter's ceiling (steady sound
+ *    net change for everything the limiter leaves alone (a cut of 0 really
+ *    is unchanged), and the limiter's ceiling (steady sound
  *    held near −13 dBFS whatever the cut; transients overshoot it by a few
  *    dB) bounds the rest;
  *  - turning the guard on sets linkMode and turning it off clears it (the
@@ -116,8 +116,13 @@ export type { GuardPlan } from "./guard-fir";
 
 /**
  * The link guard's level cut (dB) for everything the limiter leaves alone
- * (SOUND-DUEL.md "Game audio guard" > Cut). The caller passes 0 on iOS in raw
- * mode, where the page's sound already goes to the quieter earpiece.
+ * (SOUND-DUEL.md "Game audio guard" > Cut): the same on every phone and in
+ * both microphone modes. An iPhone plays a play-and-record session's sound
+ * from the loudspeaker beside its microphone, not the earpiece: WebKit sets
+ * DefaultToSpeaker on every such session (AudioSessionIOS.mm, Safari 17 on;
+ * later versions leave it off only for a page that picked the receiver
+ * through setSinkId, which this one never does), and echo cancellation off
+ * only swaps the voice-processing unit for a plain one.
  */
 export const GUARD_CUT_DB = 10;
 
@@ -162,7 +167,7 @@ export function compressorMakeupDb(c: Pick<CompressorSettings, "threshold" | "ra
 
 /** Options for setLinkGuard. */
 export interface LinkGuardOptions {
-  /** The cut (dB, default GUARD_CUT_DB): 0 on iOS in raw mode. */
+  /** The cut (dB, default GUARD_CUT_DB, which the duel uses everywhere; others are for measurements). */
   cutDb?: number;
 }
 

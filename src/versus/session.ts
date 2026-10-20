@@ -43,9 +43,16 @@
  * (up to 80 s), until fast has held for a minute. Each wait counts from the
  * switch at the earliest, and a switch holds for at least a superframe
  * (2.05 s), which is when the modem can change mode at all. Every rule needs
- * the friend's game frames to be arriving: a link that is silent both ways
- * says nothing about which way or which mode is at fault, and the stall
- * overlays already say "bring the phones closer".
+ * the friend's frames to be arriving: a link that is silent both ways says
+ * nothing about which way or which mode is at fault, and the stall overlays
+ * already say "bring the phones closer". Its frames are its game frames, and
+ * its own lobby frames while it hasn't begun (loading, or still in GO, not
+ * having heard this phone's), whose rxq is the same report; the
+ * acknowledgement rule takes game frames only, as a friend that hasn't begun
+ * acknowledges nothing. Without the lobby frames, a phone that began in fast
+ * while its fast reached no one waited at tick D for ever: its friend, still
+ * in GO for want of this phone's GO or a game frame, sent only lobby frames,
+ * and they moved no rule.
  *
  * The quality that sends a phone robust is where fast starts to fail, three
  * steps below the one that brings it back. Over RoomLink (pairing.ts
@@ -103,9 +110,16 @@
  *  - receive quality is rxqOf(stats().snrDb), the newest packet's SNR, read
  *    as 0 once nothing has arrived for over 1 s, so a friend this phone stops
  *    hearing learns of it from its frames;
- *  - the link is keyed when the pairing says GO, with the starting mode the
- *    agreed config says; if the pairing starts over after GO the lobby's mode
- *    (the link's at construction) comes back, and the next GO keys afresh;
+ *  - the link is keyed when the pairing says GO (the next GO after a restart
+ *    keys afresh), but keeps the lobby's mode (the link's at construction)
+ *    until beginMatch sets the starting mode. The GO frame, and a pick that
+ *    goes out with it, must reach the friend: in the lobby's mode they go the
+ *    way every lobby frame went. Sent in a starting fast that had stopped
+ *    getting through one way since the config froze, they never arrived, and
+ *    nothing switched back (no rule runs before a friend's game frames): one
+ *    phone sat in GO, the other "waiting" for the pick, or begun and held at
+ *    tick D on "load". A stand-in's end (leave() before the match) goes out in
+ *    the lobby's mode too, the one the friend heard the GO in;
  *  - the guest's band plan follows stats().plan while its link is locked,
  *    until GO (the pairing ignores it from then on);
  *  - background is a pause the feed doesn't have to remember: the lockstep is
@@ -134,10 +148,15 @@
  *    PEER_HEARD_MS old (a friend that paused and then went out of range is
  *    lost, not paused), and "link" otherwise, which it reads for a moment
  *    after "load" too: the friend's first game frame comes a packet before
- *    its first turn;
+ *    its first turn. So it does after "paused": the friend's first frame
+ *    that says it plays on comes before the turn its next step seals. Its
+ *    `ms` counts from the friend's last new turn, or from when its frames
+ *    stopped saying paused if that is later (a paused friend owes none):
+ *    counted from its last turn before the pause, that moment read as a
+ *    stall as long as the pause, "Signal lost" for a pause of 5 s or more;
  *  - the transmit mode adapts only during the match: the lobby keeps the
- *    link's mode, the starting mode holds until the match begins, and the
- *    mode stays as it is once the match is over;
+ *    link's mode until the match begins, and the mode stays as it is once the
+ *    match is over;
  *  - beginMatch doesn't wait for anything: the lobby calls it once the rig has
  *    had its 1.5 s of gap-free capture (SOUND-DUEL.md "Capture");
  *  - the pairing's state after the match begins is the one it had then;
@@ -151,7 +170,7 @@ import type { OpenerId } from "../sim/openers";
 import type { Command, Faction } from "../sim/types";
 import { CodecError } from "./codec";
 import { Lockstep, rxqOf, type Decision, type LockstepStatus } from "./lockstep";
-import { FAST_RXQ, Pairing, packetMs, readLobbyFrame, type HostOffer, type PairingResult, type PairingState } from "./pairing";
+import { FAST_RXQ, Pairing, packetMs, readLobbyFrame, type HostOffer, type LobbyFrame, type PairingResult, type PairingState } from "./pairing";
 
 /** After leave(), the end goes out this long before the session may close (SOUND-DUEL.md "Leaving"). */
 export const END_FRAMES_MS = 2000;
@@ -198,8 +217,8 @@ interface MatchShape {
 
 export type SessionPhase = "pairing" | "starting" | "match" | "ended" | "closed";
 
-/** Why the transmit mode changed: GO (the starting mode), the pairing starting over after GO, the friend's receive quality, or no acknowledgements. */
-export type ModeReason = "start" | "lobby" | "rxq" | "acks";
+/** Why the transmit mode changed: the match began (the starting mode), the friend's receive quality, or no acknowledgements. */
+export type ModeReason = "start" | "rxq" | "acks";
 
 export interface SessionOptions {
   transport: LinkTransport;
@@ -300,7 +319,6 @@ export class Session {
   private peerLast: { at: number; lobby: boolean } | null = null;
 
   // the transmit mode
-  private readonly lobbyMode: ModemMode;
   /** The nonces the link is keyed for ("host:guest"), null before GO. */
   private keyedFor: string | null = null;
   private tx: ModemMode;
@@ -310,9 +328,11 @@ export class Session {
   private fastWait = FAST_AFTER_MS;
   private switches = 0;
   private lastSwitch: { at: number; to: ModemMode; why: ModeReason } | null = null;
-  // what the friend's game frames say: since when they've arrived without a long gap, the newest, the run of its
-  // receive quality of this phone at or below ROBUST_RXQ or at or above FAST_RXQ, and when peerAck last moved
-  private heardSince = -Infinity;
+  // what the friend's frames say (its game frames, and its own lobby frames once this phone's match has begun): the
+  // newest, the run of its receive quality of this phone at or below ROBUST_RXQ or at or above FAST_RXQ; since when
+  // its game frames have arrived without a long gap, the newest, and when peerAck last moved
+  private lastHeardAt = -Infinity;
+  private gameSince = -Infinity;
   private lastGameAt = -Infinity;
   private lowSince: number | null = null;
   private highSince: number | null = null;
@@ -325,7 +345,7 @@ export class Session {
     this.segmentsMax = o.segmentsMax;
     this.adapt = o.adaptMode ?? true;
     const st = o.transport.stats();
-    this.tx = this.lobbyMode = st.txMode;
+    this.tx = st.txMode;
     this.pairing = new Pairing({
       role: o.role,
       build: o.build,
@@ -356,6 +376,8 @@ export class Session {
         this.pairing.slot(at);
         this.sendLobby();
       }
+    // (which frames went out: the speed trim compares the slack they said with the friend's)
+    else if (this.ls) for (const at of slots) this.ls.slot(at);
     for (const p of this.transport.poll()) this.route(p, lobby);
     const st = this.transport.stats();
     this.rxq = st.sinceRx > RX_SILENT_MS ? 0 : rxqOf(st.snrDb);
@@ -396,8 +418,8 @@ export class Session {
   /**
    * Begin the match, once the world is built from result().setup: `setupHash`
    * is parseInt(worldHash(world), 16). The first game frame replaces the GO
-   * frame on the link at once. Throws before a result, after leave(), or the
-   * second time.
+   * frame on the link at once, and the link goes to the starting mode. Throws
+   * before a result, after leave(), or the second time.
    */
   beginMatch(setupHash: number): Lockstep {
     if (this.closed || this.leftAt !== null) throw new Error("the session has ended");
@@ -406,6 +428,7 @@ export class Session {
     if (!r) throw new Error("no match agreed yet");
     this.keyAtGo();
     this.atStart = this.pairing.state();
+    this.setTx(r.fast ? "fast" : "robust", "start");
     const ls = (this.ls = this.lockstepFor(r, setupHash));
     if (this.userPaused || this.hidden) ls.setPaused(true);
     ls.setRxq(this.rxq);
@@ -513,7 +536,7 @@ export class Session {
       peerEnded: !ls ? this.earlyEnd : peerEnd === "left" || peerEnd === "desync" ? peerEnd : null,
       waiting:
         shown && shown.stalled && !this.ls!.over()
-          ? { why: heard?.lobby ? "load" : heard && shown.peerPaused ? "paused" : "link", ms: now - shown.lastNewTurnAt }
+          ? { why: heard?.lobby ? "load" : heard && shown.peerPaused ? "paused" : "link", ms: now - Math.max(shown.lastNewTurnAt, shown.peerResumedAt) }
           : null,
       leaving: this.leftAt !== null,
       closable: this.closable(now, ls)
@@ -579,14 +602,14 @@ export class Session {
     this.peerLast = null;
   }
 
-  /** A lobby frame from the friend of this pairing (its role and nonce): it hasn't begun its match. */
-  private fromPeer(p: LinkPacket): boolean {
-    if (this.peerNonce === 0) return false;
+  /** A lobby frame from the friend of this pairing (its role and nonce): it hasn't begun its match. Null: someone else's, or none. */
+  private fromPeer(p: LinkPacket): LobbyFrame | null {
+    if (this.peerNonce === 0) return null;
     try {
       const f = readLobbyFrame(p.bits, p.nbits);
-      return f.role !== this.role && f.nonce === this.peerNonce;
+      return f.role !== this.role && f.nonce === this.peerNonce ? f : null;
     } catch (e) {
-      if (e instanceof CodecError) return false;
+      if (e instanceof CodecError) return null;
       throw e;
     }
   }
@@ -637,8 +660,13 @@ export class Session {
       this.peerLast = { at: p.at, lobby: false };
     } else if (took === "lobby") {
       // (any lobby frame tells the lockstep the friend is in the lobby, which after the match is the rematch hint: a
-      // reloaded page has a new nonce. During it only the friend's own GO frames mean it is still loading)
-      if (this.fromPeer(p)) this.peerLast = { at: p.at, lobby: true };
+      // reloaded page has a new nonce. During it only the friend's own GO frames mean it is still loading, and say what
+      // it hears of this phone: the mode rule's report until its game frames come)
+      const f = this.fromPeer(p);
+      if (f) {
+        this.peerLast = { at: p.at, lobby: true };
+        this.heardRxq(p.at, f.rxq);
+      }
     } else this.counts.ignored++;
   }
 
@@ -660,7 +688,7 @@ export class Session {
     return true;
   }
 
-  /** At GO: key the link for this pairing and set the match's starting mode; if the pairing starts over after GO, the lobby's mode again. */
+  /** At GO: key the link for this pairing (the starting mode waits for beginMatch: see the header); forget it if the pairing starts over after GO. */
   private keyAtGo(): void {
     const s = this.pairing.state();
     if (s.go && s.nonces && s.config) {
@@ -671,26 +699,27 @@ export class Session {
       this.peerNonce = this.role === "host" ? s.nonces.guest : s.nonces.host;
       this.transport.setSessionKey(s.nonces.host, s.nonces.guest);
       this.startMode = s.config.fast ? "fast" : "robust";
-      this.setTx(this.startMode, "start");
     } else if (this.keyedFor !== null && !s.go) {
       this.forgetPeer();
       this.keyedFor = null;
       this.startMode = null;
-      this.setTx(this.lobbyMode, "lobby");
     }
   }
 
   // ------------------------------------------------------- the mode rule ---
 
-  /** A game frame the lockstep took: when the friend's frames arrive, and what it says of this phone's signal. */
+  /** A game frame the lockstep took: when the friend's game frames arrive, and what it says of this phone's signal. */
   private heardGame(at: number): void {
-    if (at - this.lastGameAt > PEER_GAP_MS) {
-      // (after a gap the runs start over: what the friend said before it says nothing of now)
-      this.heardSince = at;
-      this.lowSince = this.highSince = null;
-    }
+    if (at - this.lastGameAt > PEER_GAP_MS) this.gameSince = at;
     this.lastGameAt = at;
-    const q = this.ls!.status().peerRxq;
+    this.heardRxq(at, this.ls!.status().peerRxq);
+  }
+
+  /** A frame of the friend's (a game frame, or its own lobby frame once this phone began), and its receive quality of this phone (null: none). */
+  private heardRxq(at: number, q: number | null): void {
+    // (after a gap the runs start over: what the friend said before it says nothing of now)
+    if (at - this.lastHeardAt > PEER_GAP_MS) this.lowSince = this.highSince = null;
+    this.lastHeardAt = at;
     if (q === null) return;
     if (q <= ROBUST_RXQ) {
       this.lowSince ??= at;
@@ -715,13 +744,16 @@ export class Session {
       this.peerAckAt = now;
     }
     if (this.tx === "fast" && now - this.fastSince >= FAST_SETTLED_MS) this.fastWait = FAST_AFTER_MS;
-    if (now - this.switchedAt < SWITCH_HOLD_MS || now - this.lastGameAt > PEER_GAP_MS) return;
+    if (now - this.switchedAt < SWITCH_HOLD_MS || now - this.lastHeardAt > PEER_GAP_MS) return;
     if (this.tx === "fast") {
       if (this.lowSince !== null && now - this.lowSince >= ROBUST_AFTER_MS) this.setTx("robust", "rxq");
-      // (counted from when the friend's frames last started arriving: right after an outage they still carry old acks,
-      // for the latency and a packet; and a turn sealed after a spell with nothing outstanding is acknowledged a round
-      // trip and up to two packets later, which at the longest round trips pairing allows is more than 1.5 s)
-      else if (now - Math.max(this.peerAckAt, this.heardSince) >= Math.max(ACK_STALL_MS, (this.atStart?.rtt.median ?? 0) + ACK_RTT_SPARE_MS)) {
+      // (counted from when the friend's game frames last started arriving: right after an outage they still carry old
+      // acks, for the latency and a packet; and a turn sealed after a spell with nothing outstanding is acknowledged a
+      // round trip and up to two packets later, which at the longest round trips pairing allows is more than 1.5 s)
+      else if (
+        now - this.lastGameAt <= PEER_GAP_MS &&
+        now - Math.max(this.peerAckAt, this.gameSince) >= Math.max(ACK_STALL_MS, (this.atStart?.rtt.median ?? 0) + ACK_RTT_SPARE_MS)
+      ) {
         this.setTx("robust", "acks");
         this.fastWait = Math.min(FAST_AFTER_MAX_MS, this.fastWait * 2);
       }

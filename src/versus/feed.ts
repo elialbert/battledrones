@@ -16,7 +16,8 @@
  * It pumps the session from construction on, every animation frame and from
  * a 50 ms timer (art loading blocks frames, and a hidden page gets none), and
  * stops when closed. A visibilitychange to hidden pauses the lockstep at once
- * (session.setHidden), so the frame the link repeats says paused.
+ * (session.setHidden), so the frame the link repeats says paused, and counts
+ * a match the record doesn't have yet (below).
  *
  * Lift groups first. The codec splits a long unit list into pieces the
  * lockstep seals into turns of their own, and a Goliath whose lift is still
@@ -54,12 +55,16 @@
  *    end screen says "You left · No result") and counts as abandoned. A
  *    friend that left before this phone's match was decided ends it as
  *    "Friend left" (abandoned); one that leaves after keeps the result;
- *  - the win/loss record is written once: when the end check settles ("In
- *    sync ✓" or "Not verified"), on an abort, or on leaving the page with
- *    the check still running (the result as the lockstep then has it: out
- *    of sync is no contest, even found while Menu or Rematch waits). A match
- *    decided here and found out of sync after is no contest: one counted as
- *    "Not verified" is moved over (a second write, the only one);
+ *  - the win/loss record is written as soon as the result is known: the
+ *    match decided here (not waiting for the end check), or aborted. A page
+ *    that goes hidden with the match not counted yet counts it at once, as
+ *    the lockstep has it, else as abandoned for now: hidden is the last
+ *    event a phone reliably fires (one closed, or killed in the background,
+ *    fires no pagehide), and the match's own end moves that stand-in over
+ *    if the page comes back. pagehide counts it the same way. A match
+ *    decided here and found out of sync after (the end check, or the
+ *    friend's end report while Menu or Rematch waits) is no contest: the
+ *    result counted is moved over, as the end screen then says;
  *  - Menu and Rematch wait for the session to be closable or 2.5 s, showing
  *    "Leaving…", then close the session, call onExit and reload; a page
  *    unload does the record and onExit only;
@@ -318,8 +323,10 @@ export class VersusFeed implements MatchFeed {
   private resignAt: number | null = null;
   private resignLeave = false;
   private aborted: AbortReason | null = null;
-  /** The outcome counted (once, or moved to no contest once: settle), and the record as it then stood. */
+  /** The outcome counted (once, or moved over: settle), and the record as it then stood. */
   private settled: DuelOutcome | null = null;
+  /** `settled` is abandoned for now: counted when the page went hidden mid-match (wentHidden). */
+  private standIn = false;
   private tally: DuelTally | null = null;
   /** The latest stall shown, kept while paused (the pause menu's Leave), cleared once the match moves. */
   private lastStall: { kind: StallKind; ms: number } | null = null;
@@ -362,7 +369,11 @@ export class VersusFeed implements MatchFeed {
     const env = this.env;
     const doc = env.document;
     if (doc) {
-      const vis = () => this.session.setHidden(doc.visibilityState === "hidden");
+      const vis = () => {
+        const hidden = doc.visibilityState === "hidden";
+        this.session.setHidden(hidden);
+        if (hidden) this.wentHidden();
+      };
       doc.addEventListener("visibilitychange", vis);
       this.teardown.push(() => doc.removeEventListener("visibilitychange", vis));
       vis();
@@ -496,10 +507,11 @@ export class VersusFeed implements MatchFeed {
     }
     if (!ls || !scene) return;
     const st = ls.status();
-    // the end: out of sync, the friend gone before this phone's match was decided, or the result final
+    // the end: out of sync, the friend gone before this phone's match was decided, or decided (counted at once,
+    // the end check still running: a failed one moves it to no contest)
     if (st.desync) this.abort("desync");
     else if (!st.decided && st.peerEnd === "left") this.abort("left");
-    else if (st.decided && (st.endCheck === "ok" || st.endCheck === "unverified")) this.settle(outcomeOf(st.decided.winner, this.local));
+    else if (st.decided) this.settle(outcomeOf(st.decided.winner, this.local));
     if (this.resignLeave && this.world.winner && !this.aborted) scene.skipFinale();
     // the reconnect cover
     const rig = this.rig;
@@ -606,16 +618,23 @@ export class VersusFeed implements MatchFeed {
   }
 
   /**
-   * Count the match once (never on a practice link), but for one correction:
-   * a result counted when the end check said "Not verified" that the worlds
-   * then turn out to contradict (the friend's end = 2, or its end report
-   * arriving while Menu or Rematch waits) is no contest, as the end screen
-   * then says, and moves over in the record.
+   * Count the match once (never on a practice link), but for two moves: the
+   * stand-in abandoned counted when the page went hidden mid-match gives way
+   * to the match's own end; and a result counted at the decision that the
+   * worlds then turn out to contradict (the end check, the friend's end = 2,
+   * or its end report arriving while Menu or Rematch waits) is no contest,
+   * as the end screen then says. Each moves over in the record.
    */
   private settle(o: DuelOutcome): void {
     if (this.settled === null) {
       this.settled = o;
       if (!this.practice) this.tally = addOutcome(o, this.env.local);
+      return;
+    }
+    if (this.standIn) {
+      this.standIn = false;
+      if (o !== this.settled && !this.practice) this.tally = moveOutcome(this.settled, o, this.env.local);
+      this.settled = o;
       return;
     }
     const decided = this.settled === "win" || this.settled === "loss" || this.settled === "draw";
@@ -658,6 +677,20 @@ export class VersusFeed implements MatchFeed {
     this.env.reload();
   }
 
+  /**
+   * The page went hidden (the player switched away, or is closing the
+   * browser: a phone fires no pagehide when it closes or kills it from the
+   * background). A match not counted yet counts now: as the lockstep has it,
+   * else abandoned until the match's own end, should the page come back,
+   * moves it over. Never on a practice link (it keeps no record).
+   */
+  private wentHidden(): void {
+    if (this.practice || this.settled !== null) return;
+    const now = this.currentOutcome();
+    this.settle(now ?? "abandoned");
+    this.standIn = now === null;
+  }
+
   /** The page is going (a reload or navigation that isn't ours): count the match and let the lobby close the rig. */
   private pageGone(): void {
     if (this.exited) return;
@@ -686,9 +719,9 @@ export class VersusFeed implements MatchFeed {
 
   // ------------------------------------------------------------ reading ---
 
-  /** The win/loss outcome counted for this match (null: not yet). */
+  /** The win/loss outcome counted for this match (null: not yet; the stand-in a hidden page counted isn't one). */
   get outcome(): DuelOutcome | null {
-    return this.settled;
+    return this.standIn ? null : this.settled;
   }
 
   /** How the match ended with no result (null: it didn't). */

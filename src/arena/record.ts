@@ -59,9 +59,15 @@ export interface BattleEnd {
   reason: "hq" | "time" | "aborted" | "love" | "resign";
 }
 
-/** How a decided world ends a record: a side won, or (Robot Love) nobody did; `resigned` when a side gave up. */
+/**
+ * How a decided world ends a record: a side won, or nobody did. `resigned`
+ * is the world's own: the side that gave up, null when both did on one tick
+ * (a draw by "resign", not Robot Love's), unset otherwise (an HQ, or Robot
+ * Love). The sound duel's duelEnd (src/versus/records.ts, which may not
+ * import this) says the same; tests/resign.test.ts holds them together.
+ */
 export function endOf(tick: number, winner: Faction | "draw", resigned?: Faction | null): BattleEnd {
-  if (winner === "draw") return { tick, winner: null, reason: "love" };
+  if (winner === "draw") return { tick, winner: null, reason: resigned === null ? "resign" : "love" };
   return { tick, winner, reason: resigned ? "resign" : "hq" };
 }
 

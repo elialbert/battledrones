@@ -17,9 +17,10 @@
 //  - this battle mix at the master: −19 dBFS RMS, peaks −3.5 dBFS. Through
 //    the FIR alone it is −27.6 dBFS RMS and delivers 100%; 10 dB louder
 //    (−17.6 dBFS RMS, clipping) 88–96%; 14 dB louder 8–32%;
-//  - with the limiter at −24 dB (makeup taken back) and the cut at 0 (iOS
-//    raw), a battle 20 dB louder still holds the output to −19 dBFS RMS and
-//    fast delivers 99.4% at gain 1 but 98.1% at 1.1. At −18 dB: 94–97%;
+//  - with the limiter at −24 dB (makeup taken back) and the cut at 0 (a
+//    margin: every phone cuts 10 dB), a battle 20 dB louder still holds the
+//    output to −19 dBFS RMS and fast delivers 99.4% at gain 1 but 98.1% at
+//    1.1. At −18 dB: 94–97%;
 //  - at −30 dB (shipped) every case delivers 100%: the shipped cut (10 dB)
 //    leaves this battle at −37.6 dBFS RMS, and a battle 20 dB louder with the
 //    cut at 0 comes out at −21.2 dBFS RMS, −7.9 dBFS peaks; at −36 dB, 100%
@@ -366,7 +367,7 @@ describe("the guard chain (audio.ts)", () => {
       expect(dry.gain.target).toBe(0);
       expect(s.linkGuard).toBe("low");
 
-      // iOS raw: no cut, the limiter's makeup still taken back
+      // no cut (the option measurements use): the limiter's makeup still taken back
       s.setLinkGuard("low", { cutDb: 0 });
       expect(20 * Math.log10(cut.gain.target!)).toBeCloseTo(-makeup, 6);
 
@@ -1144,7 +1145,7 @@ describe("level: a loud battle through the guard, own path +40 dB", () => {
       }
       const shipped = level(game(48000, GUARD_CUT_DB, 0));
       expect(shipped.rmsDb).toBeLessThan(-35);
-      // a battle 20 dB louder, with no cut (iOS raw): the limiter's ceiling
+      // a battle 20 dB louder, with no cut (a margin: every phone cuts 10 dB): the limiter's ceiling
       const worst = level(game(48000, 0, 20));
       expect(worst.rmsDb).toBeLessThan(-20);
       expect(worst.peakDb).toBeLessThan(-6);
@@ -1168,7 +1169,7 @@ describe("level: a loud battle through the guard, own path +40 dB", () => {
   );
 
   it(
-    "and at the limiter's ceiling: no cut (iOS raw) and a battle 20 dB louder",
+    "and at the limiter's ceiling: no cut and a battle 20 dB louder (a margin over the shipped guard)",
     () => {
       for (const gain of [1, 1.1])
         for (const c of rooms)

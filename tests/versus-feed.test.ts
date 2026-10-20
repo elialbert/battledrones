@@ -24,7 +24,8 @@ import { Session } from "../src/versus/session";
 
 // VersusFeed (SOUND-DUEL.md "MatchFeed and GameScene") driven as GameScene drives it: a real Controller, the
 // game loop's planTicks, a null from commands() holding the pose, two Sessions paired over PacketAir on a fake
-// clock. No DOM: the feed's browser pieces are stand-ins (no timers, memory storage, a counted reload).
+// clock. No DOM: the feed's browser pieces are stand-ins (no timers, memory storage, a counted reload, and where a
+// test asks, a page whose visibility and pagehide it drives).
 
 const BUILD = 0x5eed;
 const rng = (seed: number) => {
@@ -45,6 +46,40 @@ class Mem {
   }
   writes(k: string): number {
     return this.sets.filter(([key]) => key === k).length;
+  }
+}
+
+/**
+ * A page as the feed reads it: the document's visibility and its visibilitychange listeners, the window's
+ * pagehide ones (one object stands for both: each listens for its own event), and no HUD root (no overlay DOM).
+ */
+class FakePage {
+  visibilityState: DocumentVisibilityState = "visible";
+  private readonly on = new Map<string, Set<(e: Event) => void>>();
+  addEventListener(type: string, fn: (e: Event) => void): void {
+    if (!this.on.has(type)) this.on.set(type, new Set());
+    this.on.get(type)!.add(fn);
+  }
+  removeEventListener(type: string, fn: (e: Event) => void): void {
+    this.on.get(type)?.delete(fn);
+  }
+  getElementById(): null {
+    return null;
+  }
+  listeners(type: string): number {
+    return this.on.get(type)?.size ?? 0;
+  }
+  /** The player switches away (or back): the browser sets the state, then fires visibilitychange. */
+  hide(hidden: boolean): void {
+    this.visibilityState = hidden ? "hidden" : "visible";
+    this.fire("visibilitychange", {});
+  }
+  /** The page goes: into the back-forward cache (`persisted`), or for good. */
+  pagehide(persisted: boolean): void {
+    this.fire("pagehide", { persisted });
+  }
+  private fire(type: string, e: object): void {
+    for (const f of [...(this.on.get(type) ?? [])]) f(e as Event);
   }
 }
 
@@ -87,6 +122,10 @@ interface Opts {
   rigs?: Partial<Record<BandRole, DuelRig>>;
   /** The host's map (default riverlands). */
   map?: string;
+  /** A phone's page (default none: no document or window). */
+  pages?: Partial<Record<BandRole, FakePage>>;
+  /** This phone's game holds from the start: it never steps tick 0 (its art still loading). */
+  held?: BandRole;
 }
 
 interface Run {
@@ -174,10 +213,13 @@ function frame(p: Phone, r: Run): void {
 
 /** The match is agreed: the feed (beginMatch), a Controller on its world, and the scene's stand-in. */
 function start(p: Phone, r: Run): void {
+  const page = r.opts.pages?.[p.role] ?? null;
   const env: Partial<FeedEnv> = {
-    setInterval: () => null, clearInterval: () => undefined, requestAnimationFrame: null, document: null, window: null,
+    setInterval: () => null, clearInterval: () => undefined, requestAnimationFrame: null,
+    document: page as unknown as FeedEnv["document"], window: page as unknown as FeedEnv["window"],
     local: p.local, session: p.session, reload: () => p.reloads++
   };
+  p.hold = r.opts.held === p.role;
   const feed = new VersusFeed({ session: p.s, rig: r.opts.rigs?.[p.role] ?? null, practice: !!r.opts.practice, onExit: () => p.exits++, env });
   r.opts.prepare?.(feed.world);
   const ctrl = new Controller(feed.world);
@@ -838,6 +880,227 @@ describe("the duel's record", () => {
     }
     expect(r.guest.s.status().closable).toBe(true);
   });
+
+  it("is written as soon as the match is decided, the end check still running (a phone closed then fires nothing more)", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 17 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    const blue = sideOf(r, "blue");
+    const red = sideOf(r, "red");
+    blue.feed!.duel.resign(false);
+    // blue's game holds once its resign is sealed: red decides first, its end check waiting on blue's report
+    const d0 = blue.drains.length;
+    runUntil(r, () => blue.drains.length > d0, 2000);
+    blue.hold = true;
+    runUntil(r, () => ls(red).decided !== null, 10_000);
+    expect(ls(red).endCheck).toBe("pending");
+    expect(red.feed!.outcome).toBe("win");
+    expect(readTally(red.local)).toEqual({ w: 1, l: 0, d: 0, abandoned: 0, noContest: 0 });
+    expect(red.local.writes(RECORD_KEY)).toBe(1);
+    blue.hold = false;
+    runUntil(r, () => [r.host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    // in sync: nothing more to write
+    expect(red.local.writes(RECORD_KEY)).toBe(1);
+    expect(blue.local.writes(RECORD_KEY)).toBe(1);
+    expect(readTally(blue.local)).toEqual({ w: 0, l: 1, d: 0, abandoned: 0, noContest: 0 });
+  });
+});
+
+describe("the page's lifecycle", () => {
+  it("switched away: paused at once, counted as abandoned until the match ends, and the friend sees it paused", { timeout: 90_000 }, () => {
+    const page = new FakePage();
+    const r = pair({ seed: 41, pages: { host: page } });
+    expect([page.listeners("visibilitychange"), page.listeners("pagehide")]).toEqual([1, 1]);
+    runUntil(r, () => tickOf(r.host) >= 40 && tickOf(r.guest) >= 40, 30_000);
+    const host = r.host;
+    expect(host.local.writes(RECORD_KEY)).toBe(0);
+    // (a hidden page gets no animation frames: its game holds, the feed's own timer pumps on)
+    page.hide(true);
+    host.hold = true;
+    // the frames say paused at once; the match counts as abandoned at once (a phone killed now fires nothing more)
+    expect(ls(host).paused).toBe(true);
+    expect(host.local.writes(RECORD_KEY)).toBe(1);
+    expect(readTally(host.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 1, noContest: 0 });
+    expect(host.feed!.outcome).toBeNull();
+    runFor(r, 6000);
+    // the friend waits on a paused friend, not a lost one
+    expect(ls(r.guest).peerPaused).toBe(true);
+    expect(r.guest.s.status().waiting?.why).toBe("paused");
+    expect(r.guest.feed!.overlay().stall).toEqual({ kind: "paused", leave: false });
+    expect(r.guest.aborts).toEqual([]);
+    // back: the match goes on
+    page.hide(false);
+    host.hold = false;
+    expect(ls(host).paused).toBe(false);
+    const at = Math.max(tickOf(host), tickOf(r.guest));
+    runUntil(r, () => tickOf(host) > at + 10 && tickOf(r.guest) > at + 10, 10_000);
+    expect(r.guest.feed!.overlay().stall).toBeNull();
+    // switched away again: counted already, nothing more
+    page.hide(true);
+    page.hide(false);
+    expect(host.local.writes(RECORD_KEY)).toBe(1);
+    // the match ends: its result takes the stand-in's place (one move); the friend counts it once
+    sideOf(r, "blue").feed!.duel.resign(false);
+    runUntil(r, () => [host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    const won = host.feed!.local === "red";
+    expect(host.feed!.outcome).toBe(won ? "win" : "loss");
+    expect(readTally(host.local)).toEqual({ w: won ? 1 : 0, l: won ? 0 : 1, d: 0, abandoned: 0, noContest: 0 });
+    expect(host.local.writes(RECORD_KEY)).toBe(2);
+    expect(r.guest.local.writes(RECORD_KEY)).toBe(1);
+    expect(readTally(r.guest.local).abandoned).toBe(0);
+  });
+
+  it("pagehide: into the back-forward cache nothing happens; for good, the match counts and the lobby closes the rig", { timeout: 60_000 }, () => {
+    const page = new FakePage();
+    const r = pair({ seed: 43, pages: { guest: page } });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    const g = r.guest;
+    page.pagehide(true);
+    runFor(r, 500);
+    expect([g.local.writes(RECORD_KEY), g.exits]).toEqual([0, 0]);
+    expect(g.s.phase).toBe("match");
+    page.pagehide(false);
+    expect(g.local.writes(RECORD_KEY)).toBe(1);
+    expect(readTally(g.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 1, noContest: 0 });
+    expect(g.feed!.outcome).toBe("abandoned");
+    expect(g.exits).toBe(1);
+    expect(g.s.phase).toBe("closed");
+    expect([page.listeners("visibilitychange"), page.listeners("pagehide")]).toEqual([0, 0]);
+    // (the page is going on its own: no reload of ours)
+    expect(g.reloads).toBe(0);
+    page.pagehide(false);
+    expect([g.local.writes(RECORD_KEY), g.exits]).toEqual([1, 1]);
+  });
+});
+
+describe("what a stalled or resigning player sees", () => {
+  /** The host's stall pill as it changes, each with the stall's length when it did, until the stall is `untilMs` long. */
+  function pill(r: Run, untilMs: number): [number, string][] {
+    const seen: [number, string][] = [];
+    runUntil(
+      r,
+      () => {
+        const ms = r.host.s.status().waiting?.ms ?? 0;
+        const now = JSON.stringify(r.host.feed!.overlay().stall);
+        if (seen.at(-1)?.[1] !== now) seen.push([ms, now]);
+        return ms >= untilMs;
+      },
+      untilMs + 20_000
+    );
+    return seen;
+  }
+  const within = (ms: number, from: number) => ms >= from && ms < from + 100;
+
+  it("a friend not heard: Waiting after 0.5 s, Signal lost after 5 s, and its Leave after 30 s", { timeout: 120_000 }, () => {
+    const r = pair({ seed: 3 });
+    runUntil(r, () => tickOf(r.host) >= 40 && tickOf(r.guest) >= 40, 30_000);
+    // the guest's packets stop reaching the host
+    r.air.outage(60_000, "ba");
+    const seen = pill(r, 31_000);
+    expect(seen.map(([, s]) => s)).toEqual([
+      "null",
+      JSON.stringify({ kind: "wait", leave: false }),
+      JSON.stringify({ kind: "lost", leave: false }),
+      JSON.stringify({ kind: "lost", leave: true })
+    ]);
+    expect(within(seen[1]![0], 500) && within(seen[2]![0], 5000) && within(seen[3]![0], 30_000), JSON.stringify(seen)).toBe(true);
+    // the pause menu offers Leave too, not "Resign and leave" (nothing heard)
+    expect(r.host.feed!.duel.exits()).toEqual({ resignAndLeave: false, leave: true });
+    // the pill's Leave: no result, counted as abandoned, the pill gone under the end screen
+    r.host.feed!.duel.leave();
+    expect(r.host.aborts.map((a) => a.reason)).toEqual(["lost"]);
+    expect(readTally(r.host.local).abandoned).toBe(1);
+    expect(r.host.feed!.overlay().stall).toBeNull();
+  });
+
+  it("a friend paused: its own words, never Signal lost, and Leave only after 60 s", { timeout: 120_000 }, () => {
+    const r = pair({ seed: 7 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    r.guest.ctrl!.paused = true;
+    const seen = pill(r, 61_000);
+    expect(seen.map(([, s]) => s)).toEqual(["null", JSON.stringify({ kind: "paused", leave: false }), JSON.stringify({ kind: "paused", leave: true })]);
+    expect(within(seen[2]![0], 60_000), JSON.stringify(seen)).toBe(true);
+    expect(r.host.feed!.duel.exits()).toEqual({ resignAndLeave: true, leave: true });
+    // back: the pill goes
+    r.guest.ctrl!.paused = false;
+    const at = tickOf(r.host);
+    runUntil(r, () => tickOf(r.host) > at + 2, 10_000);
+    expect(r.host.feed!.overlay().stall).toBeNull();
+  });
+
+  it("a friend still loading (no turn of its own yet): \"…to load\", never Signal lost, and Leave only after 60 s", { timeout: 120_000 }, () => {
+    const r = pair({ seed: 9, held: "guest" });
+    expect(tickOf(r.guest)).toBe(0);
+    const seen = pill(r, 61_000);
+    expect(tickOf(r.guest)).toBe(0);
+    expect(seen.map(([, s]) => s)).toEqual(["null", JSON.stringify({ kind: "load", leave: false }), JSON.stringify({ kind: "load", leave: true })]);
+    expect(within(seen[1]![0], 500) && within(seen[2]![0], 60_000), JSON.stringify(seen)).toBe(true);
+    // it loads: the match goes on
+    r.guest.hold = false;
+    runUntil(r, () => tickOf(r.host) > 2 * r.host.s.result()!.delay && tickOf(r.guest) > 2 * r.host.s.result()!.delay, 10_000);
+    expect(r.host.feed!.overlay().stall).toBeNull();
+  });
+
+  it("\"Resign and leave\": Resigning… until it lands, then straight to the report (the friend's finale plays)", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 17 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    const g = r.guest;
+    expect(g.feed!.duel.exits().resignAndLeave).toBe(true);
+    g.feed!.duel.resign(true);
+    expect(g.feed!.overlay().resigning).toBe(true);
+    expect(g.ctrl!.locked).toBe(true);
+    // (the frame that steps the deciding tick skips the finale)
+    let before = -1;
+    let resigning = true;
+    runUntil(
+      r,
+      () => {
+        if (g.feed!.world.winner) return true;
+        before = g.skips;
+        resigning &&= g.feed!.overlay().resigning;
+        return false;
+      },
+      10_000
+    );
+    expect([before, resigning]).toEqual([0, true]);
+    expect(g.skips).toBeGreaterThan(0);
+    expect(g.feed!.overlay().resigning).toBe(false);
+    runUntil(r, () => [r.host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    expect(r.host.skips).toBe(0);
+    expect(g.feed!.outcome).toBe("loss");
+    expect(g.aborts).toEqual([]);
+  });
+
+  it("a plain Resign plays the finale on both phones", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 17 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    r.guest.feed!.duel.resign(false);
+    runUntil(r, () => [r.host, r.guest].every((p) => ls(p).endCheck === "ok"), 20_000);
+    expect([r.host.skips, r.guest.skips]).toEqual([0, 0]);
+  });
+
+  it("\"Orders queued\" while more than 2 s of orders wait for room in a turn", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 5 });
+    runUntil(r, () => tickOf(r.host) >= 20 && tickOf(r.guest) >= 20, 30_000);
+    const p = r.host;
+    const side = p.feed!.local;
+    const hq = hqOf(p.feed!.world, side)!;
+    expect(p.feed!.overlay().queued).toBe(false);
+    // (a robust link's turns carry a few rally points a second)
+    for (let i = 0; i < 40; i++) p.ctrl!.enqueue({ type: "rally", faction: side, buildingId: hq.id, x: 10.5 + (i % 20), y: 12.5 + Math.floor(i / 20) });
+    let most = 0;
+    runUntil(
+      r,
+      () => {
+        most = Math.max(most, ls(p).queuedTicks);
+        return p.feed!.overlay().queued;
+      },
+      20_000
+    );
+    expect(most).toBeGreaterThan(20);
+    // it drains: the pill goes
+    runUntil(r, () => ls(p).queued === 0, 60_000);
+    expect(p.feed!.overlay().queued).toBe(false);
+  });
 });
 
 describe("the duel's record when the worlds drift apart", () => {
@@ -863,20 +1126,24 @@ describe("the duel's record when the worlds drift apart", () => {
     return { r, red };
   }
 
-  it("counts no contest when the end check fails while Rematch waits for the end to go out", { timeout: 60_000 }, () => {
-    const { r, red } = drifted((_, p) => p.feed!.duel.rematch());
+  it("moves the win counted at the decision to no contest when the end check fails while Rematch waits", { timeout: 60_000 }, () => {
+    const { r, red } = drifted((_, p) => {
+      // (counted at the decision, the end check still running)
+      expect([p.feed!.outcome, p.local.writes(RECORD_KEY)]).toEqual(["win", 1]);
+      p.feed!.duel.rematch();
+    });
     runUntil(r, () => red.reloads > 0, 5000);
     expect(ls(red).desync).toBe(true);
     expect(red.feed!.outcome).toBe("noContest");
     expect(readTally(red.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 0, noContest: 1 });
-    expect(red.local.writes(RECORD_KEY)).toBe(1);
+    expect(red.local.writes(RECORD_KEY)).toBe(2);
   });
 
-  it("turns a result counted as Not verified into no contest when the friend then reports the desync", { timeout: 60_000 }, () => {
+  it("turns a result still counted at Not verified into no contest when the friend then reports the desync", { timeout: 60_000 }, () => {
     // blue's packets don't reach red for 12 s: red's end check runs out first
     const { r, red } = drifted((run, _, blue) => run.air.outage(12_000, blue.role === "host" ? "ab" : "ba"));
-    runUntil(r, () => red.feed!.outcome !== null, 15_000);
-    expect(ls(red).endCheck).toBe("unverified");
+    expect(red.feed!.outcome).toBe("win");
+    runUntil(r, () => ls(red).endCheck === "unverified", 15_000);
     expect(red.feed!.outcome).toBe("win");
     expect(readTally(red.local).w).toBe(1);
     expect(red.feed!.reportView().sync).toBe("unverified");
@@ -884,6 +1151,7 @@ describe("the duel's record when the worlds drift apart", () => {
     expect(red.aborts.map((a) => a.reason)).toEqual(["desync"]);
     expect(red.feed!.outcome).toBe("noContest");
     expect(readTally(red.local)).toEqual({ w: 0, l: 0, d: 0, abandoned: 0, noContest: 1 });
+    expect(red.local.writes(RECORD_KEY)).toBe(2);
     expect(red.feed!.reportView()).toMatchObject({ sync: "desync", record: "0 wins · 0 losses · 0 draws · 1 with no result" });
   });
 });

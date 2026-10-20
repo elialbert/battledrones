@@ -26,6 +26,18 @@
  *    candidate is given up: the CRC and the gate decide, as they do the mode
  *    of a superframe whose sync was missed. (Without these, at 600 ppm half
  *    the acquisitions without a pair waited a superframe for one.)
+ *  - Where the band holds a steady tone (the sync search excised one in the
+ *    superframe before the sync), the second pass starts PRE_SYMBOLS before
+ *    the sync. A lock rides such a tone out on each tone's mean of d̃, its
+ *    steady share (decode.ts, tracker.ts), but a trial had no such means for
+ *    the first packet that decides the lock: a tone between two of the
+ *    friend's, 23 dB or more over its tone, left the friend never heard, and
+ *    a lock that rode it out never came back after a dropout. The 16 symbols
+ *    before the sync give the means (the stream's last data, or the tone
+ *    alone before a stream began, either averaging to the tone's share):
+ *    robust is heard to 30 dB now, fast to 26 (as far as its running lock
+ *    holds). They cost the pass 16 symbols more from history, about 0.15 s,
+ *    so a band without such a tone goes without them.
  *  - Locked, every expected sync is re-correlated within ±5 ms: it sets the
  *    superframe's mode and trims the timing by at most 0.5 ms. If neither
  *    pattern clears 0.3, the timing stays and that superframe's packets are
@@ -46,9 +58,9 @@
  */
 import type { BandPlan, ModemMode } from "../transport";
 import { DecodeJob, Decoder, softBits, toneScratch } from "./decode";
-import { TS, type Timing } from "./params";
+import { SUPERFRAME_SYMBOLS, TS, type Timing } from "./params";
 import type { InputRing } from "./ring";
-import { RHO_DETECT, RHO_KEEP, type Candidate, type CorrBand, type Recorr, type SyncSearch } from "./sync";
+import { DECIM, RHO_DETECT, RHO_KEEP, type Candidate, type CorrBand, type Recorr, type SyncSearch } from "./sync";
 import { EPS_LIMIT, Tracker } from "./tracker";
 
 /** A decoded packet, held until ModemCore.take(). */
@@ -72,6 +84,8 @@ const DROP_AFTER = 4;
 const CLOCK_SYMBOLS = 4;
 /** The pilots' fit leaves the turn as unwrapped unless another fits them this much better. */
 const TURN_MARGIN = 0.7;
+/** Acquisition's second pass starts this many symbols before the sync, where the band holds a steady tone (see above). */
+const PRE_SYMBOLS = 16;
 
 interface Held {
   corr: CorrBand | null;
@@ -92,6 +106,8 @@ export class Receiver {
   private trial: Tracker | null = null;
   /** 1: measuring the clock (pilots), 2: demodulating the first packet. */
   private trialStage = 0;
+  /** Symbols the trial's second pass demodulates before its sync. */
+  private trialPre = 0;
   private readonly cand: Held = { corr: null, t: 0, mode: "robust", rho: 0 };
   private readonly next: Held = { corr: null, t: 0, mode: "robust", rho: 0 };
   private hasNext = false;
@@ -331,6 +347,14 @@ export class Receiver {
       this.demodulate(tr, k * tr.slopeSum[best]!);
       return;
     }
+    if (tr === this.trial && tr.symbols <= this.trialPre) {
+      // before the trial's sync: each tone's steady share only. Then the candidate's superframe begins
+      if (tr.j === 0) {
+        tr.sfMode = this.cand.mode;
+        tr.sfPending = false;
+      }
+      return;
+    }
     const jd = tr.lastJ;
     if (jd === 0) return;
     const tb = tr.tb!;
@@ -363,9 +387,16 @@ export class Receiver {
   /** The trial's second pass: from its sync again, the tones where the clock `eps` puts them. */
   private demodulate(tr: Tracker, eps: number): void {
     const c = this.cand;
+    const e = Math.max(-EPS_LIMIT, Math.min(EPS_LIMIT, eps));
+    const step = this.t.ts * (1 + e);
+    // with a steady tone in the band (the sync search excised one in the superframe before this sync), from PRE_SYMBOLS
+    // before the sync, as far as the ring still holds them
+    const tone = c.corr!.excisedTo * DECIM >= c.t - this.t.superframe;
+    const pre = tone ? Math.max(0, Math.min(PRE_SYMBOLS, Math.floor((c.t - this.t.ts - this.ring.oldest()) / step))) : 0;
     tr.gen = this.trialGen = ++this.gens;
-    tr.begin(c.corr!.tables, c.t, Math.max(-EPS_LIMIT, Math.min(EPS_LIMIT, eps)), false, true, Infinity);
+    tr.begin(c.corr!.tables, c.t - pre * step, e, false, true, Infinity, (SUPERFRAME_SYMBOLS - pre) % SUPERFRAME_SYMBOLS);
     tr.sfMode = c.mode;
+    this.trialPre = pre;
     this.trialStage = 2;
   }
 

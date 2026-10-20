@@ -814,12 +814,18 @@ export class GameScene {
    * placement go, and the end screen says why, with "Copy debug info" when
    * `info` is given (a desync). A finale or report already up gives way: an
    * end check that fails after the result was shown is no contest after all.
+   * The score settles on its quiet coda as at a finale's flash, with no sting
+   * and no SFX jingle (nothing was won or lost): without it the battle score
+   * plays on under the end screen at the intensity the match stopped at, its
+   * mood frozen with the sim clock.
    */
   abort(reason: AbortReason, info?: string): void {
     if (this.aborted) return;
     this.aborted = reason;
     this.ended = true;
     this.finale = null;
+    // (a finale past its flash has resolved the score already: this keeps that)
+    music.finale("draw", { love: false });
     this.glide = null;
     this.gest.reset();
     this.boxRect = null;

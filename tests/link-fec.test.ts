@@ -1,13 +1,17 @@
 // The sound link's error control (SOUND-DUEL.md "The modem" > Transmitter,
 // Decoding): CRC-16 and the session keys, the K = 7 convolutional code with
-// its soft Viterbi decoder and agreement gate, the interleaver and the
-// scrambler.
+// its soft Viterbi decoder and agreement gate (against noise, and against a
+// real stream read the wrong way), the interleaver and the scrambler.
 import { describe, expect, it } from "vitest";
-import { convEncode, gateErrors, gatePasses, Viterbi } from "../src/link/modem/conv";
+import { convEncode, GATE_LIMIT, gateErrors, gatePasses, Viterbi } from "../src/link/modem/conv";
 import { CRC_INIT, crc16, crcKey } from "../src/link/modem/crc";
+import { DecodeJob, softBits, toneScratch } from "../src/link/modem/decode";
 import { interleaver } from "../src/link/modem/interleave";
-import { shape } from "../src/link/modem/params";
+import { DATA_SYMBOLS, shape, timing } from "../src/link/modem/params";
 import { pnBits, pnSeed } from "../src/link/modem/scramble";
+import { allBandTables, bandKey } from "../src/link/modem/tables";
+import { Tracker } from "../src/link/modem/tracker";
+import type { ModemMode } from "../src/link/transport";
 import { hash32 } from "../src/sim/rand";
 
 function rng(seed: number) {
@@ -121,11 +125,14 @@ describe("convolutional code and Viterbi", () => {
         const cap = 188;
         let gateStops = 0;
         let accepted = 0;
+        let closest = 1;
         for (let n = 0; n < 250_000; n++) {
           // garbage: what a receiver makes of noise, soft values of random sign and size
           for (let i = 0; i < 2 * steps; i++) soft[i] = (r() - 0.5) * 8;
           v.decode(soft, steps, out);
-          if (!gatePasses(gateErrors(out, steps, soft), steps)) {
+          const errs = gateErrors(out, steps, soft);
+          closest = Math.min(closest, errs / (2 * steps));
+          if (!gatePasses(errs, steps)) {
             gateStops++;
             continue;
           }
@@ -134,12 +141,84 @@ describe("convolutional code and Viterbi", () => {
           if (crc16(out, cap, CRC_INIT) === got) accepted++;
         }
         expect(accepted).toBe(0);
-        // the gate alone stops nearly all of them (the CRC sees the rest)
-        expect(gateStops).toBeGreaterThan(249_700);
+        // the gate alone stops every one of them, and none comes within a point of it (11.4% at the least in the million)
+        expect(gateStops).toBe(250_000);
+        expect(closest).toBeGreaterThan(GATE_LIMIT + 0.01);
       },
       180_000
     );
   }
+
+  it(
+    "a real stream decoded wrongly (in the other mode, a symbol off, with another packet's scrambler) never passes the gate either",
+    () => {
+      // The garbage that comes nearest a codeword: a strong, clean stream read the wrong way, as a superframe whose sync
+      // was missed is (decoded both ways), or a trial on a sync found a symbol off. 10.95% at the least in these 76,200
+      // (10.8% in about 500,000 more), against 11.4% for noise
+      const t = timing(48000);
+      const tables = allBandTables(t);
+      const tw = toneScratch();
+      const job = new DecodeJob();
+      const r = rng(5);
+      const info = new Uint8Array(256);
+      const enc = new Uint8Array(512);
+      const slots = new Uint8Array(512);
+      let closest = 1;
+      let decodes = 0;
+      for (const plan of ["high", "low"] as const) {
+        const tb = tables.get(bandKey(plan, "host"))!;
+        const tr = new Tracker(t);
+        tr.tb = tb;
+        const T = tb.band.T;
+        const N = DATA_SYMBOLS * T;
+        const reRe = new Float64Array(N);
+        const reIm = new Float64Array(N);
+        const read = (mode: ModemMode, index: number) => {
+          const sh = tb.shape[mode];
+          softBits(tr, mode, index, job, tw);
+          v.decode(job.soft, sh.steps, out);
+          closest = Math.min(closest, gateErrors(out, sh.steps, job.soft) / (2 * sh.steps));
+          decodes++;
+        };
+        for (let rep = 0; rep < 600; rep++) {
+          for (const mode of ["robust", "fast"] as const) {
+            // a superframe of packets in `mode`, its differential products as the receiver would hold them (clean)
+            const sh = tb.shape[mode];
+            for (let index = 0; index < DATA_SYMBOLS / sh.P; index++) {
+              for (let i = 0; i < sh.steps; i++) info[i] = i < sh.steps - 6 && r() < 0.5 ? 1 : 0;
+              convEncode(info, sh.steps, enc);
+              for (let j = 0; j < sh.coded; j++) slots[tb.slotOf[mode][j]!] = enc[j]!;
+              for (let q = 0; q < sh.coded; q++) slots[q] = slots[q]! ^ tb.pn[mode][index * sh.coded + q]!;
+              for (let st = 0; st < sh.P * T; st++) {
+                const turns = sh.b === 1 ? 2 * slots[st]! : [0, 1, 3, 2][(slots[2 * st]! << 1) | slots[2 * st + 1]!]!;
+                tr.dRe[index * sh.P * T + st] = Math.cos((turns * Math.PI) / 2);
+                tr.dIm[index * sh.P * T + st] = Math.sin((turns * Math.PI) / 2);
+              }
+            }
+            const other: ModemMode = mode === "robust" ? "fast" : "robust";
+            for (let index = 0; index < DATA_SYMBOLS / tb.shape[other].P; index++) read(other, index);
+            // a symbol off
+            reRe.set(tr.dRe.subarray(0, N));
+            reIm.set(tr.dIm.subarray(0, N));
+            for (let i = 0; i < N; i++) {
+              tr.dRe[i] = reRe[(i + T) % N]!;
+              tr.dIm[i] = reIm[(i + T) % N]!;
+            }
+            for (let index = 0; index + 1 < DATA_SYMBOLS / sh.P; index++) read(mode, index);
+            // the right symbols, another packet's scrambler: the packets moved one place on
+            for (let i = 0; i < N; i++) {
+              tr.dRe[i] = reRe[(i + sh.P * T) % N]!;
+              tr.dIm[i] = reIm[(i + sh.P * T) % N]!;
+            }
+            for (let index = 0; index + 1 < DATA_SYMBOLS / sh.P; index++) read(mode, index);
+          }
+        }
+      }
+      expect(decodes).toBeGreaterThan(75_000);
+      expect(closest).toBeGreaterThan(GATE_LIMIT);
+    },
+    120_000
+  );
 });
 
 describe("interleaver", () => {

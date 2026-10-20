@@ -3,14 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 // (the lobby builds the VersusFeed only once a match starts: its game code stays out of these tests)
 vi.mock("../src/versus/feed", () => ({ VersusFeed: class {} }));
 
-import { RigError, type MicMode } from "../src/link/rig";
+import type { ModemStats } from "../src/link/modem/core";
+import { RigError, RigLink, type MicMode } from "../src/link/rig";
+import { WorkletTransport } from "../src/link/worklet-transport";
+import type { FromWorklet } from "../src/link/worklet-protocol";
 import { PacketAir } from "../src/link/packet-air";
 import type { BandPlan, BandRole, LinkStats, LinkTransport } from "../src/link/transport";
 import { worldHash } from "../src/sim/checksum";
 import type { World } from "../src/sim/types";
 import {
   GAIN_MIN, GAIN_QUIET_MS, GAIN_RISE, GAIN_RISE_MS, GAIN_START, GAIN_STEP, GAIN_STEP_MS, LOUD_MS, LOUD_OWN_SNR_DB, LobbyMachine, QUIET_MS, REMATCH_FALLBACK_MS,
-  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, cutDbFor, openerGives, parseDuelParams, parsePrefs, parseRematch, routeText, rttLine, tipsText, type DuelRematch,
+  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, openerGives, parseDuelParams, parsePrefs, parseRematch, routeText, rttLine, tipsText, type DuelRematch,
   type LobbyEnd, type LobbyEnv, type LobbyLink, type LobbyRig
 } from "../src/versus/lobby";
 import { OPENERS, OPENER_IDS } from "../src/sim/openers";
@@ -26,6 +29,12 @@ const OFFER = { map: "riverlands", mutators: [], hostSide: "blue" as const };
 
 /** Let pending promise callbacks run (the lobby's link is a promise). */
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/** A stats report from the modem (the worklet's {t:"stats"}). */
+const modemStats = (o: Partial<ModemStats> = {}): ModemStats => ({
+  sample: 0, locked: false, plan: "high", rxMode: null, txMode: "robust", snrDb: null, rxOk: 0, rxBad: 0, syncs: 0, clockPpm: null, txPackets: 0,
+  ownSnrDb: null, loopbackMs: 40, clips: 0, inputPeak: 0.1, ...o
+});
 
 /** A manual clock. */
 function clock(t0 = 0) {
@@ -57,12 +66,6 @@ describe("the dev modes' URL parameters", () => {
     expect(parsePrefs('{"plan":"low","micMode":"ec"}')).toEqual({ plan: "low", micMode: "ec" });
     expect(parsePrefs('{"plan":"mid","micMode":7}')).toEqual({ plan: "high", micMode: "raw" });
     expect(parsePrefs("{nope")).toEqual({ plan: "high", micMode: "raw" });
-  });
-
-  it("cuts the guard by 10 dB, except on iOS in raw mode", () => {
-    expect(cutDbFor("raw", true)).toBe(0);
-    expect(cutDbFor("ec", true)).toBe(10);
-    expect(cutDbFor("raw", false)).toBe(10);
   });
 });
 
@@ -422,6 +425,9 @@ class Probe implements LobbyLink {
   gains: number[] = [];
   /** Everything from the friend is lost while set. */
   deaf = false;
+  /** The modem stopped: no report speaks for it (WorkletTransport's stats go stale at once). */
+  dead = false;
+  onError: ((message: string) => void) | null = null;
   constructor(readonly inner: LinkTransport) {}
   capacity = () => this.inner.capacity();
   send: LinkTransport["send"] = (f) => this.inner.send(f);
@@ -436,7 +442,7 @@ class Probe implements LobbyLink {
   stats = (): LinkStats => ({ ...this.inner.stats(), ownSnrDb: this.own });
   close = () => this.inner.close();
   setGain = (g: number) => void this.gains.push(g);
-  modemStats = () => ({ sample: this.sample, inputPeak: this.peak }) as ReturnType<NonNullable<LobbyLink["modemStats"]>>;
+  modemStats = () => (this.dead ? null : ({ sample: this.sample, inputPeak: this.peak } as ReturnType<NonNullable<LobbyLink["modemStats"]>>));
 }
 
 interface Bench {
@@ -536,6 +542,16 @@ describe("the lobby's logic", () => {
     expect(b.guards).toEqual(["high"]);
     expect(b.rig!.closed).toBe(false);
     expect(b.ended).toEqual([]);
+    // the match's modem is the feed's: the lobby only logs what it says
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const probe = b.links[0]!.probe;
+    probe.dead = true;
+    probe.onError!("the modem stopped: boom");
+    expect(warn).toHaveBeenCalledWith("sound link:", "the modem stopped: boom");
+    expect(b.m.state().step).toBe("started");
+    expect(b.rig!.closed).toBe(false);
+    expect(b.ended).toEqual([]);
+    warn.mockRestore();
   });
 
   it("a Join detects the plan; Back and Cancel before GO let the audio go at once", { timeout: 30_000 }, async () => {
@@ -585,6 +601,102 @@ describe("the lobby's logic", () => {
     expect(b.ended).toEqual(["error"]);
     expect(b.guards).toEqual([null]);
     expect(b.m.done).toBe(true);
+  });
+
+  it("a modem that stops is an error that lets the audio go, not the route warning; one that refused a message runs on", { timeout: 30_000 }, async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const b = bench({ friend: false });
+    await flush();
+    b.m.host();
+    await flush();
+    const probe = b.links[0]!.probe;
+    expect(probe.onError).toBeInstanceOf(Function);
+    await b.run(3000);
+    probe.onError!("a list of 0 payloads (1 to 8)");
+    expect(warn).toHaveBeenCalledWith("sound link:", "a list of 0 payloads (1 to 8)");
+    await b.run(100);
+    expect(b.m.state()).toMatchObject({ step: "pairing", error: null });
+    expect(b.ended).toEqual([]);
+    // it stops: nothing it reported holds, and it never hears its own signal again
+    probe.dead = true;
+    probe.own = null;
+    probe.onError!("the modem stopped: boom");
+    const v = b.m.state();
+    expect(v.step).toBe("error");
+    expect(v.error).toEqual({ kind: "modem", message: "the modem stopped: boom" });
+    expect(b.ended).toEqual(["error"]);
+    expect(b.rig!.closed).toBe(true);
+    expect(b.guards).toEqual(["high", null]);
+    expect(b.m.done).toBe(true);
+    await b.run(ROUTE_GRACE_MS + ROUTE_MS + 1000);
+    expect(b.m.state()).toMatchObject({ step: "error", route: false, error: { kind: "modem" } });
+    // a link the lobby let go (Back) says nothing to it either
+    const c = bench({ friend: false });
+    await flush();
+    c.m.host();
+    await flush();
+    const old = c.links[0]!.probe;
+    c.m.back();
+    old.dead = true;
+    old.onError!("the modem stopped: boom");
+    expect(c.m.state()).toMatchObject({ step: "choose", error: null });
+    warn.mockRestore();
+  });
+
+  it("the modem's error reaches the lobby through the rig's link: the worklet's fatal error, or the processor failing", { timeout: 30_000 }, async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    for (const way of ["error", "processorerror"] as const) {
+      const c = clock();
+      const port = { onmessage: null as ((e: { data: FromWorklet }) => void) | null, postMessage: () => undefined };
+      const node = { port, onprocessorerror: null as (() => void) | null, connect: () => undefined, disconnect: () => undefined };
+      const ctx = { sampleRate: 48000, currentTime: 0, state: "running", destination: {} };
+      let link: RigLink | null = null;
+      const ended: LobbyEnd[] = [];
+      const rig = fakeRig();
+      const m = new LobbyMachine({
+        now: c.now, build: BUILD, random: () => 0.5, rig, practice: null, rematch: null, seat: null,
+        prefs: { plan: "high", micMode: "raw" }, savePrefs: () => undefined, offer: OFFER, guard: () => undefined,
+        begin: () => undefined, released: (why) => void ended.push(why),
+        link: async (cfg) => {
+          const full = { ...cfg, sampleRate: 48000 };
+          const t = new WorkletTransport(ctx as unknown as BaseAudioContext, full, { clock: c.now, createNode: () => node as unknown as AudioWorkletNode });
+          return (link = new RigLink(t, full));
+        }
+      });
+      await flush();
+      m.host();
+      await flush();
+      // the modem reports, hearing its own signal well: no route warning
+      let sample = 0;
+      const report = () => port.onmessage?.({ data: { t: "stats", ...modemStats({ sample: (sample += 12000), ownSnrDb: 35 }) } });
+      for (let i = 0; i < 400; i++) {
+        c.t += 10;
+        if (i % 25 === 0) report();
+        m.update();
+      }
+      expect(m.state()).toMatchObject({ step: "pairing", route: false, error: null });
+      if (way === "error") port.onmessage?.({ data: { t: "error", message: "the modem stopped: boom", fatal: true } });
+      else node.onprocessorerror?.();
+      expect(m.state().error).toEqual({ kind: "modem", message: way === "error" ? "the modem stopped: boom" : "the sound link's audio processor failed" });
+      expect(ended).toEqual(["error"]);
+      expect(rig.closed).toBe(true);
+      expect(link!.isClosed).toBe(true);
+    }
+    warn.mockRestore();
+  });
+
+  it("a microphone mode switch leaves the guard as it is: its cut is the same in both modes, on every phone", async () => {
+    const b = bench();
+    await flush();
+    const switched: MicMode[] = [];
+    b.rig!.setMicMode = async (mode) => void switched.push(mode);
+    b.m.setMicMode("ec");
+    b.m.setMicMode("raw");
+    expect(switched).toEqual(["ec", "raw"]);
+    expect(b.guards).toEqual([]);
+    b.m.host();
+    await flush();
+    expect(b.guards).toEqual(["high"]);
   });
 
   it("waits for a tap while the context isn't running, and moves on when it starts by itself", async () => {

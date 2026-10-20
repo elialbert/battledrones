@@ -4,12 +4,12 @@
  * GameScene"). The feed decides what shows (src/versus/feed.ts); this only
  * draws it, mounted into the HUD root next to the game's own widgets.
  *
- * - One pill under the banner's slot for a stall: "Waiting for your
- *   friend…", "…to load", "Friend paused", "Signal lost: bring the phones
- *   closer", with "Leave (no result)" once the feed offers it (two taps: a
- *   stray one doesn't end the match). Small pills for "Orders queued",
- *   "Resigning…" and "Leaving…". The battlefield stays in view: a stalled
- *   match is still worth looking at.
+ * - One pill for a stall: "Waiting for your friend…", "…to load", "Friend
+ *   paused", "Signal lost: bring the phones closer", with "Leave (no
+ *   result)" once the feed offers it (two taps: a stray one doesn't end the
+ *   match). Small pills for "Orders queued", "Resigning…" and "Leaving…".
+ *   The battlefield stays in view: a stalled match is still worth looking
+ *   at.
  * - The full-screen "Tap to reconnect the sound link" cover when the rig
  *   lost its audio: the whole cover is the button (the tap must be a
  *   gesture: it resumes the audio and may ask for the microphone), with
@@ -28,7 +28,10 @@
  *    paused bit, and a hidden page pauses (session.ts), so the pill says
  *    "or switched away" under it;
  *  - the stall pill sits under the banner's slot (--banner-top), centred on
- *    the battlefield; the cover dims the screen like the pause menu.
+ *    the battlefield, and on a phone between the zoom stack and the
+ *    calldowns: in short landscape under a 53px banner, and in the banner's
+ *    slot itself once Leave shows (hud.css); the cover dims the screen like
+ *    the pause menu.
  */
 import "./hud.css";
 import type { ReportSection } from "../ui/report";

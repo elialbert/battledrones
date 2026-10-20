@@ -6,8 +6,9 @@
 // the restart on hearing a friend again, mode switches, plan detection, the
 // self-monitor and self-test, the session CRC, latency, RoomLink and CPU;
 // and what a phone's surroundings and its audio thread can throw at it: a
-// steady tone in the band, a latency that moves, a frame counter that goes
-// back, a non-finite sample, a burst of loud noise, a bad gain.
+// steady tone in the band, screen taps, a latency that moves, a frame
+// counter that goes back or jumps an hour, a non-finite sample, a burst of
+// loud noise, a bad gain, blocks longer than the worklet's.
 import { describe, expect, it } from "vitest";
 import html from "../radio-probe.html?raw";
 import { ModemCore, type ModemConfig, type RxPacket } from "../src/link/modem/core";
@@ -152,21 +153,24 @@ function withTone(m: ModemCore, sr: number, hz: number, amp: number): RoomEndpoi
 
 /**
  * One modem hearing itself through a plain 75 ms loopback (self-test), block
- * by block: `frame` may be moved between calls, and `onBlock` sees each
- * output.
+ * by block (128 frames, or `block`): `frame` may be moved between calls, and
+ * `onBlock` sees each output (`frame` still the block's first, `ms` what its
+ * process() call took).
  */
-function selfLoop(self: ModemCore, sr: number) {
-  const out = new Float32Array(128);
-  const inp = new Float32Array(128);
+function selfLoop(self: ModemCore, sr: number, block = 128) {
+  const out = new Float32Array(block);
+  const inp = new Float32Array(block);
   const delay = new Float32Array(1 << 16);
   const lag = Math.round(0.075 * sr);
-  const st = { frame: 0, onBlock: null as ((out: Float32Array) => void) | null };
+  const st = { frame: 0, ms: 0, onBlock: null as ((out: Float32Array) => void) | null };
   const run = (seconds: number) => {
-    for (const end = st.frame + seconds * sr; st.frame < end; st.frame += 128) {
+    for (const end = st.frame + seconds * sr; st.frame < end; st.frame += block) {
       const f = st.frame;
-      for (let i = 0; i < 128; i++) inp[i] = 0.3 * delay[(f + i) & 0xffff]! + 1e-4 * Math.sin(f + i);
+      for (let i = 0; i < block; i++) inp[i] = 0.3 * delay[(f + i) & 0xffff]! + 1e-4 * Math.sin(f + i);
+      const t0 = performance.now();
       self.process(inp, out, f);
-      for (let i = 0; i < 128; i++) delay[(f + i + lag) & 0xffff] = out[i]!;
+      st.ms = performance.now() - t0;
+      for (let i = 0; i < block; i++) delay[(f + i + lag) & 0xffff] = out[i]!;
       st.onBlock?.(out);
     }
   };
@@ -213,6 +217,40 @@ describe("the simulated room", () => {
     },
     90_000
   );
+
+  it("screen taps: clicks at the rate asked, each starting at the level asked and dying away over 3 ms", () => {
+    // a phone alone, silent, its microphone quiet but for the taps
+    const rec = new Float32Array(30 * 48000);
+    let w = 0;
+    const listener: RoomEndpoint = {
+      process(i, o) {
+        rec.set(i, w);
+        w += i.length;
+        o.fill(0);
+      }
+    };
+    const quiet: RoomEndpoint = { process: (_i, o) => o.fill(0) };
+    const db = -20;
+    const room = new Room({ seed: 5, a: { noise: 0, speaker: null, screenTaps: { perSecond: 2, db } }, b: { outputDb: -200 } }, listener, quiet);
+    room.run(29.9);
+    // the clicks: runs of sound, apart by more than their length
+    const amp = Math.pow(10, db / 20);
+    let clicks = 0;
+    let energy = 0;
+    let last = -Infinity;
+    for (let k = 0; k < w; k++) {
+      const v = rec[k]!;
+      energy += v * v;
+      if (Math.abs(v) > 1e-6 && k - last > 0.005 * 48000) clicks++;
+      if (Math.abs(v) > 1e-6) last = k;
+    }
+    expect(clicks).toBeGreaterThan(40);
+    expect(clicks).toBeLessThan(80);
+    // each click's energy: amp² · Σ e^(−2k/τ) over 3 ms, τ = 1 ms (48 samples)
+    const each = (amp * amp * (1 - Math.exp(-6))) / (1 - Math.exp(-2 / 48));
+    expect(energy / clicks / each).toBeGreaterThan(0.85);
+    expect(energy / clicks / each).toBeLessThan(1.15);
+  });
 });
 
 describe("two modems through the room, both transmitting", () => {
@@ -265,6 +303,30 @@ describe("two modems through the room, both transmitting", () => {
       120_000
     );
   }
+
+  it(
+    "at the edge of range (80 cm, a microphone 30 times noisier than the default): ≥ 88% of robust packets both ways, none wrong",
+    () => {
+      // Near the edge the hard decisions of a packet that Viterbi decodes exactly right disagree with its codeword by
+      // 7–12%. The first 8% gate threw away a third of these rooms' packets (68% delivered; 93% at 10%), for no garbage
+      // it stopped: noise stays over 11.4%, the garbage nearest a codeword over 10.8% (tests/link-fec.test.ts)
+      let n = 0;
+      let ok = 0;
+      for (const seed of [21, 22, 23]) {
+        const d = new Duplex({ seed, distanceCm: 80, a: { ...hard(48000, 0), noise: 3e-4 }, b: { ...hard(44100, 150), noise: 3e-4 } }, "robust");
+        d.room.run(20);
+        for (const from of [0, 1] as const) {
+          const r = d.delivery(from, 3, 19);
+          n += r.n;
+          ok += r.ok;
+        }
+        expect(d.wrong).toEqual([0, 0]);
+        expect(d.dups).toEqual([0, 0]);
+      }
+      expect(ok / n, `${ok}/${n}`).toBeGreaterThanOrEqual(0.88);
+    },
+    60_000
+  );
 
   it(
     "acquires from 50 random starts and never locks off the true timing",
@@ -676,6 +738,92 @@ describe("a steady tone in the receive band (coil whine, a beacon, a harmonic of
       60_000
     );
   }
+
+  it(
+    "between two tones, 26 dB over the friend's (5 dB over its whole band): heard from the first sync it can be, and again after the friend's speaker was quiet for 2.5 s",
+    () => {
+      // A lock rides such a tone out on each tone's running mean of d̃ (its steady share), but the lock is won on a
+      // trial's first packet, which had no such means: from 23 dB on the friend was never heard, and a lock that rode the
+      // tone out never came back after a dropout. Where the sync search excises a tone, a trial now starts 16 symbols
+      // before its sync to learn the shares. (Robust is heard to 30 dB, fast to 26, where its running lock itself loses
+      // a packet in ten or so: past that, fast loses its running lock too.)
+      for (const mode of ["robust", "fast"] as const) {
+        const d = new Duplex({ seed: 21, distanceCm: 20, a: { ownDb: 30 }, b: { ownDb: 30, ppm: 100 } }, mode);
+        const b = d.m[1];
+        let mute = false;
+        d.room.setEndpoint(0, withTone(d.m[0], 48000, 17512.5, friendTone * Math.pow(10, 26 / 20)));
+        d.room.setEndpoint(1, {
+          process(i, o, f) {
+            b.process(i, o, f);
+            if (mute) o.fill(0);
+          }
+        });
+        d.room.run(12);
+        const r = d.delivery(1, 3, 11);
+        expect(r.frac, `${mode}: ${r.ok}/${r.n}`).toBeGreaterThanOrEqual(0.9);
+        mute = true;
+        d.room.run(2.5);
+        mute = false;
+        const back = d.room.time;
+        d.room.run(8);
+        // its next sync, the trial's 16 symbols more from history, and a packet
+        expect(d.arrivals(0, back)[0]! - back, mode).toBeLessThan(SUPERFRAME_S + 1);
+        const again = d.delivery(1, back + SUPERFRAME_S + 0.5, back + 7);
+        expect(again.frac, `${mode}: ${again.ok}/${again.n}`).toBeGreaterThanOrEqual(0.9);
+        expect(d.wrong[0]).toBe(0);
+        // the tone pulls the clock a little at this level (89–93 ppm against 100 in three rooms)
+        expect(Math.abs(d.m[0].stats().clockPpm! - 100)).toBeLessThan(15);
+      }
+    },
+    60_000
+  );
+});
+
+describe("screen taps at the receiving phone (clicks its own microphone hears)", () => {
+  // Clicks of white noise decaying over 3 ms at A, at seeded random times. Their level is set against the friend in its
+  // band at 20 cm: the friend's band reaches A at about −61 dBFS, and a white click's power in a 3 kHz band over its 3 ms
+  // is about 17 dB under its onset level. (How loud real taps are in these bands is not measured: their sound is mostly
+  // below 9 kHz.) A click spoils one symbol's DFT, so two differentials: from about 20 dB over the friend it costs about
+  // a packet, which the gate must not let through half-decoded (decode.ts)
+  const run = (mode: ModemMode, perSecond: number, overFriendDb: number) => {
+    let n = 0;
+    let ok = 0;
+    for (const seed of [7, 8]) {
+      const side = { ownDb: 35, jammerDb: -30 };
+      const db = -61 + 17 + overFriendDb;
+      const d = new Duplex({ seed, distanceCm: 20, a: { ...side, screenTaps: { perSecond, db } }, b: { ...side, ppm: 100 } }, mode);
+      d.room.run(20);
+      const r = d.delivery(1, 3, 19);
+      n += r.n;
+      ok += r.ok;
+      expect(d.wrong[0], `${mode}, seed ${seed}`).toBe(0);
+    }
+    return { frac: ok / n, text: `${mode}: ${ok}/${n}` };
+  };
+
+  it(
+    "a tap a second, 10 dB over the friend in its band: robust packets lose next to nothing, fast ones a few",
+    () => {
+      // 99% and 96% here
+      const robust = run("robust", 1, 10);
+      expect(robust.frac, robust.text).toBeGreaterThanOrEqual(0.97);
+      const fast = run("fast", 1, 10);
+      expect(fast.frac, fast.text).toBeGreaterThanOrEqual(0.9);
+    },
+    60_000
+  );
+
+  it(
+    "three taps a second, 30 dB over: each costs about a packet, and none is delivered wrong",
+    () => {
+      // 52% and 68% here: of 5 robust packets a second the 3 clicks cost 2.4, of 10 fast ones 3.2
+      const robust = run("robust", 3, 30);
+      expect(robust.frac, robust.text).toBeGreaterThanOrEqual(0.4);
+      const fast = run("fast", 3, 30);
+      expect(fast.frac, fast.text).toBeGreaterThanOrEqual(0.55);
+    },
+    60_000
+  );
 });
 
 describe("what the audio thread and the phone throw at it", () => {
@@ -727,6 +875,34 @@ describe("what the audio thread and the phone throw at it", () => {
       expect(peak).toBeLessThanOrEqual(CLIP);
       expect(self.stats().clips).toBe(0);
       expect(self.stats().rxBad).toBe(0);
+    },
+    60_000
+  );
+
+  it(
+    "a frame counter that jumps ten minutes or an hour ahead (a phone suspended that long): the block carrying the jump takes a millisecond or so, not time in proportion to the jump, and decoding resumes",
+    () => {
+      // The skip after a long suspension is a gap as long as the suspension. The lock passes over the symbols it missed
+      // in one step; it used to finalize each, erased, in the one process() call: 20 ms of the audio thread for ten
+      // minutes and 110–230 ms for an hour, against a 2.67 ms quantum. (Under a millisecond now, the ring's 2.7 s of
+      // zeros included; the bound leaves room for a loaded machine.)
+      const sr = 48000;
+      for (const minutes of [10, 60]) {
+        const self = new ModemCore({ sampleRate: sr, plan: "high", tx: "host", rx: "host" });
+        self.setPayload(new Uint8Array([0x81]), 8);
+        const loop = selfLoop(self, sr);
+        loop.run(6);
+        const before = self.stats().rxOk;
+        expect(before).toBeGreaterThan(10);
+        loop.st.frame += minutes * 60 * sr;
+        let jumpMs = -1;
+        loop.st.onBlock = () => {
+          if (jumpMs < 0) jumpMs = loop.st.ms;
+        };
+        loop.run(6);
+        expect(jumpMs, `${minutes} min`).toBeLessThan(5);
+        expect(self.stats().rxOk, `${minutes} min`).toBeGreaterThan(before + 20);
+      }
     },
     60_000
   );
@@ -805,6 +981,38 @@ describe("what the audio thread and the phone throw at it", () => {
       expect(after.filter((t) => t <= 1).length, after.map((t) => t.toFixed(2)).join(" ")).toBeGreaterThanOrEqual(after.length / 2);
     },
     120_000
+  );
+
+  it(
+    "blocks longer than the worklet's 128 frames: the lock keeps up with them, decoding each packet within two blocks of its end",
+    () => {
+      // ModemCore takes a long block in pieces of up to 512 frames, and its trackers work within a budget per piece.
+      // A budget that didn't grow with the piece (48,000 tone-samples, under the 50,700 a locked tracker needs per 512
+      // frames) let the lock fall behind by 5% of the time elapsed: 1.7 s late after 25 s, and deaf once its windows
+      // fell off the ring
+      const sr = 48000;
+      const P = PACKET_SYMBOLS.high.robust;
+      for (const block of [512, 2048]) {
+        const self = new ModemCore({ sampleRate: sr, plan: "high", tx: "host", rx: "host" });
+        self.setPayload(new Uint8Array([0x81]), 8);
+        const loop = selfLoop(self, sr, block);
+        let n = 0;
+        let worst = 0;
+        loop.st.onBlock = () => {
+          for (const p of self.take()) {
+            n++;
+            worst = Math.max(worst, loop.st.frame + block - p.sample);
+          }
+        };
+        loop.run(5);
+        n = 0;
+        worst = 0;
+        loop.run(20);
+        expect(n, `${block}-frame blocks`).toBeGreaterThanOrEqual(95);
+        expect(worst, `${block}-frame blocks`).toBeLessThanOrEqual(P * timing(sr).ts + 2 * block);
+      }
+    },
+    60_000
   );
 
   it("a gain that is NaN keeps the last good one; a negative one is silence; none above 1.5", () => {

@@ -185,9 +185,10 @@ export class Music {
    * jingle instead).
    *
    * `love: false` is a draw that isn't Robot Love's (a sound duel's two
-   * resigns on one tick, SOUND-DUEL.md "Resign"): the score settles on the
-   * held tonic and its coda with no sting, since the love sting would tell of
-   * hearts that never showed. Victory and defeat don't change with it.
+   * resigns on one tick, SOUND-DUEL.md "Resign"), or a duel that ended with no
+   * result (GameScene.abort): the score settles on the held tonic and its
+   * coda with no sting, since the love sting would tell of hearts that never
+   * showed. Victory and defeat don't change with it.
    */
   finale(kind: "victory" | "defeat" | "draw", o: { love?: boolean } = {}): boolean {
     if (this.finished) return true;

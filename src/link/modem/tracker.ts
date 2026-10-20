@@ -43,6 +43,14 @@
  * per-call budget. It stores each data symbol's differential products for
  * the packet decoder, and per symbol the pilots' squared phase errors (the
  * effective SNR).
+ *
+ * An erased window (one over a gap) costs nothing of the budget, so the
+ * windows that start before the oldest sample the ring holds are passed
+ * over in one step, timing, superframe count and all, not one per loop:
+ * after a frame-counter jump of an hour (a phone suspended that long, its
+ * clock catching up on resume) the lock otherwise walked all 72,000 of the
+ * symbols it missed in the one process() call, 110–230 ms of audio thread.
+ * What is left of a gap is within the ring, at most its 2.7 s (55 symbols).
  */
 import { DATA_SYMBOLS, SUPERFRAME_SYMBOLS, TS, type Timing } from "./params";
 import { ToneWeights } from "./outlier";
@@ -58,16 +66,12 @@ const MAX_TONES = 120;
 const MAX_DATA = 105;
 /** Pilots either side of a pilot that make its neighbourhood (outlier.ts). */
 const PILOT_NEAR = 2;
-/** The running mean of each data tone's differential product: its gain per symbol. */
-const STEADY_GAIN = 1 / 32;
 /**
- * A running mean of products that average to nothing still has a size: its
- * expected square is STEADY_GAIN / (2 − STEADY_GAIN) of their spread (1/63
- * of it). A share counts as an interferer's only once its square stands
- * past four times that (decode.ts); a share of noise alone does once in e⁴,
- * 2 tones of 105.
+ * The running mean of each data tone's differential product: its gain per
+ * symbol, once it rests on 1/STEADY_GAIN symbols (before, it is their plain
+ * mean).
  */
-export const STEADY_FLOOR = (4 * STEADY_GAIN) / (2 - STEADY_GAIN);
+const STEADY_GAIN = 1 / 32;
 
 export class Tracker {
   private readonly t: Timing;
@@ -148,6 +152,20 @@ export class Tracker {
   readonly steadyIm = new Float64Array(MAX_DATA);
   readonly steadyVar = new Float64Array(MAX_DATA);
   /**
+   * A mean of products that average to nothing still has a size: its
+   * expected square is a share of their spread, 1/n while it is the plain
+   * mean of n of them, falling to STEADY_GAIN / (2 − STEADY_GAIN) = 1/63 as
+   * a running mean. A share counts as an interferer's only once its square
+   * stands past four times that (decode.ts), which a share of noise alone
+   * does once in e⁴, 2 tones of 105. The plain mean at first lets a
+   * trial's first packet, which decides the lock, use the shares of the 16
+   * symbols just before its sync (rx.ts), of which the running mean started
+   * from zero read only 40%.
+   */
+  steadyFloor = 4;
+  steadyN = 0;
+  private steadyNoise = 1;
+  /**
    * Acquisition's first pass: the pilot slopes summed over its symbols, and
    * the pilots' weighted squared residuals, for the fit as unwrapped (index
    * 1) and for the fits one turn either side (0: −2π, 2: +2π). Beyond about
@@ -179,8 +197,8 @@ export class Tracker {
     this.chunk = new Float64Array(this.len);
   }
 
-  /** Start at a sync whose useful part starts at t0 (input frame). */
-  begin(tb: BandTables, t0: number, eps: number, pilotsOnly: boolean, adapt: boolean, maxSymbols: number): void {
+  /** Start at the symbol whose useful part starts at t0 (input frame): a sync, or symbol j0 of the superframe before one. */
+  begin(tb: BandTables, t0: number, eps: number, pilotsOnly: boolean, adapt: boolean, maxSymbols: number, j0 = 0): void {
     this.tb = tb;
     this.active = true;
     this.pilotsOnly = pilotsOnly;
@@ -188,7 +206,7 @@ export class Tracker {
     this.maxSymbols = maxSymbols;
     this.t0 = t0;
     this.eps = eps;
-    this.j = 0;
+    this.j = j0;
     this.symbols = 0;
     this.sfSeq++;
     this.syncT0 = t0;
@@ -211,6 +229,9 @@ export class Tracker {
     this.steadyRe.fill(0);
     this.steadyIm.fill(0);
     this.steadyVar.fill(0);
+    this.steadyN = 0;
+    this.steadyNoise = 1;
+    this.steadyFloor = 4;
   }
 
   stop(): void {
@@ -229,8 +250,10 @@ export class Tracker {
       if (!this.ready) this.setup(ring);
       const end = this.w0 + this.len;
       if (this.winErased || this.w0 < ring.oldest()) {
+        const behind = this.behind(ring.oldest());
         this.winErased = true;
         this.finalize(ring);
+        if (behind > 1 && this.active) this.passOver(behind - 1);
         return used;
       }
       const avail = Math.min(ring.end, end);
@@ -247,6 +270,41 @@ export class Tracker {
       }
     }
     return used;
+  }
+
+  /** How many symbols, from the current window's on, have windows that start before `oldest` (at least 1). */
+  private behind(oldest: number): number {
+    return Math.max(1, Math.floor((oldest - this.w0 - this.pendingShift) / (this.t.ts * (1 + this.eps))));
+  }
+
+  /**
+   * Pass over the next n symbols, all erased (their windows start before the
+   * oldest sample held), as finalizing them one by one would: each superframe
+   * position they take erased, the clock and timing advanced by n symbols,
+   * and when they cross a superframe boundary, its sync (the newest crossed)
+   * awaits re-correlation.
+   */
+  private passOver(n: number): void {
+    const step = this.t.ts * (1 + this.eps);
+    for (let i = Math.max(0, n - SUPERFRAME_SYMBOLS); i < n; i++) {
+      const j = (this.j + i) % SUPERFRAME_SYMBOLS;
+      this.winAt[j] = this.t0 + i * step - this.t.backoff;
+      this.erased[j] = 1;
+      this.perr[j] = 0;
+      this.pcnt[j] = 0;
+    }
+    const wraps = Math.floor((this.j + n) / SUPERFRAME_SYMBOLS);
+    this.t0 += n * step;
+    this.j = (this.j + n) % SUPERFRAME_SYMBOLS;
+    this.lastJ = (this.j + SUPERFRAME_SYMBOLS - 1) % SUPERFRAME_SYMBOLS;
+    this.symbols += n;
+    if (wraps > 0) {
+      this.sfSeq += wraps;
+      this.syncT0 = this.t0 - this.j * step;
+      this.sfMode = null;
+      this.sfPending = true;
+    }
+    if (this.symbols >= this.maxSymbols) this.active = false;
   }
 
   /** Where the next symbol's window will need input up to (for scheduling). */
@@ -498,6 +556,10 @@ export class Tracker {
     if (this.pilotsOnly) return;
     // data tones, rotation removed
     const base = (this.j - 1) * b.T;
+    const g = Math.max(STEADY_GAIN, 1 / (this.steadyN + 1));
+    this.steadyN++;
+    this.steadyNoise = (1 - g) * (1 - g) * this.steadyNoise + g * g;
+    this.steadyFloor = 4 * this.steadyNoise;
     for (let d = 0; d < b.T; d++) {
       const k = b.data[d]!;
       const th = -s * hz[k]!;
@@ -511,9 +573,9 @@ export class Tracker {
       this.dIm[base + d] = yi;
       const er = yr - this.steadyRe[d]!;
       const ei = yi - this.steadyIm[d]!;
-      this.steadyRe[d] = this.steadyRe[d]! + STEADY_GAIN * er;
-      this.steadyIm[d] = this.steadyIm[d]! + STEADY_GAIN * ei;
-      this.steadyVar[d] = this.steadyVar[d]! + STEADY_GAIN * (er * er + ei * ei - this.steadyVar[d]!);
+      this.steadyRe[d] = this.steadyRe[d]! + g * er;
+      this.steadyIm[d] = this.steadyIm[d]! + g * ei;
+      this.steadyVar[d] = this.steadyVar[d]! + g * (er * er + ei * ei - this.steadyVar[d]!);
     }
   }
 

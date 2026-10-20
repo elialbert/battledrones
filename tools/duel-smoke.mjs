@@ -13,8 +13,9 @@
 //      taps an opener card, the match loads, and from then on the pages are
 //      advanced with __bd.scene.step(): a hidden page gets no animation
 //      frames, so nothing here waits on them. (Each page's own frames are
-//      held to one every RAF_MS: the two pages share one software renderer,
-//      and drawing at full rate starves both to a tick or two a second.)
+//      held to one every RAF_MS, and once the match is up the scene draws
+//      none: the two pages share one software renderer, and drawing at full
+//      rate starves both to a tick or two a second.)
 //      Orders (a build bar button, moves through the Controller), the outage
 //      (both stall, "Waiting for your friend…", then go on), a pause (the
 //      friend stalls within D ticks: "Friend paused"), then, past tick
@@ -40,8 +41,12 @@
 //  - Host / Join is driven on pages without a seat (a seat pairs at once, so
 //    its lobby has no role to tap), then the match runs on seated pages;
 //  - each page's own animation frames are slowed to one every RAF_MS by an
-//    init script, and the smoke steps the scene undrawn
-//    (__bd.scene.step(100, 1, false)), drawing only for --shots;
+//    init script (the boot waits for one), and once both matches are up the
+//    scene's own frame loop is stopped (cancelAnimationFrame(scene.raf)):
+//    the smoke steps the scene undrawn (__bd.scene.step(100, 1, false)),
+//    drawing only for --shots. Each frame the scene drew held its page's main
+//    thread 1–2.5 s, a third to a half of the match, in which the page
+//    neither stepped nor sent a packet;
 //  - the hash trails are compared at every tick of the match, from each
 //    page's own log (window.__duel.trails: read from outside after each step,
 //    the trail missed every tick a step took two of, which a lossy link's
@@ -57,6 +62,23 @@
 //    held on one tick for STUCK_MS fails (a stall that never ends, a stuck
 //    page), and so does a match slower on average than TICK_MS a tick (one
 //    that crawls), where a slow link passes;
+//  - a page whose main thread is blocked for BLOCKED_MS or more at a
+//    stretch has stopped, not the link: a heartbeat in each page (every
+//    BEAT_MS) logs such gaps, and the waits leave out the time either page
+//    stopped, but not while the relay cut either way (a cut holds the
+//    pages up whatever they do). On a loaded machine (load average 8–14 on
+//    4 CPUs) a page went 9 s without running a script (the shared software
+//    renderer), sending nothing, and its friend, held that long on its tick,
+//    failed STUCK_MS; the page that stops is held as long, once its friend
+//    has stepped through the turns it had. Shorter blocks are the smoke's
+//    own pace, which the thresholds allow for: undrawn, a page still stops
+//    for 1–2.5 s now and then (more while a stall overlay is up), and
+//    leaving those out too let a 10 s cut of the relay pass, as did leaving
+//    out the drawn frames. Each progress line says how long the pages
+//    stopped;
+//  - once a progress check has failed, the match is cut short: the trail
+//    check says where it ended, and the saved battle isn't held to a full
+//    match's turns and hashes;
 //  - the build bar's Fab button gets its click straight (dispatchEvent), not
 //    Playwright's tap: that first waits for the button to hold still over
 //    two animation frames (1–3 s here, 6–19 s on a loaded machine), and in one
@@ -105,6 +127,9 @@ const shots = args.includes("--shots");
 const urlArg = args.find((a) => !a.startsWith("--"));
 /** Each page's animation frames come this far apart (ms): see 2. above. */
 const RAF_MS = 4000;
+/** Each page's heartbeat (ms), and the gap in it that counts as its page stopped (see the header). */
+const BEAT_MS = 50;
+const BLOCKED_MS = 3000;
 /** The match goes on to this tick before the resign: the saved battle has a world hash every 100. */
 const MATCH_TICKS = 320;
 for (const [k, v] of Object.entries({ seed: SEED, loss: LOSS, latency: LATENCY, jitter: JITTER, outage: OUTAGE }))
@@ -112,11 +137,12 @@ for (const [k, v] of Object.entries({ seed: SEED, loss: LOSS, latency: LATENCY, 
 if (LOSS >= 1) throw new Error("--loss must be below 1");
 /**
  * The most a page may be held on one tick with nothing wrong (ms): the
- * smoke's own 6 s (the two pages share one software renderer, and each draws
- * its own frame every RAF_MS), the turn's trip and its ack's (LATENCY +
+ * smoke's own 6 s (two pages on one machine, stepped from here a pair of
+ * frames at a time), the turn's trip and its ack's (LATENCY +
  * JITTER each way), and a robust packet period (200 ms) for each loss in a
  * row the relay's draws can make: k in a row has odds LOSS^k at a packet, so
- * one in a million allows log(1e-6) / log(LOSS) of them.
+ * one in a million allows log(1e-6) / log(LOSS) of them. Time a page
+ * stopped doesn't count (see the header).
  */
 const LOSS_RUN = LOSS > 0 ? Math.ceil(Math.log(1e-6) / Math.log(LOSS)) : 0;
 const STUCK_MS = 6000 + 2 * (LATENCY + JITTER) + 200 * LOSS_RUN;
@@ -185,7 +211,7 @@ class Air {
   }
   /** One page, as `name`, whose packets go to `to`. */
   async attach(name, to, page) {
-    const dir = { from: name, to, rand: rng(this.seed * 2 + this.dirs.size + 1), queue: [], last: 0, busy: false, sent: 0, lost: 0, delivered: 0, cutUntil: 0, sentAt: 0, deliveredAt: 0 };
+    const dir = { from: name, to, rand: rng(this.seed * 2 + this.dirs.size + 1), queue: [], last: 0, busy: false, sent: 0, lost: 0, delivered: 0, cutUntil: 0, cuts: [], sentAt: 0, deliveredAt: 0 };
     this.dirs.set(name, dir);
     this.ends.set(name, page);
     await page.exposeFunction("__duelOut", (b64, nbits) => this.send(name, b64, nbits));
@@ -204,7 +230,9 @@ class Air {
   }
   /** Drop everything `from` sends for `ms`. */
   cut(from, ms) {
-    this.dirs.get(from).cutUntil = Date.now() + ms;
+    const d = this.dirs.get(from);
+    d.cutUntil = Date.now() + ms;
+    d.cuts.push([Date.now(), d.cutUntil]);
   }
   deliver() {
     const now = Date.now();
@@ -261,6 +289,21 @@ for (const name of ["host", "guest"]) {
     window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), ms);
     window.cancelAnimationFrame = (id) => clearTimeout(id);
   }, RAF_MS);
+  // (the heartbeat: the spans the page's main thread was blocked for BLOCKED_MS or more, on the wall clock the pages and
+  // Node share; and the one it is coming out of, which the beat that ends it may not have logged yet)
+  await context.addInitScript(([beat, over]) => {
+    const spans = [];
+    let last = Date.now();
+    setInterval(() => {
+      const now = Date.now();
+      if (now - last > over) {
+        spans.push([last + beat, now]);
+        if (spans.length > 256) spans.shift();
+      }
+      last = now;
+    }, beat);
+    window.__blockedSpans = () => (Date.now() - last > over ? [...spans, [last + beat, Date.now()]] : spans.slice());
+  }, [BEAT_MS, BLOCKED_MS]);
   await context.addInitScript((s) => {
     try {
       localStorage.setItem("battledrones.settings", s);
@@ -366,6 +409,8 @@ await both((p) => p.page.waitForFunction(() => window.__bd?.scene && window.__du
     took[p.name] = ((Date.now() - t) / 1000).toFixed(1);
   }
   log(`both matches are up, on screen after host ${took.host} s, guest ${took.guest} s`);
+  // (and drawn no more but for --shots: see the header)
+  await both((p) => p.page.evaluate(() => cancelAnimationFrame(window.__bd.scene.raf)));
 }
 
 const player = async (p) => p.page.evaluate(() => window.__bd.player);
@@ -402,15 +447,40 @@ const stepBoth = () =>
       }, p.seen + 1)
       .then((r) => sample(p, r), () => undefined)
   );
-/** Advance both pages for `ms` of real time (the link sets the pace). */
+/** The spans (Date.now()) a page's main thread was blocked for BLOCKED_MS or more, from its heartbeat. */
+const blockedSpans = (p) => p.page.evaluate(() => window.__blockedSpans?.() ?? []).catch(() => []);
+/** How long since `from` the spans cover, merged, less the `minus` spans. */
+function covered(spans, from, minus = []) {
+  const now = Date.now();
+  const merge = (list) => {
+    const out = [];
+    for (const [a, b] of list.map(([a, b]) => [Math.max(a, from), Math.min(b, now)]).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
+      const last = out[out.length - 1];
+      if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+      else out.push([a, b]);
+    }
+    return out;
+  };
+  const less = merge(minus);
+  let total = 0;
+  for (const [a, b] of merge(spans)) {
+    total += b - a;
+    for (const [c, d] of less) total -= Math.max(0, Math.min(b, d) - Math.max(a, c));
+  }
+  return total;
+}
+/** How long since `from` either page stopped, outside the relay's cuts (see the header). */
+const blocked = async (from) => covered((await both(blockedSpans)).flat(), from, [...air.dirs.values()].flatMap((d) => d.cuts));
+const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
+/** Advance both pages for `ms` of time they could run (the link sets the pace; see the header for the blocked time). */
 async function run(ms, until = null) {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
+  const T = Date.now();
+  for (;;) {
     await stepBoth();
     if (until && (await until())) return true;
+    if (Date.now() - T >= ms && Date.now() - T - (await blocked(T)) >= ms) return false;
     await sleep(30);
   }
-  return false;
 }
 const tick = (p) => p.page.evaluate(() => window.__duel.tick);
 const ticks = () => both(tick);
@@ -419,7 +489,8 @@ const ticks = () => both(tick);
  * Step both pages until each is `n` ticks past where it is now (see the
  * header). False, and a failure saying `what`, if a page short of its mark is
  * held on one tick for STUCK_MS, or it all takes longer than n ticks of
- * tickMs(D) after that.
+ * tickMs(D) after that, neither counting the time a page stopped (see the
+ * header).
  */
 async function goesOn(what, n) {
   const from = await ticks();
@@ -431,29 +502,40 @@ async function goesOn(what, n) {
     await stepBoth();
     const now = [phones.host.tick, phones.guest.tick];
     if (now.every((t, i) => t >= from[i] + n)) {
-      log(`${what}: host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]} in ${((Date.now() - T) / 1000).toFixed(1)} s`);
+      const b = await blocked(T);
+      log(`${what}: host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]} in ${secs(Date.now() - T)}${b ? ` (pages stopped ${secs(b)})` : ""}`);
       return true;
     }
-    if (Date.now() - T > limit)
-      return check(false, `${what}: ${n} ticks took over ${(limit / 1000).toFixed(1)} s (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D})`);
+    if (Date.now() - T > limit) {
+      const b = await blocked(T);
+      if (Date.now() - T - b > limit)
+        return progressFailed(`${what}: ${n} ticks took over ${secs(limit)} (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D}; pages stopped ${secs(b)} besides)`);
+    }
     for (const i of [0, 1]) {
       if (now[i] !== last[i]) [last[i], held[i]] = [now[i], Date.now()];
       else if (now[i] < from[i] + n && Date.now() - held[i] > STUCK_MS) {
+        const b = await blocked(held[i]);
+        if (Date.now() - held[i] - b <= STUCK_MS) continue;
         const pages = await both((p) =>
           p.page
             .evaluate(() => `${document.visibilityState}, ${window.__bd?.ctrl?.paused ? "paused" : "playing"}, "${document.querySelector(".duel-stall:not([hidden])")?.innerText ?? ""}"`)
             .catch((e) => String(e))
         );
-        return check(
-          false,
-          `${what}: the ${i ? "guest" : "host"} was held on tick ${now[i]} for ${STUCK_MS} ms (host ${from[0]} → ${now[0]}, guest ${from[1]} → ${now[1]}, D ${D}; ` +
-            `host ${pages[0]}, guest ${pages[1]}; ${air.recent()})`
+        return progressFailed(
+          `${what}: the ${i ? "guest" : "host"} was held on tick ${now[i]} for ${STUCK_MS} ms, pages stopped ${secs(b)} besides (host ${from[0]} → ${now[0]}, ` +
+            `guest ${from[1]} → ${now[1]}, D ${D}; host ${pages[0]}, guest ${pages[1]}; ${air.recent()})`
         );
       }
     }
     await sleep(30);
   }
 }
+/** A progress check failed: the match will be cut short (see the header). */
+let cutShort = false;
+const progressFailed = (msg) => {
+  cutShort = true;
+  return check(false, msg);
+};
 
 /** The input delay the pairing agreed: the progress checks ask for 2D + 1 ticks. */
 const D = await phones.host.page.evaluate(() => window.__duel.delay);
@@ -609,7 +691,8 @@ const synced = await run(15000, async () => (await both((p) => text(p, ".duel-sy
     else if (phones.host.trail.get(t) !== phones.guest.trail.get(t)) differ.push(t);
   }
   log(`trails: ${phones.host.trail.size} host and ${phones.guest.trail.size} guest ticks, compared through tick ${last}`);
-  check(last >= MATCH_TICKS && missing.length === 0, `ticks with no trail on a page (through ${last}): ${missing.slice(0, 10).join(", ")}`);
+  check(last >= MATCH_TICKS, `the match was decided at tick ${last}, before tick ${MATCH_TICKS}${cutShort ? ": a progress check failed above" : ""}`);
+  check(missing.length === 0, `ticks with no trail on a page (through ${last}): ${missing.slice(0, 10).join(", ")}`);
   check(differ.length === 0, `the hash trails differ at ticks ${differ.slice(0, 10).join(", ")}`);
 }
 // the report
@@ -641,7 +724,9 @@ const synced = await run(15000, async () => (await both((p) => text(p, ".duel-sy
   const keep = (r) => JSON.stringify({ map: r.map, mutators: r.mutators, seed: r.seed, openers: r.openers, seats: r.seats, turns: r.turns, hashes: r.hashes, tick: r.tick, end: r.end, maxTicks: r.maxTicks });
   log(`records: ${recs[0].turns?.length} turns, ${recs[0].hashes?.length} hashes, end ${JSON.stringify(recs[0].end)}`);
   check(keep(recs[0]) === keep(recs[1]), "the two phones saved different battles");
-  check(recs[0].v === 1 && recs[0].frames === "own" && recs[0].hashes?.length >= 3 && recs[0].turns?.length >= 4, "the saved battle is thin");
+  check(recs[0].v === 1 && recs[0].frames === "own", `the saved battle: v ${recs[0].v}, frames ${recs[0].frames}`);
+  // (a match cut short by a failed progress check has fewer: that failure is the one to read)
+  if (!cutShort) check(recs[0].hashes?.length >= 3 && recs[0].turns?.length >= 4, "the saved battle is thin");
   check(recs[0].seats?.blue?.player === "sound-duel:host" && recs[0].seats?.red?.player === "sound-duel:guest", `the seats: ${JSON.stringify(recs[0].seats)}`);
   // both sides' orders as stepped: the Fab taps, and the moves with the units they named
   const cmds = recs[0].turns.flatMap(([, , list]) => list);

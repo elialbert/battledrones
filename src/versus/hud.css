@@ -17,6 +17,43 @@
   /* over the end screen (30): "Leaving…" shows while the report waits */
   z-index: 35;
 }
+/* On a phone the pills sit between the side columns, whose buttons a stalled
+   player wants (zoom out to look around): right of the zoom stack (42px at
+   the left edge), left of the calldowns. Centred in that band, up to 360px
+   wide; a long line wraps. */
+@media (orientation: portrait) {
+  /* the calldowns: a column at the right edge, 48–52px buttons under a ⚡ meter a little wider */
+  .duel-ov {
+    left: calc(max(8px, env(safe-area-inset-left)) + 50px);
+    right: calc(max(8px, env(safe-area-inset-right)) + 64px);
+    width: auto;
+    max-width: 360px;
+    margin: 0 auto;
+    transform: none;
+  }
+}
+@media (orientation: landscape) and (max-height: 560px) {
+  /* the calldowns: a block beside the sidebar, level with the pills. The
+     banner's room ends left of it and of the minimap (src/ui/layout.ts), at
+     8px + --banner-max. Under a short-landscape banner (53px at most, its
+     sub-line and all) rather than a portrait one's 80px: the chip row and
+     the zoom stack take the bottom of a 320px screen. */
+  .duel-ov {
+    top: calc(var(--banner-top, calc(max(6px, env(safe-area-inset-top)) + 96px)) + 62px);
+    left: calc(max(8px, env(safe-area-inset-left)) + 50px);
+    right: calc(100% - 8px - var(--banner-max, calc(100vw - 352px)));
+    width: auto;
+    max-width: 360px;
+    margin: 0 auto;
+    transform: none;
+  }
+  /* Leave comes 30 s into a stall at the soonest, long after the last banner
+     went (the sim stands still meanwhile, and a banner lasts 3 s): the pill
+     takes the banner's slot, so the button stays clear of the chip row */
+  .duel-ov:has(.duel-leave:not([hidden])) {
+    top: var(--banner-top, calc(max(6px, env(safe-area-inset-top)) + 96px));
+  }
+}
 .duel-pill {
   pointer-events: auto;
   display: flex;

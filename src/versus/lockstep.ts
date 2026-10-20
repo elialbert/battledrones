@@ -81,6 +81,31 @@
  * longer than a rotation and a round trip should take, that frame goes alone in
  * every packet until the peer holds it (starving()).
  *
+ * The speed trim (SOUND-DUEL.md "Pacing") compares like with like: this
+ * phone's slack as its newest packet said it (slot(): the frames last handed
+ * out before that packet started), not as it is now, with the peer's as its
+ * newest frame said it. Each is the other phone's view of it, a copy delayed
+ * by the link, so the two speeds sum to 2 on average and the match runs at 1×.
+ * A frame says the slack as it is when the frame is built, at a seal (before
+ * the step moves the tick on) or when turns arrive: near the top of the
+ * sawtooth the slack draws between arrivals. Read live against that, each
+ * phone saw its friend ahead and both slowed: over PacketAir (fast and robust,
+ * both plans, 150–400 ms, six seeds each) matches ran 0.3–1.5% slow (9.85–9.97
+ * ticks a second), over RoomLink 0.8–1.1%; now 9.995–10.001 (RoomLink 9.9997,
+ * which is its clocks' ppm). Comparing with the newest frame built rather than
+ * the one on the air overshot where a packet carries several builds (the low
+ * plan's 400 ms robust packets: 1.6–2.9% fast). The cost: the phones now
+ * balance their slack as their packets sample it, which sits off its average
+ * by up to half a packet's turns, by where each phone's packet starts fall in
+ * its sawtooth, so the slack they keep can differ by that much (the live
+ * comparison halved it, and paid for it in speed). At the D pairing picks
+ * that cost nothing to speak of where D covers the link (PacketAir, 150–400
+ * ms, 100–400 ms packets, six seeds each: 197 ms of stall in 21,600 s of
+ * play against 835 before); where it doesn't (the low plan's robust mode, D
+ * capped at 8, which stalls 5–7% over the modem however it is paced) it moved
+ * stall from one phone to the other run by run, 9% more in all (six RoomLink
+ * runs: 117 s against 107).
+ *
  * Engine-free: no DOM, no timers, no randomness; the clock is injected.
  *
  *   const ls = new Lockstep({ local, delay, mapWidth, mapHeight, capacity, setupHash: parseInt(worldHash(w), 16), now });
@@ -88,6 +113,7 @@
  *     const cmds = ls.commandsFor(t, () => ctrl.drainCommands())  // seals turn t + D (once per tick); null: stall
  *     if (cmds) { step(w, cmds); ls.afterStep(t, parseInt(worldHash(w), 16), w.winner ? { winner: w.winner, resigned: w.resigned } : null) }
  *   for each packet:  ls.receive(p.bits, p.nbits, p.at)
+ *   for each packet start (the link's slots()):  ls.slot(at)
  *   then:             const f = ls.frames(); if (f.version !== sent) { transport.send(f.frames); sent = f.version }
  *   ls.setPaused(b), ls.setRxq(rxqOf(snrDb)), ls.setPacketMs(own transmit period), ls.leave("left" | "desync"), ls.speed(), ls.status(), ls.turns()
  *
@@ -246,6 +272,8 @@ const SLACK_SPARE = 1;
 const ARRIVALS_KEPT = 8;
 /** The packet period starving() assumes before setPacketMs or the peer's arrivals give one (robust mode's, the longer). */
 const ROBUST_PERIOD = 200;
+/** Frame lists remembered for slot() (a few a tick, a packet's worth or so; more only while nothing reports slots). */
+const HANDED_KEPT = 32;
 
 export const foldTrail = (trail: number, worldHash32: number): number => Math.imul(trail ^ worldHash32, 0x01000193) >>> 0;
 
@@ -310,6 +338,8 @@ export interface LockstepStatus {
   peerAck: number;
   /** When a new peer turn last arrived (the stall overlays count from it), on the injected clock. */
   lastNewTurnAt: number;
+  /** When the peer's frames last stopped saying paused (−Infinity: never): it owed no turn before (the session's waiting.ms). */
+  peerResumedAt: number;
   desync: boolean;
   /** How the desync was found: a checkpoint, the end check, the peer's word (end = 2), or leave("desync"). */
   desyncReason: "checkpoint" | "end" | "peer" | "local" | null;
@@ -496,6 +526,13 @@ export class Lockstep {
   private readonly peerTrail: [number, number][] = [];
 
   private peerFrame: { paused: boolean; rxq: number; slack: number } | null = null;
+  /**
+   * The slack each frame list frames() handed out reported (ack + tickLag as
+   * written), and when, back to the one the newest packet carried; and that
+   * packet's (null before slot() says one went out): what speed() compares.
+   */
+  private readonly handed: { at: number; slack: number }[] = [];
+  private airSlack: number | null = null;
   /** The peer's slack from its newest frames (the slack gate), and when they arrived (the packet period until setPacketMs). */
   private readonly slacks: number[] = [];
   private readonly arrivals: number[] = [];
@@ -518,6 +555,7 @@ export class Lockstep {
   private stallStart = 0;
   private stallMs = 0;
   private lastNewTurnAt: number;
+  private peerResumedAt = -Infinity;
   private framesIn = 0;
   private framesBad = 0;
   private delaySum = 0;
@@ -851,8 +889,27 @@ export class Lockstep {
     if (this.dirty) {
       this.dirty = false;
       this.current = { frames: this.build(), version: ++this.version };
+      // (every segment's frame says the same slack: tickLag and ack of its `to` add up to ackThrough − tick)
+      const to = this.newestSealed;
+      this.handed.push({ at: this.now(), slack: this.lagOf(to) + this.ackOf(to) });
+      if (this.handed.length > HANDED_KEPT) this.handed.shift();
     }
     return this.current;
+  }
+
+  /**
+   * A packet started at `at` (the link's slots(), this lockstep's clock): it
+   * carried the frames last handed out before then, and speed() now compares
+   * the slack they said with the peer's (see the header).
+   */
+  slot(at: number): void {
+    const h = this.handed;
+    let i = -1;
+    while (i + 1 < h.length && h[i + 1]!.at < at) i++;
+    if (i < 0) return;
+    this.airSlack = h[i]!.slack;
+    // (the older lists can't go out again)
+    h.splice(0, i);
   }
 
   /**
@@ -1009,6 +1066,7 @@ export class Lockstep {
     }
     this.framesIn++;
     this.peerInLobby = false;
+    if (this.peerFrame?.paused && !f.paused) this.peerResumedAt = at;
     this.peerFrame = { paused: f.paused, rxq: f.rxq, slack: f.ack + f.tickLag };
     // (a paused peer's slack only grows until this phone stalls: it says nothing of what the peer keeps once it plays on)
     if (f.paused) this.restartSlack();
@@ -1167,10 +1225,16 @@ export class Lockstep {
     this.dirty = true;
   }
 
-  /** Game speed: the slack trim, clamp(1 + 0.02 × (slack − peerSlack), 0.9, 1.1). The two phones' speeds sum to 2. */
+  /**
+   * Game speed: the slack trim, clamp(1 + 0.02 × (slack − peerSlack), 0.9,
+   * 1.1), with this phone's slack as its newest packet said it (live until
+   * slot() reports one): like with like, so the two phones' speeds sum to 2 on
+   * average (see the header).
+   */
   speed(): number {
     if (!this.peerFrame) return 1;
-    return Math.max(0.9, Math.min(1.1, 1 + 0.02 * (this.ackThrough - this.tick - this.peerFrame.slack)));
+    const slack = this.airSlack ?? this.ackThrough - this.tick;
+    return Math.max(0.9, Math.min(1.1, 1 + 0.02 * (slack - this.peerFrame.slack)));
   }
 
   /** The match is over here: this phone's world is decided, it left or desynced, or the peer left or desynced. */
@@ -1213,6 +1277,7 @@ export class Lockstep {
       ackThrough: this.ackThrough,
       peerAck: this.peerAck,
       lastNewTurnAt: this.lastNewTurnAt,
+      peerResumedAt: this.peerResumedAt,
       desync: this.endState === "desync",
       desyncReason: this.desyncReason,
       endCheck: this.endCheck,

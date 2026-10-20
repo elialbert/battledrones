@@ -3,9 +3,23 @@
  * code with generators 133 and 171 (octal), a soft-decision Viterbi decoder
  * with a zero tail, and the agreement gate. The gate re-encodes what Viterbi
  * decided and counts how many coded bits disagree with the received hard
- * decisions: about 1% for a real packet at working SNR, 12–15% for noise, so
- * rejecting above 8% stops nearly every garbage packet before the CRC even
- * looks at it (the CRC alone would pass one in 65,536).
+ * decisions: 0–1% for a real packet at working SNR; for garbage 11.4% at the
+ * least in a million blocks of noise, 13.1% in a million through the
+ * receiver's soft bits, and 10.8% in about 500,000 of the garbage nearest a
+ * codeword, a real stream read the wrong way (in the other mode, a symbol
+ * off, with another packet's scrambler). So rejecting above 10% stops every
+ * one of them before the CRC even looks (the CRC alone would pass one in
+ * 65,536).
+ *
+ * The limit is 10%, where it was first 8%. Near the edge of range a weak
+ * tone's hard decisions are wrong often enough that packets Viterbi decodes
+ * exactly right disagree by 7–12%, and the 8% gate threw them away for no
+ * garbage it stopped: robust at 80 cm with a microphone 30 times noisier
+ * than the room's default delivered 68% (93% at 10%), at 90 cm 17% (65%),
+ * fast at 60 cm 96% (98%), none of them wrong either way (three rooms
+ * each). Decodes that Viterbi got wrong reach the CRC a little more often
+ * there (at 80 cm 14 of 630 decodes against 5), each with its one chance in
+ * 65,536; at working SNR none do.
  *
  * Bits are one per byte (0 or 1). Soft values are positive for bit 0.
  */
@@ -15,7 +29,7 @@ export const G1 = 0o171;
 /** Memory: the encoder state is the last six input bits. */
 const STATES = 64;
 /** The gate's limit on disagreeing coded bits. */
-export const GATE_LIMIT = 0.08;
+export const GATE_LIMIT = 0.1;
 
 function parity(x: number): number {
   x ^= x >> 4;
