@@ -21,7 +21,7 @@
  *
  * Online duels (every build; relay/README.md): main.ts's "Duel a friend
  * online" opens the lobby as host, which makes a room code and shows its
- * invite link (`#vs=<code>`, Share and Copy) while it waits; the link's
+ * invite link (`#vs=<code>`: a QR code, Share and Copy) while it waits; the link's
  * "Join the battle" opens it as guest in that room. Each pairs at once in
  * its seat over a NetTransport (net-transport.ts), as a relay seat does,
  * with no rig, no guard and no sound copy; its rematch meets in the same
@@ -135,6 +135,7 @@
  *    and the match's reconnect cover rebuilds the modem.
  */
 import "./lobby.css";
+import qrcode from "qrcode-generator";
 import { sfx } from "../game/audio";
 import { gameMode } from "../game/mode";
 import type { ModemStats } from "../link/modem/core";
@@ -1171,12 +1172,21 @@ function onlinePairingHtml(v: LobbyView, quiet: string, notes: string[], actions
         : "Joining your friend's battle…";
   const invite =
     v.role === "host" && !v.rematch && !heard
-      ? `<p class="sh-sub">Send your friend this link. Keep this page open: the battle starts when they open it.</p>
+      ? `<p class="sh-sub">Your friend scans this with their phone's camera, or opens the link you send them. Keep this page open: the battle starts when they do.</p>
+        <div class="duel-qr" aria-label="QR code of the invite link">${qrSvg(room.invite)}</div>
         <div class="duel-invite"><input class="duel-invite-url" readonly value="${esc(room.invite)}" aria-label="Invite link" /></div>
         <div class="duel-invite-acts">${canShare() ? `<button class="cta" data-act="share">📤 Share link</button>` : ""}<button class="cta${canShare() ? " alt" : ""}" data-act="copy">📋 Copy link</button></div>`
       : "";
   const tips = v.tips ? `<p class="duel-hint">${tipsText(v)}</p>` : "";
   return { body: `${invite}<p class="duel-status">${status}</p>${quiet}${meterHtml(v)}${tips}${notes.join("")}`, actions };
+}
+
+/** A QR code of `text`, as an SVG that scales to its box (the Wi-Fi duel's way: origin/webrtc-duel's wifi-sheet.ts). */
+export function qrSvg(text: string): string {
+  const qr = qrcode(0, "M");
+  qr.addData(text, "Byte");
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
 }
 
 const canShare = (): boolean => typeof navigator !== "undefined" && typeof navigator.share === "function";

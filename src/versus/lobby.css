@@ -115,7 +115,15 @@
 .duel-hint p,
 .duel-warn p { margin: 0; }
 
-/* online: the host's invite link */
+/* online: the host's invite link, and its QR code for the friend's camera */
+.duel-qr {
+  width: min(56vw, 240px);
+  margin: 10px auto;
+  padding: 6px;
+  border-radius: 12px;
+  background: #fff;
+}
+.duel-qr svg { display: block; width: 100%; height: auto; }
 .duel-invite { margin: 10px 0 8px; }
 .duel-invite-url {
   box-sizing: border-box;
