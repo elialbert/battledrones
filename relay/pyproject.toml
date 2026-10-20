@@ -1,0 +1,13 @@
+[project]
+name = "battledrones-relay"
+version = "0.1.0"
+description = "A stateless WebSocket relay for Battle Drones two-device multiplayer"
+requires-python = ">=3.12"
+dependencies = ["websockets==17.3"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv]
+# server.py is a script, not a package to build
+package = false

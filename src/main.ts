@@ -112,6 +112,26 @@ const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend'
  */
 const REMATCH_KEY: typeof DuelLobby.REMATCH_KEY = "battledrones.rematch";
 const DUEL_REMATCH: typeof DuelLobby.REMATCH_DUEL = "duel";
+const DUEL_PLAN_KEY: typeof DuelLobby.DUEL_KEY = "battledrones.duel";
+
+/** A duel rematch stored for this boot is an online one (its plan has a relay room): no rig, no link mode. */
+function onlineRematch(): boolean {
+  try {
+    const plan = JSON.parse(sessionStorage.getItem(DUEL_PLAN_KEY) ?? "null") as { room?: unknown } | null;
+    return typeof plan?.room === "string";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * An online duel's invite link (`#vs=<code>`, net-transport.ts inviteUrl): the room code, or null. The duel
+ * chunk checks it again (parseInvite); this only decides whether the menu offers to join.
+ */
+function inviteCode(): string | null {
+  const m = /^#vs=([0-9A-HJKMNP-TV-Z]{6,16})$/i.exec(location.hash);
+  return m ? m[1]!.toUpperCase() : null;
+}
 
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -225,7 +245,10 @@ function showMenu(linkedMap?: string | null): void {
   // rate"). The menu's sound waits for the reconnect tap. (A practice link opens no rig and no guard, so no
   // link mode.)
   const duelRematch = token === DUEL_REMATCH;
-  if (duelRematch && !duelPractice) sfx.linkMode = true;
+  const duelOnlineRematch = duelRematch && onlineRematch();
+  if (duelRematch && !duelPractice && !duelOnlineRematch) sfx.linkMode = true;
+  // an online duel's invite link (not over a rematch, which has its own room)
+  const invite = duelRematch ? null : inviteCode();
   // ?map=<id> (a shared random map, or any built-in): preselect it and keep it as the pick
   if (linkedMap && isKnownMapId(linkedMap)) {
     gameMode.mapId = linkedMap;
@@ -315,7 +338,10 @@ function showMenu(linkedMap?: string | null): void {
       </div>
       <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
-      <div class="row" id="duelrow" hidden><button class="cta alt" id="play-duel" disabled>🔊 Duel a friend (sound)</button></div>
+      <div class="row" id="duelrow" hidden>
+        <button class="cta alt" id="play-online" disabled>🌐 Duel a friend online</button>
+        <button class="cta alt" id="play-duel" disabled hidden>🔊 Duel a friend (sound)</button>
+      </div>
       <div class="row">
         <button class="cta alt" id="play-spectate">🤖 Watch AI vs AI</button>
         <button class="cta alt" id="play-replay">🎬 Watch a replay</button>
@@ -347,6 +373,8 @@ function showMenu(linkedMap?: string | null): void {
   const duelable = canDuel();
   const duelRow = menu.querySelector<HTMLElement>("#duelrow")!;
   const duelBtn = menu.querySelector<HTMLButtonElement>("#play-duel")!;
+  const onlineBtn = menu.querySelector<HTMLButtonElement>("#play-online")!;
+  duelBtn.hidden = !duelable;
   let duel: typeof DuelLobby | null = null;
   let duelBroken = false;
   let duelLoaded = false;
@@ -354,10 +382,13 @@ function showMenu(linkedMap?: string | null): void {
   let duelLive = false;
   const syncDuelBtn = () => {
     const on = duelLoaded && !duelLive;
-    duelBtn.disabled = !on;
-    duelBtn.style.opacity = on ? "" : "0.6";
+    for (const b of [duelBtn, onlineBtn]) {
+      b.disabled = !on;
+      b.style.opacity = on ? "" : "0.6";
+    }
   };
-  if (duelable || duelRematch) {
+  // (every browser can duel online: the chunk always loads)
+  {
     syncDuelBtn();
     loadDuel()
       .then(
@@ -453,7 +484,7 @@ function showMenu(linkedMap?: string | null): void {
     syncRandom();
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
-    duelRow.hidden = !duelable || gameMode.mode !== "skirmish";
+    duelRow.hidden = gameMode.mode !== "skirmish";
     menu.classList.toggle("ops-mode", opsMode);
     // Last Stand isn't offered on every map (the island map): show the first that is, without
     // losing the skirmish pick (Play points the match at the shown map: see begin)
@@ -683,19 +714,24 @@ function showMenu(linkedMap?: string | null): void {
     sfx.unlockOnGesture();
     music.play("menu", biomeOf(shownMap()));
   };
-  /** The Duel tap, synchronously, in this order (SOUND-DUEL.md "The tap"); `rematch`: the rematch's reconnect tap. */
-  const duelTap = (d: typeof DuelLobby, rematch: boolean) => {
+  /**
+   * The Duel tap, synchronously, in this order (SOUND-DUEL.md "The tap"); `rematch`: the rematch's reconnect tap.
+   * `online`: a new online duel (relay/README.md), this phone's seat; an online rematch says so itself
+   * (tapPlan). Online there is no rig and no guard.
+   */
+  const duelTap = (d: typeof DuelLobby, rematch: boolean, online: DuelLobby.LobbyOptions["online"] = null) => {
     // (one lobby at a time: an old one's late release would turn the new one's guard and link mode off)
     if (duelLive) return;
     duelLive = true;
     syncDuelBtn();
     const tap = d.tapPlan(rematch);
+    const silent = !!tap.practice || tap.online || !!online;
     // the game's context before the rig's play-and-record, as the rig's own (src/link/rig.ts "The rate"): from
     // the menu the first touch has made it already and this only resumes it, but the rematch boot makes none
     // until this tap, and after the rig it would be born under play-and-record
     sfx.unlock();
-    const rig = tap.practice ? null : d.openRig({ micMode: tap.micMode });
-    if (!tap.practice)
+    const rig = silent ? null : d.openRig({ micMode: tap.micMode });
+    if (!silent)
       try {
         sfx.setLinkGuard("high");
       } catch (e) {
@@ -703,9 +739,11 @@ function showMenu(linkedMap?: string | null): void {
       }
     music.stop();
     // full screen: a practice link's at once (last: it consumes the activation), the rig's on the first tap once
-    // it has the microphone, as on iPadOS a full-screen page hides the microphone prompt
-    if (!rig) void fullscreen.enter();
-    else
+    // it has the microphone, as on iPadOS a full-screen page hides the microphone prompt. A new online host's
+    // waits until the friend is there (the lobby arms it): the share sheet comes first
+    if (!rig) {
+      if (online?.seat !== "host") void fullscreen.enter();
+    } else
       rig.ready.then(
         () => {
           if (!duelLive || rig.state === "closed") return; // (this lobby let it go)
@@ -714,7 +752,7 @@ function showMenu(linkedMap?: string | null): void {
         },
         () => undefined // (the lobby tells it)
       );
-    const o = { host: menu, rig, shownMap: shownMap(), mutators: activeMutators(), start: startDuel, onClose: duelClosed };
+    const o = { host: menu, rig, shownMap: shownMap(), mutators: activeMutators(), start: startDuel, onClose: duelClosed, online };
     if (rematch) d.reconnect(o);
     else d.showLobby(o);
   };
@@ -732,6 +770,43 @@ function showMenu(linkedMap?: string | null): void {
     if (duel) duelTap(duel, false);
     else if (duelBroken) duelUpdate();
   });
+  onlineBtn.addEventListener("click", () => {
+    if (duel) duelTap(duel, false, { seat: "host" });
+    else if (duelBroken) duelUpdate();
+  });
+  // an online duel's invite link: one button, whose tap joins the friend's room
+  if (invite) {
+    const scr = (rematchScreen = document.createElement("div"));
+    scr.className = "screen";
+    scr.style.position = "fixed"; // (over the menu, which scrolls)
+    scr.innerHTML = `<div class="loadbox">
+        <p class="sh-sub">🌐 Your friend has challenged you to a duel</p>
+        <button class="cta big" id="duel-join" disabled>⚔️ Join the battle</button>
+        <button class="cta alt" id="duel-menu">Menu</button>
+      </div>`;
+    menu.appendChild(scr);
+    // (the link is used up: a reload or the match's Menu comes back to the menu)
+    const forget = () => history.replaceState(history.state, "", location.pathname + location.search);
+    const btn = scr.querySelector<HTMLButtonElement>("#duel-join")!;
+    btn.addEventListener("click", () => {
+      if (duel) {
+        forget();
+        duelTap(duel, false, { seat: "guest", code: invite });
+      } else if (duelBroken) duelUpdate();
+    });
+    void loadDuel().then(
+      () => (btn.disabled = false),
+      () => {
+        btn.disabled = false;
+        btn.textContent = DUEL_UPDATE;
+      }
+    );
+    scr.querySelector("#duel-menu")!.addEventListener("click", () => {
+      forget();
+      scr.remove();
+      if (rematchScreen === scr) rematchScreen = null;
+    });
+  }
   // a duel's Rematch: one button, whose tap is the Duel tap paired with the stored role and plan
   if (duelRematch) {
     music.stop();
@@ -740,8 +815,8 @@ function showMenu(linkedMap?: string | null): void {
     scr.style.position = "fixed"; // (over the menu, which scrolls)
     scr.innerHTML = `<div class="loadbox">
         <button class="cta big" id="duel-rematch" disabled>${
-          // (a practice link has no sound to reconnect and asks for no microphone)
-          duelPractice ? "Rematch · tap to start" : "Rematch · tap to reconnect<br /><small>(allow the microphone if asked)</small>"
+          // (a practice link and an online duel have no sound to reconnect and ask for no microphone)
+          duelPractice || duelOnlineRematch ? "Rematch · tap to start" : "Rematch · tap to reconnect<br /><small>(allow the microphone if asked)</small>"
         }</button>
         <button class="cta alt" id="duel-menu">Menu</button>
       </div>`;

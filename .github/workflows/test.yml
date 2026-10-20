@@ -27,3 +27,7 @@ jobs:
           python3 -m venv .venv
           .venv/bin/pip install --quiet -e "llm-tools-battledrones[test]"
           .venv/bin/pytest -q llm-tools-battledrones
+      - name: Test the multiplayer relay (relay/)
+        run: |
+          .venv/bin/pip install --quiet uv
+          cd relay && ../.venv/bin/uv run pytest -q

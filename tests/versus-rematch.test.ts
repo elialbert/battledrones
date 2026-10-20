@@ -47,6 +47,17 @@ describe("a rematch, from the report's Rematch to the reloaded page's lobby", ()
       }
   });
 
+  it("an online duel's rematch keeps its relay room; a room code the relay wouldn't take is dropped", () => {
+    const store = new Mem();
+    const online: RematchPlan = { ...PLAN, room: "K7QM2XP4" };
+    writeRematch(online, store);
+    expect(readRematch(store)).toEqual(online);
+    for (const room of ["k7qm2xp4", "ILOU0000", "K7", 12345678]) {
+      store.setItem(DUEL_KEY, JSON.stringify({ ...PLAN, room }));
+      expect(readRematch(store)).toEqual(PLAN);
+    }
+  });
+
   it("the lobby's keys and parser are the records' own", () => {
     expect([lobby.REMATCH_KEY, lobby.REMATCH_DUEL, lobby.DUEL_KEY]).toEqual([REMATCH_KEY, REMATCH_DUEL, DUEL_KEY]);
     expect(new Set([REMATCH_KEY, DUEL_KEY]).size).toBe(2);
@@ -65,6 +76,7 @@ describe("a rematch, from the report's Rematch to the reloaded page's lobby", ()
     const literal = (name: string, of: string) => new RegExp(`const ${name}: typeof DuelLobby\\.${of} = "([^"]*)";`).exec(main)?.[1];
     expect(literal("REMATCH_KEY", "REMATCH_KEY")).toBe(REMATCH_KEY);
     expect(literal("DUEL_REMATCH", "REMATCH_DUEL")).toBe(REMATCH_DUEL);
+    expect(literal("DUEL_PLAN_KEY", "DUEL_KEY")).toBe(DUEL_KEY);
     expect(main).toContain("sessionStorage.getItem(REMATCH_KEY)");
     expect(main).toContain("sessionStorage.removeItem(REMATCH_KEY)");
     expect(main).toContain("token === DUEL_REMATCH");

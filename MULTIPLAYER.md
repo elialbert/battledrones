@@ -2,7 +2,19 @@
 
 ## Status
 
-A proposal. None of it is built. It covers online 1v1 skirmish between two
+**Online duels shipped a smaller way (October 2026).** The sound duel
+(SOUND-DUEL.md) built the lockstep, the pairing and the lobby this proposal
+calls for, behind a `LinkTransport` seam. Online play reuses all of it:
+`src/versus/net-transport.ts` carries the sound duel's packets over a
+WebSocket to a stateless relay (`relay/`, one small Python process on Fly),
+which pairs two sockets by a room code the host's page makes up and
+forwards each message to the other. The invite link is `…/#vs=<code>`, as
+below. There is no Durable Object, no storage, no battle archive and no
+reconnect by replay: a socket that drops reconnects to its seat, and the
+lockstep resends what was lost. The rest of this document is the original
+proposal, kept for what it still plans (the archive, spectators, a referee).
+
+The original proposal follows. It covers online 1v1 skirmish between two
 phones (or any two browsers), using a small Cloudflare Worker with WebSockets.
 One player creates a match and sends a link, and the other player taps it to
 join. Where there is a real choice, the options are laid out with a

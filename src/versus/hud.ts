@@ -73,6 +73,8 @@ const STALL_TEXT: Record<StallKind, { text: string; sub: string | null }> = {
   paused: { text: "Friend paused", sub: "or switched away" },
   lost: { text: "Signal lost: bring the phones closer", sub: null }
 };
+/** An online duel's lost link: no phones to bring closer. */
+const LOST_ONLINE = { text: "Connection lost: reconnecting…", sub: "Check this phone's internet connection" };
 
 const COVER_TEXT: Record<ReconnectPhase, { text: string; sub: string }> = {
   lost: { text: "Tap to reconnect the sound link", sub: "The phone stopped its microphone or sound" },
@@ -89,7 +91,7 @@ function coverWords(phase: ReconnectPhase, why: string | null): { text: string; 
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]!);
 
-export function mountDuelOverlay(root: HTMLElement, hooks: OverlayHooks): DuelOverlay {
+export function mountDuelOverlay(root: HTMLElement, hooks: OverlayHooks, online = false): DuelOverlay {
   const stack = document.createElement("div");
   stack.className = "duel-ov";
   // (the edge arrows steer around it: ui/awareness.ts)
@@ -153,7 +155,7 @@ export function mountDuelOverlay(root: HTMLElement, hooks: OverlayHooks): DuelOv
       // (the end screen covers a stall: only the leaving pill is worth showing over it)
       stall.hidden = !s.stall || s.leaving;
       if (s.stall) {
-        const t = STALL_TEXT[s.stall.kind];
+        const t = online && s.stall.kind === "lost" ? LOST_ONLINE : STALL_TEXT[s.stall.kind];
         stallText.textContent = t.text;
         stallSub.hidden = !t.sub;
         stallSub.textContent = t.sub ?? "";
@@ -260,7 +262,7 @@ function recordLine(v: DuelReportView): string {
  * read when the report renders and every 250 ms after, until the report goes.
  * The reconnect button calls `hooks.reconnect` inside the tap.
  */
-export function duelReportSection(view: () => DuelReportView, hooks: Pick<OverlayHooks, "reconnect">): ReportSection {
+export function duelReportSection(view: () => DuelReportView, hooks: Pick<OverlayHooks, "reconnect">, online = false): ReportSection {
   return {
     id: "duel",
     // (first in the left column: right under the result, where "Checking sync…" is seen)
@@ -269,7 +271,7 @@ export function duelReportSection(view: () => DuelReportView, hooks: Pick<Overla
     render: () => {
       const v = view();
       const l = v.link;
-      return `<h3 class="duel-h">🔊 Sound duel</h3>
+      return `<h3 class="duel-h">${online ? "🌐 Online duel" : "🔊 Sound duel"}</h3>
         <div class="duel-live">${liveLines(v)}${recordLine(v)}</div>
         <table class="duel-link">
           <tr><td>Packets heard</td><td>${l.good} good · ${l.bad} bad</td></tr>

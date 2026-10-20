@@ -102,6 +102,11 @@ export class ReplayFeed implements MatchFeed {
     return this.record.log.find((l) => l.round === round && l.side === side) ?? null;
   }
 
+  /** The record being watched, for the end screen's Copy replay JSON. */
+  battleRecord(): BattleRecord {
+    return this.record;
+  }
+
   commands(tick: number): Command[] | null {
     if (tick >= this.playedTo) return null;
     return this.byTick.get(tick) ?? [];

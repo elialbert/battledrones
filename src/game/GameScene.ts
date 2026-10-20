@@ -29,6 +29,8 @@ import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, f
 import { HeroPresenter } from "./hero-fx";
 import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
 import { OpsPresenter } from "./ops";
+import { MatchRecorder } from "./recorder";
+import type { BattleRecord } from "../arena/record";
 import { EntityRenderer } from "./render/entities";
 import { Fx } from "./render/fx";
 import { CombatJuice } from "./render/juice-view";
@@ -98,6 +100,8 @@ export interface MatchFeed {
   readonly opponent?: string;
   /** A duel's pause menu and report buttons (ui/hud.ts DuelHud). */
   readonly duel?: DuelHud;
+  /** The match as a battle record, for the end screen's Copy replay JSON (a duel's, or the replay's own). */
+  battleRecord?(): BattleRecord;
 }
 
 /** Why a duel ended with no result (GameScene.abort): the worlds drifted apart, the friend left, or this phone left. */
@@ -134,6 +138,8 @@ export class GameScene {
   private finaleAt: { x: number; y: number; size: number; cause: FinaleCause } | null = null;
   /** Ops: briefing banner, countdowns and star notices (null outside ops). */
   private ops: OpsPresenter | null = null;
+  /** A match set up here (not fed): its battle record as it is played (Copy replay JSON). */
+  private recorder: MatchRecorder | null = null;
   private acc = 0;
   private prev = new Map<number, { x: number; y: number }>();
   readonly stage: Stage;
@@ -195,7 +201,8 @@ export class GameScene {
 
   constructor(parent: HTMLElement, readonly dpr: number, art: TerrainArt | null, private feed: MatchFeed | null = null) {
     document.getElementById("loading")?.remove();
-    this.world = feed ? feed.world : createMapWorld(gameMode.mapId, matchOptions());
+    const opts = feed ? null : matchOptions();
+    this.world = feed ? feed.world : createMapWorld(gameMode.mapId, opts!);
     this.ctrl = new Controller(this.world);
     const interactive = (this.interactive = feed?.local !== undefined);
     // (a duel's orders land D ticks after the tap: the build bar counts them meanwhile)
@@ -238,6 +245,14 @@ export class GameScene {
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
+    if (opts) {
+      const commander = (s: AiState) => `ai:${s.strategy.name}:${s.difficulty}`;
+      const enemy = this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none";
+      this.recorder = new MatchRecorder(this.world.mapId, opts, {
+        [PLAYER]: { player: this.blueAi ? commander(this.blueAi) : "player" },
+        [ENEMY]: { player: enemy }
+      } as Record<Faction, { player: string }>);
+    }
     // quick-start openers: spectated AIs take theirs at once; the player picks first
     // (skirmish and the Daily Op only: Last Stand and Ops set up their own starts)
     const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
@@ -249,6 +264,7 @@ export class GameScene {
       openers.red = allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red")) ?? undefined;
       if (openers.blue) applyOpener(this.world, "blue", openers.blue);
       if (openers.red) applyOpener(this.world, "red", openers.red);
+      this.recorder?.setOpeners(openers);
     } else this.holdStart = OPENER_IDS.some((id) => !openerBlocked(this.world, PLAYER, id));
     tickFog(this.world); // the base shows through the opener cards
 
@@ -393,6 +409,7 @@ export class GameScene {
       enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
+      battleRecord: () => this.battleRecord(),
       uncharted,
       ...(interactive && feed?.duel ? { duel: feed.duel } : {})
     });
@@ -515,6 +532,11 @@ export class GameScene {
     return this.ctrl.showFog ? this.fogSide : null;
   }
 
+  /** The match as a battle record (Copy replay JSON): one played here, a duel's, or the replay being watched (null: none). */
+  battleRecord(): BattleRecord | null {
+    return this.recorder?.record(this.world) ?? this.feed?.battleRecord?.() ?? null;
+  }
+
   /** The tick the fed match has reached. */
   get tick(): number {
     return this.world.tick;
@@ -595,6 +617,7 @@ export class GameScene {
     const theirs = this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
     if (theirs) picks[ENEMY] = theirs;
     const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
+    this.recorder?.setOpeners(picks);
     this.holdStart = false;
     // roll-out flourish on everything that just arrived
     const b = mine.buildingId !== null ? this.world.buildings.get(mine.buildingId) : null;
@@ -731,7 +754,9 @@ export class GameScene {
         // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
         const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
         const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
-        step(this.world, fed ?? composeTick(PLAYER, mine, theirs));
+        const cmds = fed ?? composeTick(PLAYER, mine, theirs);
+        step(this.world, cmds);
+        if (!fed) this.recorder?.stepped(this.world, cmds);
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
         this.feed?.afterTick(this.world, false);

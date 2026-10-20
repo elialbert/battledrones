@@ -19,6 +19,16 @@
  * rig come in through LobbyEnv, so tests drive it over PacketAir); the sheet
  * renders its state() every frame and sends it the taps.
  *
+ * Online duels (every build; relay/README.md): main.ts's "Duel a friend
+ * online" opens the lobby as host, which makes a room code and shows its
+ * invite link (`#vs=<code>`: a QR code, Share and Copy) while it waits; the link's
+ * "Join the battle" opens it as guest in that room. Each pairs at once in
+ * its seat over a NetTransport (net-transport.ts), as a relay seat does,
+ * with no rig, no guard and no sound copy; its rematch meets in the same
+ * room (the stored rematch's `room`). It keeps the win/loss record, keeps
+ * the screen awake itself (keepScreenOn: there is no rig to), and the host
+ * asks for full screen only once paired, as the share sheet comes first.
+ *
  * Practice links (every build): `?duel=loop` pairs with an in-page friend
  * over PacketAir (loop-peer.ts), `?duel=relay&seat=host|guest` through the
  * page functions __duelOut / __duelIn (relay-transport.ts). Neither opens the
@@ -125,6 +135,7 @@
  *    and the match's reconnect cover rebuilds the modem.
  */
 import "./lobby.css";
+import qrcode from "qrcode-generator";
 import { sfx } from "../game/audio";
 import { gameMode } from "../game/mode";
 import type { ModemStats } from "../link/modem/core";
@@ -140,6 +151,7 @@ import { fullscreen } from "../ui/fullscreen";
 import { VersusFeed } from "./feed";
 import { LoopLink, type LoopParams } from "./loop-peer";
 import { NOTHING_HEARD_MESSAGE, NOTHING_HEARD_MS, VERSION_MESSAGE, type HostOffer, type PairingState } from "./pairing";
+import { NetError, NetTransport, inviteUrl, roomCode } from "./net-transport";
 import { DUEL_KEY, parseRematch, type RematchPlan } from "./records";
 import { RelayTransport } from "./relay-transport";
 import { PEER_HEARD_MS, RX_SILENT_MS, Session } from "./session";
@@ -261,13 +273,16 @@ export interface DuelTap {
   micMode: MicMode;
   /** A practice link: no rig, no guard. */
   practice: PracticeMode | null;
+  /** An online duel's rematch (its room code is stored): no rig, no guard either. */
+  online: boolean;
 }
 
 /** For main.ts's Duel tap (`rematch`: the rematch's reconnect tap). */
 export function tapPlan(rematch = false): DuelTap {
   const p = parseDuelParams(location.search);
-  const micMode = (rematch ? readRematch(false)?.micMode : null) ?? loadPrefs().micMode;
-  return { micMode, practice: p.mode === "sound" ? null : p.mode };
+  const stored = rematch ? readRematch(false) : null;
+  const micMode = stored?.micMode ?? loadPrefs().micMode;
+  return { micMode, practice: p.mode === "sound" ? null : p.mode, online: !!stored?.room };
 }
 
 /** Uniform in [0, 1) from the platform's CSPRNG: the pairing's nonces. */
@@ -304,8 +319,8 @@ export type LobbyStep =
   | "closed";
 
 export interface LobbyError {
-  /** "modem": the link's modem stopped (its words are the message). */
-  kind: "rig" | "version" | "failed" | "relay" | "left" | "modem" | "other";
+  /** "modem": the link's modem stopped (its words are the message). "online": the relay couldn't be reached, or ended the link. */
+  kind: "rig" | "version" | "failed" | "relay" | "left" | "modem" | "online" | "other";
   message: string;
   /** A rig error's reason. */
   reason?: RigErrorReason;
@@ -347,12 +362,20 @@ export interface LobbyEnv {
   /** Pair at once: a rematch (its role, plan, and the host's map, mutators and side), or a relay seat. */
   rematch: DuelRematch | null;
   seat: BandRole | null;
+  /** An online duel (relay/README.md): the room and its invite link. Its seat is `seat`; no rig and no guard, as on a practice link. */
+  online?: OnlineRoom | null;
   prefs: LobbyPrefs;
   savePrefs(p: LobbyPrefs): void;
   /** The match is agreed and capture is steady: build the feed and start it (throws: the lobby shows the error). */
   begin(session: Session, link: LobbyLink): void;
   /** The audio is let go with no match (the session closed, the rig closed, the guard off). */
   released(why: LobbyEnd): void;
+}
+
+/** An online duel's room: its code, and the link the host sends. */
+export interface OnlineRoom {
+  code: string;
+  invite: string;
 }
 
 /** The link meter, both ways. */
@@ -371,6 +394,7 @@ export interface LobbyView {
   step: LobbyStep;
   role: BandRole | null;
   practice: PracticeMode | null;
+  online: OnlineRoom | null;
   rematch: boolean;
   /** Pairing in a role it can't switch (a rematch, a relay seat). */
   fixedRole: boolean;
@@ -467,8 +491,8 @@ export class LobbyMachine {
   private peakSample = -1;
 
   constructor(private readonly env: LobbyEnv) {
-    // (the tap turned the guard on in the high plan: practice links have none)
-    this.guardPlan = env.practice ? null : "high";
+    // (the tap turned the guard on in the high plan: practice links and online duels have none)
+    this.guardPlan = env.practice || env.online ? null : "high";
     const rig = env.rig;
     if (!rig) {
       this.step = "choose";
@@ -502,7 +526,7 @@ export class LobbyMachine {
   }
 
   startSelfTest(): void {
-    if (this.step === "choose" && !this.env.practice) void this.begin("host", true);
+    if (this.step === "choose" && !this.env.practice && !this.env.online) void this.begin("host", true);
   }
 
   /** The 8 s hint's one-tap switch: the other role, at once. */
@@ -620,6 +644,7 @@ export class LobbyMachine {
       step: error && this.step !== "closed" ? "error" : this.step,
       role: this.role,
       practice: env.practice,
+      online: env.online ?? null,
       rematch: env.rematch !== null,
       fixedRole,
       prefs: { ...env.prefs },
@@ -748,7 +773,7 @@ export class LobbyMachine {
 
   /** The guard on `plan` (`force`: even if it should be on it already). */
   private setGuard(plan: BandPlan, force = false): void {
-    if (this.env.practice || (plan === this.guardPlan && !force)) return;
+    if (this.env.practice || this.env.online || (plan === this.guardPlan && !force)) return;
     this.guardPlan = plan;
     this.env.guard(plan);
   }
@@ -763,7 +788,7 @@ export class LobbyMachine {
   private linkError(link: LobbyLink, message: string): void {
     const ours = link === this.link && !this.released && this.step !== "started";
     const dead = link.stopped ?? !link.modemStats?.();
-    if (ours && dead) this.fail(new ModemError(message));
+    if (ours && dead) this.fail(this.env.online ? new NetError(message) : new ModemError(message));
     else console.warn("sound link:", message);
   }
 
@@ -772,6 +797,7 @@ export class LobbyMachine {
     console.warn("sound duel:", e);
     if (e instanceof RigError) this.fatal = { kind: "rig", reason: e.reason, message: e.message };
     else if (e instanceof Error && e.name === "RelayError") this.fatal = { kind: "relay", message: e.message };
+    else if (e instanceof NetError) this.fatal = { kind: "online", message: e.message };
     else if (e instanceof ModemError) this.fatal = { kind: "modem", message: e.message };
     else this.fatal = { kind: "other", message: e instanceof Error ? e.message : String(e) };
     this.step = "error";
@@ -831,6 +857,12 @@ export interface LobbyOptions {
   start: (feed: VersusFeed) => void;
   /** The duel's audio was let go with no match (Cancel, an error, the rematch's fallback): the menu's music comes back. */
   onClose: (why: LobbyEnd) => void;
+  /**
+   * An online duel through the relay (rig null): the host's (a new room code
+   * is made here) or the guest's, who came by the invite link with `code`.
+   * A rematch of one needs none: the stored rematch has the room.
+   */
+  online?: { seat: "host" } | { seat: "guest"; code: string } | null;
 }
 
 /**
@@ -858,7 +890,7 @@ export function reconnect(o: LobbyOptions): void {
   run(o, readRematch(true));
 }
 
-/** The relay smoke's window into the duel (practice links only). */
+/** The relay and online smokes' window into the duel (practice links and online duels only). */
 export interface DuelProbe {
   readonly state: string;
   readonly tick: number;
@@ -893,7 +925,13 @@ const esc = (s: string): string => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;",
  * is offered (not in a rematch, which keeps its band); a practice link has
  * no sound to turn up, only the other page (the relay) or the page itself.
  */
-export function tipsText(v: Pick<LobbyView, "practice" | "rematch">): string {
+export function tipsText(v: Pick<LobbyView, "practice" | "rematch"> & Partial<Pick<LobbyView, "online" | "role">>): string {
+  if (v.online)
+    return v.rematch
+      ? "Still nothing? Your friend may have gone back to the menu: tap Cancel and send a new link."
+      : v.role === "host"
+        ? "Still nothing? Check that your friend got the link and opened it. Leave this page open meanwhile."
+        : "Still nothing? Ask your friend to keep the game open on their screen, or to send a new link.";
   if (v.practice === "loop") return "Still nothing? Reload the page and tap Duel again.";
   if (v.practice === "relay") return "Still nothing? Check that the other page is in the lobby and the relay connects the two.";
   const sound = "Still nothing? Turn the volume up and the silent switch off. Unplug headphones and turn Bluetooth off. Keep the phones 10–30 cm apart.";
@@ -911,6 +949,7 @@ export function routeText(v: Pick<LobbyView, "rematch" | "role" | "prefs">): str
     : `${head} Unplug headphones, turn the volume up, or switch the host to band Low.`;
 }
 const QUIET_TEXT = "Your friend's phone has gone quiet. Bring the phones closer, or tap Cancel if your friend left.";
+const QUIET_ONLINE = "Your friend's connection has gone quiet. Wait a moment, or tap Cancel if your friend left.";
 const PLACEMENT =
   "Lay both phones flat, 10–30 cm apart. Turn the volume to about 75%, silent switch off. On an iPhone the sound may come from the earpiece at the top: turn the phones until both bars below are full.";
 
@@ -968,6 +1007,8 @@ const bar = (q: number | null): string => {
 function meterHtml(v: LobbyView): string {
   const m = v.meter;
   if (!m) return "";
+  // (online the bars would say nothing: the relay delivers or it doesn't)
+  if (v.online) return `<div class="duel-meter"><p class="dm-rtt" data-m="rtt"></p></div>`;
   if (v.step === "self-test")
     return `<div class="duel-meter"><div class="dm-row"><span class="dm-l">This phone hears itself</span>${bar(m.rxq)}<span class="dm-v" data-m="rx"></span></div></div>`;
   return `<div class="duel-meter">
@@ -1034,8 +1075,9 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
     notes.push(`<div class="duel-warn"><p>The sound link stopped.</p><button class="cta" data-act="tap">Tap to reconnect the sound link</button></div>`);
   if (v.route) notes.push(`<p class="duel-warn">${routeText(v)}</p>`);
   if (v.loud) notes.push(`<p class="sh-note">Your own signal is loud here: this phone now sends a little quieter.</p>`);
-  const quiet = v.quiet ? `<p class="duel-hint">${QUIET_TEXT}</p>` : "";
+  const quiet = v.quiet ? `<p class="duel-hint">${v.online ? QUIET_ONLINE : QUIET_TEXT}</p>` : "";
   const p = v.pairing;
+  if (v.online && (v.step === "connecting" || v.step === "pairing")) return onlinePairingHtml(v, quiet, notes, back + cancel);
   switch (v.step) {
     case "opening":
       return { body: `<p class="duel-status">Starting the microphone… Allow it if asked.</p>`, actions: cancel };
@@ -1111,6 +1153,105 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
   }
 }
 
+/**
+ * Online, before the opener cards: the host's invite link (Share where the
+ * browser has a share sheet, and Copy), the guest's "Joining…", and the
+ * relay's round trip once the pairing measures it.
+ */
+function onlinePairingHtml(v: LobbyView, quiet: string, notes: string[], actions: string): { body: string; actions: string } {
+  const room = v.online!;
+  const heard = v.pairing?.phase === "linking";
+  if (v.step === "connecting")
+    return { body: `<p class="duel-status">Connecting to the relay…</p>`, actions: `<button class="cta alt" data-act="cancel">Cancel</button>` };
+  const status = heard
+    ? "Your friend is here. Linking…"
+    : v.rematch
+      ? "Waiting for your friend to tap Rematch…"
+      : v.role === "host"
+        ? "Waiting for your friend to open the link…"
+        : "Joining your friend's battle…";
+  const invite =
+    v.role === "host" && !v.rematch && !heard
+      ? `<p class="sh-sub">Your friend scans this with their phone's camera, or opens the link you send them. Keep this page open: the battle starts when they do.</p>
+        <div class="duel-qr" aria-label="QR code of the invite link">${qrSvg(room.invite)}</div>
+        <div class="duel-invite"><input class="duel-invite-url" readonly value="${esc(room.invite)}" aria-label="Invite link" /></div>
+        <div class="duel-invite-acts">${canShare() ? `<button class="cta" data-act="share">📤 Share link</button>` : ""}<button class="cta${canShare() ? " alt" : ""}" data-act="copy">📋 Copy link</button></div>`
+      : "";
+  const tips = v.tips ? `<p class="duel-hint">${tipsText(v)}</p>` : "";
+  return { body: `${invite}<p class="duel-status">${status}</p>${quiet}${meterHtml(v)}${tips}${notes.join("")}`, actions };
+}
+
+/** A QR code of `text`, as an SVG that scales to its box (the Wi-Fi duel's way: origin/webrtc-duel's wifi-sheet.ts). */
+export function qrSvg(text: string): string {
+  const qr = qrcode(0, "M");
+  qr.addData(text, "Byte");
+  qr.make();
+  return qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+}
+
+const canShare = (): boolean => typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+/** The share sheet with the invite (a dismissed sheet is no error). */
+async function shareInvite(url: string, btn: HTMLElement): Promise<void> {
+  try {
+    await navigator.share({ title: "Battle Drones", text: "Duel me in Battle Drones!", url });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") return;
+    await copyInvite(url, btn);
+  }
+}
+
+/** The invite on the clipboard; the button says so for a moment. Where the clipboard is refused, the link is selected to copy by hand. */
+async function copyInvite(url: string, btn: HTMLElement): Promise<void> {
+  const label = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(url);
+    btn.textContent = "✓ Copied";
+  } catch {
+    const input = btn.closest(".duel-body")?.querySelector<HTMLInputElement>(".duel-invite-url");
+    input?.focus();
+    input?.select();
+    btn.textContent = "Select and copy the link";
+  }
+  setTimeout(() => {
+    if (btn.isConnected) btn.textContent = label;
+  }, 2000);
+}
+
+/**
+ * Online there is no rig to hold a screen wake lock: keep one while the duel
+ * is on, asking again whenever the page comes back (the browser lets it go
+ * while hidden). Returns its release. Quietly nothing where unsupported.
+ */
+export function keepScreenOn(
+  doc: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">,
+  nav: { wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> } }
+): () => void {
+  const wl = nav.wakeLock;
+  if (!wl) return () => undefined;
+  let lock: { release(): Promise<void> } | null = null;
+  let done = false;
+  const ask = () => {
+    if (done || doc.visibilityState !== "visible") return;
+    wl.request("screen").then(
+      (l) => {
+        if (done) void l.release().catch(() => undefined);
+        else lock = l;
+      },
+      () => undefined
+    );
+  };
+  doc.addEventListener("visibilitychange", ask);
+  ask();
+  return () => {
+    if (done) return;
+    done = true;
+    doc.removeEventListener("visibilitychange", ask);
+    void lock?.release().catch(() => undefined);
+    lock = null;
+  };
+}
+
 function errorHtml(v: LobbyView): { body: string; actions: string } {
   const e = v.error;
   const close = `<button class="cta alt" data-act="cancel">Close</button>`;
@@ -1134,6 +1275,8 @@ function errorHtml(v: LobbyView): { body: string; actions: string } {
       return { body: `<p class="duel-err">${esc(e.message)}</p><p class="sh-note">The page has no window.__duelOut: connect it with the relay harness.</p>`, actions: close };
     case "left":
       return { body: `<p class="duel-err">${esc(e.message)}.</p>`, actions: close };
+    case "online":
+      return { body: `<p class="duel-err">${esc(e.message)}.</p><p class="sh-note">Close, then start the online duel again.</p>`, actions: close };
     case "modem":
       return {
         body: `<p class="duel-err">The sound link stopped working.</p><p class="sh-note">Close, then tap Duel to start it again. (${esc(e.message)})</p>`,
@@ -1147,10 +1290,16 @@ function errorHtml(v: LobbyView): { body: string; actions: string } {
 /** The sheet: the machine, its env in the browser, the frame loop, the taps. */
 function run(o: LobbyOptions, rematch: DuelRematch | null): void {
   const params = parseDuelParams(location.search);
-  const practice = params.mode === "sound" ? null : params.mode;
+  // an online duel: a new one (its seat from the tap, the host's code made now), or its rematch (the stored room)
+  const code = rematch ? rematch.room ?? null : o.online ? (o.online.seat === "guest" ? o.online.code : roomCode()) : null;
+  const online: OnlineRoom | null = code ? { code, invite: inviteUrl(location, code) } : null;
+  const practice = online || params.mode === "sound" ? null : params.mode;
   const build = duelBuild();
   let loop: LoopLink | null = null;
   let relay: RelayTransport | null = null;
+  let net: NetTransport | null = null;
+  let disarmFullscreen: (() => void) | null = null;
+  const offWake = online ? keepScreenOn(document, navigator) : () => undefined;
   let feed: VersusFeed | null = null;
   let machine: LobbyMachine | null = null;
   let timer = 0;
@@ -1161,8 +1310,14 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
   const wrap = document.createElement("div");
   wrap.className = "sheet-wrap duel-wrap";
   wrap.innerHTML = `<div class="sheet duelsheet" role="dialog" aria-label="Duel a friend">
-      <h2>🔊 ${rematch ? "Rematch" : "Duel a friend"}</h2>
-      ${practice ? `<p class="duel-practice">Practice link (no sound): ${practice === "loop" ? "an in-page friend" : "the relay"}</p>` : `<p class="duel-noise" role="note">${NOISE_WARNING}</p>`}
+      <h2>${online ? "🌐" : "🔊"} ${rematch ? "Rematch" : online ? "Duel a friend online" : "Duel a friend"}</h2>
+      ${
+        online
+          ? ""
+          : practice
+            ? `<p class="duel-practice">Practice link (no sound): ${practice === "loop" ? "an in-page friend" : "the relay"}</p>`
+            : `<p class="duel-noise" role="note">${NOISE_WARNING}</p>`
+      }
       <div class="duel-body"></div>
       <div class="sh-actions duel-actions"></div>
     </div>`;
@@ -1184,8 +1339,10 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
   const dropPractice = () => {
     loop?.close();
     relay?.close();
+    net?.close();
     loop = null;
     relay = null;
+    net = null;
   };
 
   const prefs = loadPrefs();
@@ -1196,7 +1353,8 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
     rig: o.rig,
     practice,
     rematch,
-    seat: practice === "relay" ? params.seat : null,
+    seat: online ? (o.online?.seat ?? null) : practice === "relay" ? params.seat : null,
+    online,
     prefs,
     savePrefs,
     offer: { map: o.shownMap, mutators: o.mutators, hostSide: practice ? params.side : "blue" },
@@ -1206,6 +1364,12 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
         const friendOffer = rematch ? offer : { ...offer, hostSide: cfg.tx === "host" ? params.side : params.side === "blue" ? "red" : "blue" };
         loop = new LoopLink({ params: params.loop, role: cfg.tx, offer: friendOffer, build, seed: (cryptoRandom() * 4294967296) >>> 0 });
         return loop.page;
+      }
+      if (online) {
+        dropPractice();
+        const t = (net = new NetTransport({ code: online.code, role: cfg.tx }));
+        await t.opened;
+        return t;
       }
       if (practice === "relay") {
         dropPractice();
@@ -1221,7 +1385,7 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
       return o.rig.createLink(cfg);
     },
     guard: (plan) => {
-      if (practice) return;
+      if (practice || online) return;
       try {
         sfx.setLinkGuard(plan);
       } catch (e) {
@@ -1229,18 +1393,20 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
       }
     },
     begin: (session) => {
-      const onFrame = loop ? () => loop?.pump() : relay ? () => relay?.tick() : undefined;
+      const onFrame = loop ? () => loop?.pump() : relay ? () => relay?.tick() : net ? () => net?.tick() : undefined;
       let exited = false;
       const f = new VersusFeed({
         session,
         rig: o.rig,
         practice: practice !== null,
+        room: online?.code ?? null,
         onExit: () => {
           if (exited) return;
           exited = true;
           dropPractice();
+          offWake();
           o.rig?.close();
-          if (!practice) sfx.setLinkGuard(null);
+          if (!practice && !online) sfx.setLinkGuard(null);
         },
         ...(onFrame ? { onFrame } : {})
       });
@@ -1253,11 +1419,14 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
     released: (why) => {
       offPageGone();
       dropPractice();
+      offWake();
+      disarmFullscreen?.();
       o.onClose(why);
     }
   };
 
-  if (practice) exposeProbe(() => machine, () => feed);
+  // (online too: tools/online-smoke.mjs reads it)
+  if (practice || online) exposeProbe(() => machine, () => feed);
   const m = (machine = new LobbyMachine(env));
 
   let key = "";
@@ -1292,6 +1461,8 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
     }
     // (cancelled: the sheet is gone, and the link says the end until the session may close)
     if (v.step === "closed") return void wrap.remove();
+    // (online, the tap asked for no full screen, for the share sheet's sake: the opener's tap does, once paired)
+    if (online && !disarmFullscreen && (v.step === "picking" || v.step === "waiting")) disarmFullscreen = fullscreen.enterOnGesture();
     render();
   };
   const loopFrame = () => {
@@ -1331,6 +1502,12 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
         return;
       case "reload":
         return fullscreen.reload();
+      case "share":
+        if (online) void shareInvite(online.invite, el);
+        return;
+      case "copy":
+        if (online) void copyInvite(online.invite, el);
+        return;
       case "cancel":
         m.cancel();
         // (the frame loop goes on until the session may close, if it must say the end first)

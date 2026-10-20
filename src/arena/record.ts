@@ -6,6 +6,7 @@
  * to prove a replay matches. Round-by-round orders, notes and radio lines
  * ride along for the viewer and for reading how each side thought.
  */
+import type { SurvivalOptions } from "../sim/modes/survival";
 import { type OpenerId } from "../sim/openers";
 import type { MutatorId } from "../sim/rules";
 import { step } from "../sim/sim";
@@ -86,6 +87,10 @@ export interface BattleRecord {
   openers: Partial<Record<Faction, OpenerId>>;
   /** Income multiplier per side when not 1 (the built-in AI's difficulty handicap: tickAi sets it every tick). */
   income?: Partial<Record<Faction, number>>;
+  /** A Last Stand played in the game (game/recorder.ts): the waves' options. sim/setup.ts sets it up again. */
+  survival?: SurvivalOptions;
+  /** An op played in the game: its id (ops.ts). */
+  op?: string;
   seats: Record<Faction, SeatInfo>;
   /** Coordinates in `log` are each side's own frame; `turns` and `radio` ticks are true. */
   frames: "own";
