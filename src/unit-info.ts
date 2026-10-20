@@ -1,9 +1,13 @@
-// Every unit's description, read from balance.ts so it never drifts from the
-// game, plus hand-written notes on what makes each one special: the cards on
-// the vehicles page (vehicles.html) and the 3D models page (models.html).
-import { DAMAGE_VS, GOLIATH, INFANTRY, TERRAIN, UNITS, shotDamage, type GoliathWeaponStats } from "./sim/balance";
+// Every unit's and building's description, read from balance.ts so it never
+// drifts from the game, plus hand-written notes on what makes each one
+// special: the cards on the vehicles page (vehicles.html) and the 3D models
+// page (models.html).
+import {
+  BUILDINGS, DAMAGE_VS, ECONOMY, GOLIATH, INFANTRY, TERRAIN, UNITS, shotDamage,
+  type ArmedStats, type GoliathWeaponStats
+} from "./sim/balance";
 import { COUNTERS } from "./game/advisor";
-import { Terrain, type ArmorClass, type UnitKind } from "./sim/types";
+import { Terrain, type ArmorClass, type BuildingKind, type UnitKind } from "./sim/types";
 
 export const FEATURES: Record<UnitKind, string[]> = {
   harvester: [
@@ -135,6 +139,11 @@ function weaponLine(kind: UnitKind): string {
   if (kind === "goliath")
     return (["mortars", "laser", "cannons", "mg"] as const).map((k) => goliathWeapon(GOLIATH.weapons[k])).join("<br />");
   if (u.heal) return `<b>Repair beam</b> · ${u.heal} HP/s · range ${u.range}`;
+  return armedLine(u);
+}
+
+/** A unit's or building's weapon: its damage type, how hard and how often, and what it's strong against. */
+function armedLine(u: ArmedStats): string {
   if (u.targets === "none") return "<b>No weapon</b>";
   const strong = (Object.entries(DAMAGE_VS[u.dmgType!]) as [ArmorClass, number][])
     .filter(([a, m]) => a !== "structure" ? m > 1 : m >= 1.3)
@@ -195,5 +204,118 @@ export function card(kind: UnitKind, { portrait = true, id = true } = {}): strin
     <div class="weapon">${weaponLine(kind)}</div>
     <ul class="features">${FEATURES[kind].map((f) => `<li>${f}</li>`).join("")}</ul>
     ${matchups}
+  </article>`;
+}
+
+// ------------------------------------------------------------ buildings ---
+
+export const BUILDING_GROUPS: { title: string; kinds: BuildingKind[] }[] = [
+  { title: "Command and economy", kinds: ["hq", "depot", "radar"] },
+  { title: "Production", kinds: ["fab-plant", "airpad", "assembly-bay", "tech-lab", "gantry"] },
+  { title: "Defences", kinds: ["turret", "sam-site"] }
+];
+
+const BUILDING_FEATURES: Record<BuildingKind, string[]> = {
+  hq: [
+    "Every side starts with one, and it can't be built: the heart of your base.",
+    `Builds Harvesters and takes their scrap, and salvages ${ECONOMY.hqTrickle} scrap a second on its own, so a broke side is never stuck.`,
+    "Its point-defence gun swats early drone raids. It can't hit ground units: leave those to real defences.",
+    "Lose it and every Goliath, and you lose the game."
+  ],
+  "fab-plant": [
+    "The ground-vehicle factory: tanks, anti-air, artillery and hover tanks roll out of its hall.",
+    `Queue up to ${ECONOMY.maxQueue} at a time, and tap the map to set where they rally.`,
+    "Heavier models need a Tech Lab too."
+  ],
+  airpad: [
+    "Launches every flying drone, from the Scout to the Condor dropship.",
+    `Queue up to ${ECONOMY.maxQueue} at a time, and tap the map to set where they rally.`,
+    "Aircraft ignore terrain, so an Airpad anywhere can strike everywhere."
+  ],
+  "assembly-bay": [
+    "Assembles robot infantry: Trooper Squads, Rocket Squads and Sniper Teams.",
+    "Squads are cheap, take cover in woods and capture Uplinks fastest.",
+    "An anchored Goliath trains infantry too, wherever it stands."
+  ],
+  "tech-lab": [
+    "Research, not production: it unlocks the heavier units at the other factories.",
+    "Needs a Fab Plant, an Airpad or an Assembly Bay first.",
+    "Lose it and those units can't be built again until you rebuild it."
+  ],
+  gantry: [
+    `Builds the Goliath, one at a time over ${UNITS.goliath.buildTime} s: the mech goes up on its cradle in stages, the crane swinging armour plates on.`,
+    "Needs every other factory and the Tech Lab. One per side.",
+    "The enemy can always see it, and the Goliath taking shape on it: expect them to come for it."
+  ],
+  depot: [
+    "A forward drop-off: harvesters unload at the nearest one, so a Depot by a distant field cuts their trip.",
+    "Harvesters drop off at it just as at the HQ; it builds nothing.",
+    "Built near an anchored Goliath, an outpost Depot takes scrap anywhere on the map."
+  ],
+  turret: [
+    "Autocannon defence that hits ground and air.",
+    `Mortars out-range it (${UNITS.mortar.range} tiles to its ${BUILDINGS.turret.range}): crack it with artillery, not tanks.`,
+    `Kinetic shells: weaker against heavy armour (×${DAMAGE_VS.kinetic.heavy}), so Mastodons shrug it off.`
+  ],
+  "sam-site": [
+    `Long-range anti-air missiles, reaching ${BUILDINGS["sam-site"].range} tiles: further than any aircraft's weapon.`,
+    "Can't shoot at anything on the ground: tanks and artillery roll right past it.",
+    "Pair it with a Turret to cover both."
+  ],
+  radar: [
+    `Sees ${BUILDINGS.radar.sight} tiles in every direction, the widest view in the game, its dish sweeping round.`,
+    "Watch for attacks coming through the fog, or spot the next field.",
+    "Unarmed and lightly built: easy to lose to a raid."
+  ]
+};
+
+const B_NAME = (k: BuildingKind): string => `<a href="#${k}">${BUILDINGS[k].name}</a>`;
+const U_NAME = (k: UnitKind): string => `<a href="#${k}">${UNITS[k].name}</a>`;
+
+/**
+ * A building's description card: name, role, tags, stats, weapon, notes and
+ * what it builds or unlocks. `id: false` leaves out the anchor (as card()).
+ */
+export function buildingCard(kind: BuildingKind, { id = true } = {}): string {
+  const b = BUILDINGS[kind];
+  const kinds = Object.keys(UNITS) as UnitKind[];
+  const builds = kinds.filter((k) => UNITS[k].builtAt === kind);
+  const unlocks = kinds.filter((k) => UNITS[k].requires === kind);
+  const tags = [
+    `<span class="tag">${b.size}×${b.size}</span>`,
+    b.dropOff ? `<span class="tag">Scrap drop-off</span>` : "",
+    b.unique ? `<span class="tag">One per side</span>` : "",
+    b.alwaysVisible ? `<span class="tag">Always visible</span>` : "",
+    b.requires ? `<span class="tag tech">Needs ${b.requires.map((k) => BUILDINGS[k].name).join(" or ")}</span>` : "",
+    b.requiresAll ? `<span class="tag tech">Needs ${b.requiresAll.map((k) => BUILDINGS[k].name).join(", ")}</span>` : ""
+  ].join("");
+  const armed = b.targets !== "none";
+  const lists = [
+    builds.length ? `<div class="beats"><h4>Builds</h4>${builds.map(U_NAME).join(", ")}</div>` : "",
+    unlocks.length ? `<div class="beats"><h4>Unlocks</h4>${unlocks.map(U_NAME).join(", ")}</div>` : "",
+    b.requires || b.requiresAll
+      ? `<div class="fears"><h4>Needs</h4>${b.requires ? b.requires.map(B_NAME).join(" or ") : b.requiresAll!.map(B_NAME).join(", ")}</div>`
+      : ""
+  ].filter(Boolean);
+  return `<article${id ? ` id="${kind}"` : ""}>
+    <div class="head">
+      <div>
+        <h3>${b.name}</h3>
+        <div class="role">${b.role}</div>
+        <div class="tags">${tags}</div>
+      </div>
+    </div>
+    <div class="stats">
+      ${stat(b.cost || "—", "Scrap")}
+      ${stat(b.hp, "HP")}
+      ${stat(b.sight, "Sight")}
+      ${stat(b.buildTime ? `${b.buildTime}s` : "—", "Build")}
+      ${armed ? stat(b.dps, "DPS") : ""}
+      ${armed ? stat(b.range, "Range") : ""}
+      ${armed ? stat(TARGETS[b.targets], "Hits") : ""}
+    </div>
+    ${armed ? `<div class="weapon">${armedLine(b)}</div>` : ""}
+    <ul class="features">${BUILDING_FEATURES[kind].map((f) => `<li>${f}</li>`).join("")}</ul>
+    ${lists.length ? `<div class="matchups">${lists.join("")}</div>` : ""}
   </article>`;
 }

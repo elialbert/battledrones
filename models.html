@@ -71,7 +71,14 @@
       .weapon { font-size: 13px; color: var(--dim); }
       .weapon b { color: var(--text); font-weight: 600; }
       footer { margin-top: 40px; color: var(--dim); font-size: 13px; }
-      /* each unit: its card beside its model, stacked on a phone */
+      .tabs { display: flex; gap: 4px; margin-top: 18px; border-bottom: 1px solid var(--line); }
+      .tabs button {
+        font: inherit; font-size: 15px; font-weight: 600; color: var(--dim); background: none; cursor: pointer;
+        border: 1px solid transparent; border-bottom: none; border-radius: 10px 10px 0 0; padding: 8px 18px; margin-bottom: -1px;
+      }
+      .tabs button:hover { color: var(--text); }
+      .tabs button[aria-selected="true"] { color: var(--text); background: var(--panel); border-color: var(--line); }
+      /* each unit or building: its card beside its model, stacked on a phone */
       .row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; scroll-margin-top: 16px; }
       .viewer {
         position: relative; display: flex; flex-direction: column; min-height: 420px;
@@ -106,13 +113,17 @@
       <header>
         <h1>Battle Drones — 3D Models</h1>
         <p>
-          Every unit's in-game 3D model, beside what it does. Drag a model to turn it, pinch or ⌃-scroll to zoom, and
-          play its animations: driving, aiming, firing, marching, flying, anchoring. The same models and animation rigs
+          Every unit's and building's in-game 3D model, beside what it does. Drag a model to turn it, pinch or ⌃-scroll to zoom, and
+          play its animations: driving, aiming, firing, marching, flying, anchoring, a Gantry building a Goliath. The same models and animation rigs
           the battlefield uses. <a href="./">Back to the game</a> · <a href="./vehicles.html">Vehicles</a>
         </p>
-        <nav id="nav"></nav>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" data-tab="units" aria-controls="tab-units">Units</button>
+          <button type="button" role="tab" data-tab="buildings" aria-controls="tab-buildings">Buildings</button>
+        </div>
       </header>
-      <div id="units"></div>
+      <div id="tab-units" role="tabpanel"><nav></nav><div class="rows"></div></div>
+      <div id="tab-buildings" role="tabpanel" hidden><nav></nav><div class="rows"></div></div>
     </main>
     <script type="module" src="/src/models.ts"></script>
   </body>

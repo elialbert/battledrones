@@ -10,16 +10,18 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { CRAWLER_LEGS, instance, unitDef, unitScale } from "./game/three/models";
+import { GantryView, type GoliathHost } from "./game/render/goliath";
+import { buildingDef, CRAWLER_LEGS, instance, modelMesh, rubbleGeometry, unitDef, unitScale } from "./game/three/models";
 import { GoliathRig, type GoliathGun, type GoliathPose } from "./game/three/goliath";
 import { baySeats, SquadRig, type BotKind } from "./game/three/infantry";
 import { fowUniforms, glowMat, setVariant } from "./game/three/materials";
 import { SUN_DIR } from "./game/three/stage";
 import { discTexture } from "./game/three/textures";
+import { Ease } from "./game/three/tween";
 import { HOVER_H } from "./game/three/view";
-import { GOLIATH, UNITS } from "./sim/balance";
-import type { Faction, UnitKind } from "./sim/types";
-import { GROUPS, card } from "./unit-info";
+import { BUILDINGS, GOLIATH, TICK_RATE, UNITS } from "./sim/balance";
+import type { Building, BuildingKind, Faction, UnitKind } from "./sim/types";
+import { BUILDING_GROUPS, GROUPS, buildingCard, card } from "./unit-info";
 
 /**
  * A model on its pad, and how it plays each of its animations. `step` poses
@@ -55,21 +57,24 @@ const fwd = new THREE.Vector3();
 const quat = new THREE.Quaternion();
 const buf = new THREE.Vector2();
 
-/** Muzzle flashes, laser beams and floating hearts: short-lived glows in a viewer's scene. */
+/** Muzzle flashes, laser beams, welding sparks, smoke and floating hearts: short-lived sprites in a viewer's scene. */
 class Glows {
   readonly group = new THREE.Group();
-  private live: { o: THREE.Object3D; mat: THREE.Material; life: number; age: number; rise: number; grow: number }[] = [];
+  private live: { o: THREE.Object3D; mat: THREE.Material; life: number; age: number; rise: number; grow: number; alpha: number; late: boolean }[] = [];
   private static beamGeo = new THREE.CylinderGeometry(1, 1, 1, 6, 1, true).rotateX(Math.PI / 2).translate(0, 0, -0.5);
 
-  /** A soft flash at `at`, `size` tiles across. */
+  /** A soft flash at `at`, `size` tiles across; `rise` (tiles/s) floats it up, fading late (a heart). */
   flash(at: THREE.Vector3, size: number, tint = FLASH, life = 0.09, rise = 0): void {
     const mat = new THREE.SpriteMaterial({
       map: discTexture(), color: tint, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false
     });
-    const s = new THREE.Sprite(mat);
-    s.position.copy(at);
-    s.scale.setScalar(size);
-    this.add(s, mat, life, rise, rise ? 0 : 0.6);
+    this.sprite(mat, at, size, { life, rise, grow: rise ? 0 : 6, alpha: 1, late: rise > 0 });
+  }
+
+  /** A puff of smoke (or dust, or steam) at `at`, drifting up and spreading as it fades. */
+  smoke(at: THREE.Vector3, size: number, tint: number, alpha = 0.55, life = 1.6): void {
+    const mat = new THREE.SpriteMaterial({ map: discTexture(), color: tint, depthWrite: false, transparent: true });
+    this.sprite(mat, at, size, { life, rise: 0.45, grow: 0.9, alpha, late: false });
   }
 
   /** A laser beam from `at` along `dir` (unit), `len` tiles. */
@@ -79,13 +84,20 @@ class Glows {
     m.position.copy(at);
     m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
     m.scale.set(width, width, len);
-    this.add(m, mat, 0.14, 0, 0);
+    this.add(m, mat, { life: 0.14, rise: 0, grow: 0, alpha: 0.9, late: false });
     this.flash(at, width * 9, tint, 0.12);
   }
 
-  private add(o: THREE.Object3D, mat: THREE.Material, life: number, rise: number, grow: number): void {
+  private sprite(mat: THREE.SpriteMaterial, at: THREE.Vector3, size: number, o: { life: number; rise: number; grow: number; alpha: number; late: boolean }): void {
+    const s = new THREE.Sprite(mat);
+    s.position.copy(at);
+    s.scale.setScalar(size);
+    this.add(s, mat, o);
+  }
+
+  private add(o: THREE.Object3D, mat: THREE.Material, g: { life: number; rise: number; grow: number; alpha: number; late: boolean }): void {
     this.group.add(o);
-    this.live.push({ o, mat, life, age: 0, rise, grow });
+    this.live.push({ o, mat, age: 0, ...g });
   }
 
   update(dt: number): void {
@@ -97,9 +109,9 @@ class Glows {
         g.mat.dispose();
         return false;
       }
-      (g.mat as THREE.SpriteMaterial).opacity = g.rise ? Math.min(1, (1 - k) * 2.5) : 1 - k;
+      g.mat.opacity = g.alpha * (g.late ? Math.min(1, (1 - k) * 2.5) : 1 - k);
       g.o.position.y += g.rise * dt;
-      if (g.grow) g.o.scale.multiplyScalar(1 + g.grow * dt * 10);
+      if (g.grow) g.o.scale.multiplyScalar(1 + g.grow * dt);
       return true;
     });
   }
@@ -380,11 +392,153 @@ function goliath(f: Faction, glows: Glows): Model {
   };
 }
 
-function makeModel(kind: UnitKind, f: Faction, glows: Glows): Model {
+const TOTAL = UNITS.goliath.buildTime * TICK_RATE;
+/** The Gantry's Build Goliath loop (s): the build sped up, the rollout as the game plays it, a pause. */
+const G_BUILD = 16;
+const G_ROLL = 5;
+const G_CYCLE = G_BUILD + G_ROLL + 1.5;
+/** The deck a Goliath stands on, on the Gantry's cradle (render/goliath.ts CRADLE_H). */
+const CRADLE_H = 0.285;
+
+/** A building: idle, going up, damaged and smoking, rubble; turrets aiming and firing; the Radar sweeping; the Gantry at work. */
+function building(kind: BuildingKind, f: Faction, glows: Glows): Model {
+  const st = BUILDINGS[kind];
+  const root = new THREE.Group();
+  const m = instance(buildingDef(kind, f));
+  root.add(m.root);
+  const rubble = modelMesh(rubbleGeometry(st.size, 1));
+  rubble.visible = false;
+  root.add(rubble);
+  const armed = st.targets !== "none";
+  const anims = [
+    ...(kind === "radar" ? ["Sweep"] : []),
+    ...(kind === "gantry" ? ["Build Goliath"] : []),
+    ...(armed && m.turret ? ["Aim"] : []),
+    ...(armed ? ["Fire"] : []),
+    "Idle",
+    "Construct",
+    "Damaged",
+    "Rubble"
+  ];
+  let variant = "normal";
+  let face = 0;
+  let recoil = 0;
+  const fire = shots();
+  const puffs = shots();
+  let raised = -1;
+
+  // the Gantry plays its build through the game's own GantryView, fed a stand-in for the sim's side of it
+  let gantry: { view: GantryView; b: { id: number; faction: Faction; queue: { kind: string; remaining: number }[] }; head: { kind: string; remaining: number } | null; rig: GoliathRig; rolled: boolean } | null = null;
+  if (kind === "gantry") {
+    const at = (p: { x: number; y: number; h: number }) => v3.set(p.x, p.h, p.y);
+    const host = {
+      world: { tick: 0, powers: { stunned: new Map() } },
+      fx: {
+        weld: (p: { x: number; y: number; h: number }, n = 4) => {
+          for (let i = 0; i < n; i++) {
+            const q = at(p).add(new THREE.Vector3((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12));
+            glows.flash(q, 0.08 + Math.random() * 0.1, 0xfff0c0, 0.08 + Math.random() * 0.12);
+          }
+        },
+        steam: (p: { x: number; y: number; h: number }) => glows.smoke(at(p), 0.3, 0xf0f4f8, 0.5, 1.2),
+        sound: () => {}
+      }
+    } as unknown as GoliathHost;
+    const b = { id: 1, faction: f, queue: [] };
+    const rig = new GoliathRig(f);
+    rig.root.scale.setScalar(unitScale("goliath"));
+    rig.root.rotation.y = Math.PI;
+    rig.root.visible = false;
+    root.add(rig.root);
+    gantry = { view: new GantryView(host, m, b as unknown as Building, 0, 0, 0), b, head: null, rig, rolled: false };
+  }
+
+  return {
+    root,
+    anims,
+    step(anim, t, dt) {
+      const v = anim === "Damaged" ? "damaged" : "normal";
+      if (v !== variant) setVariant(m.root, (variant = v) as "normal");
+      m.root.visible = anim !== "Rubble";
+      rubble.visible = anim === "Rubble";
+      // Construct: it rises from the ground in a puff of dust (render/entities.ts createBuilding)
+      if (anim === "Construct") {
+        const c = Math.floor(t / 3);
+        const k = Ease.backOut(Math.min(1, (t % 3) / 0.48));
+        m.root.scale.set(0.9 + 0.1 * k, Math.max(0.05, k), 0.9 + 0.1 * k);
+        if (c !== raised) {
+          raised = c;
+          for (let i = 0; i < 10; i++)
+            glows.smoke(v3.set((Math.random() - 0.5) * st.size, 0.1, (Math.random() - 0.5) * st.size), 0.45, 0x8a7453, 0.5, 1.1);
+        }
+      } else m.root.scale.setScalar(1);
+      // Damaged: smoke rising off the roof
+      if (anim === "Damaged" && puffs(t, 0.22)) {
+        const x = (Math.random() - 0.5) * st.size * 0.5;
+        const z = (Math.random() - 0.5) * st.size * 0.5;
+        glows.smoke(v3.set(x, m.def.height * (0.5 + Math.random() * 0.4), z), 0.35 + st.size * 0.1, 0x2c2a28, 0.6, 1.8);
+      }
+      if (m.turret) {
+        let aimAt = face;
+        if (anim === "Aim") aimAt = [0.9, -0.7, 0.25, -1.5, 2.4][Math.floor(t / 2.2) % 5]!;
+        if (anim === "Fire") aimAt = 0.35;
+        if (kind === "radar") face += anim === "Sweep" ? dt * (1000 / 900) : 0; // (the game's sweep: a radian every 0.9 s)
+        else face += (aimAt - face) * (1 - Math.exp(-dt * 4));
+      }
+      if (anim === "Fire" && fire(t, Math.max(0.3, st.shotInterval ?? 0.5))) {
+        recoil = 1;
+        const from = m.turret ?? m.body;
+        from.updateWorldMatrix(true, false);
+        glows.flash(from.localToWorld(v3.set(...m.def.muzzle)), kind === "sam-site" ? 0.6 : 0.4);
+        if (kind === "sam-site") glows.smoke(v3.clone(), 0.3, 0xdedad3, 0.5, 1);
+      }
+      recoil = Math.max(0, recoil - dt * 6);
+      if (m.turret) {
+        const kick = recoil * 0.05;
+        const at = m.def.mount;
+        m.turret.rotation.y = -face;
+        m.turret.position.set(at[0] - Math.sin(face) * kick, at[1], at[2] + Math.cos(face) * kick);
+      }
+      if (gantry) {
+        const g = gantry;
+        const c = anim === "Build Goliath" ? t % G_CYCLE : -1;
+        if (c >= 0 && c < G_BUILD) {
+          // a fresh build each loop: the sim's queue counting down its ticks
+          if (!g.head || c < 0.1) g.head = { kind: "goliath", remaining: TOTAL };
+          g.head.remaining = TOTAL * (1 - c / G_BUILD);
+          g.b.queue = [g.head];
+          g.rolled = false;
+          g.rig.root.visible = false;
+        } else {
+          g.b.queue = [];
+          g.head = null;
+        }
+        // finished: it walks off the cradle while the arms swing clear
+        if (c >= G_BUILD && !g.rolled) {
+          g.rolled = true;
+          g.view.rollout();
+        }
+        const roll = c - G_BUILD;
+        const walking = c >= G_BUILD && roll > 0.7 && roll < 3.6;
+        if (c >= G_BUILD) {
+          const z = Math.min(2.9, Math.max(0, roll - 0.7) * UNITS.goliath.speed);
+          g.rig.root.visible = true;
+          g.rig.root.position.set(0, CRADLE_H * (1 - smooth((z - 1.1) / 0.5)), z);
+          g.rig.update({ ...REST, dt: dt * 1000, speed: walking ? UNITS.goliath.speed : 0 });
+        } else if (anim !== "Build Goliath") g.rig.root.visible = false;
+        g.view.update(g.b as unknown as Building, dt * 1000, 0, true);
+      }
+      return [0, 0];
+    }
+  };
+}
+
+function makeModel(kind: UnitKind | BuildingKind, f: Faction, glows: Glows): Model {
+  if (kind in BUILDINGS) return building(kind as BuildingKind, f, glows);
   if ((BOTS as string[]).includes(kind)) return squad(kind as BotKind, f, glows);
   if (kind === "condor") return condor(f);
   if (kind === "goliath") return goliath(f, glows);
-  return vehicle(kind, f, glows);
+  return vehicle(kind as UnitKind, f, glows);
 }
 
 // ------------------------------------------------------------ the stage ---
@@ -462,7 +616,7 @@ class Viewer {
   private padR = 1.5;
   visible = false;
 
-  constructor(readonly kind: UnitKind, readonly canvas: HTMLCanvasElement, private ui: HTMLElement, private faction: Faction = "blue") {
+  constructor(readonly kind: UnitKind | BuildingKind, readonly canvas: HTMLCanvasElement, private ui: HTMLElement, private faction: Faction = "blue") {
     this.ctx = canvas.getContext("2d")!;
     this.group.add(this.glows.group);
     this.controls = new OrbitControls(this.camera, canvas);
@@ -588,25 +742,55 @@ class Viewer {
 
 // ------------------------------------------------------------- the page ---
 
-const kinds = GROUPS.flatMap((g) => g.kinds);
-document.getElementById("nav")!.innerHTML = kinds
-  .map((k) => `<a href="#${k}"><img src="./assets/icons/${k}.webp" alt="" />${UNITS[k].name}</a>`)
-  .join("");
-document.getElementById("units")!.innerHTML = GROUPS.map(
-  (g) =>
-    `<h2 class="group">${g.title}</h2>` +
-    g.kinds
-      .map(
-        (k) => `<section class="row" id="${k}">
-          ${card(k, { portrait: false, id: false })}
-          <div class="viewer" data-kind="${k}">
-            ${renderer ? `<canvas aria-label="${UNITS[k].name} 3D model"></canvas><div class="hint">Drag to turn · pinch or ⌃-scroll to zoom</div>` : `<p class="nogl">This browser can't show 3D models (WebGL is off or unavailable).</p>`}
-            <div class="controls"></div>
-          </div>
-        </section>`
-      )
-      .join("")
-).join("");
+/** The page's two tabs: units and buildings, each its nav, groups and rows of card and viewer. */
+const TABS = {
+  units: { groups: GROUPS, name: (k: string) => UNITS[k as UnitKind].name, card: (k: string) => card(k as UnitKind, { portrait: false, id: false }) },
+  buildings: { groups: BUILDING_GROUPS, name: (k: string) => BUILDINGS[k as BuildingKind].name, card: (k: string) => buildingCard(k as BuildingKind, { id: false }) }
+};
+type Tab = keyof typeof TABS;
+
+for (const [tab, t] of Object.entries(TABS) as [Tab, (typeof TABS)[Tab]][]) {
+  const kinds = t.groups.flatMap((g) => g.kinds as string[]);
+  document.querySelector(`#tab-${tab} nav`)!.innerHTML = kinds
+    .map((k) => `<a href="#${k}"><img src="./assets/icons/${k}.webp" alt="" />${t.name(k)}</a>`)
+    .join("");
+  document.querySelector(`#tab-${tab} .rows`)!.innerHTML = t.groups
+    .map(
+      (g) =>
+        `<h2 class="group">${g.title}</h2>` +
+        (g.kinds as string[])
+          .map(
+            (k) => `<section class="row" id="${k}">
+              ${t.card(k)}
+              <div class="viewer" data-kind="${k}">
+                ${renderer ? `<canvas aria-label="${t.name(k)} 3D model"></canvas><div class="hint">Drag to turn · pinch or ⌃-scroll to zoom</div>` : `<p class="nogl">This browser can't show 3D models (WebGL is off or unavailable).</p>`}
+                <div class="controls"></div>
+              </div>
+            </section>`
+          )
+          .join("")
+    )
+    .join("");
+}
+
+/** Show a tab: the one the link's anchor is on (#buildings, #turret…), scrolled to it. */
+function showTab(hash: string): void {
+  const id = hash.replace(/^#/, "");
+  const target = id ? document.getElementById(id) : null;
+  const tab: Tab = id === "buildings" || target?.closest("#tab-buildings") ? "buildings" : "units";
+  for (const t of Object.keys(TABS) as Tab[]) {
+    (document.getElementById(`tab-${t}`) as HTMLElement).hidden = t !== tab;
+    document.querySelector(`[data-tab="${t}"]`)!.setAttribute("aria-selected", String(t === tab));
+  }
+  if (target?.classList.contains("row")) target.scrollIntoView();
+}
+for (const b of document.querySelectorAll<HTMLButtonElement>("[data-tab]"))
+  b.addEventListener("click", () => {
+    history.replaceState(null, "", `#${b.dataset.tab}`);
+    showTab(`#${b.dataset.tab}`);
+  });
+addEventListener("hashchange", () => showTab(location.hash));
+showTab(location.hash);
 
 if (renderer) {
   const r = renderer;
@@ -621,7 +805,7 @@ if (renderer) {
     { rootMargin: "100px" }
   );
   for (const el of document.querySelectorAll<HTMLElement>(".viewer")) {
-    const v = new Viewer(el.dataset.kind as UnitKind, el.querySelector("canvas")!, el.querySelector(".controls")!);
+    const v = new Viewer(el.dataset.kind as UnitKind | BuildingKind, el.querySelector("canvas")!, el.querySelector(".controls")!);
     viewers.set(el, v);
     seen.observe(el);
     el.querySelector(".controls")!.addEventListener("click", (e) => {
