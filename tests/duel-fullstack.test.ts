@@ -108,6 +108,7 @@ class QuietRig implements LobbyRig, DuelRig {
   readonly ready = Promise.resolve("running" as const);
   readonly wakeLockSupported = true;
   readonly failures = 0;
+  readonly lastError = null;
   readonly micMode: MicMode = "raw";
   constructor(
     private readonly now: () => number,

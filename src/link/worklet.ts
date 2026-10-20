@@ -48,10 +48,11 @@
  *  - a message the modem refuses (a payload list that breaks a rule, a plan
  *    the rate can't carry, a skip that isn't a whole number ≥ 1) posts
  *    {t:"error", fatal: false} and changes nothing;
- *  - an exception in process() posts {t:"error", fatal: true} once and
+ *  - an exception anywhere in process() (the modem's block, or turning what
+ *    it reports into messages) posts {t:"error", fatal: true} once and
  *    leaves the processor silent: the modem's state can't be trusted after
- *    it, and a thrown process() would take the node down without a word to
- *    the page;
+ *    it, and a thrown process() would take the node down with nothing for
+ *    the page but a bare processorerror;
  *  - messages after {t:"close"} are ignored, and the modem is released.
  */
 import { ModemCore, type ModemConfig } from "./modem/core";
@@ -100,16 +101,16 @@ class ModemProcessor extends AudioWorkletProcessor {
       return true;
     }
     const frame = currentFrame + this.skipped;
+    // (the whole block, reporting too: a throw that left process() would only reach the page as a bare processorerror)
     try {
       modem.process(this.pick(inputs[0], ch0.length), ch0, frame);
+      for (let c = 1; c < out.length; c++) out[c]!.set(ch0);
+      this.report(modem, frame);
     } catch (e) {
       this.modem = null;
       this.post({ t: "error", message: `the modem stopped: ${messageOf(e)}`, fatal: true });
       for (let c = 0; c < out.length; c++) out[c]!.fill(0);
-      return true;
     }
-    for (let c = 1; c < out.length; c++) out[c]!.set(ch0);
-    this.report(modem, frame);
     return true;
   }
 

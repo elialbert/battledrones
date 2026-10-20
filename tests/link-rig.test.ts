@@ -7,7 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModemConfig, ModemStats } from "../src/link/modem/core";
 import { LEAVE_AFTER_FAILURES, openRig, RigError, RIG_MESSAGES, type MicMode, type RigEnv, type RigTransport } from "../src/link/rig";
 import { PAYLOAD_BITS, type BandPlan, type LinkPacket, type LinkStats, type ModemMode, type OutFrame } from "../src/link/transport";
-import type { WorkletTransportOptions } from "../src/link/worklet-transport";
+import { WorkletTransport, type WorkletTransportOptions } from "../src/link/worklet-transport";
+import type { FromWorklet, ToWorklet } from "../src/link/worklet-protocol";
 
 /** Let promise callbacks run (the rig's async steps between fake-timer ticks). */
 async function settle(): Promise<void> {
@@ -89,6 +90,7 @@ class FakeCtx extends Emitter {
   sampleRate = 48000;
   audioWorklet: object | undefined = {};
   destination = {};
+  currentTime = 0;
   /** What resume() does: start running, never settle (iOS outside a gesture), or reject. */
   resumeMode: "run" | "hang" | "reject" = "run";
   resumes = 0;
@@ -216,6 +218,8 @@ class FakeTransport {
   readonly node: FakeNode;
   readonly t0: number;
   onError: ((message: string) => void) | null = null;
+  /** As WorkletTransport's: its modem never stops here (tests that need it use the real one: modemNodes). */
+  readonly stopped = false;
   closed = false;
   readonly sent: OutFrame[][] = [];
   readonly modes: ModemMode[] = [];
@@ -1190,6 +1194,147 @@ describe("the lifecycle", () => {
     expect(fresh.sent[0]!.map((f) => f.key)).toEqual([2]);
     expect(w.contexts[2]!.sources[0]).toMatchObject({ stream: w.devices.streams[1], to: fresh.node });
     expect(w.contexts[1]!.sources).toEqual([]);
+    rig.close();
+  });
+});
+
+describe("a modem that stops", () => {
+  /** The node a real WorkletTransport makes: what it posts kept, and the worklet's side to drive (its messages, the processor failing). */
+  class ModemNode {
+    readonly port = {
+      onmessage: null as ((e: { data: FromWorklet }) => void) | null,
+      posted: [] as ToWorklet[],
+      postMessage(m: ToWorklet) {
+        this.posted.push(m);
+      }
+    };
+    onprocessorerror: (() => void) | null = null;
+    connect(): void {}
+    disconnect(): void {}
+    from(msg: FromWorklet): void {
+      this.port.onmessage?.({ data: msg });
+    }
+  }
+
+  /** Open a rig whose links run on real WorkletTransports over ModemNodes (one per transport made, in `nodes`), with a link. */
+  async function withModems(w: World) {
+    const nodes: ModemNode[] = [];
+    w.env.createTransport = (ctx, cfg, opts) =>
+      new WorkletTransport(ctx, cfg, {
+        ...opts,
+        createNode: () => {
+          const n = new ModemNode();
+          nodes.push(n);
+          return n as unknown as AudioWorkletNode;
+        }
+      });
+    const rig = open(w);
+    await rig.ready;
+    const link = await rig.createLink(HOST);
+    const lost: string[] = [];
+    rig.onLost((r) => lost.push(r));
+    return { rig, link, nodes, lost };
+  }
+
+  const STOPPED: FromWorklet = { t: "error", message: "the modem stopped: boom", fatal: true };
+  const REFUSED: FromWorklet = { t: "error", message: "a list of 0 payloads (1 to 8)", fatal: false };
+
+  it("takes a fatal error or the processor failing as a lost link, once, after the link's onError; a refused message is none; the tap rebuilds it, the state replayed", async () => {
+    const w = world();
+    const { rig, link, nodes, lost } = await withModems(w);
+    const heard: string[] = [];
+    link.onError = (m) => heard.push(`${m} (losses so far: ${lost.length})`);
+    link.send([frame(1), frame(5)]);
+    link.setMode("fast");
+    link.setSessionKey(7, 9);
+    // the modem refused a message: it runs on
+    nodes[0]!.from(REFUSED);
+    await w.clock.advance(500);
+    expect(lost).toEqual([]);
+    expect(rig.state).toBe("running");
+    // it stopped: the link's onError hears why first, then the rig calls the link lost, at once and once
+    nodes[0]!.from(STOPPED);
+    expect(heard).toEqual(["a list of 0 payloads (1 to 8) (losses so far: 0)", "the modem stopped: boom (losses so far: 0)"]);
+    expect(lost).toEqual(["modem"]);
+    expect([rig.state, rig.lost]).toEqual(["lost", "modem"]);
+    nodes[0]!.onprocessorerror?.();
+    await w.clock.advance(2000);
+    expect(lost).toEqual(["modem"]);
+    // the tap: a new context, with a new node and modem on the same clock, and the link's frames, mode and session key replayed
+    const t0 = link.t0;
+    const ok = rig.reconnect();
+    expect(w.contexts).toHaveLength(2);
+    expect(await ok).toBe(true);
+    expect([rig.state, rig.lost, rig.failures]).toEqual(["running", null, 0]);
+    expect(nodes).toHaveLength(2);
+    expect(link.node).toBe(nodes[1] as unknown);
+    expect(link.t0).toBe(t0);
+    expect(w.contexts[0]!.state).toBe("closed");
+    expect(nodes[0]!.port.posted.at(-1)).toEqual({ t: "close" });
+    expect(nodes[1]!.port.posted.filter((m) => m.t !== "skip")).toEqual([
+      { t: "payload", frames: [frame(1), frame(5)] },
+      { t: "mode", mode: "fast" },
+      { t: "session", hostNonce: 7, guestNonce: 9 }
+    ]);
+    expect(w.contexts[1]!.sources[0]!.to).toBe(nodes[1]);
+    // the new modem's processor fails: lost again, and the next tap rebuilds again
+    nodes[1]!.from(REFUSED);
+    await w.clock.advance(500);
+    expect(lost).toEqual(["modem"]);
+    nodes[1]!.onprocessorerror?.();
+    expect(heard.at(-1)).toBe("the sound link's audio processor failed (losses so far: 1)");
+    expect(lost).toEqual(["modem", "modem"]);
+    expect(await rig.reconnect()).toBe(true);
+    expect([w.contexts.length, nodes.length, rig.state]).toEqual([3, 3, "running"]);
+    rig.close();
+  });
+
+  it("leaves it to an onError that lets the rig or the link go on it (the lobby, before the match takes the rig over)", async () => {
+    // the lobby fails on it, closing the rig
+    let w = world();
+    let r = await withModems(w);
+    const rig = r.rig;
+    r.link.onError = () => rig.close();
+    r.nodes[0]!.from(STOPPED);
+    await w.clock.advance(500);
+    expect(r.lost).toEqual([]);
+    expect(rig.state).toBe("closed");
+    // a holder that lets the link go: no loss, and the rig runs on with nothing to rebuild
+    w = world();
+    r = await withModems(w);
+    const link = r.link;
+    link.onError = () => link.close();
+    r.nodes[0]!.onprocessorerror?.();
+    await w.clock.advance(500);
+    expect(r.lost).toEqual([]);
+    expect(r.rig.state).toBe("running");
+    const again = await r.rig.createLink(HOST);
+    expect(r.nodes).toHaveLength(2);
+    expect(again.node).toBe(r.nodes[1] as unknown);
+    r.rig.close();
+  });
+
+  it("rebuilds for a modem that stopped while the link was already lost, and counts a tap that leaves it stopped as failed", async () => {
+    const w = world();
+    const { rig, nodes, lost } = await withModems(w);
+    const ctx = w.contexts[0]!;
+    ctx.resumeMode = "hang";
+    ctx.set("suspended");
+    await w.clock.advance(600);
+    expect(lost).toEqual(["context"]);
+    // the modem stops meanwhile: the same loss
+    nodes[0]!.from(STOPPED);
+    await w.clock.advance(500);
+    expect(lost).toEqual(["context"]);
+    // the context would resume, but no new one can be made for a new modem: a failed tap
+    ctx.resumeMode = "run";
+    w.noAudio = true;
+    expect(await rig.reconnect()).toBe(false);
+    expect([rig.failures, rig.lastError, nodes.length]).toEqual([1, null, 1]);
+    // one can: rebuilt rather than resumed
+    w.noAudio = false;
+    expect(await rig.reconnect()).toBe(true);
+    expect([w.contexts.length, nodes.length, rig.failures, ctx.state]).toEqual([2, 2, 0, "closed"]);
     rig.close();
   });
 });

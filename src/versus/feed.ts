@@ -73,7 +73,12 @@
  *    It covers the match only: once the match is over (decided or aborted)
  *    the end screen stays free, and the report's Sound duel block offers the
  *    same tap as a button (the link still brings the end check and the
- *    friend's rematch), except after this phone left;
+ *    friend's rematch), except after this phone left. After a failed tap
+ *    both say why when the rig knows (its lastError: the microphone refused
+ *    or missing, a rate the link can't use, a worklet that won't load), with
+ *    the lobby's advice for that reason (RIG_ADVICE); a modem that stopped
+ *    mid-match is a loss like the others (onLost "modem"), and the tap
+ *    rebuilds it;
  *  - "Your friend is back in the lobby: tap Rematch" shows on the report
  *    once a lobby frame follows the friend's game frames (its page reloaded:
  *    the lockstep's peerInLobby), on any end screen, since all offer Rematch;
@@ -98,7 +103,7 @@
 import type { BattleRecord } from "../arena/record";
 import type { Controller } from "../game/controller";
 import type { AbortReason, MatchFeed } from "../game/GameScene";
-import { CAPTURE_OK_MS, LEAVE_AFTER_FAILURES, type Rig } from "../link/rig";
+import { CAPTURE_OK_MS, LEAVE_AFTER_FAILURES, RIG_ADVICE, type Rig } from "../link/rig";
 import { worldHash } from "../sim/checksum";
 import type { MutatorId } from "../sim/rules";
 import { setupWorld } from "../sim/setup";
@@ -199,7 +204,7 @@ function browserEnv(): FeedEnv {
 }
 
 /** What the feed reads of the audio rig (src/link/rig.ts Rig; tests pass a stand-in). */
-export type DuelRig = Pick<Rig, "state" | "failures" | "micMode" | "onLost" | "reconnect" | "captureOkMs">;
+export type DuelRig = Pick<Rig, "state" | "failures" | "lastError" | "micMode" | "onLost" | "reconnect" | "captureOkMs">;
 
 /** A `lift` this phone sent that hasn't been stepped yet: the Goliath, and the Condors it named. */
 export interface LiftInFlight {
@@ -551,7 +556,7 @@ export class VersusFeed implements MatchFeed {
       reconnect:
         this.linkPhase === "ok" || this.exiting || over
           ? null
-          : { phase: this.linkPhase, leave: (this.rig?.failures ?? 0) >= LEAVE_AFTER_FAILURES },
+          : { phase: this.linkPhase, leave: (this.rig?.failures ?? 0) >= LEAVE_AFTER_FAILURES, why: this.failedWhy() },
       leaving: this.exiting !== null
     };
   }
@@ -598,6 +603,18 @@ export class VersusFeed implements MatchFeed {
       this.linkPhase = ok ? "settling" : "failed";
       this.pump();
     });
+  }
+
+  /**
+   * After a failed tap, why, when the rig knows (lastError), with the
+   * lobby's advice for that reason; null otherwise, and for a context that
+   * didn't start (the rig has no reason then: the cover's own words).
+   */
+  private failedWhy(): string | null {
+    const e = this.linkPhase === "failed" ? this.rig?.lastError : null;
+    if (!e) return null;
+    const advice = RIG_ADVICE[e.reason];
+    return advice ? `${e.message}. ${advice}` : `${e.message}.`;
   }
 
   /** Save battle: the record as a .json download. */
@@ -787,7 +804,7 @@ export class VersusFeed implements MatchFeed {
       record: this.practice ? null : tallyLine(tally),
       sync,
       // (the link still brings the end check and the friend's rematch; not once this phone has left)
-      relink: this.linkPhase === "ok" || this.exiting || this.aborted === "lost" ? null : this.linkPhase,
+      relink: this.linkPhase === "ok" || this.exiting || this.aborted === "lost" ? null : { phase: this.linkPhase, why: this.failedWhy() },
       // (a lobby frame after the friend's game frames: its page reloaded into the lobby)
       friendInLobby: !!ls && ls.peerInLobby && ls.framesIn > 0 && !this.exiting,
       link: { good: st.link.rxOk, bad: st.link.rxBad, stallMs: ls?.stallMs ?? 0, orders: ls?.orderWait ?? null }

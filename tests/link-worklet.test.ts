@@ -306,17 +306,22 @@ describe("WorkletTransport", () => {
     expect(tr.modemStats()).toBeNull();
     from({ t: "stats", ...stats() });
     expect(tr.stats().locked).toBe(true);
-    // a refused message changes nothing; the modem stopping makes the report stale at once, for good
+    // a refused message changes nothing; the modem stopping makes the report stale at once, for good, and says so as onError hears it
+    const stoppedAt: boolean[] = [];
+    tr.onError = () => stoppedAt.push(tr.stopped);
     from({ t: "error", message: "a list of 0 payloads (1 to 8)", fatal: false });
     expect(tr.stats().locked).toBe(true);
     from({ t: "error", message: "the modem stopped: boom", fatal: true });
     expect(tr.stats()).toMatchObject({ locked: false, snrDb: null, rxMode: null, rxOk: 40 });
     expect(tr.modemStats()).toBeNull();
+    expect(stoppedAt).toEqual([false, true]);
     // and so does the processor failing
     const b = fakeTransport();
     b.from({ t: "stats", ...stats() });
+    b.tr.onError = () => stoppedAt.push(b.tr.stopped);
     b.tr.node.onprocessorerror?.call(b.tr.node, new Event("processorerror") as ErrorEvent);
     expect(b.tr.stats().locked).toBe(false);
+    expect(stoppedAt).toEqual([false, true, true]);
   });
 
   it("offers a Join what either plan carries until a report of its own shows the lock, then what the plan it found carries", () => {
@@ -716,6 +721,21 @@ describe("the worklet's processor", () => {
     const port = new FakePort();
     const p = processor(cfgOf(), port);
     (p as unknown as { modem: ModemCore }).modem.process = () => {
+      throw new Error("boom");
+    };
+    const out = new Float32Array(128);
+    for (let i = 0; i < 3; i++) {
+      out.fill(1);
+      expect(p.process([[new Float32Array(128).fill(1e-3)]], [[out]])).toBe(true);
+      expect(out.every((v) => v === 0)).toBe(true);
+    }
+    expect(port.posted).toEqual([{ t: "error", message: "the modem stopped: boom", fatal: true }]);
+  });
+
+  it("posts the same fatal error for a fault turning what the modem reports into messages, rather than throwing out of process()", () => {
+    const port = new FakePort();
+    const p = processor(cfgOf(), port);
+    (p as unknown as { modem: ModemCore }).modem.take = () => {
       throw new Error("boom");
     };
     const out = new Float32Array(128);

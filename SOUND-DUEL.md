@@ -913,7 +913,10 @@ export interface LinkTransport {
     TU), so `at` is when it finished arriving, as for every transport.
   - `loadWorklet(ctx)` runs `addModule` once per context (a WeakMap).
   - `stats()` and `modemStats()` go stale once the newest report is over 1 s
-    old, or after a fatal error: unlocked, no SNR.
+    old, or after a fatal error: unlocked, no SNR. `stopped` says the modem
+    stopped (a fatal error, or the node's `processorerror`); it is set before
+    `onError` hears why, so a handler can tell it from a message the modem
+    only refused.
   - Suspensions: at every message it compares `now()` with
     `ctx.currentTime`. A step over 100 ms stands once the lowest reading of
     the last 100 ms agrees with the lowest of the 200 ms before within the
@@ -959,8 +962,11 @@ export interface LinkTransport {
     `{t:"stats", ...ModemStats}` (about 4 per second), and
     `{t:"gap", sample, frames}` (once when a gap starts, once with its total
     when capture resumes), and `{t:"error", message, fatal}` (fatal: the
-    modem could not start or stopped). Every `sample` is a frame in the
-    context's `currentFrame` domain as the context's clock runs now.
+    modem could not start or stopped; any exception in `process()`, the
+    modem's block or turning what it reports into messages, is one, so the
+    page hears why rather than a bare `processorerror`). Every `sample` is a
+    frame in the context's `currentFrame` domain as the context's clock runs
+    now.
 - **Tests.** `tools/worklet-smoke.mjs` builds dist, then loads the built
   worklet in Playwright Chromium. It uses an OfflineAudioContext at 48 kHz with
   two nodes (host and guest) cross-wired through gain and delay paths (own path
@@ -1027,19 +1033,30 @@ link, once its detection has locked, is rebuilt on the plan it found with
   - the track ending;
   - the track muted for more than 1 s;
   - the link context not running for more than 0.5 s;
-  - `devicechange`.
+  - `devicechange`;
+  - the modem stopping (`"modem"`: the worklet's fatal error, or its
+    processor failing), while its link is the live one. The rig hears it
+    after the link's `onError`, so the lobby, which lets the rig go on it
+    before the match, owns it until the match takes the rig over. A message
+    the modem only refused is no loss.
 
   The rig never suspends its own context. On visible, it re-requests the wake
   lock. If the context isn't running or the track has ended, a full-screen
   "Tap to reconnect the sound link" overlay appears. Its tap resumes the
   context, and re-requests the microphone into the existing worklet node if
-  needed, so the modem state and `now()` survive. If the context is broken, the
-  tap rebuilds it. A context that runs again by itself, or moves to
-  suspended (an iOS call ending), is resumed and kept, not rebuilt. A
-  microphone whose own rate can't carry the plan (a Bluetooth headset that
-  joined mid-match) fails the tap with the rate error, and the next tap asks
-  for it again. After 2 failures it offers Leave. The overlay closes after
-  1.5 s of gap-free capture. A "tap-to-start" rig moves to running by itself
+  needed, so the modem state and `now()` survive. If the context is broken, or
+  its modem stopped (only a new node brings it back), the tap rebuilds it,
+  with a new node and modem and the link's state replayed; a tap that leaves
+  the modem stopped counts as failed. A context that runs again by itself,
+  or moves to suspended (an iOS call ending), is resumed and kept, not
+  rebuilt. A microphone whose own rate can't carry the plan (a Bluetooth
+  headset that joined mid-match) fails the tap with the rate error, and the
+  next tap asks for it again. After a failed tap the overlay says why when
+  the rig knows (`lastError`: the microphone refused or missing, the rate, a
+  worklet that won't load), with the lobby's advice for it ("Try again with
+  headphones and Bluetooth disconnected."); the report's reconnect button
+  after the match says the same. After 2 failures it offers Leave. The
+  overlay closes after 1.5 s of gap-free capture. A "tap-to-start" rig moves to running by itself
   if the context starts without a tap, so the lobby watches the state.
 - **No wake lock.** Where the wake lock is missing (Safari before 16.4),
   does nothing (an iOS Home Screen app before 18.4: the API is there and
@@ -1315,7 +1332,9 @@ does nothing. With an interactive feed, GameScene behaves as follows:
      link's `onError`. A fatal one (the modem's stats then go stale) shows
      "The sound link stopped working." with "Close, then tap Duel to start it
      again. (<the modem's words>)", Close and Reload, and lets the audio go
-     at once. A message the modem only refused is logged.
+     at once. A message the modem only refused is logged. Once the match
+     has begun the lobby only logs them, and the rig takes a stopped modem
+     as a lost link (Rig > Lifecycle).
 
 ## Dev and test modes
 
@@ -1362,13 +1381,13 @@ Long tests set explicit timeouts (60–180 s).
 | `tests/versus-codec.test.ts` | Bit I/O and Exp-Golomb. For every command `c` in a corpus from AI-vs-AI arena matches (several maps and mutators, showcase records) plus hand-written cases for every type, with `k = canonicalize(c)`: `canonicalize(k)` deep-equals `k`, and `decode(encode(k))` deep-equals `k` (Object.is per scalar, element-wise for unitIds). Split pieces are ≤ 96 bits and keep order. Malformed inputs are rejected. The enum tables are complete |
 | `tests/versus-lockstep.test.ts` | Two worlds and two `Lockstep`s through `PacketAir`, normal-difficulty AIs on both sides for 5 game minutes: identical hash trails at every tick. Run at 0%, 10% and 30% loss, and with 3 s dropouts; with bursts of 30-unit orders; with pause; resign ends both on the same tick; a desync injected into one world is caught at the next checkpoint or the end check; leave and end frames work; stall time is bounded; the saved BattleRecord round-trips through `parseRecord` and `replay()` with no divergence. Segments: a 30-unit order lands in one rotation; out-of-order segments are kept; rotation never raises stall time against K = 1 at 0% loss |
 | `tests/versus-pairing.test.ts` | Two `Pairing`s over `PacketAir` agree on config, seed, D and openers; a build mismatch is refused; duplicate, stale or out-of-order lobby frames are harmless; both-Host is detected; a recorded HELLO from another session can't complete pairing |
-| `tests/versus-feed.test.ts` | VersusFeed with a real Controller and fake clock: a stall consumes no input, sealing happens once per tick, the order is canonical with the local side red, and nothing is sealed while paused; the record is written at the decision, and as abandoned at once by a page hidden mid-match; the visibilitychange and pagehide wiring; the stall pill, the pause menu's ways out, "Resign and leave" and "Orders queued" |
+| `tests/versus-feed.test.ts` | VersusFeed with a real Controller and fake clock: a stall consumes no input, sealing happens once per tick, the order is canonical with the local side red, and nothing is sealed while paused; the record is written at the decision, and as abandoned at once by a page hidden mid-match; the visibilitychange and pagehide wiring; the stall pill, the pause menu's ways out, "Resign and leave" and "Orders queued"; the reconnect cover (a modem that stopped too), saying why a tap failed |
 | `tests/versus-imports.test.ts` | The import rules above |
 | `tests/duel-abort.test.ts` | GameScene's abort for each reason: the end screen with no winner, the music settled once with no sting |
 | `tests/link-fec.test.ts` | CRC-16 known vectors and the session keys; convolutional code plus Viterbi corrects scattered errors; the gate rejects random input (0 false accepts in 10⁶ garbage packets, every one over the gate by a point, and none of 76,200 real streams decoded the wrong way); the interleaver properties for all four plan/mode cases; distinct, non-zero PN seeds |
 | `tests/link-modem.test.ts` | Two `ModemCore`s through `Room`, transmitting at once, own path +40 dB with unaligned symbols, h2/h3/h5 speaker nonlinearity, and a game-audio jammer through the guard, at 48/48 and 48/44.1 kHz and ±300 ppm. Robust ≥ 99% good at "20 cm" and ≥ 95% at "40 cm" (with an 8–15 ms reflection cluster); fast ≥ 98% at "20 cm". Also: acquisition from 50 random starts never locks off the true timing; a 40 ms and a 700 ms jump on the sender recover within one superframe; a 1 s capture gap recovers within 2.5 s; mode switches; plan detection; self-monitor and self-test; latency bounds `(TS + P·TS) + 128/sr + room delay`; the CPU benchmark; the edge of range (80 cm, a noisy microphone: ≥ 88% robust both ways); a steady tone 26 dB over the friend between two tones, from the start and after a 2.5 s dropout; screen taps; a jump of ten minutes or an hour; blocks of 512 and 2048 frames |
-| `tests/link-worklet.test.ts` | WorkletTransport against a fake port and context (clock mapping, stale stats, skips, close), the real processor class in Node through a shim decoding both ways, and the worklet's import graph using only the allowed globals |
-| `tests/link-rig.test.ts` | The rig's state machine against fakes: open, refusal, lost reasons, reconnect and rebuild (a Join on its detected plan), capture tracking, close during a rebuild; mic mode switches (old microphone first, one at a time); a microphone's rate on a reconnect or switch; keeping a context that recovered by itself; the wake lock (iOS Home Screen apps before 18.4, refusal) |
+| `tests/link-worklet.test.ts` | WorkletTransport against a fake port and context (clock mapping, stale stats, a stopped modem, skips, close), the real processor class in Node through a shim decoding both ways (a fault anywhere in `process()` posts the fatal error), and the worklet's import graph using only the allowed globals |
+| `tests/link-rig.test.ts` | The rig's state machine against fakes: open, refusal, lost reasons, reconnect and rebuild (a Join on its detected plan), capture tracking, close during a rebuild; mic mode switches (old microphone first, one at a time); a microphone's rate on a reconnect or switch; keeping a context that recovered by itself; a modem that stops (a fatal error or the processor failing, through real WorkletTransports: one loss, after the link's onError, and a rebuild); the wake lock (iOS Home Screen apps before 18.4, refusal) |
 | `tests/versus-session.test.ts` | Two Sessions over PacketAir from pairing through a match with AIs: identical trails at 0/10/30% loss and a 3 s outage, a slow loader, the session CRC after GO, mode adaptation, leave and end frames from every phase, replayed lobby frames; the mode from GO to the match (fast lost one way, a friend that missed this phone's GO); the wait for a friend that plays on after a pause |
 | `tests/versus-pacing.test.ts` | Two Sessions stepped at 60 Hz over PacketAir (both plans and modes) and RoomLink: 10 ticks/s within 0.01 over three minutes, and at most 150 ms of stall |
 | `tests/versus-relay.test.ts` | RelayTransport checks each CRC for its own frame type, even under a session key of 0xFFFF |

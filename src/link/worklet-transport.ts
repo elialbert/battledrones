@@ -92,7 +92,8 @@
  *    for the modem: stats() then reads unlocked, with no SNR or receive
  *    mode (the counters and the plan stay), and modemStats() returns null;
  *  - an error the worklet marks fatal (the modem stopped) or the processor
- *    failing makes the report stale at once;
+ *    failing makes the report stale at once, and `stopped` true, before
+ *    onError hears it;
  *  - poll(), slots() and takeGaps() keep at most 256 entries each when
  *    nobody pulls them (the oldest go);
  *  - after close(), send() and the setters do nothing, and poll(), slots()
@@ -192,7 +193,7 @@ export class WorkletTransport implements LinkTransport {
   readonly node: AudioWorkletNode;
   /** now()'s zero on the clock. */
   readonly t0: number;
-  /** The worklet's errors: a sample rate the modem can't use, a message it refused, a fault in process(), the processor failing. */
+  /** The worklet's errors: a sample rate the modem can't use, a message it refused, a fault in process(), the processor failing (all but a refusal leave it `stopped`). */
   onError: ((message: string) => void) | null = null;
   private readonly ctx: BaseAudioContext;
   private readonly sr: number;
@@ -356,6 +357,16 @@ export class WorkletTransport implements LinkTransport {
   /** The worklet's newest stats report (about four a second): null before the first, and while it is stale (see above). */
   modemStats(): ModemStats | null {
     return this.live();
+  }
+
+  /**
+   * The modem stopped: an error the worklet marked fatal, or the processor
+   * failing. Set before onError hears it, so a handler tells that from a
+   * message the modem only refused (it runs on). Only a new node brings the
+   * modem back: the rig takes it as a lost link.
+   */
+  get stopped(): boolean {
+    return this.dead;
   }
 
   /**

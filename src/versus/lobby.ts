@@ -119,14 +119,15 @@
  *    check would read the silent modem as a phone that can't hear itself,
  *    and give the wrong advice. A message the modem refused (it runs on) is
  *    only logged, as is anything from a link the lobby let go or, once the
- *    match began, from the match's (its stall pill and Leave are the way out
- *    there).
+ *    match began, from the match's: there the rig, which hears a stopped
+ *    modem after the lobby has (RigLink.onStopped), takes it as a lost link,
+ *    and the match's reconnect cover rebuilds the modem.
  */
 import "./lobby.css";
 import { sfx } from "../game/audio";
 import { gameMode } from "../game/mode";
 import type { ModemStats } from "../link/modem/core";
-import { CAPTURE_OK_MS, RigError, type MicMode, type Rig, type RigErrorReason } from "../link/rig";
+import { CAPTURE_OK_MS, RIG_ADVICE, RigError, type MicMode, type Rig, type RigErrorReason } from "../link/rig";
 import type { BandPlan, BandRole, LinkTransport } from "../link/transport";
 import { BUILDINGS, UNITS } from "../sim/balance";
 import { worldHash } from "../sim/checksum";
@@ -880,14 +881,6 @@ class RelayError extends Error {
 }
 
 const esc = (s: string): string => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]!);
-
-/** Microphone refused and the rest: what to do about it, in a line. */
-const RIG_ADVICE: Partial<Record<RigErrorReason, string>> = {
-  "mic-refused": "Allow the microphone for this site in the browser's settings, then try again.",
-  rate: "Try again with headphones and Bluetooth disconnected.",
-  "no-audio": "Try another browser.",
-  "no-worklet": "Try another browser."
-};
 
 /**
  * The 30 s tips: the sound's, with band Low (Advanced) only where Advanced

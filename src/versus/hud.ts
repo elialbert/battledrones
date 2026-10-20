@@ -13,7 +13,8 @@
  * - The full-screen "Tap to reconnect the sound link" cover when the rig
  *   lost its audio: the whole cover is the button (the tap must be a
  *   gesture: it resumes the audio and may ask for the microphone), with
- *   Leave after LEAVE_AFTER_FAILURES failed taps.
+ *   Leave after LEAVE_AFTER_FAILURES failed taps. After a failed tap it says
+ *   why when the feed knows (the rig's reason and what to do about it).
  * - The report's "Sound duel" block: the record, the link's quality, and the
  *   end check ("Checking sync…" until the friend's end report arrives);
  *   "Your friend is back in the lobby: tap Rematch" (SOUND-DUEL.md "Rematch
@@ -48,7 +49,8 @@ export interface OverlayState {
   queued: boolean;
   /** A resign is on its way (it lands D ticks after the tap). */
   resigning: boolean;
-  reconnect: { phase: ReconnectPhase; leave: boolean } | null;
+  /** `why`: after a failed tap, the rig's reason and what to do about it (null: the cover's own words). */
+  reconnect: { phase: ReconnectPhase; leave: boolean; why: string | null } | null;
   /** Menu or Rematch was tapped: the end goes out for up to 2 s first. */
   leaving: boolean;
 }
@@ -78,6 +80,14 @@ const COVER_TEXT: Record<ReconnectPhase, { text: string; sub: string }> = {
   failed: { text: "That didn't work: tap to try again", sub: "Allow the microphone if asked" },
   settling: { text: "Listening…", sub: "The match goes on in a moment" }
 };
+
+/** The cover's words for a phase: after a failed tap, `why` in place of the generic line when there is one. */
+function coverWords(phase: ReconnectPhase, why: string | null): { text: string; sub: string } {
+  const t = COVER_TEXT[phase];
+  return phase === "failed" && why ? { text: t.text, sub: why } : t;
+}
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]!);
 
 export function mountDuelOverlay(root: HTMLElement, hooks: OverlayHooks): DuelOverlay {
   const stack = document.createElement("div");
@@ -156,7 +166,7 @@ export function mountDuelOverlay(root: HTMLElement, hooks: OverlayHooks): DuelOv
       leaving.hidden = !s.leaving;
       cover.hidden = !s.reconnect || s.leaving;
       if (s.reconnect) {
-        const t = COVER_TEXT[s.reconnect.phase];
+        const t = coverWords(s.reconnect.phase, s.reconnect.why);
         coverText.textContent = t.text;
         coverSub.textContent = t.sub;
         cover.classList.toggle("busy", s.reconnect.phase === "trying" || s.reconnect.phase === "settling");
@@ -179,8 +189,8 @@ export interface DuelReportView {
   record: string | null;
   /** The end check: "pending" shows "Checking sync…". */
   sync: "pending" | "ok" | "unverified" | "desync" | "left" | "lost";
-  /** The rig lost its audio after the match (the cover gives way to the end screen): the report's reconnect. */
-  relink: ReconnectPhase | null;
+  /** The rig lost its audio after the match (the cover gives way to the end screen): the report's reconnect, `why` as the cover's. */
+  relink: { phase: ReconnectPhase; why: string | null } | null;
   /** The friend's reloaded page is in the lobby: "tap Rematch". */
   friendInLobby: boolean;
   /**
@@ -228,11 +238,12 @@ function liveLines(v: DuelReportView): string {
 /** The reconnect cover's tap, as a button in the report (its words are the cover's). */
 function relinkLine(v: DuelReportView): string {
   if (!v.relink) return "";
-  const t = COVER_TEXT[v.relink];
-  const busy = v.relink === "trying" || v.relink === "settling";
+  const { phase, why } = v.relink;
+  const t = coverWords(phase, why);
+  const busy = phase === "trying" || phase === "settling";
   return busy
     ? `<p class="duel-relink busy">🔊 ${t.text}</p>`
-    : `<button class="cta alt duel-relink">🔊 ${t.text}<small>${t.sub}</small></button>`;
+    : `<button class="cta alt duel-relink">🔊 ${t.text}<small>${esc(t.sub)}</small></button>`;
 }
 
 function recordLine(v: DuelReportView): string {

@@ -52,21 +52,25 @@
  *
  * Lifecycle. While running, onLost(reason) fires once per loss: the track
  * ending, the track muted for more than 1 s, the context not running for
- * more than 0.5 s, or the audio devices changing. The rig never suspends its
- * own context. On visible it re-requests the wake lock and checks at once.
- * reconnect() is the "Tap to reconnect the sound link" overlay's tap: it
- * resumes the context and re-requests the microphone into the existing node
- * if the track ended, is muted, the devices changed or its rate can't carry
- * the link, so the modem's state and now() survive; a closed context, or one
- * still stuck where an earlier tap's resume left it, is rebuilt. Failures
- * count up (failures), so the overlay can offer Leave after 2.
+ * more than 0.5 s, the audio devices changing, or the modem stopping (the
+ * worklet's fatal error, or its processor failing: WorkletTransport.stopped).
+ * The rig never suspends its own context. On visible it re-requests the wake
+ * lock and checks at once. reconnect() is the "Tap to reconnect the sound
+ * link" overlay's tap: it resumes the context and re-requests the microphone
+ * into the existing node if the track ended, is muted, the devices changed
+ * or its rate can't carry the link, so the modem's state and now() survive;
+ * a closed context, one still stuck where an earlier tap's resume left it,
+ * or one whose modem stopped, is rebuilt. Failures count up (failures), and
+ * lastError says why when the rig knows, so the overlay can say so and offer
+ * Leave after 2.
  *
  * Errors are RigErrors with a reason the lobby can show: the microphone
  * refused (the rig then closes the context and puts the session back to
  * "auto") or missing, a sample rate the modem can't use (the context's, or
  * the microphone's own when the browser reports it), no Web Audio or
  * AudioWorklet, or the worklet failing to load (a stale build: "A new
- * version is ready").
+ * version is ready"). RIG_ADVICE says what to do about each, in a line,
+ * under the lobby's error and on the reconnect cover after a failed tap.
  *
  * Testing. Everything the rig touches in the browser comes through a
  * RigEnv: the navigator's pieces, the document's visibility, the context and
@@ -108,6 +112,16 @@
  *  - a rebuilt context whose rate can't carry the plan gets settleRate's
  *    second try once the microphone is in: one more context, kept if its
  *    rate is higher;
+ *  - a stopped modem counts only while its link is the live one and runs on
+ *    it, and only after the link's onError has heard it: a holder that lets
+ *    the link or the rig go on it (the lobby, until the match takes the rig
+ *    over) owns it, and a message the modem only refused is no loss. The
+ *    loss comes at once: the modem hears and sends nothing. Its tap
+ *    rebuilds the context (only a new node brings the modem back, and a
+ *    broken audio thread may be why it stopped), the link's state replayed
+ *    as for any rebuild; a reconnect that ends with the modem still stopped
+ *    (no context could be made, or the new modem stopped already) counts
+ *    as failed;
  *  - a rebuilt context gets a new modem: packets not yet polled carry over,
  *    but the stats' counters start again and both phones re-acquire (about
  *    2 s). A Join whose detection has locked is rebuilt on the plan it found,
@@ -147,6 +161,14 @@ export const RIG_MESSAGES: Readonly<Record<Exclude<RigErrorReason, "rate">, stri
   update: "A new version is ready: reload this phone (and your friend's)"
 };
 
+/** What to do about a reason, in a line: under the lobby's error, and the reconnect cover's after a failed tap. */
+export const RIG_ADVICE: Readonly<Partial<Record<RigErrorReason, string>>> = {
+  "mic-refused": "Allow the microphone for this site in the browser's settings, then try again.",
+  rate: "Try again with headphones and Bluetooth disconnected.",
+  "no-audio": "Try another browser.",
+  "no-worklet": "Try another browser."
+};
+
 export class RigError extends Error {
   constructor(
     readonly reason: RigErrorReason,
@@ -157,8 +179,8 @@ export class RigError extends Error {
   }
 }
 
-/** Why the link's audio was lost. */
-export type LostReason = "track-ended" | "track-muted" | "context" | "devicechange";
+/** Why the link's audio was lost ("modem": the modem stopped, WorkletTransport.stopped). */
+export type LostReason = "track-ended" | "track-muted" | "context" | "devicechange" | "modem";
 
 export type RigState = "opening" | "tap-to-start" | "running" | "lost" | "failed" | "closed";
 
@@ -186,7 +208,7 @@ const TICK_MS = 100;
 export type RigTransport = Pick<
   WorkletTransport,
   | "node" | "t0" | "onError" | "capacity" | "send" | "poll" | "slots" | "now" | "setMode" | "setSessionKey"
-  | "stats" | "close" | "reconfigure" | "setGain" | "modemStats" | "takeGaps" | "detectedPlan"
+  | "stats" | "close" | "reconfigure" | "setGain" | "modemStats" | "takeGaps" | "detectedPlan" | "stopped"
 >;
 
 interface WakeLockLike {
@@ -290,10 +312,13 @@ export class RigLink implements LinkTransport {
   private closed = false;
   /** (rig) The link closed itself: the rig stops counting capture. */
   onClose: (() => void) | null = null;
+  /** (rig) The modem under it stopped (a fatal error, the processor failing), after onError heard why: the rig takes it as a lost link. */
+  onStopped: (() => void) | null = null;
 
   constructor(t: RigTransport, cfg: ModemConfig) {
     this.cur = t;
     this.cfg = { ...cfg };
+    this.listen(t);
   }
 
   /** The modem's node now (a rebuild replaces it). */
@@ -333,7 +358,6 @@ export class RigLink implements LinkTransport {
 
   set onError(fn: ((message: string) => void) | null) {
     this.err = fn;
-    this.cur.onError = fn;
   }
 
   capacity(): number {
@@ -424,7 +448,7 @@ export class RigLink implements LinkTransport {
     old.onError = null;
     old.close();
     this.cur = next;
-    next.onError = this.err;
+    this.listen(next);
     if (this.closed) {
       next.close();
       return;
@@ -432,6 +456,22 @@ export class RigLink implements LinkTransport {
     if (this.frames) next.send(this.frames);
     if (this.mode) next.setMode(this.mode);
     if (this.keys) next.setSessionKey(this.keys[0], this.keys[1]);
+  }
+
+  /**
+   * A transport's errors go to onError; then, when its modem stopped (not a
+   * message it only refused) and the link still runs on it, to the rig.
+   * After onError: a holder that lets the link or the rig go on the error
+   * (the lobby, before the match) owns it, and the rig hears nothing.
+   */
+  private listen(t: RigTransport): void {
+    t.onError = (message) => {
+      try {
+        this.err?.(message);
+      } finally {
+        if (t.stopped && t === this.cur && !this.closed) this.onStopped?.();
+      }
+    };
   }
 }
 
@@ -455,6 +495,8 @@ export class Rig {
   private lastErr: RigError | null = null;
   /** The state a context stayed in when a reconnect's resume did not take: the next reconnect rebuilds it if it is still there. */
   private stuckIn: string | null = null;
+  /** The live link's modem stopped (RigLink.onStopped): a loss, and the next reconnect rebuilds the context for a new one. */
+  private modemStopped = false;
   private reconnecting: Promise<boolean> | null = null;
   /** The last mic mode switch asked for (the next waits for it). */
   private switching: Promise<void> | null = null;
@@ -609,11 +651,18 @@ export class Rig {
       if (this.link === link) {
         this.source?.disconnect();
         this.okSince = null;
+        this.modemStopped = false;
       }
+    };
+    link.onStopped = () => {
+      if (this.link !== link || link.isClosed) return;
+      this.modemStopped = true;
+      this.check();
     };
     this.link = link;
     // a gap the old link left open was its worklet's: this one counts from its connection
     this.inGap = false;
+    this.modemStopped = false;
     this.connectSource();
     return link;
   }
@@ -659,20 +708,21 @@ export class Rig {
 
   /**
    * The reconnect overlay's tap (and "Tap to start sound"): call inside the
-   * gesture. Resumes the context (rebuilding it when it is closed or still
-   * where the last resume left it), re-requests the microphone when it is
-   * gone, muted, the devices changed or its rate can't carry the link, and
-   * keeps the modem's node when it can. Resolves true when the link's audio
-   * runs again; false counts a failure (see lastError for the microphone's
-   * or the rate's).
+   * gesture. Resumes the context (rebuilding it when it is closed, still
+   * where the last resume left it, or its modem stopped), re-requests the
+   * microphone when it is gone, muted, the devices changed or its rate can't
+   * carry the link, and keeps the modem's node when it can. Resolves true
+   * when the link's audio runs again; false counts a failure (see lastError
+   * for the microphone's, the rate's or the worklet's).
    */
   reconnect(): Promise<boolean> {
     if (this.st === "closed" || this.st === "failed" || this.st === "opening") return Promise.resolve(false);
     if (this.reconnecting) return this.reconnecting;
     // the gesture's part, synchronously
     let ctx = this.ctx;
-    // (one that has moved on since a resume didn't take, running again by itself or suspended, is resumed and kept)
-    const rebuild = ctx.state === "closed" || ctx.state === this.stuckIn;
+    // (one that has moved on since a resume didn't take, running again by itself or suspended, is resumed and kept;
+    // a stopped modem comes back only on a new node, so with a new context, as for a broken one)
+    const rebuild = ctx.state === "closed" || ctx.state === this.stuckIn || this.modemStopped;
     let fresh: AudioContext | null = null;
     if (rebuild) {
       fresh = this.makeContext();
@@ -705,8 +755,9 @@ export class Rig {
         } else if (asked) this.useStream(asked);
         const running = await this.settleResume(this.ctx, RECONNECT_WAIT_MS);
         if (this.shut()) return false;
-        if (!running) {
-          this.stuckIn = this.ctx.state;
+        // (a modem still stopped: no context could be made for a new one, or the new one stopped already)
+        if (!running || this.modemStopped) {
+          if (!running) this.stuckIn = this.ctx.state;
           this.lastErr = null;
           this.fails++;
           this.setRunning(false);
@@ -981,8 +1032,9 @@ export class Rig {
     this.watchContext(old, fresh);
     if (link && t) {
       link.replace(t);
-      // the old worklet's open gap went with it: the new one counts from its connection
+      // the old worklet's open gap went with it: the new one counts from its connection; and a stopped modem with it
       this.inGap = false;
+      this.modemStopped = false;
     }
     const s = asked ?? this.stream;
     if (s) this.useStream(s);
@@ -1002,7 +1054,7 @@ export class Rig {
     } else if (this.st === "opening") this.st = "tap-to-start";
   }
 
-  /** The watch: track ended or muted, the context not running, a device change; and the context's running time for capture. */
+  /** The watch: the modem stopped, track ended or muted, the context not running, a device change; and the context's running time for capture. */
   private check(): void {
     if (this.st === "closed" || this.st === "failed") return;
     const now = this.env.now();
@@ -1022,6 +1074,8 @@ export class Rig {
     const switching = this.switchedAt !== null && now - this.switchedAt < SWITCH_WAIT_MS;
     if (this.st !== "running" || this.reconnecting || switching) return;
     this.pullGaps();
+    // (a stopped modem hears and sends nothing: at once)
+    if (this.modemStopped) return this.lose("modem");
     const track = this.track;
     if (!track || track.readyState === "ended") return this.lose("track-ended");
     if (track.muted) {
@@ -1182,7 +1236,6 @@ function browserEnvLazy(stub: Partial<RigEnv> | undefined): Partial<RigEnv> {
   return browserEnv();
 }
 
-/** Close a context unless it already is (closing a closed one rejects). */
 /** The rate a stream's microphone track reports (getSettings), or null when the browser doesn't say. */
 function micRate(s: MediaStream): number | null {
   let sr: number | undefined;
@@ -1194,6 +1247,7 @@ function micRate(s: MediaStream): number | null {
   return typeof sr === "number" && Number.isFinite(sr) && sr > 0 ? sr : null;
 }
 
+/** Close a context unless it already is (closing a closed one rejects). */
 function closeContext(ctx: AudioContext): void {
   if (ctx.state !== "closed") void ctx.close().catch(() => undefined);
 }
