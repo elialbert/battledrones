@@ -184,7 +184,8 @@ export interface DuelReportView {
    * The link's quality: packets heard, stall time, and the order delay as a
    * player feels it (Lockstep.orderWait: from the drain to this phone stepping
    * the order, mean and worst; null before any order). Not D × 100 ms, which
-   * every order would read and the pause menu already shows.
+   * every order would read and the pause menu already shows. Both leave this
+   * phone's own pause out, and both count a friend's (it stalls this phone).
    */
   link: { good: number; bad: number; stallMs: number; orders: { meanMs: number; worstMs: number } | null };
 }

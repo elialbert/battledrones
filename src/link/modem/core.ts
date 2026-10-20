@@ -30,25 +30,43 @@
  *
  * Re-acquiring a friend. When the receiver wins a lock on a friend it had
  * not heard for over REACQUIRE_S (its previous packet delivered that long
- * before the new lock's first), the transmitter starts a new superframe at
- * its next symbol boundary: the friend may have lost this phone too, and
- * its next sync would otherwise be up to a superframe away. The case is a
- * phone whose context was suspended. It starts a new superframe on its
- * skip, and its friend re-acquires it within a second; but its own
- * microphone comes back about 20 ms off the context's clock (Chromium), so
- * its lock on the friend is stale and it waited for the friend's next sync,
- * up to 2.5 s. With the friend's restart it hears it about half a second
- * after the friend re-acquired it (the room with that offset, 24
- * suspensions: 1.68 s after the resume on average and 2.75 s at worst
- * without, 1.12 and 1.80 with). It can't ping-pong: a restart costs a
- * friend that was hearing this phone at most half a second between packets
- * (0.30 to 0.49 s measured), under REACQUIRE_S, so the friend's own
- * re-acquisition doesn't restart it in turn; and a phone restarts at most
- * once per RESTART_GUARD_S, its own restarts on a jump or a counter going
- * back included (a phone that just restarted on its skip is being
- * re-acquired already). The cost: when both lost each other but one kept
- * its lock (a loss shorter than its sync check), that one gets the other's
- * restart for nothing, half a second between packets once.
+ * before the new lock's first), on a sync off the superframe grid of the
+ * stream it knew (the live lock's, or the last one's after it dropped), the
+ * transmitter starts a new superframe at its next symbol boundary. A friend
+ * whose stream started over had its audio stop (a suspension, its frame
+ * counter jumping), so it heard nothing meanwhile either, and its lock on
+ * this phone may be stale: its next sync would otherwise be up to a
+ * superframe away. The case is a phone whose context was suspended. It
+ * starts a new superframe on its skip, and its friend re-acquires it within
+ * a second; but its own microphone comes back about 20 ms off the context's
+ * clock (Chromium), so its lock on the friend is stale and it waited for the
+ * friend's next sync, up to 2.5 s. With the friend's restart it hears it
+ * about half a second after the friend re-acquired it: in the room with that
+ * offset (24 suspensions), 1.12 s after the resume on average and 1.80 s at
+ * worst, against 1.68 and 2.75 s; in Chromium (tools/worklet-smoke.mjs's two
+ * contexts, 0.7 s suspensions), a median of 0.97 s and 1.6 s at worst in 20,
+ * against 1.82 and 2.0 s in 30. A friend whose stream went on, on the grid
+ * this phone knew, lost nothing to its own audio (noise at this microphone,
+ * its speaker muted, both muted): a restart would only cost it a packet.
+ * (Before the grid was asked, the friend's speaker muted for 2.5 s restarted
+ * this phone in 7 rooms of 12, its friend's longest wait between packets
+ * going from 0.15–0.45 to 0.35–0.55 s; both muted restarted one or both in
+ * all 12, and in the high plan the friend heard this phone 0.4 s later for
+ * it.) A phone that restarted since it last heard the friend (on its own
+ * skip, say) doesn't: the friend is re-acquiring that restart already. One
+ * that restarted before it lost the friend (a stall of its own audio a
+ * moment earlier) still does; held off by any restart in the last
+ * RESTART_GUARD_S, a host whose audio stalled a second before its guest's
+ * 1.5 s suspension left the guest waiting for its next sync, 2.1 s after the
+ * resume (Chromium). A restart while the friend was away holds it too,
+ * though the friend can't have heard it: a host whose audio stalls during
+ * its guest's suspension leaves the guest waiting a superframe, as before
+ * (seen with Chromium's audio service stopped 200 ms every 4 s, 4 of 8
+ * suspensions). It can't ping-pong: the friend restarted on its own
+ * jump, after it last heard this phone; a restart costs a friend that kept
+ * its lock on this phone a packet or so (0.28–0.60 s between packets in 12
+ * rooms, the low plan's robust packets the longest), under REACQUIRE_S; and
+ * a phone restarts for a re-acquisition at most once per RESTART_GUARD_S.
  *
  * Plan detection. A Join (rx "detect") searches both plans' host bands, and
  * until it locks it transmits in the high plan's guest band (16–19 kHz),
@@ -149,9 +167,9 @@ export interface GapEvent {
 /** Tone-samples of DFT work per call: the lock's tracker live needs about 15,000 at 48 kHz. */
 const BUDGET = 48_000;
 const MONITOR_BUDGET = 8_000;
-/** A lock won on a friend not heard for longer than this (s) restarts this phone's superframe (see above)... */
+/** A lock won on a friend not heard for longer than this (s), whose stream started over, restarts this phone's superframe (see above)... */
 const REACQUIRE_S = 1;
-/** ...unless it restarted, for that or on a jump, less than this long ago (s). */
+/** ...unless it restarted for that less than this long ago (s), or restarted at all since it last heard the friend. */
 const RESTART_GUARD_S = 5;
 /** Blocks longer than this are processed in pieces. */
 const PIECE = 512;
@@ -179,8 +197,9 @@ export class ModemCore {
   private gapStart = 0;
   private gapLen = 0;
   private peak = 0;
-  /** Frame of this phone's newest superframe restart (a jump, the counter going back, or a re-acquisition), and the frames that must pass before the next re-acquisition restarts it. */
+  /** Frame of this phone's newest superframe restart (a jump, the counter going back, or a re-acquisition), of its newest for a re-acquisition, and the frames that must pass before the next of those. */
   private lastRestart = -Infinity;
+  private lastReacquire = -Infinity;
   private readonly restartGuard: number;
   private readonly gapSample = new Float64Array(16);
   private readonly gapFrames = new Float64Array(16);
@@ -304,11 +323,12 @@ export class ModemCore {
     if (!this.rx.runDecode()) this.search.runJob(this.ring);
     if (this.rx.detected) this.planFound(this.rx.detected);
     if (this.rx.reacquired) {
-      // a friend heard again after a long silence may have lost this phone too: a sync for it now (see above)
+      // a friend heard again after a long silence, whose stream started over, lost this phone too: a sync for it now,
+      // unless this phone restarted since it last heard the friend (the friend is re-acquiring that already)
       this.rx.reacquired = false;
-      if (frame - this.lastRestart > this.restartGuard) {
+      if (this.lastRestart < this.rx.heardBefore && frame - this.lastReacquire > this.restartGuard) {
         this.tx.restartSuperframe();
-        this.lastRestart = frame;
+        this.lastRestart = this.lastReacquire = frame;
       }
     }
     this.next = frame + n;

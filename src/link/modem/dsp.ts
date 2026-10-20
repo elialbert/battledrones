@@ -127,11 +127,6 @@ export function bandpassFir(sr: number, loHz: number, hiHz: number, length: numb
   return h;
 }
 
-/** A Kaiser-windowed low-pass FIR (odd length) with its −6 dB point at cutHz. */
-export function lowpassFir(sr: number, cutHz: number, length: number, atten = 70): Float64Array {
-  return bandpassFir(sr, 0, cutHz, length, atten);
-}
-
 /**
  * The k-th smallest of a[0 … n − 1] (k from 0), found in place by Hoare's
  * selection: no allocation, no recursion. Reorders a.

@@ -19,6 +19,15 @@
  *    smoother than that).
  *  - A real FFT is done as a half-size complex one.
  *
+ * The candidate must be the maximum within ±45 ms, where the spec says
+ * ±50: under a symbol. A sender whose frame counter jumps just after a sync
+ * starts a new superframe at the next symbol boundary, so its new sync can
+ * come exactly one symbol after the old one, which (as strong or stronger)
+ * hid it at ±50 ms; the trial on the old sync then failed (its packet was
+ * cut by the jump) and the receiver waited a superframe for the next. The
+ * echoes the window is there for, 8–15 ms on and the room's tail below
+ * them, stay well inside ±45 ms.
+ *
  * And one addition: before the band-pass, any FFT bin whose power stands
  * EXCISE times over the median of the band's bins is zeroed. A steady tone
  * in the band (coil whine, a beacon, a harmonic of game audio) otherwise
@@ -259,7 +268,7 @@ export class SyncSearch {
   /** Half the band-pass length: x_bp at t needs x up to t + Dh. */
   private readonly Dh: number;
   private readonly nD: number;
-  /** ±50 ms (the candidate must be the maximum), 15 ms (first-path look-back), ±5 ms (re-correlation), in decimated samples. */
+  /** ±45 ms (the candidate must be the maximum: see the header), 15 ms (first-path look-back), ±5 ms (re-correlation), in decimated samples. */
   readonly W: number;
   readonly F: number;
   readonly R: number;
@@ -310,7 +319,7 @@ export class SyncSearch {
     this.hop = DECIM * Math.floor((M - t.N - L + 1) / DECIM);
     this.hopD = this.hop / DECIM;
     this.nD = t.N / DECIM;
-    this.W = Math.round((0.05 * t.sr) / DECIM);
+    this.W = Math.round((0.045 * t.sr) / DECIM);
     this.F = Math.round((0.015 * t.sr) / DECIM);
     this.R = Math.round((0.005 * t.sr) / DECIM);
     if (!Number.isInteger(this.nD)) throw new Error("the useful symbol must be a multiple of the decimation");

@@ -491,6 +491,32 @@ describe("the report's order delay", () => {
     expect(p.feed!.reportView().link.orders).toEqual(ls(p).orderWait);
   });
 
+  it("leaves this phone's own pause out: an order drained just before the pause menu opens still reads about D × 100 ms", { timeout: 60_000 }, () => {
+    const r = pair({ seed: 31 });
+    runUntil(r, () => tickOf(r.host) >= 30 && tickOf(r.guest) >= 30, 30_000);
+    const p = r.host;
+    const D = p.s.result()!.delay;
+    const side = p.feed!.local;
+    const hq = hqOf(p.feed!.world, side)!;
+    const rallies = () => [...p.stepped.values()].flat().filter((c) => c.type === "rally" && c.faction === side).length;
+    const drains = p.drains.length;
+    p.ctrl!.enqueue({ type: "rally", faction: side, buildingId: hq.id, x: 20.5, y: 21.5 });
+    runUntil(r, () => p.drains.length > drains, 1000);
+    // drained and sealed for D ticks on: the pause menu opens before it is stepped, for 10 s
+    p.ctrl!.paused = true;
+    runFor(r, 10_000);
+    expect(rallies()).toBe(0);
+    expect(ls(p).paused).toBe(true);
+    p.ctrl!.paused = false;
+    runUntil(r, () => rallies() === 1, 5000);
+    const o = p.feed!.reportView().link.orders!;
+    // (the friend's stall meanwhile is its own: this phone steps on through the D turns it holds of the friend's)
+    expect(o.worstMs).toBeLessThanOrEqual(D * 100 + 100);
+    expect(o.worstMs).toBeGreaterThanOrEqual(D * 100 - 100);
+    // (and "Waiting on the link" leaves it out too)
+    expect(p.feed!.reportView().link.stallMs).toBeLessThan(500);
+  });
+
   it("reads as the mean and the worst", () => {
     expect(orderRows(null)).toEqual([["Order delay", "–"], ["Slowest order", "–"]]);
     expect(orderRows({ meanMs: 620.4, worstMs: 1420 })).toEqual([["Order delay", "620 ms average"], ["Slowest order", "1.4 s"]]);

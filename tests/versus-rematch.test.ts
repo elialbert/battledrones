@@ -84,4 +84,35 @@ describe("a rematch, from the report's Rematch to the reloaded page's lobby", ()
     expect(named.some((n) => n.startsWith("src/main.ts: "))).toBe(true);
     expect(named.length).toBeGreaterThanOrEqual(3);
   });
+
+  /**
+   * The rematch token as modules outside the duel compare it by hand: a
+   * literal on either side of === or !== against a value named rematch or
+   * token, in a module that reads the rematch key. Each is the duel's token or
+   * one of the single-player end screen's (src/game/mode.ts rematchToken: "1",
+   * "spectate", "daily"; an op's "op:<id>" is read with startsWith).
+   */
+  const SINGLE_TOKENS = ["1", "spectate", "daily"];
+  function tokenLiterals(src: Record<string, string>): { at: string; literal: string }[] {
+    const out: { at: string; literal: string }[] = [];
+    for (const [path, text] of Object.entries(src)) {
+      if (path.startsWith("../src/versus/") || path.startsWith("../src/link/")) continue;
+      if (!text.includes(`"${REMATCH_KEY}"`)) continue;
+      const cmp = /\b(?:rematch|token)\s*[!=]==\s*"([^"]*)"|"([^"]*)"\s*[!=]==\s*(?:rematch|token)\b/g;
+      for (const m of text.matchAll(cmp)) out.push({ at: path.slice(3), literal: (m[1] ?? m[2])! });
+    }
+    return out;
+  }
+
+  it("every module outside the duel that compares the token by hand compares it with the records' own", () => {
+    const found = tokenLiterals(sources);
+    // (the reload that keeps a practice rematch's ?duel= parameters, src/ui/fullscreen.ts reloadWithoutLink)
+    expect(found.filter((f) => f.literal === REMATCH_DUEL).map((f) => f.at)).toContain("src/ui/fullscreen.ts");
+    for (const f of found) expect([REMATCH_DUEL, ...SINGLE_TOKENS], `${f.at} compares the rematch token with "${f.literal}"`).toContain(f.literal);
+    // (a duel's token that a single-player boot also took would start the wrong game)
+    expect(SINGLE_TOKENS).not.toContain(REMATCH_DUEL);
+    // the check sees a stale copy: the token renamed in the records alone
+    const stale = { ...sources, "../src/ui/fullscreen.ts": sources["../src/ui/fullscreen.ts"]!.replace(`=== "${REMATCH_DUEL}"`, '=== "old-duel"') };
+    expect(tokenLiterals(stale).filter((f) => ![REMATCH_DUEL, ...SINGLE_TOKENS].includes(f.literal))).toEqual([{ at: "src/ui/fullscreen.ts", literal: "old-duel" }]);
+  });
 });

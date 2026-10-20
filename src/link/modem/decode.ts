@@ -16,9 +16,9 @@
  * soft values scaled by (OUTLIER/r)³ and its share of μ capped at OUTLIER
  * times that median, so one loud tone neither shouts down the code nor
  * shrinks every clean tone's λ; one whose signal stands less than twice
- * over the running mean of its d̃ (the interferer's share) is scaled by the
- * square of half that ratio. With no interferer this is the spec's λ
- * exactly.
+ * over the running mean of its d̃ (the interferer's share, once that stands
+ * out of the products' spread) is scaled by the square of half that ratio.
+ * With no interferer this is the spec's λ exactly.
  */
 import type { BandPlan, ModemMode } from "../transport";
 import { gateErrors, gatePasses, Viterbi } from "./conv";
@@ -26,7 +26,7 @@ import { CRC_BITS } from "./params";
 import { CRC_INIT, crc16 } from "./crc";
 import { ToneWeights } from "./outlier";
 import type { BandTables } from "./tables";
-import type { Tracker } from "./tracker";
+import { STEADY_FLOOR, type Tracker } from "./tracker";
 
 const CLAMP = 4;
 /*
@@ -92,11 +92,14 @@ export function softBits(tr: Tracker, mode: ModemMode, index: number, job: Decod
   }
   const mu = tw.update(T) / T;
   const gain = tw.gain;
-  // a steady interferer's share of each tone (the running mean of d̃): weight the tone by its signal-to-interference ratio
+  // a steady interferer's share of each tone (the running mean of d̃, once it stands out of what its spread leaves in
+  // a mean: tracker.ts): weight the tone by its signal-to-interference ratio
   const sr = tr.steadyRe;
   const si = tr.steadyIm;
+  const sv = tr.steadyVar;
   for (let t = 0; t < T; t++) {
-    const J = Math.sqrt(sr[t]! * sr[t]! + si[t]! * si[t]!);
+    const j2 = sr[t]! * sr[t]! + si[t]! * si[t]!;
+    const J = Math.sqrt(j2) * +(j2 > STEADY_FLOOR * sv[t]!);
     const q = (STEADY * Math.max(mag[t]! - J, 0)) / Math.max(J, 1e-300);
     gain[t] = gain[t]! * Math.min(1, q * q);
   }

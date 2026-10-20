@@ -32,8 +32,10 @@
  *    before the sheet exists (openRig comes first), so tapPlan() reads it;
  *  - Advanced is offered before Host or Join only, and Back (before GO)
  *    returns there: the route check's advice ("switch the host to band Low")
- *    is one Back away. Self-test is a host session whose receiver listens to
- *    its own band; it is not offered on practice links;
+ *    is one Back away. A rematch keeps its band and has no Advanced, so its
+ *    route warning leaves that advice out, as it does where this phone hosts
+ *    on band Low already. Self-test is a host session whose receiver listens
+ *    to its own band; it is not offered on practice links;
  *  - a Join's link starts in the high plan's guest band (rx "detect"), or the
  *    low plan's when the context's rate can't carry the high one; the guard
  *    follows the plan the link locks on. A host's guard follows its plan;
@@ -43,12 +45,20 @@
  *    Practice links have no own signal and skip it;
  *  - loud own signal: it is this phone's own signal that matters, so a stats
  *    report counts as loud only when its microphone peak is above −6 dBFS
- *    while the self-monitor hears the own signal well (ownSnrDb ≥ 20 dB: a
- *    peak with the own signal faint is some other sound), and only an
- *    unbroken run of them for 2 s acts (a clap, a knock or a word is over by
- *    then). Then the transmit gain drops by 3 dB, at most once a second, down
- *    to 0.5 (−6 dB: what brings a peak just over −6 dBFS well under it,
- *    while the friend still hears this phone within 6 dB of its usual).
+ *    while the self-monitor hears the own signal (ownSnrDb ≥ 10 dB, where the
+ *    route check says it does), and only an unbroken run of them for 2 s acts
+ *    (a clap, a knock or a word is over by then). Not "heard well": an own
+ *    signal that clips the microphone reads lower the harder it clips (own
+ *    output looped back and hard-clipped at ±1: 34–42 dB at 2× full scale,
+ *    21–24 dB at 3×, 15–18 dB at 4×, 11–16 dB at 5–6×), while a loud sound
+ *    of another kind either leaves it as it was or buries it (a full-scale
+ *    burst read −4 to 6 dB, steady noise 0 dB) and doesn't last 2 s in a row
+ *    above 10. (Past about 8× the clipped own signal dips under 10 dB, 6–10
+ *    at 15–40×: there neither rule acts for sure, and the route check may
+ *    speak instead.) Then the transmit gain drops by 3 dB, at most once a
+ *    second, down to 0.5 (−6 dB: what brings a peak just over −6 dBFS well
+ *    under it, while the friend still hears this phone within 6 dB of its
+ *    usual).
  *    Once 5 s pass with no loud report it climbs back by 1 dB every 2 s to
  *    the gain the lobby chose, 1 (the modem is offered up to 1.1). The note
  *    shows while the gain is below 1, never with the route warning, which
@@ -383,8 +393,12 @@ export const ROUTE_MS = 3000;
 export const ROUTE_GRACE_MS = 2050;
 /** Loud own signal: a stats report whose microphone peak is above −6 dBFS … */
 export const LOUD_PEAK = 10 ** (-6 / 20);
-/** … while the self-monitor hears this phone's own signal at least this well (a peak with the own signal faint is some other sound) … */
-export const LOUD_OWN_SNR_DB = 20;
+/**
+ * … while the self-monitor hears this phone's own signal at all (the route
+ * check's threshold: an own signal clipping the microphone reads 11–24 dB at
+ * 3–6× full scale, see the header) …
+ */
+export const LOUD_OWN_SNR_DB = ROUTE_SNR_DB;
 /** … in every report for this long (a clap, a knock or a word has gone by then) … */
 export const LOUD_MS = 2000;
 /** … drops the gain by 3 dB, at most once per GAIN_STEP_MS, down to GAIN_MIN (−6 dB: the friend still hears this phone within 6 dB of its usual). */
@@ -844,8 +858,17 @@ export function tipsText(v: Pick<LobbyView, "practice" | "rematch">): string {
   const sound = "Still nothing? Turn the volume up and the silent switch off. Unplug headphones and turn Bluetooth off. Keep the phones 10–30 cm apart.";
   return v.rematch ? sound : `${sound} Or try band Low on the host (Advanced).`;
 }
-const ROUTE_TEXT =
-  "This phone can't hear its own signal: sound may be going to the earpiece or Bluetooth, or it can't play this band. Unplug headphones, turn the volume up, or switch the host to band Low.";
+/**
+ * The route warning. Band Low is advice only where it can be taken: not in a
+ * rematch (it keeps its band, and has no Advanced), and not where this phone
+ * hosts on band Low already.
+ */
+export function routeText(v: Pick<LobbyView, "rematch" | "role" | "prefs">): string {
+  const head = "This phone can't hear its own signal: sound may be going to the earpiece or Bluetooth, or it can't play this band.";
+  return v.rematch || (v.role === "host" && v.prefs.plan === "low")
+    ? `${head} Unplug headphones or turn the volume up.`
+    : `${head} Unplug headphones, turn the volume up, or switch the host to band Low.`;
+}
 const QUIET_TEXT = "Your friend's phone has gone quiet. Bring the phones closer, or tap Cancel if your friend left.";
 const PLACEMENT =
   "Lay both phones flat, 10–30 cm apart. Turn the volume to about 75%, silent switch off. On an iPhone the sound may come from the earpiece at the top: turn the phones until both bars below are full.";
@@ -964,7 +987,7 @@ function bodyHtml(v: LobbyView, advOpen: boolean): { body: string; actions: stri
   if (v.noWakeLock && (v.step === "choose" || v.step === "pairing")) notes.push(`<p class="sh-note">Set Auto-Lock to Never: this phone can't keep its screen on by itself.</p>`);
   if (v.lost && v.step !== "error")
     notes.push(`<div class="duel-warn"><p>The sound link stopped.</p><button class="cta" data-act="tap">Tap to reconnect the sound link</button></div>`);
-  if (v.route) notes.push(`<p class="duel-warn">${ROUTE_TEXT}</p>`);
+  if (v.route) notes.push(`<p class="duel-warn">${routeText(v)}</p>`);
   if (v.loud) notes.push(`<p class="sh-note">Your own signal is loud here: this phone now sends a little quieter.</p>`);
   const quiet = v.quiet ? `<p class="duel-hint">${QUIET_TEXT}</p>` : "";
   const p = v.pairing;

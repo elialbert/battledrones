@@ -60,6 +60,14 @@ const MAX_DATA = 105;
 const PILOT_NEAR = 2;
 /** The running mean of each data tone's differential product: its gain per symbol. */
 const STEADY_GAIN = 1 / 32;
+/**
+ * A running mean of products that average to nothing still has a size: its
+ * expected square is STEADY_GAIN / (2 − STEADY_GAIN) of their spread (1/63
+ * of it). A share counts as an interferer's only once its square stands
+ * past four times that (decode.ts); a share of noise alone does once in e⁴,
+ * 2 tones of 105.
+ */
+export const STEADY_FLOOR = (4 * STEADY_GAIN) / (2 - STEADY_GAIN);
 
 export class Tracker {
   private readonly t: Timing;
@@ -125,10 +133,20 @@ export class Tracker {
   /**
    * Per data tone, the running mean of its differential product. The
    * scrambled data averages to nothing, so what remains is a steady
-   * interferer's share (outlier.ts).
+   * interferer's share (outlier.ts). And the running mean of the products'
+   * squared distance from it, their spread, by which that share is judged:
+   * a burst of noise louder than the friend leaves a mean as large as the
+   * burst's spread allows, fading only at STEADY_GAIN a symbol, and judged
+   * by its size alone every tone read as interfered and every packet failed
+   * long after the burst, the lock kept all along: up to 4–5 s after 0.5 to
+   * 1.5 s of noise 20 dB over the friend in its band (at 20 cm), and longer
+   * than the 10 s watched after 1.5 s of it 38 dB over. The spread fades
+   * with the mean, so the share stays judged as noise, and the packets
+   * decode again at once (0.2–0.9 s after the burst, a packet or two).
    */
   readonly steadyRe = new Float64Array(MAX_DATA);
   readonly steadyIm = new Float64Array(MAX_DATA);
+  readonly steadyVar = new Float64Array(MAX_DATA);
   /**
    * Acquisition's first pass: the pilot slopes summed over its symbols, and
    * the pilots' weighted squared residuals, for the fit as unwrapped (index
@@ -192,6 +210,7 @@ export class Tracker {
     this.pcnt.fill(0);
     this.steadyRe.fill(0);
     this.steadyIm.fill(0);
+    this.steadyVar.fill(0);
   }
 
   stop(): void {
@@ -490,8 +509,11 @@ export class Tracker {
       const yi = r * sn + i * c;
       this.dRe[base + d] = yr;
       this.dIm[base + d] = yi;
-      this.steadyRe[d] = this.steadyRe[d]! + STEADY_GAIN * (yr - this.steadyRe[d]!);
-      this.steadyIm[d] = this.steadyIm[d]! + STEADY_GAIN * (yi - this.steadyIm[d]!);
+      const er = yr - this.steadyRe[d]!;
+      const ei = yi - this.steadyIm[d]!;
+      this.steadyRe[d] = this.steadyRe[d]! + STEADY_GAIN * er;
+      this.steadyIm[d] = this.steadyIm[d]! + STEADY_GAIN * ei;
+      this.steadyVar[d] = this.steadyVar[d]! + STEADY_GAIN * (er * er + ei * ei - this.steadyVar[d]!);
     }
   }
 

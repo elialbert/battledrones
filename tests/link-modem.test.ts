@@ -2,11 +2,12 @@
 // two ModemCores in the simulated Room, both transmitting at once, each
 // hearing its own speaker 40 dB louder than its friend's, through a
 // distorting speaker, over game audio, at 44.1 and 48 kHz with their clocks
-// 300 ppm apart. Then acquisition, gaps, mode switches, plan detection, the
+// 300 ppm apart. Then acquisition (at 600 ppm too), gaps, a friend's skip,
+// the restart on hearing a friend again, mode switches, plan detection, the
 // self-monitor and self-test, the session CRC, latency, RoomLink and CPU;
 // and what a phone's surroundings and its audio thread can throw at it: a
 // steady tone in the band, a latency that moves, a frame counter that goes
-// back, a non-finite sample, a bad gain.
+// back, a non-finite sample, a burst of loud noise, a bad gain.
 import { describe, expect, it } from "vitest";
 import html from "../radio-probe.html?raw";
 import { ModemCore, type ModemConfig, type RxPacket } from "../src/link/modem/core";
@@ -341,6 +342,118 @@ describe("two modems through the room, both transmitting", () => {
   );
 
   it(
+    "a phone that hears again, after more than a second, a friend whose stream started over starts a new superframe, once; not for a friend whose stream went on; the friend doesn't answer in kind",
+    () => {
+      for (const [seed, mode, plan] of [
+        [43, "robust", "high"],
+        [44, "fast", "high"],
+        [43, "robust", "low"]
+      ] as const) {
+        const label = `${plan} ${mode}`;
+        const d = new Duplex({ seed, distanceCm: 20, a: { ownDb: 35 }, b: { ownDb: 35, sampleRate: 44100, ppm: -200 } }, mode, [{ plan }, { plan }]);
+        const restarts = [0, 0];
+        const mute = [false, false];
+        for (const s of [0, 1] as const) {
+          const m = d.m[s];
+          const tx = (m as unknown as { tx: { restartSuperframe(): void } }).tx;
+          const restart = tx.restartSuperframe.bind(tx);
+          tx.restartSuperframe = () => {
+            restarts[s]!++;
+            restart();
+          };
+          d.room.setEndpoint(s, {
+            process(i, o, f) {
+              m.process(i, o, f);
+              if (mute[s]) o.fill(0);
+            }
+          });
+        }
+        /** The longest wait between packets B heard from A, from a second before t to 4 s after. */
+        const gapAtB = (t: number) => {
+          const a = d.arrivals(1, t - 1).filter((x) => x < t + 4);
+          return Math.max(...a.slice(1).map((x, i) => x - a[i]!));
+        };
+        // B's speaker goes quiet for 2.5 s (a route change, a call): A loses it, but B goes on hearing A, and B's stream
+        // went on, so A finds it again on the grid it knew: a restart would only cost B a packet
+        d.room.run(5);
+        mute[1] = true;
+        d.room.run(2.5);
+        mute[1] = false;
+        const t1 = d.room.time;
+        d.room.run(6);
+        expect(restarts, `${label}: a loss on A's side only`).toEqual([0, 0]);
+        expect(d.arrivals(0, t1)[0]! - t1, label).toBeLessThan(SUPERFRAME_S + 0.5);
+        // both quiet for 2.5 s: both streams went on, and each finds the other on its grid
+        mute[0] = mute[1] = true;
+        d.room.run(2.5);
+        mute[0] = mute[1] = false;
+        const t2 = d.room.time;
+        d.room.run(6);
+        expect(restarts, `${label}: both quiet`).toEqual([0, 0]);
+        // A's own audio stalls 150 ms (it starts a new superframe on the jump, which B finds within a second); 2 s on,
+        // B's audio stops for 1.5 s (its frame counter jumps): its stream starts over, and it heard nothing meanwhile.
+        // A, hearing it again on a new grid, starts a new superframe once (its own restart came before it lost B); B
+        // started one on its jump, after it last heard A, and doesn't again
+        d.room.jump(0, 150);
+        d.room.run(2);
+        expect(restarts, `${label}: A's stall`).toEqual([0, 0]);
+        d.room.jump(1, 1500);
+        const t3 = d.room.time + 1.5;
+        d.room.run(8);
+        expect(restarts, `${label}: B's audio stopped`).toEqual([1, 0]);
+        expect(d.arrivals(0, t3)[0]! - t3, label).toBeLessThan(1);
+        // what A's restart cost B, which had kept its lock: a packet or so (0.6 s between packets at most, in the low
+        // plan's robust packets), under the second that would restart B
+        expect(gapAtB(t3), label).toBeLessThan(0.7);
+        d.room.run(12);
+        expect(restarts, label).toEqual([1, 0]);
+        for (const from of [0, 1] as const) {
+          expect(d.delivery(from, t2 + 2, t2 + 5.5).frac, label).toBeGreaterThanOrEqual(0.95);
+          expect(d.delivery(from, t3 + 2, t3 + 17).frac, label).toBeGreaterThanOrEqual(0.98);
+        }
+        expect(d.wrong).toEqual([0, 0]);
+      }
+    },
+    90_000
+  );
+
+  it(
+    "hears a friend's new superframe after its skip, even when its old one had just sent a sync",
+    () => {
+      // the friend's context was suspended: its frame counter stood still, and catches up by the skip `skipMs` after it
+      // resumes. Its old superframe sends a sync 40 ms after the resume. With the skip 90 ms on, the new superframe's
+      // sync comes one symbol after the old one (which hid it, and whose packet the skip cut); 180 ms on, the old
+      // sync's first packet got through, and the trial on it won while the new sync waited (and was dropped). Either
+      // way the receiver waited a superframe for the next sync
+      const t = timing(48000);
+      for (const [mode, seed, skipMs] of [
+        ["fast", 3, 90],
+        ["fast", 1, 180]
+      ] as const) {
+        const d = new Duplex({ seed, distanceCm: 20, a: { ownDb: 35 }, b: { ownDb: 35, ppm: 120 } }, mode);
+        const m = d.m[1];
+        let held = 0;
+        d.room.setEndpoint(1, { process: (i, o, f) => m.process(i, o, f! - held) });
+        d.room.run(4);
+        const syncs = (m as unknown as { tx: { syncs: { useful: number }[] } }).tx.syncs;
+        let next = Math.max(...syncs.map((s) => s.useful)) - t.cp;
+        while (next < d.room.frame(1)) next += t.superframe;
+        d.room.run((next - 0.04 * 48000 - d.room.frame(1)) / 48000);
+        d.room.jump(1, 700);
+        held = 0.7 * 48000;
+        const resumed = d.room.time + 0.7;
+        d.room.run(0.7 + skipMs / 1000);
+        held = 0;
+        d.room.run(3);
+        const a = d.arrivals(0, resumed);
+        expect(a[0]! - resumed, `${mode}, skip ${skipMs} ms after the resume`).toBeLessThan(1);
+        expect(d.wrong).toEqual([0, 0]);
+      }
+    },
+    60_000
+  );
+
+  it(
     "recovers within 2.5 s of a 1 s capture gap, keeping its timing, and reports the gap",
     () => {
       const d = new Duplex({ seed: 41, distanceCm: 20, a: { ownDb: 30 }, b: { ownDb: 30, sampleRate: 44100, ppm: -200 } }, "robust");
@@ -648,6 +761,50 @@ describe("what the audio thread and the phone throw at it", () => {
       expect(d.wrong[0]).toBe(0);
     },
     60_000
+  );
+
+  it(
+    "1.5 s of loud noise at one microphone (38 dB over the friend in its band): its friend heard again within a superframe after, mostly within a second",
+    () => {
+      // Wherever the burst falls in the friend's superframe. One that takes in a sync costs the lock, and the next sync
+      // brings it back; one between two leaves the lock as it was, and the packets decode again at once. (The tones'
+      // running means, the steady interferer's share, filled with the burst: read as interference, they failed every
+      // packet for 4 s after a burst 20 dB over the friend, and past the 10 s watched after this one.)
+      const gauss = (...xs: number[]) => Math.sqrt(-2 * Math.log((hash32(...xs, 1) + 1) / 2 ** 32)) * Math.cos((2 * Math.PI * hash32(...xs, 2)) / 2 ** 32);
+      const after: number[] = [];
+      for (const [plan, mode] of [
+        ["high", "fast"],
+        ["high", "robust"],
+        ["low", "robust"]
+      ] as const) {
+        for (const off of [0, 0.5, 1, 1.5]) {
+          const d = new Duplex({ seed: 4, distanceCm: 20, a: { ownDb: 30 }, b: { ownDb: 30, ppm: 100 } }, mode, [{ plan }, { plan }]);
+          const a = d.m[0];
+          let loud = false;
+          let n = 0;
+          d.room.setEndpoint(0, {
+            process(i, o, f) {
+              if (loud) for (let k = 0; k < i.length; k++) i[k] = i[k]! + 0.2 * gauss(n, k);
+              n++;
+              a.process(i, o, f);
+            }
+          });
+          d.room.run(5 + off);
+          loud = true;
+          d.room.run(1.5);
+          loud = false;
+          const end = d.room.time;
+          d.room.run(2.6);
+          const first = d.arrivals(0, end)[0];
+          expect(first, `${plan} ${mode}, the burst ${off} s on: never heard again`).toBeDefined();
+          after.push(first! - end);
+          expect(d.wrong[0]).toBe(0);
+        }
+      }
+      for (const t of after) expect(t).toBeLessThanOrEqual(SUPERFRAME_S + 0.5);
+      expect(after.filter((t) => t <= 1).length, after.map((t) => t.toFixed(2)).join(" ")).toBeGreaterThanOrEqual(after.length / 2);
+    },
+    120_000
   );
 
   it("a gain that is NaN keeps the last good one; a negative one is silence; none above 1.5", () => {

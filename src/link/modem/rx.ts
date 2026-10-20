@@ -32,6 +32,12 @@
  *    decoded both ways (the CRC and the gate decide); a lock that has missed
  *    its sync is dropped after 4 more packets fail.
  *  - Packets overlapping a gap are erased: neither decoded nor counted.
+ *  - A sync that comes in while a trial runs is held for after it (the
+ *    strongest, if several), and tried when the trial fails, or when it wins
+ *    and the new lock doesn't expect that sync: a friend that restarted its
+ *    stream just after the sync the trial took (a skip on resuming) leaves
+ *    that lock stale at once, and dropping the held sync then cost a
+ *    superframe.
  *  - A packet is delivered once. When the friend's timing steps (its output
  *    latency changed) the lock can decode a packet at the old timing while a
  *    trial, started from the sync at the new one, decodes the same packet as
@@ -122,15 +128,25 @@ export class Receiver {
   private hasPair = false;
   /** The friend's clock as the lock knew it: the live lock's ε̂, or the last one's once it dropped (NaN: none since configure()). */
   private lastEps = NaN;
+  /** The last lock's band and superframe grid (a sync's useful start) when it dropped (band null: none since configure()). */
+  private lastCorr: CorrBand | null = null;
+  private lastSyncT0 = 0;
   /** The trial's clock before its first packet was tried (a reference picked its turn: the pair, or the lock's clock). */
   private trialRef = NaN;
   /** The runner-up turn's clock, when the pilots fit it about as well and nothing else picked the turn (NaN: none). */
   private altEps = NaN;
   /** Window start (input frame) of the newest packet delivered (−Infinity: none since configure()). */
   private lastRx = -Infinity;
-  /** A lock was just won on a friend not heard for longer than `reacquireAfter` (input frames; ModemCore sets it, reads the flag and clears it). */
+  /**
+   * A lock was just won on a friend not heard for longer than `reacquireAfter`
+   * (input frames), on a sync off the grid of the stream it knew: the
+   * friend's stream started over meanwhile (ModemCore sets the length, reads
+   * the flag and clears it); and when the friend was last heard before that
+   * (the window start of its last packet, an input frame).
+   */
   reacquired = false;
   reacquireAfter = Infinity;
+  heardBefore = -Infinity;
   private readonly maxShift: number;
   private readonly near: number;
   // stats
@@ -188,8 +204,10 @@ export class Receiver {
     this.hasSnr = false;
     this.rxMode = null;
     this.lastEps = NaN;
+    this.lastCorr = null;
     this.lastRx = -Infinity;
     this.reacquired = false;
+    this.heardBefore = -Infinity;
     this.recent.fill(-Infinity);
     this.search.setBands(bands, mon, this.ring.end);
   }
@@ -221,13 +239,8 @@ export class Receiver {
   }
 
   private candidate(c: Candidate): void {
-    const main = this.main;
-    if (main && c.corr === this.mainCorr) {
-      // the lock's own sync: the re-correlation handles it
-      const sf = this.t.superframe * (1 + main.eps);
-      const k = Math.round((c.t - main.syncT0) / sf);
-      if (Math.abs(c.t - (main.syncT0 + k * sf)) <= this.near) return;
-    }
+    // the lock's own sync: the re-correlation handles it
+    if (this.ownSync(c.corr, c.t)) return;
     if (this.trial) {
       if (!this.hasNext || c.rho > this.next.rho) {
         this.hold(this.next, c.corr, c.t, c.mode, c.rho);
@@ -236,6 +249,25 @@ export class Receiver {
       return;
     }
     this.startTrial(c.corr, c.t, c.mode, c.rho);
+  }
+
+  /** Is a sync at t in this band one the lock expects (a whole number of its superframes on from its own)? */
+  private ownSync(corr: CorrBand, t: number): boolean {
+    const main = this.main;
+    return main !== null && onGrid(corr, t, this.mainCorr, main.syncT0, this.t.superframe * (1 + main.eps), this.near);
+  }
+
+  /**
+   * Is a sync at t in this band on the grid of the stream the receiver knew:
+   * the lock's, or the last one's after it dropped? A friend whose stream
+   * went on while this phone lost it (noise here, its speaker muted) sends
+   * its syncs on that grid still; one whose stream started over (its audio
+   * stopped: a suspension, its frame counter jumping) does not, and it heard
+   * nothing meanwhile either.
+   */
+  private knownGrid(corr: CorrBand, t: number): boolean {
+    if (this.main) return this.ownSync(corr, t);
+    return onGrid(corr, t, this.lastCorr, this.lastSyncT0, this.t.superframe * (1 + this.lastEps), this.near);
   }
 
   private hold(h: Held, corr: CorrBand, t: number, mode: ModemMode, rho: number): void {
@@ -383,7 +415,10 @@ export class Receiver {
     if (job.gen === this.trialGen && job.first) {
       this.decoder.run(job, this.sessionKey);
       if (job.ok) {
-        if (job.sample - this.lastRx > this.reacquireAfter && this.lastRx > -Infinity) this.reacquired = true;
+        if (job.sample - this.lastRx > this.reacquireAfter && this.lastRx > -Infinity && !this.knownGrid(this.cand.corr!, this.cand.t)) {
+          this.reacquired = true;
+          this.heardBefore = this.lastRx;
+        }
         this.promote();
         if (this.deliver(job)) this.rxOk++;
         this.quality(job);
@@ -409,11 +444,19 @@ export class Receiver {
     this.trial = null;
     this.trialStage = 0;
     this.trialGen = -1;
-    this.hasNext = false;
+    this.altEps = NaN;
     this.fails = 0;
     this.syncMissed = false;
     this.syncs++;
     if (this.detecting && this.mainCorr) this.detected = this.mainCorr.tables.band.plan;
+    // a later sync heard while the trial ran is a candidate still, unless the new lock expects it: the friend may
+    // have restarted its stream since the sync the trial took (a jump just after that sync's packet), and then the
+    // lock just won is stale already
+    if (this.hasNext) {
+      this.hasNext = false;
+      const n = this.next;
+      if (n.corr && n.t > this.cand.t + this.near && !this.ownSync(n.corr, n.t) && n.t - this.t.ts > this.ring.oldest()) this.startTrial(n.corr, n.t, n.mode, n.rho);
+    }
   }
 
   private result(job: DecodeJob, main: Tracker): void {
@@ -439,6 +482,8 @@ export class Receiver {
     }
     if (this.syncMissed && this.fails >= DROP_AFTER) {
       this.lastEps = main.eps;
+      this.lastCorr = this.mainCorr;
+      this.lastSyncT0 = main.syncT0;
       main.stop();
       this.main = null;
       this.mainCorr = null;
@@ -477,4 +522,11 @@ export class Receiver {
     slot.session = job.session;
     return true;
   }
+}
+
+/** Is a sync at t in band `corr` a whole number of superframes `sf` on from one at t0 in band `at`, within `near`? */
+function onGrid(corr: CorrBand, t: number, at: CorrBand | null, t0: number, sf: number, near: number): boolean {
+  if (corr !== at) return false;
+  const k = Math.round((t - t0) / sf);
+  return Math.abs(t - (t0 + k * sf)) <= near;
 }

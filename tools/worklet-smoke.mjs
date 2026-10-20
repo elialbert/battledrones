@@ -45,10 +45,15 @@
 // thread stretches the latter: 856 ms around a 684 ms step, the main thread
 // held 150 ms as resume() settled). The host
 // must hear the guest again within a second (the skip starts a new
-// superframe), the guest the host within 3 s. (The guest's own receiver
+// superframe), the guest the host within 1.7 s. (The guest's own receiver
 // gains little from the skip in Chromium: its MediaStream input comes back on
-// a 10 ms grid, about 20 ms off what the context's clock says, so it usually
-// waits for the host's next sync as it would without one.)
+// a 10 ms grid, about 20 ms off what the context's clock says, so its lock on
+// the host is stale. The host, hearing the guest again after more than a
+// second on the new superframe the skip started, starts a new superframe of
+// its own, and the guest hears that: about a second after the resume, 1.6 s
+// at worst in 40, where it waited for the host's next sync before, 1.8 s in
+// this scene's timing and up to 2.6 s; so 1.7 s fails a host that no longer
+// restarts, and a busy host's slow one gets the second attempt.)
 //
 // Real time runs on a host that may be busy, and some of what happens in it
 // is the browser's, not the modem's. The page reads each context's clock
@@ -63,12 +68,21 @@
 // (the two lengths needn't agree: 193.8 and 173.8 ms once). A render thread
 // held up alone renders what it owes as soon as it runs again (a 300 ms hold
 // caught up within 20 ms), so a lasting step in one context only is rarer,
-// but seen under load; and a transport can leave part of a stall unreported
-// (127.1 ms skipped of one its clock put at 224.1, after a 200 ms stop of the
-// audio service: 4 such stops in 8) or post one its context then caught up
-// (a 346.6 ms skip whose clock settled 91 ms behind, under load). None of
-// these is let through, but a busy host makes them all; the last two are
-// printed as a NOTE for the transport's owner. And Chromium sometimes hands
+// but seen under load; and a transport could leave part of a stall
+// unreported (127.1 ms skipped of one its clock put at 224.1, after a 200 ms
+// stop of the audio service: 4 such stops in 8) or post one its context then
+// caught up (a 346.6 ms skip whose clock settled 91 ms behind, under load).
+// It now waits for its clock to stop moving before it measures the step
+// (WorkletTransport), which leaves a context that stands still for 200 ms
+// and only then catches up. A skip is held against the level the clock
+// stood at just before the stall, and against the lowest of the 2.5 s
+// before, which the transport's own baseline may still hold: a step of
+// 30–120 ms a little earlier, too small to skip, is in one and not the other
+// (taken against the lowest alone, a 200.2 ms skip of a stall that took the
+// clock from 57 to 254 ms behind read as short of it, the 57 counted in,
+// with the audio service stopped 200 ms at a time). None of these is let
+// through, but a busy host makes them all; the last two are printed as a NOTE
+// for the transport's owner. And Chromium sometimes hands
 // the resumed guest one to three render quanta of digital silence (2.7 to
 // 10.7 ms seen, 4 resumes in 52), which the modem rightly reports as a
 // capture gap: a gap of at most RESUME_SILENCE_MS within RESUME_EDGE_MS of
@@ -77,7 +91,11 @@
 // misses the first sync after the skip and hears its friend a superframe
 // later (the host the guest 2457 and 2648 ms after a 0.7 s suspension, where
 // it is usually 190–700 ms; the guest the host 3448 ms after one): a NOTE for
-// the receiver's owner, pass or fail.
+// the receiver's owner, pass or fail. Two causes were the receiver's, and are
+// gone: a new superframe's sync one symbol after the old one's, which hid it,
+// and one that came in while the trial on the old one ran, dropped when that
+// trial won. One is Chromium's: the guest's MediaStream input stepping 10 ms
+// within the trial on the host's first sync (1 resume in 40).
 //
 // So a problem is hard or not (checkRealtime): hard when a busy host can't
 // make it (worklet errors, a skip whose context's clock never fell behind by
@@ -285,7 +303,7 @@ async function scenario({ kind, url, name }) {
  * and running()), and should post the stretch as one skip afterwards (a
  * capture gap of that length); the host should hear the guest again within a
  * second (the skip starts a new superframe), and the guest the host within
- * the spec's 2.5 s and a margin.
+ * 1.7 s (the host, hearing the guest's new superframe, starts one too).
  */
 async function realtime({ ms }) {
   const { loadWorklet, WorkletTransport } = window.__link;
@@ -408,7 +426,7 @@ const STALL_AGREE_MS = 30;
 /** The guest's skip for its suspension: within this (ms) of how far its clock fell behind across it. */
 const SUSPEND_AGREE_MS = 60;
 /** How long after its suspension the host must hear the guest, and the guest the host (ms). */
-const HEARS_MS = { host: 1000, guest: 3000 };
+const HEARS_MS = { host: 1000, guest: 1700 };
 /** The modem's superframe (ms): a sync symbol and DATA_SYMBOLS data symbols of TU + TCP (params.ts). */
 const SUPERFRAME_MS = (() => {
   const params = readFileSync(join(ROOT, "src/link/modem/params.ts"), "utf8");
@@ -428,26 +446,35 @@ const sinceOf = (r, side, at) => Math.max(-Infinity, ...r.skips[side].filter((k)
 /**
  * A skip `k` that `side`'s transport posted, against its context's clock as
  * the page read it. step: how far the clock fell behind and stayed, the
- * lowest reading in the second after the skip against the lowest in the 2.5 s
- * before the stall could have ended (the transport posts a skip
- * SKIP_CONFIRM_MS, 200 ms, after the first reading past the step), none from
- * before the side's previous skip (the clock stepped there too). peak: how far
- * it was behind at most while the transport confirmed it (its readings come
- * with the worklet's messages, at least every 250 ms). NaN without readings.
+ * lowest reading in the second after the skip against the level it stood at
+ * just before the stall (the lowest in the 500 ms before the stall could
+ * have ended: the transport posts a skip SKIP_CONFIRM_MS, 200 ms, after the
+ * first reading past the step). far: the same against the lowest in the
+ * 2.5 s before, the span the transport's own baseline covers. Neither takes
+ * a reading from before the side's previous skip (the clock stepped there
+ * too). peak: how far it was behind the latter at most while the transport
+ * confirmed it (its readings come with the worklet's messages, at least
+ * every 250 ms). NaN without readings.
  */
 function against(r, side, k) {
   const clock = r.clocks[side];
-  const base = readings(clock, Math.max(k.at - k.ms - 2700, sinceOf(r, side, k.at)), k.at - k.ms - 200).low;
+  const since = sinceOf(r, side, k.at);
+  const end = k.at - k.ms - 200;
+  const near = readings(clock, Math.max(end - 500, since), end).low;
+  const base = readings(clock, Math.max(end - 2500, since), end).low;
+  const after = readings(clock, k.at, k.at + 1000).low;
   const finite = (x) => (Number.isFinite(x) ? x : NaN);
-  return { step: finite(readings(clock, k.at, k.at + 1000).low - base), peak: finite(readings(clock, k.at - 450, k.at + 25).high - base) };
+  return { step: finite(after - near), far: finite(after - base), peak: finite(readings(clock, k.at - 450, k.at + 25).high - base) };
 }
 
 /**
  * The skips posted while running (all but the guest's for its suspension),
  * each as its context's clock shows it: "stall" (the clock fell behind by the
- * skip and stayed: the context really stopped, and the transport did its
- * job), "deeper" (it stayed further behind than the skip: the transport left
- * part of the stall, under SKIP_MIN_MS, unreported), "caught up" (it
+ * skip and stayed, from where it stood just before or from the lowest of the
+ * 2.5 s before: the context really stopped, and the transport did its job),
+ * "deeper" (it stayed further behind than the skip from where it stood just
+ * before: the transport left part of the stall, under SKIP_MIN_MS,
+ * unreported), "caught up" (it
  * fell behind by the skip, as the transport saw, then caught up: a render
  * thread starved of the CPU renders what it owes late, which the transport
  * can't tell from a stall within SKIP_CONFIRM_MS), "unread" (no readings to
@@ -460,10 +487,10 @@ function running(r, sus) {
   for (const side of ["host", "guest"])
     for (const k of r.skips[side]) {
       if (k === sus) continue;
-      const { step, peak } = against(r, side, k);
+      const { step, far, peak } = against(r, side, k);
       const kind = Number.isNaN(step)
         ? "unread"
-        : Math.abs(step - k.ms) <= STALL_AGREE_MS
+        : Math.abs(step - k.ms) <= STALL_AGREE_MS || Math.abs(far - k.ms) <= STALL_AGREE_MS
           ? "stall"
           : step > k.ms
             ? "deeper"
@@ -472,7 +499,7 @@ function running(r, sus) {
               : Number.isNaN(peak)
                 ? "unread"
                 : "unshown";
-      out.push({ side, k, step, peak, kind, shared: null });
+      out.push({ side, k, step, far, peak, kind, shared: null });
     }
   for (const a of out) {
     if (a.side !== "host" || a.kind !== "stall") continue;
@@ -501,11 +528,15 @@ function checkRealtime(label, r) {
   const sus = r.skips.guest.find((k) => k.at >= r.before) ?? null;
   const skips = running(r, sus);
   // how far the guest's clock fell behind across the suspension: from the resume on, and as it stood when the skip
-  // was posted (a stall just after the resume shows in the latter only)
+  // was posted (a stall just after the resume shows in the latter only); from where it stood just before, or from the
+  // lowest of the 2.5 s before, which the transport's baseline may still hold (whichever the skip is nearer)
   const g = r.clocks.guest;
-  const base = readings(g, Math.max(r.before - 2500, sinceOf(r, "guest", r.before)), r.before).low;
-  const across = readings(g, r.back, r.back + 1000).low - base;
-  const posted = sus && readings(g, sus.at, sus.at + 1000).low - base;
+  const since = sinceOf(r, "guest", r.before);
+  const base = readings(g, Math.max(r.before - 2500, since), r.before).low;
+  const near = readings(g, Math.max(r.before - 500, since), r.before).low;
+  const behind = (x) => (sus && Math.abs(sus.ms - (x - near)) < Math.abs(sus.ms - (x - base)) ? x - near : x - base);
+  const across = behind(readings(g, r.back, r.back + 1000).low);
+  const posted = sus && behind(readings(g, sus.at, sus.at + 1000).low);
   console.log(
     `${label}: suspended ${r.suspendedMs} ms (from the suspend() call to resume() settling), skipped ${sus ? tenth(sus.ms) : "nothing"} (its clock fell behind ${tenth(across)}); the host heard the guest ${r.hostHears} ms after, the guest the host ${r.guestHears} ms after (the main thread ran up to ${r.lateMs} ms late)`
   );

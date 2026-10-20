@@ -1,12 +1,13 @@
 // The modem's AudioWorklet and its main-thread side (SOUND-DUEL.md "Link
 // layer", "Worklet"): WorkletTransport against a fake node, port and
-// context (messages, the clock mapping, close); the real processor class from
-// src/link/worklet.ts, loaded in Node under a stand-in for the
-// AudioWorkletGlobalScope (channel choice, errors, close, allocation); two
-// phones end to end, each a WorkletTransport talking through a cloning fake
-// MessagePort to a real processor, the processors in the simulated room; and
-// the rule that the worklet's import graph uses only the AudioWorklet's
-// globals. (tools/worklet-smoke.mjs runs the built worklet in Chromium.)
+// context (messages, the clock mapping and its skips, close); the real
+// processor class from src/link/worklet.ts, loaded in Node under a stand-in
+// for the AudioWorkletGlobalScope (channel choice, errors, close,
+// allocation); two phones end to end, each a WorkletTransport talking
+// through a cloning fake MessagePort to a real processor, the processors in
+// the simulated room; and the rule that the worklet's import graph uses only
+// the AudioWorklet's globals. (tools/worklet-smoke.mjs runs the built
+// worklet in Chromium.)
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ModemCore, type ModemConfig, type ModemStats, type RxPacket } from "../src/link/modem/core";
 import { PACKET_SYMBOLS, timing } from "../src/link/modem/params";
@@ -438,6 +439,46 @@ describe("WorkletTransport", () => {
     expect(until(524)).toEqual({ ms: 300, frames: [Math.round((300 + 3) * 48)] });
     settle(524);
     expect(skips()).toEqual([]);
+  });
+
+  it("posts a skip as promptly with a phone's jitter as without: the clock stands still within what its readings spread", () => {
+    // readings up to 40 ms late (a phone's audio callback), the worklet's messages 100, 150 or 250 ms apart give or
+    // take 30%: a suspension's step goes over at the cadence's pace, of its length within the jitter. (Held to two
+    // single readings agreeing within 15 ms, 1 skip in 10 went over 0.5–1 s after the step's first reading and the
+    // slowest 1.1–2.1 s after, in 300 per cadence.)
+    const u = (...xs: number[]) => hash32(...xs) / 2 ** 32;
+    for (const cadence of [100, 150, 250]) {
+      const delays: number[] = [];
+      for (let rep = 0; rep < 60; rep++) {
+        const { ctx, clock, sent, from } = fakeTransport();
+        const t0 = clock.t;
+        let n = 0;
+        const read = (at: number, behind: number) => {
+          clock.t = t0 + at;
+          ctx.currentTime = (at - behind) / 1000;
+          from({ t: "slot", sample: 0, index: 0, key: 1 });
+        };
+        const gap = () => cadence * (0.7 + 0.6 * u(rep, cadence, n++, 1));
+        const late = () => 40 * u(rep, cadence, n, 2);
+        const step = 300 + 1200 * u(rep, cadence, 3);
+        let at = 0;
+        for (; at < 3000; at += gap()) read(at, late());
+        // suspended (no readings), then running again `step` behind
+        at += step;
+        const first = at;
+        let skip: number[] = [];
+        for (; at < first + 3000 && !skip.length; at += gap()) {
+          read(at, step + late());
+          skip = sent().flatMap((m) => (m.t === "skip" ? [m.frames / 48] : []));
+          if (skip.length) delays.push(at - first);
+        }
+        expect(skip).toHaveLength(1);
+        expect(Math.abs(skip[0]! - 3 - step)).toBeLessThanOrEqual(40);
+      }
+      delays.sort((a, b) => a - b);
+      expect(delays[Math.floor(0.9 * delays.length)]).toBeLessThanOrEqual(200 + 1.5 * cadence);
+      expect(delays[delays.length - 1]).toBeLessThanOrEqual(200 + 4 * cadence);
+    }
   });
 
   it("close posts close and disconnects; nothing comes through after it", () => {
@@ -882,8 +923,7 @@ describe("two phones through their worklets, when things go wrong", () => {
           w.run(ms + 2500);
           // on each phone's clock, the first DFT window of the first packet heard that started after it (a stale lock would
           // wait for the friend's next sync instead: up to 2.4 s). In the room the input moves on by exactly the stretch, so
-          // the suspended phone keeps its lock; in Chromium it comes back about 20 ms off, and only the friend gains (see
-          // tools/worklet-smoke.mjs)
+          // the suspended phone keeps its lock; in Chromium it comes back about 20 ms off (the next test)
           for (const s of [0, 1] as const) {
             const back = w.room.localMs(s, resumed);
             const first = w.got[s].slice(n[s]).find((p) => p.at >= back);
@@ -907,32 +947,49 @@ describe("two phones through their worklets, when things go wrong", () => {
     120_000
   );
 
-  it("TMPSCAN lagged microphone", () => {
-    const rows: string[] = [];
-    for (let seed = Number(process.env.S0 ?? 1); seed <= Number(process.env.S1 ?? 10); seed++)
-      for (const side of (process.env.SIDE ? [Number(process.env.SIDE)] : [0, 1]) as (0 | 1)[]) {
-        const ms = seed % 2 ? 700 : 1500;
+  it(
+    "a suspended phone whose microphone comes back 20 ms off its context's clock hears its friend within 1.5 s: the friend, hearing it again, starts a new superframe",
+    () => {
+      // Chromium's MediaStream input comes back about 20 ms off, past the receiver's tolerance: its lock on the friend is
+      // stale after the skip, and it needs a new sync. The friend's next one was up to a superframe away (2.7, 2.4 and
+      // 2.4 s here); the friend re-acquiring it after more than a second sends one at once
+      for (const [seed, side, ms] of [
+        [1, 0, 700],
+        [3, 1, 700],
+        [10, 1, 1500]
+      ] as const) {
+        const label = `seed ${seed}, ${side ? "guest" : "host"} suspended ${ms} ms`;
         const w = worklets({ seed, distanceCm: 20, a: { ownDb: 35 }, b: { ownDb: 35, ppm: 120, sampleRate: seed % 3 ? 48000 : 44100 } });
         w.host.tr.send([keyed(10)]);
         w.guest.tr.send([keyed(77)]);
         w.run(5000 + seed * 173);
         const ph = side ? w.guest : w.host;
+        const friend = side ? w.host : w.guest;
+        // (packets its stale lock decodes before the skip don't count: the skip makes that lock 20 ms off)
         let skipAt = Infinity;
         const post = ph.main.postMessage.bind(ph.main);
-        ph.main.postMessage = (m: unknown, x?: Transferable[]) => { if ((m as ToWorklet).t === "skip" && skipAt === Infinity) skipAt = ph.tr.now(); post(m, x); };
+        ph.main.postMessage = (m: unknown, x?: Transferable[]) => {
+          if ((m as ToWorklet).t === "skip" && skipAt === Infinity) skipAt = ph.tr.now();
+          post(m, x);
+        };
         const n = [w.got[0].length, w.got[1].length];
         w.suspend(side, ms, 20);
         const resumed = w.room.time + ms / 1000;
         w.run(ms + 3500);
         const back = w.room.localMs(side, resumed);
-        const first = w.got[side].slice(n[side]).find((p) => p.at >= skipAt);
-        const other = w.got[1 - side]!.slice(n[1 - side]).find((p) => p.at >= w.room.localMs((1 - side) as 0 | 1, resumed));
-        rows.push(`seed ${seed} side ${side} ${ms}: skip +${(skipAt - back).toFixed(0)}, suspended hears friend ${first ? (first.at - back).toFixed(0) : "never"}, friend hears it ${other ? (other.at - w.room.localMs((1 - side) as 0 | 1, resumed)).toFixed(0) : "never"}`);
+        const heard = w.got[side].slice(n[side]).find((p) => p.at >= skipAt);
+        expect(heard, `${label}: heard nothing`).toBeDefined();
+        expect(heard!.at - back, label).toBeLessThan(1500);
+        const other = (1 - side) as 0 | 1;
+        const backF = w.room.localMs(other, resumed);
+        const heardBy = w.got[other].slice(n[other]).find((p) => p.at >= backF);
+        expect(heardBy!.at - backF, label).toBeLessThan(1000);
+        expect([ph.tr.stats().locked, friend.tr.stats().locked], label).toEqual([true, true]);
+        expect(w.errors, label).toEqual([]);
       }
-    console.log(rows.join("\n"));
-    const L = (globalThis as { __log?: string[] }).__log;
-    if (L) console.log(L.filter((l) => !/stepN 0->0/.test(l) || /d [1-9]\d\d/.test(l)).slice(0, 60).join("\n"));
-  }, 600_000);
+    },
+    120_000
+  );
 
   it(
     "a Join's capacity() never offers more than its modem takes, through the detection and on the plan it finds",

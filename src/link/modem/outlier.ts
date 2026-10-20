@@ -27,9 +27,11 @@
  *    them, each only a little louder than its neighbours. But the scrambled
  *    data turns each tone's differential product d̃ at random, symbol after
  *    symbol, while an interferer adds the same rotation every time, so the
- *    running mean of d̃ (tracker.ts) is the interferer's share. A data tone
- *    whose signal stands less than twice over that share has its weight
- *    scaled by (SIR/2)², SIR being the ratio of the two (decode.ts).
+ *    running mean of d̃ (tracker.ts) is the interferer's share, once it
+ *    stands clear of what the products' spread leaves in a mean (a burst of
+ *    noise leaves a large one, which isn't steady). A data tone whose signal
+ *    stands less than twice over that share has its weight scaled by
+ *    (SIR/2)², SIR being the ratio of the two (decode.ts).
  *
  * Neither changes anything when no tone is interfered.
  */

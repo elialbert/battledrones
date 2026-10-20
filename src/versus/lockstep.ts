@@ -328,9 +328,11 @@ export interface LockstepStatus {
    * being drained (the tick after its tap; for one that replaced queued
    * orders, the oldest of theirs, as orderDelay counts) to this phone stepping
    * the turn it was sealed in, so the queue's wait and every stall on the way
-   * count. Each piece of a split order counts once. Mean and worst (ms); null
-   * before any. (A tap made during a stall waits in the Controller until the
-   * stall ends, unseen here.)
+   * count. This phone's own pause doesn't (a player doesn't feel the pause
+   * menu as a slow order), as stallMs leaves it out; a friend's pause stalls
+   * this phone, and counts in both. Each piece of a split order counts once.
+   * Mean and worst (ms); null before any. (A tap made during a stall waits in
+   * the Controller until the stall ends, unseen here.)
    */
   orderWait: { meanMs: number; worstMs: number } | null;
   /** Frames in the rotation: the segments with unacknowledged turns (1 when there are none). */
@@ -520,11 +522,14 @@ export class Lockstep {
   private framesBad = 0;
   private delaySum = 0;
   private delayCount = 0;
-  /** The order wait: when each tick a queued command counts from drained (the link's clock), and the waits of the commands stepped. */
+  /** The order wait: when each tick a queued command counts from drained (playClock()), and the waits of the commands stepped. */
   private readonly drainedAt = new Map<number, number>();
   private waitSum = 0;
   private waitCount = 0;
   private waitWorst = 0;
+  /** This phone's pauses so far (ms, the link's clock), and when the one in force began: playClock() leaves them out. */
+  private pausedMs = 0;
+  private pausedAt = 0;
   private readonly stepped: [number, Faction, Command[]][] = [];
 
   private dirty = true;
@@ -589,7 +594,7 @@ export class Lockstep {
     this.trailValue = foldTrail(this.trailValue, worldHash32 >>> 0);
     const sealed = this.mine.get(tick);
     if (sealed?.drainedAt) {
-      const now = this.now();
+      const now = this.playClock();
       for (const at of sealed.drainedAt) {
         const wait = Math.max(0, now - at);
         this.waitSum += wait;
@@ -631,7 +636,7 @@ export class Lockstep {
   private seal(T: number, drained: readonly Command[]): void {
     const ctx = { local: this.local, width: this.map.width, height: this.map.height };
     // (the order wait counts from here: enqueue stamps what it queues with this tick)
-    if (drained.length) this.drainedAt.set(this.tick, this.now());
+    if (drained.length) this.drainedAt.set(this.tick, this.playClock());
     for (const c of drained) this.enqueue(canonicalize(c, ctx));
     this.trim();
     // the newest segment's frame as it stands: from its oldest unacknowledged turn (T when it has none) to T − 1
@@ -677,7 +682,7 @@ export class Lockstep {
       prev = encodeCommand(wr, q.command, this.map, prev);
       this.delaySum += T - q.at;
       this.delayCount++;
-      drainedAt.push(this.drainedAt.get(q.at) ?? this.now());
+      drainedAt.push(this.drainedAt.get(q.at) ?? this.playClock());
       this.queue.shift();
       count++;
     }
@@ -1116,6 +1121,8 @@ export class Lockstep {
   setPaused(paused: boolean): void {
     if (paused === this.paused) return;
     this.paused = paused;
+    if (paused) this.pausedAt = this.now();
+    else this.pausedMs += this.now() - this.pausedAt;
     this.endStall();
     this.restartSlack();
     this.dirty = true;
@@ -1169,6 +1176,11 @@ export class Lockstep {
   /** The match is over here: this phone's world is decided, it left or desynced, or the peer left or desynced. */
   over(): boolean {
     return this.endState !== "playing" || this.peerEnd === "left" || this.peerEnd === "desync";
+  }
+
+  /** The link's clock with this phone's pauses taken out: what the order wait counts in. */
+  private playClock(): number {
+    return this.now() - this.pausedMs - (this.paused ? this.now() - this.pausedAt : 0);
   }
 
   private endStall(): void {

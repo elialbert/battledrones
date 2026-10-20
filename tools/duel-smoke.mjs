@@ -15,7 +15,7 @@
 //      frames, so nothing here waits on them. (Each page's own frames are
 //      held to one every RAF_MS: the two pages share one software renderer,
 //      and drawing at full rate starves both to a tick or two a second.)
-//      Orders (a build bar tap, moves through the Controller), the outage
+//      Orders (a build bar button, moves through the Controller), the outage
 //      (both stall, "Waiting for your friend…", then go on), a pause (the
 //      friend stalls within D ticks: "Friend paused"), then, past tick
 //      MATCH_TICKS, the guest resigns from the pause menu.
@@ -47,6 +47,8 @@
 //    the trail missed every tick a step took two of, which a lossy link's
 //    stalls make common), on top of the lockstep's own checkpoints and end
 //    check, the final world hash and the saved battles' hash every 100 ticks;
+//  - "Friend paused" may take the friend D more ticks and 0.5 s of stall to
+//    show: it is waited for as long as the progress checks allow those;
 //  - "the match goes on" (at the start, after the outage, after the pause)
 //    means both pages step 2D + 1 more ticks: more than D proves the friend's
 //    new turns arrived (a phone holds at most D of them ahead), twice over.
@@ -55,6 +57,24 @@
 //    held on one tick for STUCK_MS fails (a stall that never ends, a stuck
 //    page), and so does a match slower on average than TICK_MS a tick (one
 //    that crawls), where a slow link passes;
+//  - the build bar's Fab button gets its click straight (dispatchEvent), not
+//    Playwright's tap: that first waits for the button to hold still over
+//    two animation frames (1–3 s here, 6–19 s on a loaded machine), and in one
+//    run of many the host's Fab then never landed in either world, for no
+//    reason the smoke could tell. The touch is the build bar's own, the same
+//    in single player (tools/smoke.mjs); here it is the order's way from the
+//    button to both worlds that counts. Each click must put the order on its
+//    way at once, and a Fab that doesn't land prints both pages' Controller
+//    and lockstep queues, so a lost order is told from a missed tap;
+//  - "both matches are up" waits, past the match state, for each page's
+//    first frame on screen (a screenshot of a few pixels), as the timed
+//    checks start there. The first composite after the match loads can take
+//    15 s here (the scene has just compiled its shaders, and the two pages
+//    share one software renderer), and a page that repaints meanwhile is
+//    held, outside its scripts. Without the wait the match state came first
+//    in 3 runs of 8, and both pages were then held 7–12 s just after the Fab
+//    clicks; in 2 of them the guest was 5 ticks on at the Fab check, its own
+//    order not yet stepped;
 //  - --shots waits for the cards' and the report's entrance animations (CSS:
 //    the slowed frames don't hold them) and takes the screenshot with any
 //    finite one left fast-forwarded, so nothing is caught mid-way.
@@ -337,7 +357,16 @@ for (const p of [phones.host, phones.guest]) {
 }
 log(`picks: host ${picks.host}, guest ${picks.guest}`);
 await both((p) => p.page.waitForFunction(() => window.__bd?.scene && window.__duel?.state === "match", null, { timeout: 90000 }));
-log("both matches are up");
+// (and on screen, one page at a time: see the header)
+{
+  const took = {};
+  for (const p of [phones.host, phones.guest]) {
+    const t = Date.now();
+    await p.page.screenshot({ clip: { x: 0, y: 0, width: 4, height: 4 }, timeout: 90000 });
+    took[p.name] = ((Date.now() - t) / 1000).toFixed(1);
+  }
+  log(`both matches are up, on screen after host ${took.host} s, guest ${took.guest} s`);
+}
 
 const player = async (p) => p.page.evaluate(() => window.__bd.player);
 check((await player(phones.host)) === "blue" && (await player(phones.guest)) === "red", "the host plays blue and the guest red");
@@ -450,8 +479,32 @@ const fabs = (p) =>
     const n = (f) => [...w.buildings.values()].filter((b) => b.faction === f && b.kind === "fab-plant").length + (w.factions[f].pending?.kind === "fab-plant" ? 1 : 0);
     return { blue: n("blue"), red: n("red") };
   });
+/** Where a page's own orders are: the Controller's queue and in flight, the build slot, toasts, and the lockstep's queue. */
+const orders = (p) =>
+  p.page
+    .evaluate(() => {
+      const { world: w, ctrl, player: me, scene } = window.__bd;
+      const ls = scene.feed?.session?.lockstep?.status();
+      const card = document.querySelector("#card");
+      return {
+        tick: w.tick,
+        queue: (ctrl.queue ?? []).map((c) => c.type),
+        inFlight: (ctrl.inFlight ?? []).map((c) => c.type),
+        pending: w.factions[me].pending?.kind ?? null,
+        scrap: Math.round(w.factions[me].scrap),
+        card: card ? !card.hidden : null,
+        toasts: [...document.querySelectorAll(".toast .tx")].map((t) => t.textContent),
+        lockstep: ls && { tick: ls.tick, queued: ls.queued, queuedTicks: ls.queuedTicks, newestSealed: ls.newestSealed, ackThrough: ls.ackThrough, peerAck: ls.peerAck, stalled: ls.stalled }
+      };
+    })
+    .catch((e) => String(e));
 const fabsBefore = await fabs(phones.host);
-for (const p of [phones.host, phones.guest]) await btn(p, "Fab").tap();
+for (const p of [phones.host, phones.guest]) {
+  await btn(p, "Fab").dispatchEvent("click");
+  // (on its way: in the Controller's queue until the next step drains it, then in flight, or already the build slot's)
+  const o = await orders(p);
+  check(o.queue?.includes("startBuilding") || o.inFlight?.includes("startBuilding") || o.pending === "fab-plant", `the ${p.name}'s Fab tap made no order: ${JSON.stringify(o)}`);
+}
 const moved = {};
 for (const p of [phones.host, phones.guest])
   moved[p.name] = await p.page.evaluate(() => {
@@ -465,7 +518,8 @@ await run(4000);
 // (both phones' worlds have both sides' Fab Plants; the saved battle below has the orders as stepped)
 for (const p of [phones.host, phones.guest]) {
   const now = await fabs(p);
-  check(now.blue > fabsBefore.blue && now.red > fabsBefore.red, `the Fab taps didn't land on the ${p.name}'s phone: ${JSON.stringify(fabsBefore)} → ${JSON.stringify(now)}`);
+  if (!check(now.blue > fabsBefore.blue && now.red > fabsBefore.red, `the Fab taps didn't land on the ${p.name}'s phone: ${JSON.stringify(fabsBefore)} → ${JSON.stringify(now)}`))
+    log(`orders: host ${JSON.stringify(await orders(phones.host))}; guest ${JSON.stringify(await orders(phones.guest))}`);
 }
 await both((p) => shot(p, "2-match"));
 
@@ -492,15 +546,15 @@ check((await phones.host.page.locator("#p-resign").count()) === 1, "no Resign in
 check((await phones.host.page.locator("#p-quit, #p-fog").count()) === 0, "the duel's pause menu offers Quit or the fog toggle");
 await shot(phones.host, "3-paused");
 const hostAt = await tick(phones.host);
-let friendPaused = false;
-await run(3500, async () => {
-  if (!friendPaused) friendPaused = /Friend paused/.test(await text(phones.guest, ".duel-stall:not([hidden])"));
-  return false;
-});
+// (the friend steps on through the turns it holds, up to D past the pause, and says so once its stall is 0.5 s
+// old: how long that takes follows the link, as the progress checks do)
+const pausedT = Date.now();
+const friendPaused = await run(STUCK_MS + (D + 1) * tickMs(D), async () => /Friend paused/.test(await text(phones.guest, ".duel-stall:not([hidden])")));
+const pausedAfter = (Date.now() - pausedT) / 1000;
 const [hostHeld, guestHeld] = await ticks();
 await run(1000);
 const [, guestHeld2] = await ticks();
-log(`paused at host tick ${hostAt} (D ${D}): host ${hostHeld}, guest ${guestHeld} → ${guestHeld2}`);
+log(`paused at host tick ${hostAt} (D ${D}): host ${hostHeld}, guest ${guestHeld} → ${guestHeld2}, "Friend paused" after ${pausedAfter.toFixed(1)} s`);
 check(hostHeld === hostAt, "the paused phone stepped on");
 check(guestHeld2 === guestHeld && guestHeld <= hostAt + D + 1, `the friend didn't stall within D ticks of the pause (${guestHeld2} vs ${hostAt} + ${D})`);
 check(friendPaused, "the friend didn't show \"Friend paused\"");

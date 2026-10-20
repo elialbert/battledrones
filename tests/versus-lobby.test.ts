@@ -10,7 +10,7 @@ import { worldHash } from "../src/sim/checksum";
 import type { World } from "../src/sim/types";
 import {
   GAIN_MIN, GAIN_QUIET_MS, GAIN_RISE, GAIN_RISE_MS, GAIN_START, GAIN_STEP, GAIN_STEP_MS, LOUD_MS, LOUD_OWN_SNR_DB, LobbyMachine, QUIET_MS, REMATCH_FALLBACK_MS,
-  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, cutDbFor, openerGives, parseDuelParams, parsePrefs, parseRematch, rttLine, tipsText, type DuelRematch,
+  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, cutDbFor, openerGives, parseDuelParams, parsePrefs, parseRematch, routeText, rttLine, tipsText, type DuelRematch,
   type LobbyEnd, type LobbyEnv, type LobbyLink, type LobbyRig
 } from "../src/versus/lobby";
 import { OPENERS, OPENER_IDS } from "../src/sim/openers";
@@ -102,6 +102,19 @@ describe("the lobby's words", () => {
     expect(rematch).not.toMatch(/Advanced|band Low/);
     for (const practice of ["loop", "relay"] as const)
       for (const r of [false, true]) expect(tipsText({ practice, rematch: r })).not.toMatch(/volume|silent switch|Bluetooth|Advanced|headphones/i);
+  });
+
+  it("the route warning: band Low only where it can be taken", () => {
+    const view = (rematch: boolean, role: BandRole | null, plan: BandPlan) => ({ rematch, role, prefs: { plan, micMode: "raw" as const } });
+    expect(routeText(view(false, "host", "high"))).toMatch(/or switch the host to band Low\.$/);
+    expect(routeText(view(false, "guest", "high"))).toMatch(/band Low/);
+    // (a guest can't tell the host's plan from its prefs: the advice stays)
+    expect(routeText(view(false, "guest", "low"))).toMatch(/band Low/);
+    // a rematch keeps its band and has no Advanced; a host on band Low is there already
+    for (const v of [view(true, "host", "high"), view(true, "guest", "high"), view(false, "host", "low")]) {
+      expect(routeText(v)).not.toMatch(/band Low|Advanced/);
+      expect(routeText(v)).toMatch(/can't hear its own signal: .* Unplug headphones or turn the volume up\.$/);
+    }
   });
 
   it("the meter's round trip, and on the loop the input delay instead", () => {
@@ -644,7 +657,7 @@ describe("the lobby's logic", () => {
   /** Reports in LOUD_MS: the one at its end is the first a run of loud ones acts on. */
   const RUN = LOUD_MS / 250;
 
-  it("a loud own signal: only the own signal heard well counts, and only a run of 2 s, not a transient", { timeout: 30_000 }, async () => {
+  it("a loud own signal: only the own signal heard counts, and only a run of 2 s, not a transient", { timeout: 30_000 }, async () => {
     const b = bench({ friend: false });
     await flush();
     b.m.host();
@@ -659,15 +672,32 @@ describe("the lobby's logic", () => {
       await reports(b, probe, 1, 0.2);
     }
     expect(probe.gains).toEqual([]);
-    // loud for long, with the own signal faint (heard, but not well: someone talking, music): not this phone's
-    probe.own = LOUD_OWN_SNR_DB - 5;
-    expect(probe.own).toBeGreaterThanOrEqual(ROUTE_SNR_DB);
-    await reports(b, probe, 4 * RUN, 0.9);
+    // loud for long, with the own signal buried (a full-scale burst, music at the microphone): not this phone's
+    probe.own = ROUTE_SNR_DB - 4;
+    await reports(b, probe, 4 * RUN, 1);
     // … or not heard at all
     probe.own = null;
-    await reports(b, probe, 4 * RUN, 0.9);
+    await reports(b, probe, 4 * RUN, 1);
     expect(probe.gains).toEqual([]);
     expect(b.m.state().loud).toBe(false);
+  });
+
+  it("a loud own signal that clips the microphone counts: clipping pulls its own SNR down to 11–24 dB", { timeout: 30_000 }, async () => {
+    expect(LOUD_OWN_SNR_DB).toBe(ROUTE_SNR_DB);
+    const b = bench({ friend: false });
+    await flush();
+    b.m.host();
+    await flush();
+    const probe = b.links[0]!.probe;
+    // (the own signal looped back at 4–6× full scale and hard-clipped: the peak pinned, ownSnrDb 11–18 dB)
+    probe.own = 15;
+    await reports(b, probe, RUN + 1, 1);
+    expect(probe.gains).toHaveLength(1);
+    expect(probe.gains[0]).toBeCloseTo(GAIN_START * GAIN_STEP, 6);
+    probe.own = ROUTE_SNR_DB + 1;
+    await reports(b, probe, (2 * GAIN_STEP_MS) / 250, 1);
+    expect(probe.gains).toHaveLength(3);
+    expect(b.m.state()).toMatchObject({ loud: true, route: false });
   });
 
   it("a loud own signal lowers the gain by 3 dB a second to the floor, and it climbs back by 1 dB every 2 s once quiet", { timeout: 30_000 }, async () => {
