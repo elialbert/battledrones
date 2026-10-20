@@ -244,6 +244,8 @@ npm run maps           # export map grids to art/maps/*.json (--ascii to preview
                        #   the robots, ?icon=<kind> for one model alone, as shot for its HUD portrait)
 node tools/model-portraits.mjs --all  # reshoot every HUD portrait from the 3D models, blue and red (ICONS.md)
                        # vehicles reference page: /vehicles.html (built into dist/ too)
+                       # 3D models page: /models.html (built into dist/ too): every unit's model to turn
+                       #   and zoom, beside its card, with its animations to play
                        # battle record viewer: /record-viewer.html[?replay=<record>] (built into dist/ too,
                        #   with battles/showcase/; the game takes ?replay=<record> as well)
                        # radio probe: /radio-probe.html (built into dist/ too) measures a phone-to-phone
