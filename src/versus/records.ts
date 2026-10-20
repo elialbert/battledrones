@@ -19,8 +19,10 @@
  * code is used for its types only.
  *
  * Rematch. sessionStorage `battledrones.rematch` = "duel" and
- * `battledrones.duel` = { role, plan, micMode, hostSide, mapId, mutators },
- * the host side already flipped: rematches swap sides, never roles or bands.
+ * `battledrones.duel` = { role, plan, micMode, hostSide, mapId, mutators,
+ * room? }, the host side already flipped: rematches swap sides, never roles
+ * or bands. An online duel's `room` is its relay room code: the rematch
+ * meets there again.
  * main.ts reads it at boot, before any audio context exists, and the lobby
  * pairs with it. The keys, the token and the parser live here alone: the
  * lobby re-exports them, and main.ts, which may import the duel's types only,
@@ -51,6 +53,7 @@ import { isKnownMapId } from "../sim/maps";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import type { MatchSetup } from "../sim/setup";
 import type { Command, Faction } from "../sim/types";
+import { isRoomCode } from "./net-transport";
 
 /** A world hash goes into the saved record every this many ticks (the arena's rate: the viewer checks them). */
 export const HASH_EVERY = 100;
@@ -227,6 +230,8 @@ export interface RematchPlan {
   hostSide: Faction;
   mapId: string;
   mutators: MutatorId[];
+  /** An online duel's room code (net-transport.ts): the rematch meets in the same room, over the relay. */
+  room?: string;
 }
 
 /** Leave the rematch for the next page. False where storage is blocked (the page then opens the menu). */
@@ -259,7 +264,9 @@ export function parseRematch(raw: string | null): RematchPlan | null {
     if (hostSide !== "blue" && hostSide !== "red") return null;
     if (typeof mapId !== "string" || !isKnownMapId(mapId)) return null;
     const muts = Array.isArray(mutators) ? mutators.filter((m): m is MutatorId => typeof m === "string" && isMutatorId(m)) : [];
-    return { role, plan, micMode: micMode === "ec" ? "ec" : "raw", hostSide, mapId, mutators: muts };
+    const p: RematchPlan = { role, plan, micMode: micMode === "ec" ? "ec" : "raw", hostSide, mapId, mutators: muts };
+    if (isRoomCode(o.room)) p.room = o.room;
+    return p;
   } catch {
     return null;
   }

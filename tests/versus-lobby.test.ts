@@ -22,6 +22,7 @@ import { HeldEnd, LoopFriend, LoopLink, lobbyLatencyFor } from "../src/versus/lo
 import { NOTHING_HEARD_MS, delayFor, packetMs } from "../src/versus/pairing";
 import { RelayTransport, decodeRelayPacket, encodeRelayPacket, type RelayWindow } from "../src/versus/relay-transport";
 import { Session } from "../src/versus/session";
+import { FINAL_CLOSE, NetError } from "../src/versus/net-transport";
 import { reloadWithoutLink } from "../src/ui/fullscreen";
 
 const BUILD = 0xd0e1;
@@ -105,6 +106,11 @@ describe("the lobby's words", () => {
     expect(rematch).not.toMatch(/Advanced|band Low/);
     for (const practice of ["loop", "relay"] as const)
       for (const r of [false, true]) expect(tipsText({ practice, rematch: r })).not.toMatch(/volume|silent switch|Bluetooth|Advanced|headphones/i);
+    // online: the link, not the sound
+    const online = { code: "K7QM2XP4", invite: "x" };
+    for (const role of ["host", "guest"] as const)
+      for (const r of [false, true]) expect(tipsText({ practice: null, rematch: r, online, role })).not.toMatch(/volume|silent switch|Bluetooth|Advanced|headphones/i);
+    expect(tipsText({ practice: null, rematch: false, online, role: "host" })).toMatch(/got the link/);
   });
 
   it("the route warning: band Low only where it can be taken", () => {
@@ -459,7 +465,9 @@ interface Bench {
 }
 
 /** The machine with a fake rig (or none) whose links are LoopLinks: a friend on the other end, all on one manual clock. */
-function bench(o: { rig?: FakeRig | null; rematch?: DuelRematch | null; seat?: BandRole | null; friend?: boolean; latencyMs?: number; friendBuild?: number } = {}): Bench {
+function bench(
+  o: { rig?: FakeRig | null; rematch?: DuelRematch | null; seat?: BandRole | null; friend?: boolean; latencyMs?: number; friendBuild?: number; online?: boolean } = {}
+): Bench {
   const c = clock();
   const guards: (BandPlan | null)[] = [];
   const ended: LobbyEnd[] = [];
@@ -475,7 +483,8 @@ function bench(o: { rig?: FakeRig | null; rematch?: DuelRematch | null; seat?: B
       return () => ((i++ * 0.6180339887) % 1);
     })(),
     rig,
-    practice: rig ? null : "loop",
+    practice: rig || o.online ? null : "loop",
+    online: o.online ? { code: "K7QM2XP4", invite: "https://simonw.github.io/battledrones/#vs=K7QM2XP4" } : null,
     link: async (cfg, offer) => {
       const loop = new LoopLink({ params: { delay: null, loss: 0, latencyMs: o.latencyMs ?? 250 }, role: cfg.tx, offer, build: o.friendBuild ?? BUILD, seed: seed++, now: c.now, timers: null });
       if (o.friend === false) loop.friend.close();
@@ -1022,6 +1031,42 @@ describe("the lobby's logic", () => {
     await b.run(20_000, () => b.m.state().step === "started");
     expect(b.begun.length).toBe(1);
     expect(b.guards).toEqual([]);
+  });
+
+  it("an online duel needs no rig, has no guard, pairs at once in its seat, and counts as no practice link", { timeout: 30_000 }, async () => {
+    const b = bench({ rig: null, seat: "guest", online: true });
+    await flush();
+    expect(b.m.state()).toMatchObject({ step: "pairing", role: "guest", practice: null, online: { code: "K7QM2XP4" }, fixedRole: true, canBack: false });
+    expect(b.links[0]!.cfg.tx).toBe("guest");
+    // (no self-test online)
+    b.m.startSelfTest();
+    expect(b.m.state().step).toBe("pairing");
+    await b.run(20_000, () => b.m.state().step === "picking");
+    b.m.pick(b.m.state().pairing!.offered[0]!);
+    await b.run(20_000, () => b.m.state().step === "started");
+    expect(b.begun.length).toBe(1);
+    expect(b.guards).toEqual([]);
+  });
+
+  it("online, a relay that can't be reached or ends the link is an \"online\" error", { timeout: 30_000 }, async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const b0 = bench({ rig: null, seat: "host", online: true });
+    await flush();
+    // (the link made, then ended by the relay)
+    const probe = b0.links[0]!.probe;
+    probe.dead = true;
+    probe.onError!(FINAL_CLOSE[4010]!);
+    expect(b0.m.state()).toMatchObject({ step: "error", error: { kind: "online", message: FINAL_CLOSE[4010] } });
+    expect(b0.ended).toEqual(["error"]);
+    // and one that never opens
+    const c = bench({ rig: null, seat: null, online: true });
+    c.env.link = async () => {
+      throw new NetError("Couldn't reach the relay in 15 s");
+    };
+    await flush();
+    c.m.host();
+    await flush();
+    expect(c.m.state()).toMatchObject({ step: "error", error: { kind: "online", message: "Couldn't reach the relay in 15 s" } });
   });
 
   it("phones of different versions stop at the version error, and Close lets the audio go", { timeout: 30_000 }, async () => {

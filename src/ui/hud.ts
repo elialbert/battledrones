@@ -82,6 +82,8 @@ export interface DuelHud {
   actions(): { id: string; label: string; cls?: string; on(): void }[];
   /** A practice link (no sound): no record kept, and the report says so. */
   practice: boolean;
+  /** An online duel, through the relay. */
+  online?: boolean;
 }
 
 /** What a duel's end screen adds: a head instead of VICTORY / DEFEAT (no result), and more buttons (Copy debug info). */
@@ -962,7 +964,7 @@ export function createHud(api: HudApi): Hud {
     if (!api.ctrl.paused) return;
     const duel = api.duel;
     const line = duel
-      ? `vs ${duel.opponent} · 🔊 ${duel.delayMs()} ms`
+      ? `vs ${duel.opponent} · ${duel.online ? "🌐" : "🔊"} ${duel.delayMs()} ms`
       : ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`;
     pauseEl.innerHTML = `
       <div class="panel">
@@ -1426,7 +1428,7 @@ export function createHud(api: HudApi): Hud {
         ...(duel
           ? {
               opponent: duel.opponent,
-              via: duel.practice ? "practice link (no sound)" : "over sound",
+              via: duel.practice ? "practice link (no sound)" : duel.online ? "online" : "over sound",
               onRematch: () => duel.rematch(),
               onMenu: () => duel.menu(),
               after: [...duel.actions(), ...(opts?.actions ?? [])]

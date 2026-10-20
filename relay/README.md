@@ -12,6 +12,12 @@ only the players' orders cross the wire: about one ~40-byte message every
 the air (SOUND-DUEL.md, `src/versus/relay-transport.ts`). A 10-minute match
 is around a megabyte of traffic.
 
+The game's side is `src/versus/net-transport.ts`: the host's page makes
+the room code and shows the invite link (`…/battledrones/#vs=<code>`),
+both pages connect, and each sends one message per packet,
+`<nbits> <base64>`. `tools/online-smoke.mjs` plays a whole match through
+the deployed relay.
+
 ## Protocol
 
 ```

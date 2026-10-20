@@ -219,6 +219,8 @@ export interface VersusFeedOptions {
   rig: DuelRig | null;
   /** A practice link (no sound): no win/loss record, and the report says so. */
   practice: boolean;
+  /** An online duel's relay room (net-transport.ts): its words for a lost link and the report's, and where its rematch meets. */
+  room?: string | null;
   /** The other side's label (default "your friend"). */
   opponent?: string;
   /** Once, when the duel is over for this page (the session closable, or the page going): the lobby closes the rig and turns the guard off. */
@@ -289,6 +291,8 @@ export class VersusFeed implements MatchFeed {
   /** The match as the pairing agreed it. */
   readonly result: PairingResult;
   readonly practice: boolean;
+  /** An online duel's room code (null: over sound, or a practice link). */
+  readonly room: string | null;
   /** The pause menu's and the report's duel parts (GameScene hands them to the HUD). */
   readonly duel: DuelHud;
 
@@ -347,6 +351,7 @@ export class VersusFeed implements MatchFeed {
     this.result = r;
     this.rig = o.rig;
     this.practice = o.practice;
+    this.room = o.room ?? null;
     this.trailLog = o.practice ? [] : null;
     this.onExit = o.onExit;
     this.onFrame = o.onFrame ?? null;
@@ -361,6 +366,7 @@ export class VersusFeed implements MatchFeed {
     this.duel = {
       opponent: this.opponent,
       practice: this.practice,
+      online: this.room !== null,
       delayMs: () => r.delay * 100,
       resign: (leave) => this.resign(leave),
       leave: () => this.leave(),
@@ -417,8 +423,9 @@ export class VersusFeed implements MatchFeed {
     const doc = this.env.document;
     const root = doc?.getElementById("hud");
     if (root) {
-      this.ui = mountDuelOverlay(root, { reconnect: () => this.reconnect(), leave: () => this.leave() });
-      this.teardown.push(addReportSection(duelReportSection(() => this.reportView(), { reconnect: () => this.reconnect() })));
+      const online = this.room !== null;
+      this.ui = mountDuelOverlay(root, { reconnect: () => this.reconnect(), leave: () => this.leave() }, online);
+      this.teardown.push(addReportSection(duelReportSection(() => this.reportView(), { reconnect: () => this.reconnect() }, online)));
     }
     this.pump();
   }
@@ -685,7 +692,10 @@ export class VersusFeed implements MatchFeed {
     if (to === "rematch") {
       const r = this.result;
       writeRematch(
-        { role: r.role, plan: r.plan, micMode: this.rig?.micMode ?? "raw", hostSide: OTHER[r.config.hostSide], mapId: r.mapId, mutators: r.config.mutators.slice() },
+        {
+          role: r.role, plan: r.plan, micMode: this.rig?.micMode ?? "raw", hostSide: OTHER[r.config.hostSide], mapId: r.mapId, mutators: r.config.mutators.slice(),
+          ...(this.room ? { room: this.room } : {})
+        },
         this.env.session
       );
     }

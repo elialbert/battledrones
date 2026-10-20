@@ -171,6 +171,13 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   rings under units in combat, kill and loss cues that sound different,
   on-screen-only camera shake, and gold "+100" pops with a rising coin
   chime when your harvesters deliver.
+- **Duel a friend online.** On the Skirmish tab, tap 🌐 Duel a friend
+  online and send the link it gives you. Your friend taps it and you're
+  both in the lobby: your map and mutators, blue against red, each picking
+  an opener. Both browsers run the whole simulation in lockstep, and only
+  your orders cross the internet, through a tiny relay that stores nothing
+  (`relay/`). Rematch swaps sides. Two phones on a table can also duel with
+  no network at all, over sound (SOUND-DUEL.md).
 - **Voices and a radio announcer.** Every unit class answers in its own
   synthesized robot voice when selected, ordered, built or promoted. Mastodons
   growl, Wasps buzz, Menders ring and Troopers chatter. A radio commander
@@ -236,6 +243,9 @@ node tools/model-portraits.mjs --all  # reshoot every HUD portrait from the 3D m
                        #   with battles/showcase/; the game takes ?replay=<record> as well)
                        # radio probe: /radio-probe.html (built into dist/ too) measures a phone-to-phone
                        #   sound link, for multiplayer over audio (reports/Audio modem for lockstep multiplayer.md)
+node tools/online-smoke.mjs  # two pages play an online duel through the deployed relay (against dist/,
+                       #   served as simonw.github.io, the only origin the relay accepts; --shots)
+cd relay && uv run pytest    # the relay's tests (relay/README.md: running and deploying it)
 node tools/shots.mjs   # screenshot tour against the dev server (SPECTATE=1, MAP=...)
 node tools/showcase.mjs  # staged close-up skirmish for checking weapon effects
 ```
@@ -284,6 +294,8 @@ npm run art:textures   # just the biome rock textures the 3D cliffs and crags us
   game differs from it.
 - **`ICONS.md`** — the HUD portraits: why they're shots of the 3D models,
   and how they're framed and finished.
+- **`relay/README.md`** — the online duel's WebSocket relay: its protocol,
+  and how to run and deploy it to Fly.
 
 ## Architecture
 
