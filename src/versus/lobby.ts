@@ -318,6 +318,8 @@ export interface LobbyLink extends LinkTransport {
   modemStats?(): ModemStats | null;
   /** The modem's errors (RigLink: the worklet's, kept across rebuilds). */
   onError?: ((message: string) => void) | null;
+  /** The modem stopped (RigLink.stopped): its error was fatal, not a refused message. */
+  readonly stopped?: boolean;
 }
 
 /** What the lobby uses of the rig. */
@@ -751,13 +753,16 @@ export class LobbyMachine {
   }
 
   /**
-   * The modem's error (see the header). WorkletTransport makes the stats of
-   * a modem that stopped stale at once, before it calls onError, so a modem
-   * still reporting has only refused a message.
+   * The modem's error (see the header). A link that says whether its modem
+   * stopped (RigLink.stopped, set before onError) is taken at its word: a
+   * refused message that came before the first stats report, or while they
+   * were stale, isn't fatal. One that doesn't say falls back to its stats,
+   * which WorkletTransport makes stale at once for a modem that stopped.
    */
   private linkError(link: LobbyLink, message: string): void {
     const ours = link === this.link && !this.released && this.step !== "started";
-    if (ours && !link.modemStats?.()) this.fail(new ModemError(message));
+    const dead = link.stopped ?? !link.modemStats?.();
+    if (ours && dead) this.fail(new ModemError(message));
     else console.warn("sound link:", message);
   }
 

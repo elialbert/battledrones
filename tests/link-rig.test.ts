@@ -5,7 +5,7 @@
 // page's visibility, timers on a manual clock) and of the WorkletTransport.
 import { describe, expect, it, vi } from "vitest";
 import type { ModemConfig, ModemStats } from "../src/link/modem/core";
-import { LEAVE_AFTER_FAILURES, openRig, RigError, RIG_MESSAGES, type MicMode, type RigEnv, type RigTransport } from "../src/link/rig";
+import { LEAVE_AFTER_FAILURES, openRig, RECOVERED_MS, RigError, RIG_MESSAGES, type MicMode, type RigEnv, type RigTransport } from "../src/link/rig";
 import { PAYLOAD_BITS, type BandPlan, type LinkPacket, type LinkStats, type ModemMode, type OutFrame } from "../src/link/transport";
 import { WorkletTransport, type WorkletTransportOptions } from "../src/link/worklet-transport";
 import type { FromWorklet, ToWorklet } from "../src/link/worklet-protocol";
@@ -1238,6 +1238,30 @@ describe("a modem that stops", () => {
 
   const STOPPED: FromWorklet = { t: "error", message: "the modem stopped: boom", fatal: true };
   const REFUSED: FromWorklet = { t: "error", message: "a list of 0 payloads (1 to 8)", fatal: false };
+
+  it("counts a tap after which the modem stops again at once as failed, so Leave comes; one that held RECOVERED_MS starts the count afresh", async () => {
+    const w = world();
+    const { rig, nodes, lost } = await withModems(w);
+    nodes[0]!.from(STOPPED);
+    expect(lost).toEqual(["modem"]);
+    // each rebuild's modem stops again a moment later: the taps "work", but the link never holds
+    expect(await rig.reconnect()).toBe(true);
+    expect(rig.failures).toBe(0);
+    await w.clock.advance(1000);
+    nodes.at(-1)!.from(STOPPED);
+    expect([rig.state, rig.failures]).toEqual(["lost", 1]);
+    expect(await rig.reconnect()).toBe(true);
+    await w.clock.advance(1000);
+    nodes.at(-1)!.from(STOPPED);
+    expect([rig.state, rig.failures]).toEqual(["lost", LEAVE_AFTER_FAILURES]);
+    // a tap after which the link holds: the count starts afresh, and a loss much later is a first one again
+    expect(await rig.reconnect()).toBe(true);
+    await w.clock.advance(RECOVERED_MS + 1000);
+    nodes.at(-1)!.from(STOPPED);
+    expect([rig.state, rig.failures]).toEqual(["lost", 0]);
+    expect(lost).toEqual(["modem", "modem", "modem", "modem"]);
+    rig.close();
+  });
 
   it("takes a fatal error or the processor failing as a lost link, once, after the link's onError; a refused message is none; the tap rebuilds it, the state replayed", async () => {
     const w = world();

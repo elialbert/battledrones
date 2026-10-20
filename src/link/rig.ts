@@ -108,7 +108,9 @@
  *    to "running" by itself as the call ended, or "suspended") is resumed
  *    and kept. A reconnect counts as failed when the context isn't running
  *    1 s after the tap or the microphone request fails, and success resets
- *    the count;
+ *    the count — unless the link is lost again within RECOVERED_MS (10 s),
+ *    when that tap counts as failed after all (a modem that stops again at
+ *    every rebuild would otherwise never reach Leave);
  *  - a rebuilt context whose rate can't carry the plan gets settleRate's
  *    second try once the microphone is in: one more context, kept if its
  *    rate is higher;
@@ -191,6 +193,13 @@ export function micConstraints(mode: MicMode): MediaTrackConstraints {
 
 /** The ways out of the overlay: Leave is offered after this many failed reconnects. */
 export const LEAVE_AFTER_FAILURES = 2;
+/**
+ * A reconnect counts as having worked once the link has held this long
+ * after it: lost again sooner (a modem that stops again at every rebuild,
+ * a microphone that drops at once), the tap failed after all, so the
+ * overlay still reaches Leave.
+ */
+export const RECOVERED_MS = 10_000;
 /** The lobby starts lockstep, and the overlay closes, after this much gap-free capture (ms). */
 export const CAPTURE_OK_MS = 1500;
 /** onLost thresholds (ms). */
@@ -426,6 +435,11 @@ export class RigLink implements LinkTransport {
     return this.cur.modemStats();
   }
 
+  /** The modem under it stopped (WorkletTransport.stopped): what tells a fatal error from a refused message. */
+  get stopped(): boolean {
+    return this.cur.stopped;
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -492,6 +506,8 @@ export class Rig {
   private lostFns = new Set<(reason: LostReason) => void>();
   private lostReason: LostReason | null = null;
   private fails = 0;
+  /** The last reconnect that worked, until the link has held RECOVERED_MS: when (rig clock), and the failures before it. */
+  private recovered: { at: number; fails: number } | null = null;
   private lastErr: RigError | null = null;
   /** The state a context stayed in when a reconnect's resume did not take: the next reconnect rebuilds it if it is still there. */
   private stuckIn: string | null = null;
@@ -764,6 +780,7 @@ export class Rig {
           return false;
         }
         this.stuckIn = null;
+        this.recovered = { at: this.env.now(), fails: this.fails };
         this.fails = 0;
         this.lastErr = null;
         this.lostReason = null;
@@ -1090,6 +1107,9 @@ export class Rig {
   }
 
   private lose(reason: LostReason): void {
+    // (lost again right after a reconnect that seemed to work: that tap failed after all)
+    if (this.recovered && this.env.now() - this.recovered.at < RECOVERED_MS) this.fails = this.recovered.fails + 1;
+    this.recovered = null;
     this.st = "lost";
     this.lostReason = reason;
     for (const fn of [...this.lostFns]) fn(reason);

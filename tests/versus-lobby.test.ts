@@ -685,6 +685,43 @@ describe("the lobby's logic", () => {
     warn.mockRestore();
   });
 
+  it("a message the modem refused before its first stats report is no reason to end the lobby: only a stopped modem is", { timeout: 30_000 }, async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const c = clock();
+    const port = { onmessage: null as ((e: { data: FromWorklet }) => void) | null, postMessage: () => undefined };
+    const node = { port, onprocessorerror: null as (() => void) | null, connect: () => undefined, disconnect: () => undefined };
+    const ctx = { sampleRate: 48000, currentTime: 0, state: "running", destination: {} };
+    let link: RigLink | null = null;
+    const ended: LobbyEnd[] = [];
+    const rig = fakeRig();
+    const m = new LobbyMachine({
+      now: c.now, build: BUILD, random: () => 0.5, rig, practice: null, rematch: null, seat: null,
+      prefs: { plan: "high", micMode: "raw" }, savePrefs: () => undefined, offer: OFFER, guard: () => undefined,
+      begin: () => undefined, released: (why) => void ended.push(why),
+      link: async (cfg) => {
+        const full = { ...cfg, sampleRate: 48000 };
+        const t = new WorkletTransport(ctx as unknown as BaseAudioContext, full, { clock: c.now, createNode: () => node as unknown as AudioWorkletNode });
+        return (link = new RigLink(t, full));
+      }
+    });
+    await flush();
+    m.host();
+    await flush();
+    // no stats report yet (modemStats() is null), and the worklet refuses a message: the modem runs on
+    expect(link!.modemStats()).toBeNull();
+    port.onmessage?.({ data: { t: "error", message: "a list of 0 payloads (1 to 8)", fatal: false } });
+    expect(link!.stopped).toBe(false);
+    expect(m.state()).toMatchObject({ step: "pairing", error: null });
+    expect(ended).toEqual([]);
+    expect(warn).toHaveBeenCalledWith("sound link:", "a list of 0 payloads (1 to 8)");
+    // then it stops: that ends the lobby
+    port.onmessage?.({ data: { t: "error", message: "the modem stopped: boom", fatal: true } });
+    expect(link!.stopped).toBe(true);
+    expect(m.state().error).toEqual({ kind: "modem", message: "the modem stopped: boom" });
+    expect(ended).toEqual(["error"]);
+    warn.mockRestore();
+  });
+
   it("a microphone mode switch leaves the guard as it is: its cut is the same in both modes, on every phone", async () => {
     const b = bench();
     await flush();

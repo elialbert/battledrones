@@ -1055,7 +1055,10 @@ link, once its detection has locked, is rebuilt on the plan it found with
   the rig knows (`lastError`: the microphone refused or missing, the rate, a
   worklet that won't load), with the lobby's advice for it ("Try again with
   headphones and Bluetooth disconnected."); the report's reconnect button
-  after the match says the same. After 2 failures it offers Leave. The
+  after the match says the same. After 2 failures it offers Leave. A tap
+  after which the link is lost again within 10 s (`RECOVERED_MS`: a modem
+  that stops again at every rebuild) counts as failed after all, so the
+  overlay still gets there. The
   overlay closes after 1.5 s of gap-free capture. A "tap-to-start" rig moves to running by itself
   if the context starts without a tap, so the lobby watches the state.
 - **No wake lock.** Where the wake lock is missing (Safari before 16.4),
@@ -1329,7 +1332,8 @@ does nothing. With an interactive feed, GameScene behaves as follows:
    - nothing heard (after 8 s, the role-switch hint; after 30 s, tips);
    - the update-ready message;
    - the modem stopped: the worklet's errors reach the lobby through the
-     link's `onError`. A fatal one (the modem's stats then go stale) shows
+     link's `onError`. A fatal one (`RigLink.stopped`, set before `onError`;
+     a link that can't say falls back to its stats having gone stale) shows
      "The sound link stopped working." with "Close, then tap Duel to start it
      again. (<the modem's words>)", Close and Reload, and lets the audio go
      at once. A message the modem only refused is logged. Once the match
