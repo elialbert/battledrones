@@ -3,7 +3,7 @@
 // special: the cards on the vehicles page (vehicles.html) and the 3D models
 // page (models.html).
 import {
-  BUILDINGS, DAMAGE_VS, ECONOMY, GOLIATH, INFANTRY, TERRAIN, UNITS, shotDamage,
+  BUILDINGS, DAMAGE_VS, ECONOMY, GOLIATH, INFANTRY, OBJECTIVES, TERRAIN, UNITS, shotDamage,
   type ArmedStats, type GoliathWeaponStats
 } from "./sim/balance";
 import { COUNTERS } from "./game/advisor";
@@ -209,11 +209,66 @@ export function card(kind: UnitKind, { portrait = true, id = true } = {}): strin
 
 // ------------------------------------------------------------ buildings ---
 
-export const BUILDING_GROUPS: { title: string; kinds: BuildingKind[] }[] = [
+/** The map's objectives: no one builds them, both sides fight over them. */
+export type ObjectiveKind = "uplink" | "supply-crate";
+export type SiteKind = BuildingKind | ObjectiveKind;
+
+export const BUILDING_GROUPS: { title: string; kinds: SiteKind[] }[] = [
   { title: "Command and economy", kinds: ["hq", "depot", "radar"] },
   { title: "Production", kinds: ["fab-plant", "airpad", "assembly-bay", "tech-lab", "gantry"] },
-  { title: "Defences", kinds: ["turret", "sam-site"] }
+  { title: "Defences", kinds: ["turret", "sam-site"] },
+  { title: "Map objectives", kinds: ["uplink", "supply-crate"] }
 ];
+
+const isObjective = (k: SiteKind): k is ObjectiveKind => k === "uplink" || k === "supply-crate";
+const U = OBJECTIVES.uplink;
+const D = OBJECTIVES.drops;
+const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const OBJECTIVE_INFO: Record<ObjectiveKind, { name: string; role: string; tags: string[]; stats: [string | number, string][]; features: string[] }> = {
+  uplink: {
+    name: "Uplink relay",
+    role: "A capturable relay in the contested middle of the map: scrap, vision and command charge to whoever holds it.",
+    tags: ["Neutral", "Capturable"],
+    stats: [[`${U.income}/s`, "Scrap"], [U.sight, "Sight"], [U.radius, "Zone"], [`~${Math.round(100 / U.maxRate)}s`, "Capture"]],
+    features: [
+      `Park units in its ${U.radius}-tile zone to swing the capture bar your way: neutral to yours takes about ${Math.round(100 / U.maxRate)} s with four units, taking it off the enemy twice that.`,
+      `Infantry squads count ${INFANTRY.captureWeight}× and aircraft ${U.airWeight}×; harvesters don't count.`,
+      `Its holder earns ${U.income} scrap a second, sees ${U.sight} tiles around it and charges their command meter for calldowns.`,
+      "Some sit on islands only robot infantry flown in by Condor can take, and an island relay pays only while troops stand on it."
+    ]
+  },
+  "supply-crate": {
+    name: "Supply crate",
+    role: "Parachuted onto the battlefield in pairs: the first unit there takes it.",
+    tags: ["Neutral", "Announced to both sides"],
+    stats: [[mmss(D.first), "First"], [`${D.every}s`, "Every"], [`${D.warning}s`, "Warning"], [`${D.ttl}s`, "Lasts"]],
+    features: [
+      `The first drop lands at ${mmss(D.first)}, then one every ${D.every} s, announced to both sides ${D.warning} s ahead with a pillar of light where they'll land.`,
+      `Any unit but a harvester that comes within ${D.claimRadius} tiles claims it; unclaimed, it burns out after ${D.ttl} s.`,
+      `Inside: ${D.scrap} scrap, Veterans (+1 rank to the claimer and allies within ${D.veteranRadius} tiles), Field Repair (${Math.round(D.repairShare * 100)}% HP to your units within ${D.repairRadius}), +${D.charge} command charge, or a rare free Lancer.`
+    ]
+  }
+};
+
+/** A building's or objective's name. */
+export const siteName = (k: SiteKind): string => (isObjective(k) ? OBJECTIVE_INFO[k].name : BUILDINGS[k].name);
+
+/** A building's or objective's card (buildingCard(), or the objective's own). */
+export function siteCard(kind: SiteKind, { id = true } = {}): string {
+  if (!isObjective(kind)) return buildingCard(kind, { id });
+  const o = OBJECTIVE_INFO[kind];
+  return `<article${id ? ` id="${kind}"` : ""}>
+    <div class="head">
+      <div>
+        <h3>${o.name}</h3>
+        <div class="role">${o.role}</div>
+        <div class="tags">${o.tags.map((t) => `<span class="tag">${t}</span>`).join("")}</div>
+      </div>
+    </div>
+    <div class="stats">${o.stats.map(([v, l]) => stat(v, l)).join("")}</div>
+    <ul class="features">${o.features.map((f) => `<li>${f}</li>`).join("")}</ul>
+  </article>`;
+}
 
 const BUILDING_FEATURES: Record<BuildingKind, string[]> = {
   hq: [

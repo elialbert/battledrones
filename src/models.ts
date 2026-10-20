@@ -11,17 +11,19 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { GantryView, type GoliathHost } from "./game/render/goliath";
-import { buildingDef, CRAWLER_LEGS, instance, modelMesh, rubbleGeometry, unitDef, unitScale } from "./game/three/models";
+import {
+  buildingDef, chuteGeometry, CRAWLER_LEGS, crateDef, instance, modelMesh, rubbleGeometry, unitDef, unitScale, uplinkDef
+} from "./game/three/models";
 import { GoliathRig, type GoliathGun, type GoliathPose } from "./game/three/goliath";
 import { baySeats, SquadRig, type BotKind } from "./game/three/infantry";
-import { fowUniforms, glowMat, setVariant } from "./game/three/materials";
+import { discMat, fowUniforms, glowMat, setVariant } from "./game/three/materials";
 import { SUN_DIR } from "./game/three/stage";
 import { discTexture } from "./game/three/textures";
 import { Ease } from "./game/three/tween";
 import { HOVER_H } from "./game/three/view";
 import { BUILDINGS, GOLIATH, TICK_RATE, UNITS } from "./sim/balance";
 import type { Building, BuildingKind, Faction, UnitKind } from "./sim/types";
-import { BUILDING_GROUPS, GROUPS, buildingCard, card } from "./unit-info";
+import { BUILDING_GROUPS, GROUPS, card, siteCard, siteName, type SiteKind } from "./unit-info";
 
 /**
  * A model on its pad, and how it plays each of its animations. `step` poses
@@ -35,6 +37,8 @@ interface Model {
   anims: string[];
   step(anim: string, t: number, dt: number): [number, number];
   dispose?(): void;
+  /** Belongs to no side: no Blue/Red buttons. */
+  neutral?: boolean;
 }
 
 const BOTS: BotKind[] = ["trooper", "rocket-squad", "sniper"];
@@ -533,7 +537,103 @@ function building(kind: BuildingKind, f: Faction, glows: Glows): Model {
   };
 }
 
-function makeModel(kind: UnitKind | BuildingKind, f: Faction, glows: Glows): Model {
+// the objectives' colours (render/objectives.ts)
+const HOLDER: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
+const NEUTRAL = 0xe8c66a;
+const GOLD = 0xffd66e;
+
+/** A flat glow disc on the ground, `size` tiles across. */
+function groundGlow(color: number, size: number): { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial } {
+  const mat = discMat(color, 0);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), mat);
+  mesh.position.y = 0.04;
+  mesh.scale.setScalar(size);
+  mesh.renderOrder = 3;
+  return { mesh, mat };
+}
+
+/**
+ * The Uplink relay: its dish scanning while no one holds it, turning for its
+ * holder (Blue or Red: the side buttons pick who), spinning up while it's
+ * captured, the capture bar filling round it until it flips.
+ */
+function uplink(f: Faction): Model {
+  const root = new THREE.Group();
+  const m = instance(uplinkDef());
+  root.add(m.root);
+  const glow = groundGlow(NEUTRAL, 3.2);
+  root.add(glow.mesh);
+  // the capture bar: a ring round the platform on a dark track (render/objectives.ts draws it on the ground)
+  const track = new THREE.Mesh(new THREE.RingGeometry(1.3, 1.46, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x0b0f16, transparent: true, opacity: 0.62, depthWrite: false }));
+  track.position.y = 0.03;
+  const barMat = new THREE.MeshBasicMaterial({ color: HOLDER[f], transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false });
+  const bar = new THREE.Mesh(new THREE.BufferGeometry(), barMat);
+  bar.position.y = 0.035;
+  root.add(track, bar);
+  let spin = 0;
+  let filled = -1;
+  const setBar = (p: number) => {
+    if (Math.abs(p - filled) < 0.004) return;
+    filled = p;
+    bar.geometry.dispose();
+    // (filled clockwise from north, seen from above)
+    bar.geometry = new THREE.RingGeometry(1.31, 1.45, 64, 1, Math.PI / 2 - Math.PI * 2 * p, Math.PI * 2 * p).rotateX(-Math.PI / 2);
+  };
+  return {
+    root,
+    anims: ["Held", "Capturing", "Neutral"],
+    step(anim, t, dt) {
+      const capture = anim === "Capturing" ? (t % 9) / 7 : 0;
+      const owned = anim === "Held" || capture >= 1;
+      const flash = capture >= 1 ? Math.max(0, 1 - (capture - 1) * 3.5) : 0;
+      const rate = anim === "Capturing" && capture < 1 ? 2.6 : owned ? 0.7 : 0;
+      spin = rate > 0 ? spin + rate * dt : Math.sin(t * 0.4) * 0.9;
+      m.turret!.rotation.y = -spin;
+      const breathe = 0.5 + 0.5 * Math.sin(t * 3);
+      glow.mat.color.setHex(owned ? HOLDER[f] : NEUTRAL);
+      glow.mat.opacity = owned ? 0.28 + 0.14 * breathe + 0.5 * flash : 0.08;
+      glow.mesh.scale.setScalar(3.2 + flash * 2);
+      barMat.color.setHex(HOLDER[f]);
+      setBar(anim === "Neutral" ? 0 : owned ? 1 : Math.min(1, capture));
+      return [0, 0];
+    }
+  };
+}
+
+/** A supply crate: coming down under its canopy, then landed, glowing and blinking for a taker. */
+function crate(): Model {
+  const root = new THREE.Group();
+  const c = instance(crateDef());
+  const chute = modelMesh(chuteGeometry(), false);
+  const glow = groundGlow(GOLD, 1.6);
+  root.add(c.root, chute, glow.mesh);
+  return {
+    root,
+    neutral: true,
+    anims: ["Drop", "Landed"],
+    step(anim, t) {
+      // Drop: down from on high under a striped canopy, swaying, then it lands and glows (render/objectives.ts)
+      const d = anim === "Drop" ? t % 6 : 6;
+      const e = Math.min(1, d / 3);
+      const hgt = (1 - e) * (1 - e * 0.35);
+      const sway = Math.sin(t * 4) * 0.2 * hgt;
+      const h = 2.6 * hgt;
+      c.root.position.set(sway * 0.4, h, 0);
+      c.root.rotation.set(sway * 0.4, 0.4, sway * 0.3);
+      chute.visible = e < 1;
+      chute.position.set(sway * 0.4, h + 0.42, 0);
+      chute.rotation.set(sway * 0.3, 0, sway * 0.5);
+      const pulse = 0.5 + 0.5 * Math.sin(t * 4.5);
+      glow.mat.opacity = e < 1 ? 0.15 * e : 0.32 + 0.25 * pulse;
+      glow.mesh.scale.setScalar(e < 1 ? 1.6 : 1.5 + 0.3 * pulse);
+      return [0, 0];
+    }
+  };
+}
+
+function makeModel(kind: UnitKind | SiteKind, f: Faction, glows: Glows): Model {
+  if (kind === "uplink") return uplink(f);
+  if (kind === "supply-crate") return crate();
   if (kind in BUILDINGS) return building(kind as BuildingKind, f, glows);
   if ((BOTS as string[]).includes(kind)) return squad(kind as BotKind, f, glows);
   if (kind === "condor") return condor(f);
@@ -616,7 +716,7 @@ class Viewer {
   private padR = 1.5;
   visible = false;
 
-  constructor(readonly kind: UnitKind | BuildingKind, readonly canvas: HTMLCanvasElement, private ui: HTMLElement, private faction: Faction = "blue") {
+  constructor(readonly kind: UnitKind | SiteKind, readonly canvas: HTMLCanvasElement, private ui: HTMLElement, private faction: Faction = "blue") {
     this.ctx = canvas.getContext("2d")!;
     this.group.add(this.glows.group);
     this.controls = new OrbitControls(this.camera, canvas);
@@ -682,8 +782,9 @@ class Viewer {
     this.ui.innerHTML =
       this.model.anims.map((a) => b(a, a === this.anim, `anim:${a}`)).join("") +
       `<span class="sep"></span>` +
-      b("Blue", this.faction === "blue", "faction:blue") +
-      b("Red", this.faction === "red", "faction:red", "red") +
+      (this.model.neutral
+        ? ""
+        : b("Blue", this.faction === "blue", "faction:blue") + b("Red", this.faction === "red", "faction:red", "red")) +
       b("↻ Spin", this.controls.autoRotate, "spin");
   }
 
@@ -745,7 +846,7 @@ class Viewer {
 /** The page's two tabs: units and buildings, each its nav, groups and rows of card and viewer. */
 const TABS = {
   units: { groups: GROUPS, name: (k: string) => UNITS[k as UnitKind].name, card: (k: string) => card(k as UnitKind, { portrait: false, id: false }) },
-  buildings: { groups: BUILDING_GROUPS, name: (k: string) => BUILDINGS[k as BuildingKind].name, card: (k: string) => buildingCard(k as BuildingKind, { id: false }) }
+  buildings: { groups: BUILDING_GROUPS, name: (k: string) => siteName(k as SiteKind), card: (k: string) => siteCard(k as SiteKind, { id: false }) }
 };
 type Tab = keyof typeof TABS;
 
@@ -805,7 +906,7 @@ if (renderer) {
     { rootMargin: "100px" }
   );
   for (const el of document.querySelectorAll<HTMLElement>(".viewer")) {
-    const v = new Viewer(el.dataset.kind as UnitKind | BuildingKind, el.querySelector("canvas")!, el.querySelector(".controls")!);
+    const v = new Viewer(el.dataset.kind as UnitKind | SiteKind, el.querySelector("canvas")!, el.querySelector(".controls")!);
     viewers.set(el, v);
     seen.observe(el);
     el.querySelector(".controls")!.addEventListener("click", (e) => {
