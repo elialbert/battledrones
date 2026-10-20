@@ -273,6 +273,12 @@ when the input delay leaves room for it:
   `capacity ≥ minCapacity(D)`: 175, 175, 177, 177, 183, 183 bits for D = 3…8,
   because the window always holds the empty turns latency leaves. Real links
   carry 186 or 188.
+- **The low plan's limit.** About one frame of orders is in flight per round
+  trip, and on the low plan the round trip is near 1 s, so heavy order
+  traffic queues there: with a 30-unit order from each side every 5 s
+  (rtt 956 ms, D 8), orders waited 3.4–7.0 s on average and up to 17.8 s,
+  with no stall. The low plan is the fallback for phones that can't play the
+  high band; the HUD's "Orders queued" says when it happens.
 
 ### Hash trail and the end of the match
 
@@ -652,6 +658,13 @@ in detail; the main ones:
   that goes back silences output until the next boundary. A capture gap (an
   input block that is all zero or not finite) leaves the transmit stream
   alone: the output was rendered on time, so the friend's lock is intact.
+- **Restart on re-acquisition.** A phone that locks again on a friend it had
+  not heard for over 1 s starts a new superframe of its own, so the friend
+  (which may have lost it too) gets a sync quickly, but only when the
+  friend's new sync is off the superframe grid of the stream it knew (the
+  friend's own audio stopped and started over). At most once per 5 s, and
+  not if this phone restarted for any reason since it last heard that
+  friend, so two phones can't keep restarting each other.
 - **Payload.** The modem holds a list of payloads (`setPayloads`), each with
   a key. A packet takes, from the newest list delivered before its first
   symbol starts, the first payload whose key is greater than the last key
@@ -722,7 +735,10 @@ in detail; the main ones:
     and its share of μ is capped at 2× that median. A tone whose signal stands
     less than 2× above the running mean of its `d̃` (time constant 32
     symbols; scrambled data averages out, a steady interferer does not) is
-    weighted by `(SIR/2)²`. The pilot slope fit and the pilot SNR weight an
+    weighted by `(SIR/2)²` — once that running mean stands clear of the
+    scatter noise alone leaves in it (its square over 4 · α/(2 − α) times
+    the running mean of `|d̃ − mean|²`, α = 1/32), so a burst of noise
+    doesn't make every tone look interfered. The pilot slope fit and the pilot SNR weight an
     outlier pilot (over 2× the median of its 5-pilot neighbourhood) the same
     way. With no interferer all of this is the plain rule above.
 - **Decoding.** Descramble, deinterleave, soft Viterbi (zero-tail), then:
@@ -862,11 +878,16 @@ export interface LinkTransport {
   - `stats()` and `modemStats()` go stale once the newest report is over 1 s
     old, or after a fatal error: unlocked, no SNR.
   - Suspensions: at every message it compares `now()` with
-    `ctx.currentTime`. A step over 100 ms that persists for 200 ms is sent as
-    a `skip`, so the modem starts a new superframe and its friend re-acquires
-    it quickly (218–495 ms after resume in Chromium, against 1.1–1.4 s). The
-    suspended phone's own receiver still waits for its friend's next sync:
-    its microphone input comes back about 20 ms off the context's clock.
+    `ctx.currentTime`. A step over 100 ms stands once the lowest reading of
+    the last 100 ms agrees with the lowest of the 200 ms before within the
+    readings' own spread (3 × the median excess of 20 baseline readings over
+    their lowest, kept between 15 and 50 ms); it is then sent as a `skip`, so
+    the modem starts a new superframe and its friend re-acquires it quickly
+    (218–495 ms after resume in Chromium, against 1.1–1.4 s). A catch-up
+    slower than the spread per 100 ms can't be told from lost time. The
+    suspended phone's own receiver waits for its friend's re-acquisition
+    restart (above): its microphone input comes back about 20 ms off the
+    context's clock.
   - While a Join detects its plan, `capacity()` is 186 until a report of its
     own shows the lock; `detectedPlan()` says what it found.
 
@@ -1112,7 +1133,9 @@ does nothing. With an interactive feed, GameScene behaves as follows:
   - the headline reads "vs your friend · <map> · <time> · over sound";
   - the tips leave out difficulty and AI;
   - a Sound duel section shows the record, link quality (good/bad packets,
-    stall time, average order delay) and the sync status.
+    "Waiting on the link", and "Order delay" / "Slowest order": real time
+    from the order being drained to it being stepped here, with this phone's
+    own pauses left out) and the sync status.
 
   The actions are Rematch, Save battle and Menu.
 - **In flight.** Controller keeps an `inFlight` list of placement and
@@ -1196,9 +1219,14 @@ does nothing. With an interactive feed, GameScene behaves as follows:
    - **Route check:** if `ownSnrDb < 10` for 3 s, "This phone can't hear its
      own signal: sound may be going to the earpiece or Bluetooth, or it can't
      play this band. Unplug headphones, turn the volume up, or switch the host
-     to band Low."
-   - **Loud own signal:** if the microphone peaks above −6 dBFS, the gain
-     drops.
+     to band Low." (In a rematch, or where this phone hosts on band Low
+     already, it ends "Unplug headphones or turn the volume up.")
+   - **Loud own signal:** a stats report counts when the microphone peaks
+     above −6 dBFS while the self-monitor hears the own signal
+     (`ownSnrDb ≥ 10`): a clap or a voice is not the phone's own signal. An
+     unbroken 2 s run of them lowers the gain 3 dB, at most once a second,
+     down to 0.5; it comes back up 1 dB every 2 s after 5 s with none. The
+     note never shows together with the route warning.
 4. **Paired:** the map name or code and the mutators, then opener cards, then
    "Waiting for your friend to pick…".
 5. **GO**, then loading, then the match.
@@ -1254,9 +1282,9 @@ Long tests set explicit timeouts (60–180 s).
 | `tests/versus-session.test.ts` | Two Sessions over PacketAir from pairing through a match with AIs: identical trails at 0/10/30% loss and a 3 s outage, a slow loader, the session CRC after GO, mode adaptation, leave and end frames from every phase, replayed lobby frames |
 | `tests/lift-split.test.ts` | A select-all split into pieces applied in one tick equals the single command; a Goliath-only order still waits |
 | `tests/link-guard.test.ts` | The FIR guard's response for both plans at 44.1 and 48 kHz, and delivery with a loud battle mix through the guard at own path +40 dB |
-| `tests/duel-fullstack.test.ts` | Pairing, then a 90 s duel through `RoomLink` with AIs on both phones: identical hash trails, and at least 90% of ticks without a stall after the first 2 s |
+| `tests/duel-fullstack.test.ts` | Pairing, then a 90 s duel through `RoomLink` and VersusFeed (and, for Join, the lobby, each modem starting at its tap) with AIs and 30-unit bursts on both phones: identical hash trails, at least 90% of ticks without a stall after the first 2 s (counted as ticks that waited and as time stalled), equal saved records that replay. High and low plans; 48/44.1 kHz at ±300 ppm with the jammer and own path +40 dB; a 1 s capture gap and a 700 ms jump; Join detection on both plans |
 | `tools/worklet-smoke.mjs` | The built worklet decodes both ways in Chromium |
-| `tools/duel-smoke.mjs` | Two pages through the relay, end to end |
+| `tools/duel-smoke.mjs` | Two pages through the relay, end to end: the lobby by hand, opener picks, orders, a one-way outage, pause, resign, equal trails, hashes and saved records, and a rematch with sides swapped |
 
 ## Before launch, on real phones
 
