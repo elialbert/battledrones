@@ -41,6 +41,8 @@ export interface PowerPanel {
   /** What to draw under the pointer while armed. */
   preview(): TargetPreview | null;
   cancel(): void;
+  /** Keys 4–7: the `i`th power's button, as a tap (arm it, or disarm it if armed). */
+  press(i: number): void;
   /** The context chip while armed ("Tap map: Barrage" + cancel). */
   chip(): { label: string; cancel(): void } | null;
   update(): void;
@@ -91,7 +93,7 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     <div class="pw-meter" title="Command meter: fills over time, and from your losses (and kills)"><i>⚡</i><b>0</b></div>
     <div class="pw-grid">
       ${POWER_KINDS.map(
-        (p) => `<button class="pw" data-p="${p}" aria-label="${POWER_NAMES[p]}" title="${POWER_NAMES[p]}" style="--c:${COLOR[p]}">
+        (p, i) => `<button class="pw" data-p="${p}" aria-label="${POWER_NAMES[p]}" title="${POWER_NAMES[p]} (${i + 4})" style="--c:${COLOR[p]}">
           <span class="pw-ring"></span><span class="pw-face">${ICON[p]}</span><span class="pw-tag"></span>
         </button>`
       ).join("")}
@@ -156,23 +158,28 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     btn.addEventListener("pointercancel", clear);
     btn.addEventListener("contextmenu", (e) => e.preventDefault());
     btn.addEventListener("click", () => {
-      if (long) return;
-      if (targeting === p) {
-        arm(null);
-        sfx.play("click", 0.5);
-        return;
-      }
-      const why = api.ctrl.powerBlocker(p);
-      if (why) {
-        api.notify(why, "bad");
-        btn.classList.remove("nope");
-        void btn.offsetWidth;
-        btn.classList.add("nope");
-        return;
-      }
-      arm(p);
-      sfx.play("click");
+      if (!long) tap(p);
     });
+  }
+
+  /** A tap on power `p`'s button (or its key): arm it, disarm it, or say why not. */
+  function tap(p: PowerKind): void {
+    const btn = btns.get(p)!.b;
+    if (targeting === p) {
+      arm(null);
+      sfx.play("click", 0.5);
+      return;
+    }
+    const why = api.ctrl.powerBlocker(p);
+    if (why) {
+      api.notify(why, "bad");
+      btn.classList.remove("nope");
+      void btn.offsetWidth;
+      btn.classList.add("nope");
+      return;
+    }
+    arm(p);
+    sfx.play("click");
   }
 
   function update(): void {
@@ -262,6 +269,11 @@ export function createPowerPanel(api: PowerPanelApi): PowerPanel {
     },
     cancel() {
       if (targeting) arm(null);
+    },
+    press(i) {
+      const p = POWER_KINDS[i];
+      // (a match with no Drop Pod crew has no pod button)
+      if (p && !el.hidden && !btns.get(p)!.b.hidden) tap(p);
     },
     chip() {
       return targeting ? { label: `Tap map: ${POWER_NAMES[targeting]}`, cancel: () => arm(null) } : null;
