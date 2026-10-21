@@ -875,6 +875,10 @@ button {
 
 /* Landscape: dock as a right-edge sidebar (thumb-reachable). */
 @media (orientation: landscape) {
+  /* the build sidebar's width (wider as the desk sidebar, below): what sits beside it keeps clear */
+  #hud {
+    --bar-w: 172px;
+  }
   .dock {
     top: 0;
     bottom: 0;
@@ -888,7 +892,7 @@ button {
   }
   .buildbar {
     height: 100%;
-    width: calc(172px + env(safe-area-inset-right));
+    width: calc(var(--bar-w) + env(safe-area-inset-right));
     border-width: 0 0 0 1px;
     border-radius: 16px 0 0 16px;
     padding: max(6px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
@@ -915,7 +919,7 @@ button {
     height: 70px;
   }
   .minimap-wrap {
-    right: calc(182px + env(safe-area-inset-right));
+    right: calc(var(--bar-w) + 10px + env(safe-area-inset-right));
     top: max(6px, env(safe-area-inset-top));
   }
   .zoombtns {
@@ -923,16 +927,17 @@ button {
     transform: translateY(-50%);
   }
   .card {
-    right: calc(186px + env(safe-area-inset-right));
+    right: calc(var(--bar-w) + 14px + env(safe-area-inset-right));
     top: 50%;
     transform: translateY(-50%);
     animation-name: cardInL;
   }
-  /* centred at 50vw − 90px; never under the round buttons (right edge ~102 px) or the
-     minimap (left edge 100vw − 302 px): a pill that doesn't fit wraps to a second row */
+  /* centred over the battlefield (50vw − 90px beside the 172 px sidebar); never under the
+     round buttons (right edge ~102 px) or the minimap (left edge 100vw − 302 px there):
+     a pill that doesn't fit wraps to a second row */
   .topbar {
-    left: calc(50% - 90px);
-    max-width: calc(100vw - 432px);
+    left: calc(50% - var(--bar-w) / 2 - 4px);
+    max-width: calc(100vw - var(--bar-w) - 260px);
     flex-wrap: wrap;
     justify-content: center;
     row-gap: 4px;
@@ -3795,8 +3800,8 @@ button {
   position: absolute;
   top: calc(max(6px, env(safe-area-inset-top)) + 50px);
   left: max(8px, env(safe-area-inset-left));
-  /* clear of the battle meter that hangs under the top bar (centred at 50vw − 90px) */
-  max-width: min(210px, calc(50vw - 186px));
+  /* clear of the battle meter that hangs under the top bar (centred over the battlefield) */
+  max-width: min(210px, calc(50vw - var(--bar-w, 172px) / 2 - 100px));
 }
 
 /* objectives card (tap the goal pill) and the pause screen's copy of it */
@@ -4655,7 +4660,7 @@ button {
 /* landscape: beside the build sidebar, under the minimap */
 @media (orientation: landscape) {
   .powers {
-    right: calc(186px + env(safe-area-inset-right));
+    right: calc(var(--bar-w) + 14px + env(safe-area-inset-right));
   }
 }
 @media (orientation: landscape) and (max-height: 560px) {
@@ -5708,5 +5713,164 @@ button {
   .mapcard.uncharted .mfog::before {
     animation: none;
     opacity: 1;
+  }
+}
+
+/* ========================================================== desk sidebar === */
+/* A landscape screen with a mouse (src/ui/hud.ts DESK_QUERY): the dock is one
+   sidebar. The build grid is three wide at the top, so it's shaped like the
+   keys that press it (Q W E / A S D / Z X C, src/ui/build-keys.ts) and never
+   moves; under it the calldowns, then the selection, its chips and the squads,
+   which come and go at the bottom without shifting the grid. */
+.pw-slot {
+  display: none;
+}
+#hud.desk {
+  --bar-w: 256px;
+}
+#hud.desk .dock {
+  width: calc(var(--bar-w) + env(safe-area-inset-right));
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: auto;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(14, 20, 32, 0.94), rgba(8, 11, 18, 0.97));
+  border-left: 1px solid var(--line);
+  border-radius: 16px 0 0 16px;
+  box-shadow: 0 -6px 22px rgba(0, 0, 0, 0.45);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+#hud.desk .buildbar {
+  flex: none;
+  width: auto;
+  height: auto;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+#hud.desk .grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+#hud.desk .pw-slot {
+  display: block;
+  padding: 4px 8px 0;
+}
+#hud.desk .powers {
+  position: static;
+  transform: none;
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 0 12px;
+  border-top: 1px solid var(--line);
+}
+#hud.desk .pw-meter {
+  min-width: 0;
+  padding: 2px 6px;
+}
+#hud.desk .pw-grid {
+  flex-direction: row;
+  gap: 8px;
+}
+#hud.desk .pw {
+  width: 44px;
+  height: 44px;
+}
+#hud.desk .pw-face {
+  inset: 5px;
+}
+#hud.desk .pw-face svg {
+  width: 21px;
+  height: 21px;
+}
+#hud.desk .ctx {
+  order: 3;
+  margin-top: auto;
+  align-items: stretch;
+  padding: 8px 8px 0;
+}
+#hud.desk .selpanel {
+  max-width: none;
+}
+/* Stop, Move only and ✕ on one row */
+#hud.desk .chips,
+#hud.desk .chiprow {
+  gap: 5px;
+}
+#hud.desk .chip {
+  padding: 6px 10px;
+}
+/* the squads along the bottom, the selection's chips over them */
+#hud.desk .chiprow {
+  flex-direction: column-reverse;
+  align-items: flex-start;
+}
+/* tall enough (≥ 880 px): the minimap heads the sidebar, as wide as it is, and leaves the
+   battlefield's top-right corner (it stays where it is in the DOM: the sidebar starts below it) */
+@media (orientation: landscape) and (min-height: 880px) {
+  #hud.desk .minimap-wrap {
+    z-index: 1;
+    top: max(8px, env(safe-area-inset-top));
+    right: calc(8px + env(safe-area-inset-right));
+  }
+  #hud.desk #minimap {
+    width: calc(var(--bar-w) - 24px);
+    height: calc(var(--bar-w) - 24px);
+  }
+  #hud.desk .dock {
+    padding-top: calc(var(--bar-w) - 2px + max(8px, env(safe-area-inset-top)));
+  }
+}
+
+/* ------------------------------------------------- build mode's keys --- */
+/* B opens it (src/ui/hud.ts buildKey): each tab and button shows its key */
+.kc {
+  display: none;
+}
+.dock.keys .kc {
+  display: block;
+  position: absolute;
+  z-index: 3;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 5px;
+  border: 1px solid #8fb8f0;
+  border-bottom-width: 2px;
+  background: #0d1626;
+  color: #e8f1ff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+.dock.keys .kc:empty {
+  display: none;
+}
+/* top centre: the ⚔ counter mark and 🔒 keep the left corner, the queue count the right */
+.dock.keys .bb .kc {
+  left: 50%;
+  top: 3px;
+  transform: translateX(-50%);
+}
+.dock.keys .tab .kc {
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.dock.keys .buildbar {
+  box-shadow: inset 0 0 0 2px rgba(110, 176, 255, 0.55);
+  border-radius: 12px;
+}
+.bb.kp {
+  animation: bbPress 0.16s;
+}
+@keyframes bbPress {
+  50% {
+    transform: scale(0.92);
+    border-color: #8fb8f0;
   }
 }

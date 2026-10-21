@@ -1637,6 +1637,8 @@ export class GameScene {
     };
     const keydown = (e: KeyboardEvent) => {
       if (typing(e)) return;
+      // build mode (B) gets first look: its letters overlap the camera's WASD (src/ui/build-keys.ts)
+      if (!this.finale && this.hud.buildKey(e)) return;
       if (/^Arrow/.test(e.code) || ["KeyW", "KeyA", "KeyS", "KeyD"].includes(e.code)) {
         if (!e.ctrlKey && !e.metaKey) {
           this.keys.add(e.code);
@@ -1660,6 +1662,7 @@ export class GameScene {
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
+      else if (e.key === "Enter" && this.ctrl.placing) this.ctrl.commitPlacement(); // the ghost where it stands (✓ Place)
       else if (e.key === "." && !this.interactive) this.aware.cycleSpeed(); // (a duel runs at one speed)
       else if (e.key === "j") this.aware.jump();
       else if (e.key === "c") this.toggleCine();
