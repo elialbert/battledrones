@@ -593,12 +593,9 @@ export function createHud(api: HudApi): Hud {
       el.classList.remove("kp");
       void el.offsetWidth; // (restart the press flash)
       el.classList.add("kp");
-      // a building started or picked up to place: one at a time, so build mode is done
-      // (a refused one, locked, short of scrap or with another under way, leaves it open);
-      // units stay open for more (B W W W: three Stingers)
-      const refused = ["locked", "poor", "busy"].some((c) => el.classList.contains(c));
+      // build mode stays open whatever is pressed (start a Fab Plant, then 2 W W for two
+      // Stingers): only B, Esc or a click on the battlefield closes it
       taps.get(key)!();
-      if (key.startsWith("b:") && !refused) setKeyMode(false);
     }
     return true;
   }
@@ -1706,5 +1703,5 @@ export const HELP_HTML = `
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them. Watching AI vs AI, the 🎥 cinematic camera (key C) follows the action by itself; pan or zoom and it hands the camera to you, taking it back a few seconds later.</p>
   <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>
-  <h3>Keyboard</h3><p><b>B</b> opens build mode: each button shows its key, laid out like the buttons (Q W E / A S D / Z X C beside the sidebar, Q W E R T… along the bottom), and <b>1</b>–<b>4</b> switch tabs. Units keep it open (B W W W: three in a row); a building closes it. Once a building is ready, B and its key again pick it up, and <b>Enter</b> places it where the ghost stands. <b>B</b> or <b>Esc</b> closes build mode. Elsewhere: <b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>Q</b> selects your army, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save), <b>U</b> unload, <b>G</b> anchor, <b>Delete</b> sell, <b>J</b> jump to a fight, <b>C</b> cinematic camera, <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancel.</p>`;
+  <h3>Keyboard</h3><p><b>B</b> opens build mode: each button shows its key, laid out like the buttons (Q W E / A S D / Z X C beside the sidebar, Q W E R T… along the bottom), and <b>1</b>–<b>4</b> switch tabs. It stays open for as much as you like (B Q 2 W W: a Fab Plant, then two Stingers) until <b>B</b>, <b>Esc</b> or a click on the battlefield closes it. Once a building is ready, its key picks it up, and <b>Enter</b> places it where the ghost stands. Elsewhere: <b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>Q</b> selects your army, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save), <b>U</b> unload, <b>G</b> anchor, <b>Delete</b> sell, <b>J</b> jump to a fight, <b>C</b> cinematic camera, <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancel.</p>`;
 
