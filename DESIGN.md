@@ -2329,7 +2329,8 @@ labels shorten ("Move", "Army") so everything stays on one row down to
 ### Mouse & keyboard
 
 Left-click select (Shift+click adds or removes a unit), left-drag
-box-select, right-click command, wheel zoom,
+box-select (Shift+drag adds the box to the selection), right-click
+command, wheel zoom,
 middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
 Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action,
 C cinematic camera (AI vs AI),
