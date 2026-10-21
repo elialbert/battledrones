@@ -577,6 +577,11 @@ export class Controller {
     this.forceMove = false;
   }
 
+  /** Shift+drag: add the boxed units to the selection (a building selected gives way). */
+  addUnits(ids: number[]): void {
+    this.selectUnits([...this.selectedUnits, ...ids]);
+  }
+
   /** Shift+click: add a unit to the selection, or take it out if it's already in. */
   toggleUnit(id: number): void {
     this.selectedBuilding = null;

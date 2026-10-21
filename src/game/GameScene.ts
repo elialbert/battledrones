@@ -1457,7 +1457,7 @@ export class GameScene {
 
   private setupInput(): void {
     const rig = this.stage.rig;
-    /** Shift was held on the click that fires a tap: it adds or removes a unit. */
+    /** Shift was held on the click that fires a tap (it adds or removes a unit), or ends a box (it adds the box). */
     let shift = false;
     this.gest = new GestureRecognizer({
       onTap: (sx, sy, type) => {
@@ -1515,7 +1515,9 @@ export class GameScene {
         // prefer combat units: a box over the mining line shouldn't grab harvesters
         const army = inBox.filter((u) => u.kind !== "harvester");
         const ids = (army.length > 0 ? army : inBox).map((u) => u.id);
-        if (ids.length > 0) this.ctrl.selectUnits(ids);
+        if (ids.length === 0) return;
+        if (shift) this.ctrl.addUnits(ids); // Shift+drag adds to the selection
+        else this.ctrl.selectUnits(ids);
       },
       onPan: (dx, dy) => {
         this.cine?.hold();

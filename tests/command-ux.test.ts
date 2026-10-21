@@ -188,6 +188,20 @@ describe("controller: touch placement", () => {
     expect(c.idleArmy()).toEqual([a.id]);
   });
 
+  it("Shift+drag adds the boxed units to the selection, keeping the rest", () => {
+    const w = field();
+    const c = new Controller(w);
+    const a = spawnUnit(w, "stinger", "blue", 10, 10);
+    const b = spawnUnit(w, "stinger", "blue", 11, 10);
+    const d = spawnUnit(w, "stinger", "blue", 12, 10);
+    c.selectUnits([a.id, b.id]);
+    c.addUnits([b.id, d.id]);
+    expect([...c.selectedUnits]).toEqual([a.id, b.id, d.id]);
+    c.selectedBuilding = 1;
+    c.addUnits([a.id]);
+    expect(c.selectedBuilding).toBeNull();
+  });
+
   it("⚔ Select army and 💤 Idle leave out harvesters and the unarmed Condor", () => {
     const w = field();
     const c = new Controller(w);
