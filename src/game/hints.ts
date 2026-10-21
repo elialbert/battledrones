@@ -30,7 +30,7 @@ export const HINTS = {
   /** How long a hint stays in the ticker, ms. */
   showMs: 7000,
   /** Priorities (lower first): what the player is doing right now beats the curriculum. */
-  priority: { placement: 0, squads: 1, transport: 1, goliath: 1, tutorial: 2, calldowns: 3, salvage: 4 }
+  priority: { placement: 0, squads: 1, transport: 1, goliath: 1, tutorial: 2, calldowns: 3, buildKeys: 3, salvage: 4 }
 } as const;
 
 export interface HintOffer {

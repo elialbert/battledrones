@@ -5718,9 +5718,10 @@ button {
 
 /* ========================================================== desk sidebar === */
 /* A landscape screen with a mouse (src/ui/hud.ts DESK_QUERY): the dock is one
-   sidebar. The build grid is three wide at the top (Base's nine: 3 × 3) and
-   never moves; under it the calldowns, then the selection, its chips and the
-   squads, which come and go at the bottom without shifting the grid. */
+   sidebar. The build grid is three wide at the top, so it's shaped like the
+   keys that press it (Q W E / A S D / Z X C, src/ui/build-keys.ts) and never
+   moves; under it the calldowns, then the selection, its chips and the squads,
+   which come and go at the bottom without shifting the grid. */
 .pw-slot {
   display: none;
 }
@@ -5823,3 +5824,53 @@ button {
   }
 }
 
+/* ------------------------------------------------- build mode's keys --- */
+/* B opens it (src/ui/hud.ts buildKey): each tab and button shows its key */
+.kc {
+  display: none;
+}
+.dock.keys .kc {
+  display: block;
+  position: absolute;
+  z-index: 3;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 5px;
+  border: 1px solid #8fb8f0;
+  border-bottom-width: 2px;
+  background: #0d1626;
+  color: #e8f1ff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+.dock.keys .kc:empty {
+  display: none;
+}
+/* top centre: the ⚔ counter mark and 🔒 keep the left corner, the queue count the right */
+.dock.keys .bb .kc {
+  left: 50%;
+  top: 3px;
+  transform: translateX(-50%);
+}
+.dock.keys .tab .kc {
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.dock.keys .buildbar {
+  box-shadow: inset 0 0 0 2px rgba(110, 176, 255, 0.55);
+  border-radius: 12px;
+}
+.bb.kp {
+  animation: bbPress 0.16s;
+}
+@keyframes bbPress {
+  50% {
+    transform: scale(0.92);
+    border-color: #8fb8f0;
+  }
+}

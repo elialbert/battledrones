@@ -24,6 +24,7 @@ import { mountHudLayout } from "./layout";
 import { HINTS, HintQueue, type HintOffer } from "../game/hints";
 import { fullscreen } from "./fullscreen";
 import { mapById } from "../sim/maps";
+import { TAB_CODES, buildKeyAction, buildKeys, keyLabel } from "./build-keys";
 
 export interface HudApi {
   world: World;
@@ -116,6 +117,12 @@ export interface Hud {
   bannerUp(prefix: string): boolean;
   /** A small toast (veteran promoted / lost…); tapping it jumps to (x, y). */
   notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
+  /**
+   * Build mode from the keyboard (src/ui/build-keys.ts): B, then 1–4 for a
+   * tab and the letter where the button sits. True: the key was build
+   * mode's (the game leaves it alone).
+   */
+  buildKey(e: KeyboardEvent): boolean;
   /** A plain short toast (e.g. why a calldown can't fire). */
   notify(msg: string, tone?: "bad" | "good"): void;
   togglePause(): void;
@@ -135,6 +142,23 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "infantry", label: "Infantry", icon: "🤖" },
   { id: "air", label: "Aircraft", icon: "✈" }
 ];
+
+/** Set once the build-keys tip has shown, or build mode has been used (localStorage). */
+const KEYS_TIP = "battledrones.buildkeys";
+const getFlag = (k: string): boolean => {
+  try {
+    return localStorage.getItem(k) === "1";
+  } catch {
+    return false; // (storage blocked)
+  }
+};
+const setFlag = (k: string): void => {
+  try {
+    localStorage.setItem(k, "1");
+  } catch {
+    /* storage blocked */
+  }
+};
 
 /** A landscape screen with a mouse and the height for one sidebar holding the build grid, calldowns and selection. */
 const DESK_QUERY = "(orientation: landscape) and (hover: hover) and (pointer: fine) and (min-width: 900px) and (min-height: 600px)";
@@ -362,13 +386,15 @@ export function createHud(api: HudApi): Hud {
   let tab: Tab = "build";
   const buttons = new Map<string, HTMLButtonElement>();
   /** Cached child elements of each build button (no per-frame DOM queries), and the price its label shows. */
-  const parts = new Map<string, { prog: HTMLElement; lock: HTMLElement; badge: HTMLElement; cost: HTMLElement; price: number }>();
+  const parts = new Map<string, { prog: HTMLElement; lock: HTMLElement; badge: HTMLElement; cost: HTMLElement; kc: HTMLElement; price: number; name: string }>();
+  /** What a tap on each build button does (build mode's keys press the same). */
+  const taps = new Map<string, () => void>();
 
   for (const t of TABS) {
     const b = document.createElement("button");
     b.className = "tab";
     b.dataset.tab = t.id;
-    b.innerHTML = `<span class="ti">${t.icon}</span><span class="tl2">${t.label}</span><span class="tbadge" hidden></span>`;
+    b.innerHTML = `<span class="ti">${t.icon}</span><span class="tl2">${t.label}</span><span class="tbadge" hidden></span><span class="kc"></span>`;
     b.addEventListener("click", () => {
       sfx.play("click", 0.5);
       tab = t.id;
@@ -387,7 +413,8 @@ export function createHud(api: HudApi): Hud {
       <span class="cost">${cost}</span>
       <span class="badge" hidden></span>
       <span class="prog" hidden></span>
-      <span class="lock" hidden>🔒</span>`;
+      <span class="lock" hidden>🔒</span>
+      <span class="kc"></span>`;
     // long-press (touch) or right-click (mouse) opens the info card
     let timer = 0;
     let longFired = false;
@@ -413,14 +440,18 @@ export function createHud(api: HudApi): Hud {
     b.addEventListener("click", () => {
       if (longFired) return;
       onTap();
+      tipKeys();
     });
     buttons.set(key, b);
+    taps.set(key, onTap);
     parts.set(key, {
       prog: b.querySelector<HTMLElement>(".prog")!,
       lock: b.querySelector<HTMLElement>(".lock")!,
       badge: b.querySelector<HTMLElement>(".badge")!,
       cost: b.querySelector<HTMLElement>(".cost")!,
-      price: cost
+      kc: b.querySelector<HTMLElement>(".kc")!,
+      price: cost,
+      name
     });
     return b;
   };
@@ -473,13 +504,111 @@ export function createHud(api: HudApi): Hud {
     for (const k of keys) gridEl.appendChild(buttons.get(k)!);
     for (const el of tabsEl.children) (el as HTMLElement).classList.toggle("on", (el as HTMLElement).dataset.tab === tab);
     cardEl.hidden = true;
+    labelKeys();
   }
-  renderGrid();
+
+  // ------------------------------------------------- build mode (keys) ---
+  // B, then 1–4 for a tab and the letter where the button sits (src/ui/build-keys.ts)
+  const dockEl = $(".dock");
+  /** Build mode is open: the bar shows its keys. */
+  let keyMode = false;
+  /** The shown buttons' keys (`KeyboardEvent.code`), in grid order. */
+  let gridKeys: (string | null)[] = [];
+  /** The keyboard's own letters for each key, where the browser says (AZERTY…). */
+  let layoutMap: ReadonlyMap<string, string> | undefined;
+  type LayoutKeyboard = { getLayoutMap?(): Promise<ReadonlyMap<string, string>> };
+  (navigator as Navigator & { keyboard?: LayoutKeyboard }).keyboard
+    ?.getLayoutMap?.()
+    .then((m) => {
+      layoutMap = m;
+      labelKeys();
+    })
+    .catch(() => {});
+
+  /** Give the shown buttons their keys by how the grid lays them out (3 columns, 2, or one row), and label them. */
+  function labelKeys(): void {
+    const els = [...gridEl.children] as HTMLButtonElement[];
+    const css = getComputedStyle(gridEl);
+    const cols = css.display === "grid" ? css.gridTemplateColumns.split(" ").length : 0;
+    gridKeys = buildKeys(els.length, cols);
+    els.forEach((el, i) => {
+      const code = gridKeys[i];
+      const pt = parts.get(el.dataset.key!)!;
+      const label = code ? keyLabel(code, layoutMap) : "";
+      if (pt.kc.textContent === label) return;
+      pt.kc.textContent = label;
+      el.title = code ? `${pt.name} (B, then ${label})` : pt.name;
+    });
+    TABS.forEach((t, i) => {
+      const el = tabsEl.children[i] as HTMLElement;
+      el.querySelector(".kc")!.textContent = keyLabel(TAB_CODES[i]!, layoutMap);
+      el.title = `${t.label} (B, then ${keyLabel(TAB_CODES[i]!, layoutMap)})`;
+    });
+  }
+
+  function setKeyMode(on: boolean): void {
+    if (keyMode === on) return;
+    keyMode = on;
+    dockEl.classList.toggle("keys", on);
+    if (on) {
+      labelKeys();
+      keysTipped = true; // (found it: no tip needed)
+      setFlag(KEYS_TIP);
+    }
+  }
+
+  /** Once per device, after a build button is clicked on a desk: the keys exist. */
+  let keysTipped = getFlag(KEYS_TIP);
+  function tipKeys(): void {
+    if (keysTipped || !root.classList.contains("desk")) return;
+    keysTipped = true;
+    hints.offer({
+      id: "build-keys",
+      msg: "Build from the keyboard: press B, then the letter on the button (1–4 switch tabs). Enter places a building.",
+      priority: HINTS.priority.buildKeys,
+      onShow: () => setFlag(KEYS_TIP)
+    });
+  }
+
+  function buildKey(e: KeyboardEvent): boolean {
+    if (api.ctrl.spectator || over || api.ctrl.paused) {
+      setKeyMode(false);
+      return false;
+    }
+    if (keyMode) labelKeys(); // (the window may have changed shape since)
+    const act = buildKeyAction(keyMode, e, gridKeys);
+    if (!act) return false;
+    e.preventDefault();
+    if (act.type === "open") {
+      setKeyMode(true);
+      sfx.play("click", 0.5);
+    } else if (act.type === "close") setKeyMode(false);
+    else if (act.type === "tab") {
+      sfx.play("click", 0.5);
+      tab = TABS[act.index]!.id;
+      renderGrid();
+    } else if (act.type === "press") {
+      const el = gridEl.children[act.index] as HTMLElement;
+      const key = el.dataset.key!;
+      el.classList.remove("kp");
+      void el.offsetWidth; // (restart the press flash)
+      el.classList.add("kp");
+      // build mode stays open whatever is pressed (start a Fab Plant, then 2 W W for two
+      // Stingers): only B, Esc or a click on the battlefield closes it
+      taps.get(key)!();
+    }
+    return true;
+  }
+  // a click on the battlefield (an order, a placement) closes it; one on the sidebar doesn't
+  const closeOutside = (e: PointerEvent) => {
+    if (keyMode && !dockEl.contains(e.target as Node)) setKeyMode(false);
+  };
+  window.addEventListener("pointerdown", closeOutside, { capture: true });
 
   // ------------------------------------------------------------- desk ---
   // a landscape screen with a mouse and room for it: the dock is one sidebar, build
-  // grid three wide, then the calldowns, the selection and its chips, the squads
-  // (style.css #hud.desk)
+  // grid three wide (keys Q W E / A S D / Z X C), then the calldowns, the selection
+  // and its chips, the squads (style.css #hud.desk)
   const deskQuery = window.matchMedia(DESK_QUERY);
   const pwSlot = $(".pw-slot");
   /** The calldown block (src/ui/powers.ts, mounted after the HUD): in the sidebar on a desk. */
@@ -489,10 +618,12 @@ export function createHud(api: HudApi): Hud {
     root.classList.toggle("desk", desk);
     powersEl ??= root.querySelector<HTMLElement>(".powers");
     if (powersEl && powersEl.parentElement !== (desk ? pwSlot : root)) (desk ? pwSlot : root).appendChild(powersEl);
+    labelKeys();
     layout.refresh(true);
   }
   deskQuery.addEventListener("change", syncDesk);
   syncDesk();
+  renderGrid();
 
   // ------------------------------------------------------------ info card ---
   function showCard(kind: UnitKind | BuildingKind): void {
@@ -1132,6 +1263,7 @@ export function createHud(api: HudApi): Hud {
     ops?.update();
     // (the calldown block turns up after the HUD: into the sidebar with it)
     if (!powersEl && root.querySelector(".powers")) syncDesk();
+    if (keyMode && (api.ctrl.paused || over)) setKeyMode(false);
 
     const ctrl = api.ctrl;
     tutorial();
@@ -1533,7 +1665,9 @@ export function createHud(api: HudApi): Hud {
       toast(msg, undefined, tone ?? "", tone === "bad" ? 2200 : 4200);
     },
     togglePause,
+    buildKey,
     destroy() {
+      window.removeEventListener("pointerdown", closeOutside, { capture: true });
       deskQuery.removeEventListener("change", syncDesk);
       offAnnounce();
       offMute();
@@ -1575,5 +1709,5 @@ export const HELP_HTML = `
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them. Watching AI vs AI, the 🎥 cinematic camera (key C) follows the action by itself; pan or zoom and it hands the camera to you, taking it back a few seconds later.</p>
   <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>
-  <h3>Keyboard</h3><p><b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>H</b> back to your HQ, <b>J</b> jump to a fight, <b>C</b> cinematic camera. <b>Q</b> selects your army, <b>E</b> its idle units, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save). <b>X</b> stops the selection, <b>F</b> makes the next order <b>Move only</b>, <b>U</b> unloads, <b>G</b> anchors, <b>Delete</b> sells. <b>4</b>–<b>7</b> arm the calldowns (Barrage, EMP, Drop Pod, Sky Hammer), then click the map. <b>Enter</b> places a ready building where its ghost stands. <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancels and deselects.</p>`;
+  <h3>Keyboard</h3><p><b>B</b> opens build mode: each button shows its key, laid out like the buttons (Q W E / A S D / Z X C beside the sidebar, Q W E R T… along the bottom), and <b>1</b>–<b>4</b> switch tabs. It stays open for as much as you like (B Q 2 W W: a Fab Plant, then two Stingers) until <b>B</b>, <b>Esc</b> or a click on the battlefield closes it. Once a building is ready, its key picks it up, and <b>Enter</b> places it where the ghost stands. Elsewhere: <b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>H</b> back to your HQ, <b>J</b> jump to a fight, <b>C</b> cinematic camera. <b>Q</b> selects your army, <b>E</b> its idle units, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save). <b>X</b> stops the selection, <b>F</b> makes the next order <b>Move only</b>, <b>U</b> unloads, <b>G</b> anchors, <b>Delete</b> sells. <b>4</b>–<b>7</b> arm the calldowns (Barrage, EMP, Drop Pod, Sky Hammer), then click the map. <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancels and deselects.</p>`;
 
