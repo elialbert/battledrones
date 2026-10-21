@@ -571,7 +571,8 @@ export function createHud(api: HudApi): Hud {
   }
 
   function buildKey(e: KeyboardEvent): boolean {
-    if (api.ctrl.spectator || over || api.ctrl.paused) {
+    // (not behind the opener cards or the finale either: api.busy, as the hint queue waits)
+    if (api.ctrl.spectator || over || api.ctrl.paused || api.busy?.()) {
       setKeyMode(false);
       return false;
     }
@@ -1263,7 +1264,7 @@ export function createHud(api: HudApi): Hud {
     ops?.update();
     // (the calldown block turns up after the HUD: into the sidebar with it)
     if (!powersEl && root.querySelector(".powers")) syncDesk();
-    if (keyMode && (api.ctrl.paused || over)) setKeyMode(false);
+    if (keyMode && (api.ctrl.paused || over || api.busy?.())) setKeyMode(false);
 
     const ctrl = api.ctrl;
     tutorial();
