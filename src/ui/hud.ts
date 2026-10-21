@@ -545,6 +545,11 @@ export function createHud(api: HudApi): Hud {
 
   // --------------------------------------------------------------- chips ---
   type Chip = { id: string; label: string; cls?: string; on: () => void; active?: boolean };
+  /** The key that does what each chip does (src/game/GameScene.ts keydown), for its tooltip. */
+  const CHIP_KEYS: Record<string, string> = {
+    stop: "X", move: "F", clear: "Esc", sell: "Delete", unload: "U", anchor: "G", army: "Q", idle: "E",
+    place: "Enter", cancel: "Esc", untarget: "Esc"
+  };
   let lastChipKey = "";
   let lastChipShape = "";
   /** The class each chip was last given (so a refused tap's "nope" shake survives a label tick). */
@@ -577,6 +582,7 @@ export function createHud(api: HudApi): Hud {
       b.className = chipClass(c);
       b.dataset.id = c.id;
       b.textContent = c.label;
+      if (CHIP_KEYS[c.id]) b.title = `Key: ${CHIP_KEYS[c.id]}`;
       b.addEventListener("click", () => {
         sfx.play("click", 0.5);
         chipList[i]?.on();
@@ -1543,5 +1549,6 @@ export const HELP_HTML = `
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Mastodons crush ground armies · Mortars and Hornets smash bases and squads · Rocket Squads beat Mastodons · Snipers beat infantry · Rocket Squads, Wasps, Lancers and Hornets bring down Goliaths. Long-press any build button for details.</p>
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them. Watching AI vs AI, the 🎥 cinematic camera (key C) follows the action by itself; pan or zoom and it hands the camera to you, taking it back a few seconds later.</p>
-  <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>`;
+  <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>
+  <h3>Keyboard</h3><p><b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>H</b> back to your HQ, <b>J</b> jump to a fight, <b>C</b> cinematic camera. <b>Q</b> selects your army, <b>E</b> its idle units, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save). <b>X</b> stops the selection, <b>F</b> makes the next order <b>Move only</b>, <b>U</b> unloads, <b>G</b> anchors, <b>Delete</b> sells. <b>4</b>–<b>7</b> arm the calldowns (Barrage, EMP, Drop Pod, Sky Hammer), then click the map. <b>Enter</b> places a ready building where its ghost stands. <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancels and deselects.</p>`;
 

@@ -1657,9 +1657,16 @@ export class GameScene {
         if (e.key === " ") e.preventDefault();
         this.hud.togglePause();
       } else if (e.key === "q") this.ctrl.selectArmy();
+      else if (e.key === "e" && !this.ctrl.spectator) this.selectIdle();
+      else if (e.key === "x") this.ctrl.stopSelected();
+      else if (e.key === "f" && this.ctrl.selectedUnits.size > 0 && !this.ctrl.spectator)
+        this.ctrl.forceMove = !this.ctrl.forceMove; // ➜ Move only: the next order just drives
+      else if (e.key === "h") this.homeCamera();
+      else if (/^Digit[4-7]$/.test(e.code) && !this.ctrl.spectator) this.powerUi?.press(Number(e.code.slice(5)) - 4); // calldowns
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
+      else if (e.key === "Enter" && this.ctrl.placing) this.ctrl.commitPlacement(); // the ghost where it stands (✓ Place)
       else if (e.key === "." && !this.interactive) this.aware.cycleSpeed(); // (a duel runs at one speed)
       else if (e.key === "j") this.aware.jump();
       else if (e.key === "c") this.toggleCine();
@@ -1686,6 +1693,22 @@ export class GameScene {
       window.removeEventListener("keyup", keyup);
       window.removeEventListener("blur", blur);
     });
+  }
+
+  /** 💤 Idle (E): the army with no orders, or why nothing was selected. */
+  private selectIdle(): void {
+    const idle = this.ctrl.idleArmy();
+    if (idle.length) this.ctrl.selectUnits(idle);
+    else this.hud.notify("No idle units");
+  }
+
+  /** H: the camera back over our HQ, while it stands. */
+  private homeCamera(): void {
+    const hq = hqOf(this.world, PLAYER);
+    if (hq) {
+      const c = buildingCenter(hq);
+      this.aware.glideTo(c.x, c.y);
+    }
   }
 
   private clampedZoom(z: number): number {
