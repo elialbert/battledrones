@@ -1651,6 +1651,8 @@ export class GameScene {
         return;
       }
       if (this.finale || e.repeat) return; // (the cinematic: no zoom, squads or jumps)
+      // Ctrl/Cmd/Alt + a key is the browser's (find, copy, print…): only the squads' saves take one
+      if ((e.ctrlKey || e.metaKey || e.altKey) && !/^Digit[1-3]$/.test(e.code)) return;
       if (e.key === "+" || e.key === "=") this.zoomBy(1.3);
       else if (e.key === "-" || e.key === "_") this.zoomBy(1 / 1.3);
       else if ((e.key === "p" || e.key === " ") && !this.holdStart) {
@@ -1666,7 +1668,12 @@ export class GameScene {
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
       else if (e.key === "Delete") this.ctrl.sellSelected();
-      else if (e.key === "Enter" && this.ctrl.placing) this.ctrl.commitPlacement(); // the ghost where it stands (✓ Place)
+      else if (e.key === "Enter" && this.ctrl.placing) {
+        // the ghost where it stands (✓ Place); not also a click on whichever HUD button
+        // has focus (the ready build button just tapped would start another one)
+        e.preventDefault();
+        this.ctrl.commitPlacement();
+      }
       else if (e.key === "." && !this.interactive) this.aware.cycleSpeed(); // (a duel runs at one speed)
       else if (e.key === "j") this.aware.jump();
       else if (e.key === "c") this.toggleCine();
