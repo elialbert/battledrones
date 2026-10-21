@@ -577,9 +577,12 @@ export class Controller {
     this.forceMove = false;
   }
 
-  /** Shift+drag: add the boxed units to the selection (a building selected gives way). */
+  /** Shift+drag: add the boxed units to the selection (a building selected gives way; an armed Move only survives). */
   addUnits(ids: number[]): void {
-    this.selectUnits([...this.selectedUnits, ...ids]);
+    this.selectedBuilding = null;
+    if (ids.every((id) => this.selectedUnits.has(id))) return; // nothing new: quiet
+    // adding makes a fresh selection set, so the voices answer
+    this.selectedUnits = new Set([...this.selectedUnits, ...ids]);
   }
 
   /** Shift+click: add a unit to the selection, or take it out if it's already in. */

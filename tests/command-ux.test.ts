@@ -197,9 +197,32 @@ describe("controller: touch placement", () => {
     c.selectUnits([a.id, b.id]);
     c.addUnits([b.id, d.id]);
     expect([...c.selectedUnits]).toEqual([a.id, b.id, d.id]);
-    c.selectedBuilding = 1;
+    // a building selected gives way to the units
+    c.clearSelection();
+    c.selectedBuilding = hqOf(w, "blue")!.id;
     c.addUnits([a.id]);
     expect(c.selectedBuilding).toBeNull();
+    expect([...c.selectedUnits]).toEqual([a.id]);
+  });
+
+  it("Shift+drag keeps an armed Move only, and is quiet when it adds nothing", () => {
+    const w = field();
+    const c = new Controller(w);
+    const [a, b, d] = [1, 2, 3].map((i) => spawnUnit(w, "stinger", "blue", 10 + i, 10));
+    c.selectUnits([a!.id]);
+    c.forceMove = true;
+    const before = c.selectedUnits;
+    c.addUnits([a!.id]); // a box over what's already selected
+    expect(c.selectedUnits).toBe(before); // no fresh set: no voice
+    c.addUnits([b!.id, d!.id]);
+    expect([...c.selectedUnits]).toEqual([a!.id, b!.id, d!.id]);
+    expect(c.selectedUnits).not.toBe(before); // adding is a fresh selection: the voices answer
+    expect(c.forceMove).toBe(true);
+    // the next ground click is still the Move only order, for the whole group
+    c.tapWorld(20.5, 20.5, { kind: "ground" });
+    expect(c.drainCommands()).toEqual([
+      { type: "move", faction: "blue", unitIds: [a!.id, b!.id, d!.id], x: 20.5, y: 20.5 }
+    ]);
   });
 
   it("⚔ Select army and 💤 Idle leave out harvesters and the unarmed Condor", () => {
