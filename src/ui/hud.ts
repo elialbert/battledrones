@@ -136,6 +136,9 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "air", label: "Aircraft", icon: "✈" }
 ];
 
+/** A landscape screen with a mouse and the height for one sidebar holding the build grid, calldowns and selection. */
+const DESK_QUERY = "(orientation: landscape) and (hover: hover) and (pointer: fine) and (min-width: 900px) and (min-height: 600px)";
+
 const BUILDABLE: BuildingKind[] = ["fab-plant", "airpad", "assembly-bay", "tech-lab", "depot", "turret", "sam-site", "radar", "gantry"];
 const GROUND: UnitKind[] = ["harvester", "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "goliath"];
 const INFANTRY: UnitKind[] = ["trooper", "rocket-squad", "sniper"];
@@ -302,6 +305,7 @@ export function createHud(api: HudApi): Hud {
         <div class="tabs" id="tabs"></div>
         <div class="grid" id="grid"></div>
       </div>
+      <div class="pw-slot"></div>
     </div>
     <div id="card" class="card" hidden></div>
     <div id="pause" class="screen" hidden></div>
@@ -471,6 +475,24 @@ export function createHud(api: HudApi): Hud {
     cardEl.hidden = true;
   }
   renderGrid();
+
+  // ------------------------------------------------------------- desk ---
+  // a landscape screen with a mouse and room for it: the dock is one sidebar, build
+  // grid three wide, then the calldowns, the selection and its chips, the squads
+  // (style.css #hud.desk)
+  const deskQuery = window.matchMedia(DESK_QUERY);
+  const pwSlot = $(".pw-slot");
+  /** The calldown block (src/ui/powers.ts, mounted after the HUD): in the sidebar on a desk. */
+  let powersEl: HTMLElement | null = null;
+  function syncDesk(): void {
+    const desk = deskQuery.matches && !api.ctrl.spectator;
+    root.classList.toggle("desk", desk);
+    powersEl ??= root.querySelector<HTMLElement>(".powers");
+    if (powersEl && powersEl.parentElement !== (desk ? pwSlot : root)) (desk ? pwSlot : root).appendChild(powersEl);
+    layout.refresh(true);
+  }
+  deskQuery.addEventListener("change", syncDesk);
+  syncDesk();
 
   // ------------------------------------------------------------ info card ---
   function showCard(kind: UnitKind | BuildingKind): void {
@@ -1102,6 +1124,8 @@ export function createHud(api: HudApi): Hud {
     }
     surv?.update();
     ops?.update();
+    // (the calldown block turns up after the HUD: into the sidebar with it)
+    if (!powersEl && root.querySelector(".powers")) syncDesk();
 
     const ctrl = api.ctrl;
     tutorial();
@@ -1504,6 +1528,7 @@ export function createHud(api: HudApi): Hud {
     },
     togglePause,
     destroy() {
+      deskQuery.removeEventListener("change", syncDesk);
       offAnnounce();
       offMute();
       layout.destroy();
