@@ -168,8 +168,11 @@ describe("Marshal, the bot built for a budget", () => {
       }
       expect([...drawn].sort()).toEqual([...MARSHAL_POOL[d]].sort()); // (every plan comes up)
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm);
+      expect(MARSHAL[d].microApm).toBeLessThanOrEqual(120); // (fight orders at most 2 a second)
     }
     expect(MARSHAL_POOL.easy).not.toContain("rush");
+    expect(MARSHAL_POOL.easy).not.toContain("greed");
+    expect(MARSHAL.easy.holdUntil).toBeGreaterThan(0);
   });
 
   it("draws only plans the match rules allow", () => {
@@ -185,5 +188,18 @@ describe("Marshal, the bot built for a budget", () => {
     expect(planStrategy("turtle").assaultValue).toBeGreaterThan(STRATEGIES.balanced.assaultValue);
     expect(planStrategy("greed").buildOrder.slice(0, 3)).toEqual(["fab-plant", "depot", "depot"]);
     expect(planStrategy("greed").harvesters).toBeGreaterThan(STRATEGIES.boom.harvesters);
+  });
+
+  it("plays fast-expanding plans on Normal and Hard: a depot after the first factory", () => {
+    for (const n of ["balanced", "airswarm", "boom", "ironclad", "turtle"] as const) {
+      const slow = planStrategy(n);
+      const fast = planStrategy(n, true);
+      expect(fast.buildOrder.slice(0, 3)).toContain("depot");
+      expect(fast.harvesters).toBe(5);
+      expect([...fast.buildOrder].sort()).toEqual(expect.arrayContaining([...new Set(slow.buildOrder)].sort())); // (the same buildings, sooner)
+    }
+    expect(planStrategy("rush", true)).toEqual(planStrategy("rush"));
+    expect(MARSHAL.easy.fast).toBe(false);
+    expect(MARSHAL.normal.fast && MARSHAL.hard.fast).toBe(true);
   });
 });

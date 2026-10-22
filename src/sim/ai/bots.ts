@@ -107,7 +107,7 @@ const ALL: BotDef[] = [
   {
     id: "marshal",
     label: "Marshal",
-    about: "The commander's plans on a human's budget (7/14/30 actions a minute), Turtle and Greed among them: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
+    about: "The commander's plans on a human's budget (10/30/120 actions a minute, fight orders at most 2 a second), Turtle and Greed among them: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
     group: "Commander",
     difficulties: true,
     opener: (seed, side) => pickAiOpener("balanced", seed, side), // (each bot's own: its plan's)

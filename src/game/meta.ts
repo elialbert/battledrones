@@ -41,7 +41,7 @@ export function difficultyBot(side: Faction): WatchedBot {
   const rules = makeRules(activeMutators());
   const plan = gameMode.daily
     ? gameMode.daily.strategy
-    : marshalPlan(s, difficulty, MARSHAL_POOL[difficulty].filter((n) => strategyFits(planStrategy(n), rules)));
+    : marshalPlan(s, difficulty, MARSHAL_POOL[difficulty].filter((n) => strategyFits(planStrategy(n, MARSHAL[difficulty].fast), rules)));
   const bot = marshal(side, s, difficulty, { ...MARSHAL[difficulty], strategy: plan });
   const label = planStrategy(plan).label;
   return {

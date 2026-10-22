@@ -338,6 +338,9 @@ while rich (no change: games end before it matters).
 
 ### Difficulties: one slider
 
+**Superseded by "Retuning the levels" below** (10 / 30 / 120 APM). What
+follows is the first tuning, kept for its numbers.
+
 `MARSHAL` in marshal.ts. Each difficulty sets how fast it thinks and acts,
 and fight micro's share of the actions, at a human's pace for the level:
 
@@ -441,6 +444,94 @@ So caps that high make Marshal a strong opponent at every level; if the
 levels should feel different, think speed, the micro budget and the plan
 pool are the levers that still bite up there.
 
+## Retuning the levels: 10 / 30 / 120
+
+Asked for: Easy gentler (less APM if need be, less aggressive plans);
+Normal varied, with Rush less overpowering; Hard as strong as it can be,
+but not from fight micro faster than a person's, about 2 orders a second
+at most. Tested with a scratch harness (one process per game, all five
+maps, mirror pairs).
+
+### Fight micro at a human's pace
+
+Fight micro (`MICRO_BURST`) now banks **one** order: one fight order at a
+time, at most one every `60 / microApm` seconds. Hard's 120 is one every
+half second. At 115 APM against stock Hard, 40 games each: micro held to
+2 a second won 90%, unlimited micro 88% (it peaked at 5 to 6 a second),
+and head to head the human-paced one won 19-16-5. Micro speed was never
+where Hard's strength came from. Over a game Hard gives 25 to 35 fight
+orders a minute.
+
+### The plans: the economy wins, not the rush
+
+A round robin of every plan against every other at 50 APM (8 plans, 1120
+games):
+
+| | Greed | Rush | Turtle | Ironclad | Air Swarm | Boom | Balanced | Skyforce |
+|---|---|---|---|---|---|---|---|---|
+| Against the field | 73% | 66% | 51% | 49% | 47% | 45% | 42% | 27% |
+
+Then each change against all seven plans (140 games each):
+
+- **Rush's strength isn't its timing.** Waves at 1800 instead of 1400, or
+  raids in packs of 8, made it *stronger* (58% → 63–68%): it's the army
+  mix and the second factory. With one factory and a depot: 41%.
+- **Greed's strength is its early depot.** Without the second harvester it
+  still won 64–70%. The same depot, right after the first factory, with a
+  fifth harvester (`fastDepot`), took Balanced from 42% to 63% and Boom from
+  43% to 59%.
+
+So rather than nerf Rush, every other plan got stronger: each has a
+**fast-expanding version** (`MARSHAL_PLANS[…].fast`), which Normal and
+Hard play. Rush and Greed have none. A round robin with them (1120 games):
+Greed 62%, Air Swarm 61%, Balanced 56%, Ironclad 54%, Rush 40%, Turtle 40%,
+Boom 36%. That's 36–62% where it was 27–73%, and Rush drops from second to
+near the bottom, level with Turtle.
+
+### Easy: only APM makes it easier
+
+Against the stock Easy commander (0.75× income), every Easy variant won
+92–98%: 20 APM; 20 with three harvesters, no economy tricks and no fight
+micro; 12 APM. Stock Easy is too weak to measure against, so Easy is
+tuned against the scripted novice and beginner players instead.
+
+- **Peace makes it stronger, not weaker.** No attacks before 5 or 6 minutes
+  (`Strategy.holdUntil`, new) took Easy at 20 APM to 98–100% against the
+  scripted players: it attacks later with a bigger army. Easy keeps
+  5 minutes of peace anyway, for the player's sake.
+- **A cliff between 10 and 12 APM.** With 5 minutes of peace: 12 APM beat
+  the novice 85% and the beginner 62%; 10 APM 42% and 35%.
+- Easy plays the slow plans (Balanced, Boom, Turtle), not the fast ones,
+  and not Greed.
+
+### Hard: think a little slower
+
+At 115 APM, a plan every 1.5 s beat a plan every second 69% (27-12-1), every
+2 s 52%, every half second lost 79%. Replanning too often re-sends orders,
+and each costs an action. A 60 APM cap lost 39 of 40 to 115, and 150 beat
+115 58% (noise), so 120 it is. Hard plays the four strongest plans
+(Balanced, Air Swarm and Ironclad fast, and Greed).
+
+### Where the levels landed
+
+`MARSHAL` in marshal.ts; 60 games each, all five maps, seeds 1 to 6:
+
+| | Think / fights | APM / micro | Plans | Peace |
+|---|---|---|---|---|
+| Easy | 4 s / 3 s | 10 / 3 | Balanced, Boom, Turtle | 5 min |
+| Normal | 2 s / 1 s | 30 / 20 | all but Skyforce, fast | none |
+| Hard | 1.5 s / 0.5 s | 120 / 120 | Balanced, Air Swarm, Ironclad, Greed, fast | none |
+
+| | Novice | Beginner | Decent | Stock Easy | Stock Normal | Stock Hard | Next level down |
+|---|---|---|---|---|---|---|---|
+| Easy | 43% | 37% | 40% | 92% | 30% | | |
+| Normal | | | 92% | | 83% | 63% | 100% (Easy) |
+| Hard | | | | | | 92% | 99% (Normal) |
+
+The step from Easy to Normal is steep: Normal won all 60 games against
+Easy. Normal at 50 APM beat Normal at 30 72% (Hard beat it 98%), so APM is
+still the knob for anything between.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
@@ -456,7 +547,9 @@ pool are the levers that still bite up there.
 - **Is uncapped turbo bad because of the re-sent orders, or for another
   reason?** The re-sent orders: once they're dropped, planning every 0.5 s
   does no harm.
-- **Does Marshal's Normal (14 APM) feel right to a person?** Only play will
+- **Easy to Normal is a big step** (60-0). A level between, or Normal at
+  about 20 APM, would smooth it if players find the jump too much.
+- **Does Marshal's Normal (30 APM) feel right to a person?** Only play will
   tell. The scripted players are the closest stand-in measured so far.
 
 ## Where things are

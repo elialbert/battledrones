@@ -79,6 +79,19 @@ describe("AI commander", () => {
     expect(state.mode).toBe("assault");
   });
 
+  it("holds its army at home through its seconds of peace (holdUntil)", () => {
+    const w = createSkirmishWorld();
+    const state = createAiState("balanced", "normal", undefined, { holdUntil: 60 });
+    for (let i = 0; i < 6; i++) {
+      spawnUnit(w, "stinger", "red", 38.5 + (i % 3), 8.5 + Math.floor(i / 3));
+      spawnUnit(w, "wasp", "red", 34.5 + (i % 3), 8.5 + Math.floor(i / 3));
+    }
+    runWithAi(w, 10, state);
+    expect(state.mode).toBe("buildup");
+    runWithAi(w, 60, state);
+    expect(state.mode).toBe("assault");
+  });
+
   it("beats a completely passive opponent inside 12 minutes", () => {
     const w = createSkirmishWorld();
     runWithAi(w, 12 * 60, createAiState("balanced"));

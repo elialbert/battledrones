@@ -56,6 +56,10 @@ export interface MarshalOptions {
    * fight, apart from how well it runs its base. Unlimited if left out.
    */
   microApm?: number;
+  /** Play the plan's fast-expanding version, if it has one (MARSHAL_PLANS). */
+  fast?: boolean;
+  /** Seconds of peace: no raids, waves or finishing push before this. */
+  holdUntil?: number;
 }
 
 export type PlanName = StrategyName | "turtle" | "greed";
@@ -65,13 +69,14 @@ export type PlanName = StrategyName | "turtle" | "greed";
  * own built on one of them (`base`: its opener and the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts).
  */
-export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string; tweak?: Partial<Strategy> }> = {
-  balanced: { base: "balanced", label: "Balanced" },
+export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy> }> = {
+  balanced: { base: "balanced", label: "Balanced", fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
+  /** (no fast version: Rush is the plan that skips the economy; with a depot it beat the rest of the field more often) */
   rush: { base: "rush", label: "Rush" },
-  airswarm: { base: "airswarm", label: "Air Swarm" },
-  boom: { base: "boom", label: "Boom" },
+  airswarm: { base: "airswarm", label: "Air Swarm", fast: fastDepot(["airpad", "depot", "fab-plant", "turret", "tech-lab", "airpad"]) },
+  boom: { base: "boom", label: "Boom", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "airpad", "turret", "radar", "sam-site"]) },
   skyforce: { base: "skyforce", label: "Skyforce" },
-  ironclad: { base: "ironclad", label: "Ironclad" },
+  ironclad: { base: "ironclad", label: "Ironclad", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "assembly-bay", "airpad", "fab-plant", "sam-site"]) },
   /**
    * Turrets and a SAM round home, heavy tech and a depot behind them, no
    * raids, and one army big enough to end it. (Against stock Balanced at
@@ -86,7 +91,8 @@ export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string
       harvesters: 5,
       assaultValue: 3000,
       harassGroup: Infinity
-    }
+    },
+    fast: fastDepot(["fab-plant", "turret", "depot", "tech-lab", "sam-site", "turret", "fab-plant", "radar"])
   },
   /** Two depots before anything else, a harvester for each, then a late push. (78% at 14 APM; 56% with a turret and the Tech Lab between the depots.) */
   greed: {
@@ -101,14 +107,27 @@ export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string
   }
 };
 
-/** The plans each difficulty picks from, at random for each game. */
+/**
+ * A plan's fast-expanding version (`fast`): a depot by the first field right
+ * after the first factory, and a fifth harvester. Under a budget of actions
+ * the economy is what wins: every plan but Rush and Greed gained 10 to 20
+ * points with it (APM-BOTS.md, "Retuning the levels").
+ */
+function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
+  return { buildOrder, harvesters: 5 };
+}
+
+/**
+ * The plans each difficulty picks from, at random for each game (APM-BOTS.md,
+ * "Retuning the levels"). Easy plays the slow plans, no Rush and no Greed (a
+ * beginner gets a few minutes' peace, and Greed is the strongest plan);
+ * Normal all of them but Skyforce (an all-air plan needs more hands, and it
+ * won 27% of a round robin at 50 APM); Hard the four strongest.
+ */
 export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
-  // (no Rush on Easy: a beginner should get a few minutes' peace; no Skyforce
-  // anywhere: at 14 APM it won 28% of 36 games against stock Balanced, Ironclad
-  // 42%, the rest 67–89%)
-  easy: ["balanced", "boom", "turtle", "greed"],
+  easy: ["balanced", "boom", "turtle"],
   normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"],
-  hard: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"]
+  hard: ["balanced", "airswarm", "ironclad", "greed"]
 };
 
 /**
@@ -119,10 +138,10 @@ export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
  */
 export const MARSHAL_ECONOMY: Partial<Strategy> = { spendDown: true, depotReach: 5 };
 
-/** A plan as the commander's personality it plays. */
-export const planStrategy = (name: PlanName): Strategy => {
+/** A plan as the commander's personality it plays (`fast`: its fast-expanding version, if it has one). */
+export const planStrategy = (name: PlanName, fast = false): Strategy => {
   const p = MARSHAL_PLANS[name];
-  return { ...STRATEGIES[p.base], ...MARSHAL_ECONOMY, ...p.tweak, label: p.label };
+  return { ...STRATEGIES[p.base], ...MARSHAL_ECONOMY, ...p.tweak, ...(fast ? p.fast : undefined), label: p.label };
 };
 
 /** The plan a Marshal with this seed draws (from `pool`: the plans the match rules allow). */
@@ -131,17 +150,20 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
 }
 
 /**
- * Each difficulty's speeds and APM caps: the one slider for how well it runs
- * its base and how sharp it is in a fight. `microApm` is fight micro's share
- * of `apm`, at a human's pace for the level. Each plays about as well as the
- * stock commander at that difficulty does with its income handicap
- * (APM-BOTS.md): against it, Easy won 70% of 60 games, Normal 73%,
- * Hard 43% (each plan alone, before MARSHAL_ECONOMY: 36–69%).
+ * Each difficulty: how fast it thinks and acts, fight micro's share of its
+ * actions, whether it plays the fast-expanding plans, and its seconds of
+ * peace. Fight micro never gives more than one order at a time (MICRO_BURST),
+ * so even Hard's is at most 2 a second, a human's pace. APM-BOTS.md,
+ * "Retuning the levels", has the numbers: Easy beats the scripted novice and
+ * beginner players about 2 games in 5; Normal beats the stock Hard commander
+ * 70%; Hard beats it 95%, and Normal 98%.
  */
-export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number; microApm: number }> = {
-  easy: { think: 4, react: 3, apm: 7, microApm: 3 },
-  normal: { think: 2, react: 1, apm: 14, microApm: 6 },
-  hard: { think: 1, react: 0.5, apm: 30, microApm: 20 }
+export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number; microApm: number; fast: boolean; holdUntil: number }> = {
+  easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300 },
+  normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
+  // (a plan every 1.5 s beat a plan every second 69% of 40 games, and every half second lost 79%: replanning
+  // too often re-sends orders that spend its actions)
+  hard: { think: 1.5, react: 0.5, apm: 120, microApm: 120, fast: true, holdUntil: 0 }
 };
 
 /** Orders by rank: the cap spends from the top. */
@@ -189,8 +211,8 @@ const FINISH_MIN = 3000;
 const FINISH_EVERY = 10;
 /** An enemy unit unseen this long no longer counts toward its army (ticks). */
 const SIGHTING_TTL = 90 * TICK_RATE;
-/** The fight micro's budget: how many actions it can bank. */
-const MICRO_BURST = 5;
+/** The fight micro's budget: how many actions it can bank (one: a fight order at most every 60 / microApm seconds). */
+const MICRO_BURST = 1;
 const PER_ACTION = 60 * TICK_RATE;
 
 const unitsOf = (c: Command): number[] | null => ("unitIds" in c ? c.unitIds : null);
@@ -251,7 +273,7 @@ function alreadyDoing(u: Unit, c: Command): boolean {
 
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
   const plan = MARSHAL_PLANS[opts.strategy];
-  const s = createAiState(plan.base, difficulty, seed, planStrategy(opts.strategy));
+  const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil });
   s.fair = true;
   s.interval = opts.think;
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
@@ -389,7 +411,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const ours = army.reduce((v, u) => v + UNITS[u.kind].cost, 0);
     if (!finishing && ours >= Math.max(FINISH_MIN, FINISH * enemy)) finishing = true;
     else if (finishing && ours < Math.max(FINISH_MIN * 0.6, 1.5 * enemy)) finishing = false;
-    if (!finishing || w.tick - lastPush < FINISH_EVERY * TICK_RATE || !army.length) return null;
+    if (!finishing || w.tick < (s.strategy.holdUntil ?? 0) * TICK_RATE || w.tick - lastPush < FINISH_EVERY * TICK_RATE || !army.length) return null;
     const cx = army.reduce((a, u) => a + u.x, 0) / army.length;
     const cy = army.reduce((a, u) => a + u.y, 0) / army.length;
     const known = knownBuildings(w, side).filter((b) => b.faction !== side);

@@ -105,6 +105,8 @@ export interface Strategy {
   spendDown?: boolean;
   /** A field this far from the nearest drop-off gets a depot by it (9 if unset): nearer means shorter hauls. */
   depotReach?: number;
+  /** Seconds of peace: no raids or assaults before this (it still defends). */
+  holdUntil?: number;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -672,10 +674,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   );
   if (
     s.mode === "buildup" && diff.harass && raiders.length >= s.strategy.harassGroup &&
-    s.seenAA <= raiders.length / 2 && w.tick >= OPENING_GRACE
+    s.seenAA <= raiders.length / 2 && w.tick >= Math.max(OPENING_GRACE, (s.strategy.holdUntil ?? 0) * TICK_RATE)
   )
     s.mode = "harass";
-  if (armyValue >= assaultAt && s.mode !== "assault") {
+  if (armyValue >= assaultAt && s.mode !== "assault" && w.tick >= (s.strategy.holdUntil ?? 0) * TICK_RATE) {
     s.mode = "assault";
     s.waveValue = armyValue;
   }
