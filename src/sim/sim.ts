@@ -12,7 +12,7 @@ import { applyGoliathCommand, orderedToMove, tickGoliaths, tickLove } from "./go
 import { applyLiftCommand, routeLiftCommand, tickLift, type HeldLiftOrders } from "./lift";
 import { tickLifeline } from "./lifeline";
 import { callWaveEarly, tickSurvival } from "./modes/survival";
-import { tickMovement, vehicleSpots } from "./movement";
+import { resetPathBudget, tickMovement, vehicleSpots } from "./movement";
 import { tickOps } from "./ops";
 import { tickObjectives } from "./objectives";
 import { applyCalldown, chargePowers, tickPowers } from "./powers";
@@ -25,6 +25,7 @@ import { isResource, tileIndex } from "./world";
 export function step(w: World, commands: Command[]): void {
   w.fx = []; // (first: a decided world must not hand the deciding tick's events out again)
   if (w.winner) return;
+  resetPathBudget(); // (each tick's path searching is its own: movement.ts PATH_TILES_PER_TICK)
   // orders a hooking Goliath ignored, kept for this tick's commands only (lift.ts HeldLiftOrders; one command can't need it)
   const held: HeldLiftOrders | undefined = commands.length > 1 ? { ignored: new Map(), freed: [] } : undefined;
   for (const c of commands) applyCommand(w, c, held);

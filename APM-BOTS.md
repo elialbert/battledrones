@@ -378,15 +378,68 @@ stock Normal commanders.
 
 ## Real time
 
-Marshal thinks for about 0.1% of real time (60–90 ms per game minute, at
-most 2 ms in one tick). One 16-minute Hard game took minutes to simulate:
-stock Hard's army had an attack order on Marshal's Airpad and Gantry in a
-corner, boxed in by buildings and the map's edge, and every attacker
-searched the whole map for a path, failed, and searched again the next
-tick (2 ms each, 13000 a minute). An attacker with no path now gives the
-target up (`tickMovement`, tests/movement.test.ts). Left alone: the stock
-commander looks for a field for each idle harvester on every think, up to
-19 ms in a tick late in a game when the near fields are mined out.
+The bots are cheap: Marshal thinks for about 0.1% of real time (60–90 ms
+per game minute) and the stock commander about the same. What slowed games
+was the simulation, in three places, now capped (96 games, 6 maps, before →
+after, the worst tick of each game):
+
+- **An attack on a building no path reaches.** Stock Hard's army attacked
+  Marshal's Airpad and Gantry in a corner, boxed in by buildings and the
+  map's edge: every attacker searched the whole map, failed, and searched
+  again the next tick (2 ms each, 13000 a minute; one game took minutes per
+  game minute). An attacker with no path now gives the target up.
+- **Mass orders.** 75 units told to attack-move at once searched 75 paths
+  in one tick: 40 to 60 ms. Each side may now search `PATH_TILES_PER_TICK`
+  (6000) tiles a tick (A* expansions: a count, so every phone plays the
+  same match); the rest keep to the path they have, or wait a tick. A unit
+  on the same tile as one that just searched, going to the same tile, takes
+  a copy of that path, exactly what its own search would find (copies from
+  a tile or two off broke the mirror-symmetry test). The last of a big
+  army sets off up to a second later; balance didn't move (stock Balanced
+  vs Ironclad and Marshal vs stock Hard, 36 games each, the same within
+  noise).
+- **Mined-out fields.** With the near fields gone, a dozen harvesters (and
+  the commander's search for their next field) each searched the whole map
+  in one tick and found nothing: 10 to 30 ms. A search in vain now marks
+  the ground it covered, and a search from anywhere on it this pass doesn't
+  search again (`nearestReachableResource`'s `misses`).
+
+The worst simulation tick of a game is now 8.6 ms at the median, 12 at the
+90th percentile, 15 at most (it was 12 to 58 ms, and once minutes). The
+worst bot tick is the first think (6 to 16 ms, the code still warming up);
+after that, under 9 ms.
+
+## Higher caps: 35 / 65 / 115
+
+Asked for: Easy 35 APM, Normal 65, Hard 115, each difficulty's speeds
+otherwise as in `MARSHAL`. Against the stock commander at the same
+difficulty (income handicap and all), 60 games each:
+
+| | Fight micro as now (3/6/20) | Fight micro scaled up | APM it used |
+|---|---|---|---|
+| Easy 35 | 93% (56-0-4) | 92% (15 for micro) | 31 |
+| Normal 65 | 82% | 98% (28) | 56 |
+| Hard 115 | 65% | 90% (unlimited) | 90–95 |
+
+- **Every level beats its stock counterpart, most by far.** Easy at 35
+  beats stock Normal 83% and stock Hard 61% (36 games each): far too strong
+  for an Easy. The current Normal (14 APM) wins 4 games in 36 against it.
+- **Above about 35, APM stops separating the levels.** Marshal used only
+  31 of Easy's 35 and 56 of Normal's 65 (it tried 1000+, nearly all
+  replans of what it was already doing). Easy at 35 against Normal at 65:
+  20-16. Hard at 115 beat Normal at 65 30-5: its faster thinking and its
+  bigger micro budget, more than its APM.
+- **The plan drawn matters more than the level here.** Normal at 65
+  against stock Hard by plan, 36 games each: Greed 69%, Rush 61%, Turtle
+  58%, Boom 42%, Ironclad 39%, Air Swarm 36%, Balanced 22%.
+- **Against the scripted players**, Easy at 35 beat the novice 69%, the
+  beginner 44%, the decent player 75%.
+- **Spending:** at these caps it banks 500–750 scrap, like the stock
+  commander, and mines 2700–3200 a minute.
+
+So caps that high make Marshal a strong opponent at every level; if the
+levels should feel different, think speed, the micro budget and the plan
+pool are the levers that still bite up there.
 
 ## Open questions
 

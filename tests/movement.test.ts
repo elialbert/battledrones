@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
-import { findPath } from "../src/sim/movement";
+import { PATH_TILES_PER_TICK, findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
 import { Terrain } from "../src/sim/types";
 import { canGetWithin, createWorld, regionAt, removeBuilding, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -285,6 +285,32 @@ describe("fighting across water", () => {
     step(w, [{ type: "attack", faction: "blue", unitIds: [tank.id], targetId: squad.id }]);
     runTicks(w, 2);
     expect(w.units.get(tank.id)!.order.type).toBe("idle");
+  });
+});
+
+describe("the path search budget", () => {
+  it("a mass order spreads its path searches over a few ticks, and arrives about as soon", () => {
+    const w = createWorld(64, 64);
+    for (let y = 2; y < 62; y++) setTerrain(w, 32, y, Terrain.Rock); // (the long way round: big searches)
+    const army = Array.from({ length: 60 }, (_, i) => spawnUnit(w, "stinger", "blue", 4.5 + (i % 10), 10.5 + Math.floor(i / 10)));
+    step(w, [{ type: "move", faction: "blue", unitIds: army.map((u) => u.id), x: 58.5, y: 10.5 }]);
+    const planned = () => army.filter((u) => u.path).length;
+    expect(planned()).toBeGreaterThan(0);
+    expect(planned()).toBeLessThan(army.length); // (not all in the one tick: about PATH_TILES_PER_TICK searched)
+    expect(PATH_TILES_PER_TICK).toBeGreaterThan(0);
+    // (a worst case: each search here goes the long way round a wall, some 1200 tiles; on the
+    // real maps an attack-move searches 60 to 180)
+    let t = 1;
+    while (planned() < army.length) {
+      step(w, []);
+      t++;
+    }
+    expect(t).toBeLessThanOrEqual(15); // every unit under way within 1.5 s
+    while (army.some((u) => u.order.type === "move") && t < 900) {
+      step(w, []);
+      t++;
+    }
+    expect(t).toBeLessThan(400); // (all there by 40 s: 36 when each searched its own at once)
   });
 });
 

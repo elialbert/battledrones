@@ -10,6 +10,31 @@ const ARRIVE_DIST = 0.25;
 export const IGNORE_TICKS = 30;
 /** Consume en-route waypoints loosely — tight radii livelock grouped units. */
 const WAYPOINT_DIST = 0.7;
+/**
+ * Tiles each side's units may search for paths in one tick (A* expansions:
+ * a count, so every machine plays the same match). A search under way always
+ * finishes; once a side's are past this, its other units wait a tick, keeping
+ * to the paths they have. A mass order (75 units told to attack-move at once)
+ * otherwise searches 75 paths in one tick, 40 to 60 ms of it.
+ */
+export const PATH_TILES_PER_TICK = 6000;
+let pathBudget: { used: Partial<Record<Faction, number>> } = { used: {} };
+/**
+ * Paths found during this tick's movement, by side, move class and start and
+ * goal tile: a search depends on nothing else, so a unit on the same tile
+ * going to the same tile takes a copy — exactly the path its own search would
+ * find — without searching or spending the budget. (Only while tickMovement
+ * runs: nothing builds or falls in the middle of it.)
+ */
+let sharedPaths: Map<string, { x: number; y: number }[] | null> | null = null;
+/** Tiles the last findPath expanded. */
+let expanded = 0;
+
+/** A new tick: every side's path searching starts afresh (sim.ts step, first thing). */
+export function resetPathBudget(): void {
+  pathBudget = { used: {} };
+}
+
 /** Fastest terrain speed multiplier (roads) — keeps the A* heuristic admissible. */
 const MAX_TERRAIN_SPEED = Math.max(...Object.values(TERRAIN).map((t) => Math.max(t.speed, t.hoverSpeed, t.footSpeed)));
 
@@ -31,6 +56,10 @@ function arrivalRadius(w: World, u: Unit, gx: number, gy: number): number {
 function stepCost(w: World, idx: number, mc: MoveClass): number {
   return 1 / (terrainMult(TERRAIN[w.terrain[idx] as Terrain], mc) || 1);
 }
+
+/** The tile under x (y) as findPath floors it, in the side's own frame. */
+const frameTileX = (w: World, faction: Faction | undefined, x: number) => (faction !== "red" ? Math.floor(x) : w.width - 1 - Math.floor(w.width - x));
+const frameTileY = (w: World, faction: Faction | undefined, y: number) => (faction !== "red" ? Math.floor(y) : w.height - 1 - Math.floor(w.height - y));
 
 /** A* working arrays, grown to the largest map seen and reused by every search. */
 let scratch: { g: Float32Array; from: Int32Array; seen: Uint32Array; shut: Uint32Array; gen: number } | null = null;
@@ -54,8 +83,8 @@ export function findPath(
   const s = faction === "red" ? -1 : 1;
   // the tile under a point, floored in that frame too: a point on a tile edge
   // (e.g. an Uplink at (28, 28)) belongs to the tile on the side's own far side
-  const tileX = (x: number) => (s > 0 ? Math.floor(x) : w.width - 1 - Math.floor(w.width - x));
-  const tileY = (y: number) => (s > 0 ? Math.floor(y) : w.height - 1 - Math.floor(w.height - y));
+  const tileX = (x: number) => frameTileX(w, faction, x);
+  const tileY = (y: number) => frameTileY(w, faction, y);
   const sx = tileX(fromX);
   const sy = tileY(fromY);
   let gx = tileX(toX);
@@ -159,9 +188,11 @@ export function findPath(
     return (Math.max(dx, dy) + 0.4142 * Math.min(dx, dy)) / MAX_TERRAIN_SPEED;
   };
   push(h(startIdx), startIdx);
+  expanded = 0;
 
   while (heap.length > 0) {
     const cur = pop();
+    expanded++;
     if (cur === goalIdx) {
       const path: { x: number; y: number }[] = [];
       for (let idx = goalIdx; idx !== startIdx; idx = sc.from[idx]!)
@@ -221,15 +252,34 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
     return false;
   }
 
-  // ground: (re)plan when the goal changed or the path is exhausted/blocked
+  // ground: (re)plan when the goal changed or the path is exhausted/blocked —
+  // once this side's searching for the tick is spent (PATH_TILES_PER_TICK), next
+  // tick: till then it keeps to the path it has, or waits
+  let waiting = false;
   if (
     !u.path ||
     !u.pathGoal ||
     hypot(u.pathGoal.x - x, u.pathGoal.y - y) > 0.6
   ) {
-    u.path = findPath(w, u.x, u.y, x, y, mc, u.faction);
-    u.pathGoal = { x, y };
-    if (!u.path) return true; // unreachable: give up (caller goes idle)
+    const used = pathBudget.used[u.faction] ?? 0;
+    const key = sharedPaths &&
+      `${u.faction} ${mc} ${frameTileX(w, u.faction, u.x)} ${frameTileY(w, u.faction, u.y)} ${frameTileX(w, u.faction, x)} ${frameTileY(w, u.faction, y)}`;
+    const shared = key ? sharedPaths!.get(key) : undefined;
+    if (shared !== undefined) {
+      u.path = shared && shared.slice();
+      u.pathGoal = { x, y };
+      if (!u.path) return true;
+    } else if (used >= PATH_TILES_PER_TICK) {
+      if (!u.path) return false;
+      waiting = true;
+    } else {
+      expanded = 0; // (a search that ends before expanding anything)
+      u.path = findPath(w, u.x, u.y, x, y, mc, u.faction);
+      pathBudget.used[u.faction] = used + Math.max(1, expanded);
+      u.pathGoal = { x, y };
+      if (key) sharedPaths!.set(key, u.path && u.path.slice());
+      if (!u.path) return true; // unreachable: give up (caller goes idle)
+    }
   }
   let wp = u.path[0];
   while (wp) {
@@ -241,7 +291,7 @@ export function moveUnitToward(w: World, u: Unit, x: number, y: number): boolean
   if (!wp) {
     u.path = null;
     u.pathGoal = null;
-    return true;
+    return !waiting; // (the end of the old path isn't where it's going now)
   }
   if (!passable(w, Math.floor(wp.x), Math.floor(wp.y), mc)) {
     // world changed under the path (new building etc.) — replan next tick
@@ -302,6 +352,7 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
   /** Where each crusher stood before it moved (to tell who actually drove). */
   const crushers: { u: Unit; x: number; y: number }[] = [];
   for (const u of w.units.values()) if (crushes(u.kind)) crushers.push({ u, x: u.x, y: u.y });
+  sharedPaths = new Map();
   for (const u of w.units.values()) {
     const o = u.order;
     if (pausedIds.has(u.id)) continue;
@@ -335,6 +386,7 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
       }
     }
   }
+  sharedPaths = null;
   const moved = crushers.filter((c) => c.u.x !== c.x || c.u.y !== c.y).map((c) => c.u);
   const driving = new Set<number>();
   for (const [id, p] of spots) {

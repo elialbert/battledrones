@@ -444,8 +444,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (island maps: only fields on our side of the bridges; none left, no more harvesters —
   // and no search: a search for a field that isn't there floods the whole landmass)
   const fieldsLeft = !islandMap || ownFieldLeft(w, hqC, ourSide);
+  // (the ground searched in vain this think isn't searched again: late in a match, with the near
+  // fields mined out, a dozen idle harvesters took 30 ms of one tick)
+  const misses: Uint8Array[] = [];
   const fieldFrom = (x: number, y: number) =>
-    !islandMap ? nearestReachableResource(w, x, y, faction) : fieldsLeft ? nearestReachableResource(w, x, y, faction, ourSide) : null;
+    !islandMap
+      ? nearestReachableResource(w, x, y, faction, undefined, misses)
+      : fieldsLeft
+      ? nearestReachableResource(w, x, y, faction, ourSide, misses)
+      : null;
   // the fields our dug-in Goliaths work (ai/goliath.ts): harvesters sent out, and more built for them
   const goliathFields = goliathHarvest(w, faction, s, harvesters, () => {
     const at = fieldFrom(hqC.x, hqC.y);

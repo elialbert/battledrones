@@ -430,19 +430,28 @@ export function nearestScrapTile(w: World, x: number, y: number, faction?: Facti
  * Straight-line distance is fooled by rivers and rock-locked tiles.
  * `accept` (optional) skips fields it turns down (the AI keeps to its own
  * side of an island map's bridges).
+ *
+ * `misses` (optional) remembers the ground searched in vain: a search from
+ * anywhere on it would find nothing too, so it doesn't search again. Only
+ * for searches with the same `accept`, while no field appears and nothing
+ * opens a way (one pass of the harvesters, one AI think): late in a match,
+ * with the near fields mined out, a dozen harvesters each searched the whole
+ * map in the same tick.
  */
 export function nearestReachableResource(
   w: World,
   x: number,
   y: number,
   faction?: Faction,
-  accept?: (tx: number, ty: number) => boolean
+  accept?: (tx: number, ty: number) => boolean,
+  misses?: Uint8Array[]
 ): { x: number; y: number } | null {
   const W = w.width;
   // neighbour order in the side's own frame: red's BFS is blue's, turned 180°
   const s = faction === "red" ? -1 : 1;
   const start = tileIndex(w, Math.floor(x), Math.floor(y));
   if (start < 0 || start >= W * w.height) return null;
+  if (misses?.some((m) => m[start])) return null;
   const seen = new Uint8Array(W * w.height);
   const queue = new Int32Array(W * w.height);
   let head = 0;
@@ -470,6 +479,7 @@ export function nearestReachableResource(
         queue[tail++] = ni;
       }
   }
+  misses?.push(seen);
   return null;
 }
 
@@ -510,6 +520,7 @@ function dockPoint(b: DropSite, x: number, y: number): { x: number; y: number } 
 }
 
 export function tickHarvest(w: World): void {
+  const misses: Uint8Array[] = []; // (fields only run dry during the pass: a search in vain stays in vain)
   for (const u of w.units.values()) {
     if (u.order.type !== "harvest") continue;
     if (isStunned(w, u.id)) continue; // EMP'd: frozen in place
@@ -544,7 +555,7 @@ export function tickHarvest(w: World): void {
       }
       const i = tileIndex(w, o.fieldX, o.fieldY);
       if (!isResource(w, i)) {
-        const next = nearestReachableResource(w, u.x, u.y, u.faction);
+        const next = nearestReachableResource(w, u.x, u.y, u.faction, undefined, misses);
         if (!next) {
           u.order = { type: "idle" };
           continue;
@@ -558,7 +569,7 @@ export function tickHarvest(w: World): void {
         if (hypot(o.fieldX + 0.5 - u.x, o.fieldY + 0.5 - u.y) < 2.2) o.phase = "harvesting";
         else {
           // that field is cut off — settle for the nearest one we can reach
-          const next = nearestReachableResource(w, u.x, u.y, u.faction);
+          const next = nearestReachableResource(w, u.x, u.y, u.faction, undefined, misses);
           if (next && (next.x !== o.fieldX || next.y !== o.fieldY)) {
             o.fieldX = next.x;
             o.fieldY = next.y;
