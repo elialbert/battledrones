@@ -41,6 +41,7 @@ import { USELESS, effectivenessVs, seenEnemies } from "./intel";
 import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
 import { goliathsOf, isLifted } from "../goliath";
+import { strikeHolds } from "./hornets";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
 
@@ -67,17 +68,18 @@ export interface MarshalOptions {
   fight?: Partial<Fight>;
 }
 
-export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and three of
+ * The game plans Marshal picks from: the stock personalities, and four of
  * its own built on one of them (`base`: its opener and the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
- * play (AiState.goliathStyle), "expand" unless it says.
+ * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
+ * Hornets do (AiState.hornetStyle).
  */
 export const MARSHAL_PLANS: Record<
   PlanName,
-  { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush" }
+  { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush"; hornets?: "strike" }
 > = {
   balanced: { base: "balanced", label: "Balanced", fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
   /** (no fast version: Rush is the plan that skips the economy; with a depot it beat the rest of the field more often) */
@@ -131,6 +133,22 @@ export const MARSHAL_PLANS: Record<
       assaultValue: 5000,
       harassGroup: Infinity
     }
+  },
+  /**
+   * For fun (APM-BOTS.md): the Tech Lab straight after the Airpad, the
+   * Airpads build Hornets before anything else till there are seven, and
+   * the wing hides by a far corner of the map until the enemy's army comes
+   * at ours, then bombs their HQ (ai/hornets.ts). No raids: the Wasps stay
+   * home and guard.
+   */
+  strike: {
+    base: "airswarm",
+    label: "Hornet Strike",
+    hornets: "strike",
+    tweak: {
+      buildOrder: ["airpad", "tech-lab", "fab-plant", "airpad", "turret", "depot"],
+      harassGroup: Infinity
+    }
   }
 };
 
@@ -149,15 +167,16 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
  * "Retuning the levels"). Easy plays the slow plans, no Rush and no Greed (a
  * beginner gets a few minutes' peace, and Greed is the strongest plan);
  * Normal all of them but Skyforce (an all-air plan needs more hands, and it
- * won 27% of a round robin at 50 APM); Hard the four strongest. Juggernaut,
- * the fun one, comes up everywhere but Easy (Easy meets no Goliath).
+ * won 27% of a round robin at 50 APM); Hard the four strongest. Juggernaut
+ * and Hornet Strike, the fun ones, come up everywhere but Easy (Easy meets
+ * no Goliath, and no bombers on its HQ at 2:30).
  */
 export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   easy: ["balanced", "boom", "turtle"],
-  casual: ["balanced", "boom", "turtle", "airswarm", "juggernaut"],
-  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed", "juggernaut"],
-  hard: ["balanced", "airswarm", "ironclad", "greed", "juggernaut"],
-  brutal: ["balanced", "airswarm", "ironclad", "greed", "juggernaut"]
+  casual: ["balanced", "boom", "turtle", "airswarm", "juggernaut", "strike"],
+  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed", "juggernaut", "strike"],
+  hard: ["balanced", "airswarm", "ironclad", "greed", "juggernaut", "strike"],
+  brutal: ["balanced", "airswarm", "ironclad", "greed", "juggernaut", "strike"]
 };
 
 /**
@@ -353,6 +372,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   s.interval = opts.think;
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
   s.goliathStyle = plan.goliath ?? "expand";
+  s.hornetStyle = plan.hornets;
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
 
   /** The plan's orders not yet sent. */
@@ -485,9 +505,11 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       if (w.tick - x.tick > SIGHTING_TTL) sighted.delete(id);
       else enemy += x.value;
     }
+    // (a Hornet strike's wing flies its own plan: ai/hornets.ts)
+    const wing = strikeHolds(w, side, s);
     const army = [...w.units.values()].filter(
       (u) =>
-        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" &&
+        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
         (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
     );
     const ours = army.reduce((v, u) => v + UNITS[u.kind].cost, 0);
@@ -514,9 +536,10 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const hq = hqOf(w, side);
     const home = hq ? buildingCenter(hq) : null;
     const enemies = seenEnemies(w, side).filter((e) => !e.goliath && (UNITS[e.kind].dps > 0 || UNITS[e.kind].heal));
+    const wing = strikeHolds(w, side, s);
     const army = [...w.units.values()].filter(
       (u) =>
-        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" &&
+        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
         !dodging.has(u.id) && (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
     );
     const defences = [...w.buildings.values()].filter(

@@ -668,6 +668,32 @@ the staging point after 40 s alone. It retreats when what it sees outweighs
 regular Marshal, 19–0 (1 draw) against stock Balanced. It is in every
 difficulty's pool but Easy's, since Easy meets no Goliath.
 
+### Hornet Strike: the bomber snipe
+
+A plan for fun, and meant to lose a lot (`strike`, on Air Swarm,
+`hornetStyle: "strike"`, ai/hornets.ts). The Tech Lab comes straight after
+the Airpad. The Airpads build Hornets before anything else until there are
+seven, with the next Hornet's price set aside from the other factories. Every
+Hornet is the strike's and never the army's: no wave, guard post, fight micro
+or finishing push gives one orders. The wing gathers behind the HQ and joins
+the defence if the base comes under real attack before it's ready. Once seven
+are ready, it flies up our side of the map to the free corner with the least
+known anti-air on the way, then along the enemy's edge to a spot at most 30
+tiles from their HQ. It waits there until it sees 800 of the enemy's army on
+our half of the map, then every Hornet bombs the HQ (seven do about 340
+damage a second, so the HQ falls in roughly 9 s). The wing also strikes at
+once if anti-air finds it, and after 4 minutes parked in any case. Once the
+wing is gone, the next one gathers.
+
+The wing is ready at about 2:15 and has struck by about 3:00. On Hard,
+against regular Marshal with random plans, 30 games on five maps, both sides:
+8 wins with no home defence and 5 with it, both within the noise. By wing
+size (with the defence): 4 Hornets won 4/30, 5 won 2/30 and 7 won 5/30. A
+smaller wing leaves sooner but only takes 1,100–1,400 off the HQ before it
+dies, and the HQ repairs that. When it loses, it's mostly to an early push
+on a base that spent everything on bombers, or anti-air finding the wing
+(Archipelago). It is in every pool but Easy's.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
@@ -696,6 +722,7 @@ difficulty's pool but Easy's, since Easy meets no Goliath.
 | `src/sim/ai/apm.ts` | `capApm`, the token bucket |
 | `src/sim/ai/marshal.ts` | Marshal; `MARSHAL` (each difficulty's speeds and caps), `MARSHAL_PLANS`, `MARSHAL_POOL` |
 | `src/sim/ai/commander.ts` | The stock commander: `tickAi`, `DIFFICULTY`, `STRATEGIES` |
+| `src/sim/ai/hornets.ts` | The Hornet Strike plan's wing: `STRIKE`, `planStrike`, `strikeHolds`, `strikeWants` |
 | `src/sim/ai/player.ts` | The scripted players |
 | `src/arena/match.ts` | `parseSeat`, `seatName`, bot seats ticking every tick |
 | `tools/arena.ts` | `run`, `series`, `league`, `bots` |

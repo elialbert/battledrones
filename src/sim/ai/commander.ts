@@ -9,6 +9,7 @@ import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import { planMenders } from "./menders";
 import { bannedBy, infantryArmy } from "../rules";
 import { planSalvage } from "./salvage";
+import { planStrike, strikeHolds, strikeWants } from "./hornets";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
@@ -280,6 +281,13 @@ export interface AiState {
    * the enemy's HQ with its Goliath and a big escort.
    */
   goliathStyle?: "expand" | "rush";
+  /**
+   * How its Hornets play (ai/hornets.ts): "strike" (Marshal's Hornet Strike
+   * plan) builds a wing of them first, hides it by a far corner of the map
+   * and bombs the enemy's HQ when their army comes at ours. They are never
+   * the army's.
+   */
+  hornetStyle?: "strike";
 }
 
 /**
@@ -372,7 +380,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const harvesters = mine.filter((u) => u.kind === "harvester");
   // (island maps: squads holding an island relay, or stranded on one, are the airlift's — ai/airlift.ts —
   // never counted toward a wave they can't walk to)
-  const army = mine.filter((u) => COMBAT_KINDS.includes(u.kind) && !offHomeLand(w, faction, u));
+  // (nor are the Hornets of a strike wing: ai/hornets.ts flies them)
+  const wing = strikeHolds(w, faction, s);
+  const army = mine.filter((u) => COMBAT_KINDS.includes(u.kind) && !offHomeLand(w, faction, u) && !wing.has(u.id));
   const airlifts = airliftActive(w, faction, s);
   const armyValue = value(army);
   const count = (k: UnitKind) => mine.filter((u) => u.kind === k).length;
@@ -611,8 +621,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       produce(fab, kind);
     }
   };
+  // a strike wing still to build (ai/hornets.ts): the Airpads build Hornets first, and the rest waits for them
+  let wingShort = unitBlocker(w, faction, "hornet") ? 0 : strikeWants(w, faction, s, queued("hornet"));
   const runPads = () => {
     for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
+      if (wingShort > 0 && pad.queue.length < depth) {
+        if (spendable < unitCost(w, faction, "hornet")) break;
+        produce(pad, "hornet");
+        wingShort--;
+        continue;
+      }
       if (pad.queue.length >= depth) continue;
       // Air War mutator (no Fab Plants): play the air-only plan, and bring bombers for the defences
       const airWar = bannedBy(w, "fab-plant", faction) !== null; // (or an op's "air only")
@@ -655,8 +673,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // (island relays: the squads the airlift is waiting for are bought first)
   if (airlifts) runBays(true);
-  runFabs();
-  runPads();
+  if (wingShort > 0) {
+    runPads();
+    // (the next Hornet's price set aside, if any Airpad is free to build it)
+    if (wingShort > 0 && myBuildings.some((b) => b.kind === "airpad" && b.queue.length < depth)) spendable -= unitCost(w, faction, "hornet");
+    runFabs();
+  } else {
+    runFabs();
+    runPads();
+  }
   runBays();
 
   // --- scouting -----------------------------------------------------------
@@ -774,6 +799,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     ...planGoliaths(w, faction, s, { army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq })
   );
   cmds.push(...huntGoliaths(w, faction, s, { army, used, seen, enemyHqPos, mode: s.mode, threatened }));
+  // --- 1c'. the Hornet strike: gather, hide, bomb their HQ when their army is out (ai/hornets.ts)
+  const intruder = threatened ? atHome[0] : undefined;
+  cmds.push(...planStrike(w, faction, s, { hqC, enemyHqPos, seen, defend: intruder ? { x: intruder.x, y: intruder.y } : null }));
 
   // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
   for (const id of objectiveHolds(w, faction, s)) used.add(id);
