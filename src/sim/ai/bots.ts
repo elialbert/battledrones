@@ -15,7 +15,7 @@
  * never re-run it.
  */
 import { createAiState, tickAi, STRATEGIES, type Difficulty, type StrategyName } from "./commander";
-import { MARSHAL, marshal } from "./marshal";
+import { MARSHAL, marshal, marshalPlan } from "./marshal";
 import { PROFILES, scriptedPlayer, type ProfileName } from "./player";
 import { pickAiOpener, type OpenerId } from "../openers";
 import type { Command, Faction, World } from "../types";
@@ -30,6 +30,10 @@ export interface Bot {
    * is sent and this isn't called.
    */
   sent?(cmds: Command[]): void;
+  /** Its quick-start opener, when it picks one for itself (Marshal's comes with the plan it drew); else its BotDef's. */
+  opener?: OpenerId;
+  /** The plan it drew for this game ("Turtle"), when it draws one. */
+  plan?: string;
 }
 
 export interface BotDef {
@@ -42,7 +46,7 @@ export interface BotDef {
   group: string;
   /** Does `difficulty` change how it plays? (Scripted players have one speed.) */
   difficulties: boolean;
-  /** Its quick-start opener for a match with this seed. */
+  /** Its quick-start opener for a match with this seed (unless the bot names its own: `Bot.opener`). */
   opener(seed: number, side: Faction): OpenerId;
   /** `seed` feeds its tie-break RNG. */
   create(side: Faction, seed: number, difficulty: Difficulty): Bot;
@@ -103,11 +107,11 @@ const ALL: BotDef[] = [
   {
     id: "marshal",
     label: "Marshal",
-    about: "The Balanced plan on a human's budget (10/14/30 actions a minute): no wasted orders, focus fire, knows when to quit a fight and when to finish one",
+    about: "The commander's plans on a human's budget (7/14/30 actions a minute), Turtle and Greed among them: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
     group: "Commander",
     difficulties: true,
-    opener: (seed, side) => pickAiOpener("balanced", seed, side),
-    create: (side, seed, difficulty) => marshal(side, seed, difficulty, { ...MARSHAL[difficulty], strategy: "balanced" }),
+    opener: (seed, side) => pickAiOpener("balanced", seed, side), // (each bot's own: its plan's)
+    create: (side, seed, difficulty) => marshal(side, seed, difficulty, { ...MARSHAL[difficulty], strategy: marshalPlan(seed, difficulty) }),
     apm: (difficulty) => MARSHAL[difficulty].apm
   }
 ];

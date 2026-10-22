@@ -17,7 +17,7 @@ export const gameMode = {
   spectator: false,
   /** Watch AI vs AI's bot for each side (saved): a sim/ai/bots.ts id, or "random" (a commander personality). */
   watch: { blue: "random", red: "random" } as Record<Faction, string>,
-  /** The skirmish opponent (saved): a sim/ai/bots.ts id, or "random" (the classic commander for the difficulty). */
+  /** The skirmish opponent (saved): a sim/ai/bots.ts id, or "random" (Marshal at the difficulty, drawing a plan: meta.ts difficultyBot). */
   opponent: "random",
   mapId: "riverlands",
   difficulty: "normal" as Difficulty,

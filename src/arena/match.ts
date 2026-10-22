@@ -355,7 +355,7 @@ export class Arena {
     if (this.round === 0) {
       for (const side of SIDES) {
         const s = this.seats[side];
-        const pick = s.spec.kind === "bot" ? BOTS[s.spec.bot]!.opener(w.seed, side) : s.opener ?? DEFAULT_OPENER;
+        const pick = s.spec.kind === "bot" ? s.bot?.opener ?? BOTS[s.spec.bot]!.opener(w.seed, side) : s.opener ?? DEFAULT_OPENER;
         const o = allowedOpener(w, side, pick);
         if (o) {
           applyOpener(w, side, o);

@@ -22,6 +22,8 @@ export function capApm(bot: Bot, apm: number, burst = APM_BURST): Bot {
   let tokens = cap;
   let last: number | null = null;
   return {
+    opener: bot.opener,
+    plan: bot.plan,
     tick(w: World): Command[] {
       if (last !== null) tokens = Math.min(cap, tokens + (w.tick - last) * apm);
       last = w.tick;

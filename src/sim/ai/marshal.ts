@@ -7,8 +7,9 @@
  *  - how fast it thinks: the commander's plan (commander.ts) every `think`
  *    seconds, and a look at every fight every `react` seconds.
  *
- * The plan is the stock commander's: build order, counters, waves. What
- * differs is how it gives orders:
+ * The plan is the stock commander's: build order, counters, waves, drawn
+ * for each game from MARSHAL_PLANS (a stock personality, or its own Turtle
+ * or Greed on top of one). What differs is how it gives orders:
  *
  *  - **Only orders that change something.** An order to a unit already doing
  *    it (the same target, a destination within a tile or two, a Mender within
@@ -35,18 +36,20 @@ import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
 import type { Command, Faction, Unit, World } from "../types";
 import { buildingCenter, dist, domainOf, hqOf } from "../world";
-import { createAiState, tickAi, type Difficulty, type StrategyName } from "./commander";
+import { STRATEGIES, createAiState, tickAi, type Difficulty, type Strategy, type StrategyName } from "./commander";
 import { USELESS, effectivenessVs, seenEnemies } from "./intel";
 import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
+import { hash32 } from "../rand";
+import { pickAiOpener } from "../openers";
 
 export interface MarshalOptions {
   /** Seconds between the commander's planning passes. */
   think: number;
   /** Seconds between looks at the fights (0: no fight micro). */
   react: number;
-  /** The plan it follows. */
-  strategy: StrategyName;
+  /** The plan it follows (MARSHAL_PLANS). */
+  strategy: PlanName;
   /**
    * Actions a minute it may spend on fight micro (breaking off, stepping
    * back, focus fire), out of what its cap allows: how sharp it is in a
@@ -55,15 +58,82 @@ export interface MarshalOptions {
   microApm?: number;
 }
 
+export type PlanName = StrategyName | "turtle" | "greed";
+
 /**
- * Each difficulty's speeds and default APM cap. Against the stock Normal
- * commander (Balanced, 60–100 APM), Marshal at 10 APM won 11% of 36 games,
- * at 13 56%, at 16 83%, at 30 89%, at 60 94% (APM-BOTS.md).
+ * The game plans Marshal picks from: the stock personalities, and two of its
+ * own built on one of them (`base`: its opener and the tables keyed by
+ * personality, ai/goliath.ts and ai/airlift.ts).
  */
-export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number }> = {
-  easy: { think: 3.5, react: 2, apm: 10 },
-  normal: { think: 2, react: 1, apm: 14 },
-  hard: { think: 1, react: 0.5, apm: 30 }
+export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string; tweak?: Partial<Strategy> }> = {
+  balanced: { base: "balanced", label: "Balanced" },
+  rush: { base: "rush", label: "Rush" },
+  airswarm: { base: "airswarm", label: "Air Swarm" },
+  boom: { base: "boom", label: "Boom" },
+  skyforce: { base: "skyforce", label: "Skyforce" },
+  ironclad: { base: "ironclad", label: "Ironclad" },
+  /**
+   * Turrets and a SAM round home, heavy tech and a depot behind them, no
+   * raids, and one army big enough to end it. (Against stock Balanced at
+   * 14 APM: 72% of 36 games; 33% with five towers, a radar and only the
+   * usual four harvesters: towers cost actions as well as scrap.)
+   */
+  turtle: {
+    base: "ironclad",
+    label: "Turtle",
+    tweak: {
+      buildOrder: ["fab-plant", "turret", "tech-lab", "depot", "sam-site", "turret", "fab-plant", "radar"],
+      harvesters: 5,
+      assaultValue: 3000,
+      harassGroup: Infinity
+    }
+  },
+  /** Two depots before anything else, a harvester for each, then a late push. (78% at 14 APM; 56% with a turret and the Tech Lab between the depots.) */
+  greed: {
+    base: "boom",
+    label: "Greed",
+    tweak: {
+      buildOrder: ["fab-plant", "depot", "depot", "turret", "tech-lab", "fab-plant", "airpad", "sam-site"],
+      harvesters: 6,
+      assaultValue: 2400,
+      harassGroup: Infinity
+    }
+  }
+};
+
+/** The plans each difficulty picks from, at random for each game. */
+export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
+  // (no Rush on Easy: a beginner should get a few minutes' peace; no Skyforce
+  // anywhere: at 14 APM it won 28% of 36 games against stock Balanced, Ironclad
+  // 42%, the rest 67–89%)
+  easy: ["balanced", "boom", "turtle", "greed"],
+  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"],
+  hard: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"]
+};
+
+/** A plan as the commander's personality it plays. */
+export const planStrategy = (name: PlanName): Strategy => {
+  const p = MARSHAL_PLANS[name];
+  return { ...STRATEGIES[p.base], ...p.tweak, label: p.label };
+};
+
+/** The plan a Marshal with this seed draws (from `pool`: the plans the match rules allow). */
+export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly PlanName[] = MARSHAL_POOL[difficulty]): PlanName {
+  return pool.length ? pool[hash32(seed, 0x6d61) % pool.length]! : "balanced";
+}
+
+/**
+ * Each difficulty's speeds and APM caps: the one slider for how well it runs
+ * its base and how sharp it is in a fight. `microApm` is fight micro's share
+ * of `apm`, at a human's pace for the level. Each plays about as well as the
+ * stock commander at that difficulty does with its income handicap
+ * (APM-BOTS.md): against it, Easy won 72% of 36 games, Normal 61%,
+ * Hard 49% (each plan alone: 36–69%).
+ */
+export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number; microApm: number }> = {
+  easy: { think: 4, react: 3, apm: 7, microApm: 3 },
+  normal: { think: 2, react: 1, apm: 14, microApm: 6 },
+  hard: { think: 1, react: 0.5, apm: 30, microApm: 20 }
 };
 
 /** Orders by rank: the cap spends from the top. */
@@ -172,7 +242,8 @@ function alreadyDoing(u: Unit, c: Command): boolean {
 }
 
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
-  const s = createAiState(opts.strategy, difficulty, seed);
+  const plan = MARSHAL_PLANS[opts.strategy];
+  const s = createAiState(plan.base, difficulty, seed, planStrategy(opts.strategy));
   s.fair = true;
   s.interval = opts.think;
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
@@ -218,6 +289,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     });
 
   return {
+    opener: pickAiOpener(plan.base, seed, side),
+    plan: plan.label,
     tick(w: World): Command[] {
       for (const [id, until] of held) if (until <= w.tick) held.delete(id);
       const plan = tickAi(w, side, s); // the dodge reflex every tick, the plan every `think`

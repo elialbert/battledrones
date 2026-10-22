@@ -2,6 +2,7 @@ import { capApm } from "../sim/ai/apm";
 import { BOTS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
+import { MARSHAL, MARSHAL_POOL, marshal, marshalPlan, planStrategy } from "../sim/ai/marshal";
 import { opAiState } from "../sim/ops";
 import { MUTATORS, makeRules, rulesOf, strategyFits } from "../sim/rules";
 import type { Faction, World } from "../sim/types";
@@ -29,6 +30,30 @@ export function aiStrategy(difficulty: Difficulty): StrategyName | undefined {
   return pool.length ? pool[Math.floor(Math.random() * pool.length)] : "balanced";
 }
 
+/**
+ * The menu's difficulty (🎲 Random opponent, the Daily Op): Marshal at that
+ * difficulty, fair and on a human's budget of actions (ai/marshal.ts),
+ * drawing a plan the rules allow, or playing the Daily Op's personality.
+ */
+export function difficultyBot(side: Faction): WatchedBot {
+  const difficulty = gameMode.difficulty;
+  const s = aiSeed(side === "blue" ? 2 : 1);
+  const rules = makeRules(activeMutators());
+  const plan = gameMode.daily
+    ? gameMode.daily.strategy
+    : marshalPlan(s, difficulty, MARSHAL_POOL[difficulty].filter((n) => strategyFits(planStrategy(n), rules)));
+  const bot = marshal(side, s, difficulty, { ...MARSHAL[difficulty], strategy: plan });
+  const label = planStrategy(plan).label;
+  return {
+    bot: capApm(bot, MARSHAL[difficulty].apm),
+    label,
+    versus: `vs ${label} AI (${DIFFICULTY[difficulty].label})`,
+    opener: bot.opener!,
+    seat: botSeat("marshal", difficulty),
+    ladder: true
+  };
+}
+
 /** A bot on one side of a match (AI vs AI, or the opponent picked on the menu): what it is, its opener, and the record's name for it. */
 export interface WatchedBot {
   bot: Bot;
@@ -38,6 +63,8 @@ export interface WatchedBot {
   versus: string;
   opener: OpenerId;
   seat: string;
+  /** The menu's difficulty, not a picked opponent: the career ladder, its tips and stars (difficultyBot). */
+  ladder?: boolean;
 }
 
 function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty): WatchedBot {
@@ -48,7 +75,7 @@ function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty
     bot: apm ? capApm(bot, apm) : bot,
     label: def.label,
     versus: `vs ${def.label} bot${def.difficulties ? ` · ${DIFFICULTY[difficulty].label}` : ""}`,
-    opener: def.opener(seed, side),
+    opener: bot.opener ?? def.opener(seed, side),
     seat: botSeat(id, difficulty)
   };
 }

@@ -16,8 +16,8 @@ it turns up everywhere at once:
 There are ten today. Six are the built-in commander with each of its
 personalities (`src/sim/ai/commander.ts`), three are the scripted phone
 players (`src/sim/ai/player.ts`), and one is Marshal
-(`src/sim/ai/marshal.ts`), the commander's plan played on a human's budget of
-actions. The registry is `src/sim/ai/bots.ts`.
+(`src/sim/ai/marshal.ts`), the commander's plans played on a human's budget
+of actions; the menu's Easy/Normal/Hard play it. The registry is `src/sim/ai/bots.ts`.
 
 ## The rules
 
@@ -164,6 +164,9 @@ What it does, and what to copy:
   helps, because each scarce action goes to a fresher choice.
 - **Set a default cap** with `BotDef.apm(difficulty)` if the bot is meant to
   play on one. A seat's `@apm=` overrides it, and the game wears it too.
+- **A bot that draws its plan** from its seed names its opener in
+  `Bot.opener` (the arena and game use it over `BotDef.opener`, which only
+  sees the match seed) and its plan in `Bot.plan`.
 
 The cap drops what it can't pay for rather than queueing it, because a
 queued order goes stale while it waits. A bot knows better than the cap which

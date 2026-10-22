@@ -27,7 +27,7 @@ import { chronicleOf, type Chronicle } from "./chronicle";
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { aiSeed, aiStrategy, announceRules, opEnemyAi, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
+import { aiSeed, aiStrategy, announceRules, difficultyBot, opEnemyAi, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
 import { OpsPresenter } from "./ops";
 import { MatchRecorder } from "./recorder";
 import type { BattleRecord } from "../arena/record";
@@ -243,7 +243,9 @@ export class GameScene {
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     if (gameMode.spectator && !feed)
       this.watched = { blue: watchBot("blue", this.world.seed), red: this.world.survival ? null : watchBot("red", this.world.seed) };
-    if (!gameMode.spectator && !feed && !this.world.survival && !this.world.ops) this.foe = opponentBot(ENEMY, this.world.seed);
+    // (the menu's difficulty is Marshal at that difficulty: meta.ts difficultyBot; an op's enemy keeps its scripted commander)
+    if (!gameMode.spectator && !feed && !this.world.survival && !this.world.ops)
+      this.foe = opponentBot(ENEMY, this.world.seed) ?? difficultyBot(ENEMY);
     this.ai =
       this.world.survival || feed || this.watched || this.foe ? null : opEnemyAi() ?? createAiState(aiStrategy(gameMode.difficulty), gameMode.difficulty, aiSeed(1));
     if (gameMode.spectator) {
@@ -412,7 +414,9 @@ export class GameScene {
             red: !this.watched.red ? "the waves" : `${this.watched.red.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
           }
         : null,
-      enemy: this.foe
+      enemy: this.foe?.ladder
+        ? { strategy: this.foe.label, difficulty: gameMode.difficulty }
+        : this.foe
         ? { strategy: this.foe.label, difficulty: "", versus: this.foe.versus } // (no "try a harder AI" tips: it's not the career ladder)
         : { strategy: this.ai?.strategy.label ?? this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,

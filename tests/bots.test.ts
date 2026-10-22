@@ -3,7 +3,9 @@ import { Arena, SIDES, parseSeat, seatName } from "../src/arena/match";
 import { replay, type BattleRecord } from "../src/arena/record";
 import { APM_BURST, capApm } from "../src/sim/ai/apm";
 import { BOTS, BOT_IDS, type Bot } from "../src/sim/ai/bots";
-import { MARSHAL } from "../src/sim/ai/marshal";
+import { MARSHAL, MARSHAL_PLANS, MARSHAL_POOL, marshalPlan, planStrategy, type PlanName } from "../src/sim/ai/marshal";
+import { pickAiOpener } from "../src/sim/openers";
+import { makeRules, strategyFits } from "../src/sim/rules";
 import { STRATEGIES } from "../src/sim/ai/commander";
 import { PROFILES } from "../src/sim/ai/player";
 
@@ -151,5 +153,37 @@ describe("Marshal, the bot built for a budget", () => {
     const loose = play("bot:marshal@apm=200");
     expect(loose.seats.blue.player).toBe("bot:marshal:normal@apm=200");
     expect(actions(loose, "blue")).toBeGreaterThan(actions(capped, "blue"));
+  });
+
+  it("draws each game's plan from its difficulty's pool, and opens as that plan does", () => {
+    for (const d of ["easy", "normal", "hard"] as const) {
+      const drawn = new Set<PlanName>();
+      for (let seed = 1; seed <= 200; seed++) {
+        const plan = marshalPlan(seed, d);
+        expect(MARSHAL_POOL[d]).toContain(plan);
+        drawn.add(plan);
+        const bot = BOTS.marshal!.create("red", seed, d);
+        expect(bot.plan).toBe(MARSHAL_PLANS[plan].label);
+        expect(bot.opener).toBe(pickAiOpener(MARSHAL_PLANS[plan].base, seed, "red"));
+      }
+      expect([...drawn].sort()).toEqual([...MARSHAL_POOL[d]].sort()); // (every plan comes up)
+      expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm);
+    }
+    expect(MARSHAL_POOL.easy).not.toContain("rush");
+  });
+
+  it("draws only plans the match rules allow", () => {
+    const rules = makeRules(["airwar"]);
+    const pool = MARSHAL_POOL.normal.filter((n) => strategyFits(planStrategy(n), rules));
+    expect(pool.length).toBeGreaterThan(0);
+    for (let seed = 1; seed <= 50; seed++) expect(pool).toContain(marshalPlan(seed, "normal", pool));
+    expect(marshalPlan(1, "normal", [])).toBe("balanced");
+  });
+
+  it("turtles and greeds on top of a stock personality", () => {
+    expect(planStrategy("turtle").harassGroup).toBe(Infinity);
+    expect(planStrategy("turtle").assaultValue).toBeGreaterThan(STRATEGIES.balanced.assaultValue);
+    expect(planStrategy("greed").buildOrder.slice(0, 3)).toEqual(["fab-plant", "depot", "depot"]);
+    expect(planStrategy("greed").harvesters).toBeGreaterThan(STRATEGIES.boom.harvesters);
   });
 });

@@ -2,7 +2,9 @@
 
 ## Status
 
-**Steps 1 and 2 are done; 3 is mostly answered; 4 is next.** This builds on
+**Steps 1 and 2 are done; 3 is mostly answered; 4 is half done: the
+menu's difficulty is now Marshal (below), the APM choice in the pickers is
+next.** This builds on
 the `selectable-bots` branch: the bot registry (`src/sim/ai/bots.ts`), `bot:`
 seats, `tools/arena.ts league`, and the menu's Opponent and Watch AI vs AI
 pickers. **[BOTS.md](BOTS.md)** is the guide to writing a bot. Read it first.
@@ -13,6 +15,11 @@ pickers. **[BOTS.md](BOTS.md)** is the guide to writing a bot. Read it first.
 - Step 2: `bot:marshal` (`src/sim/ai/marshal.ts`). **At 13 APM it plays the
   stock Normal commander, at 60–100 APM, about even; at 16 APM and up it wins
   83–100%.** See "What Marshal showed" below.
+- Since: **Marshal draws a game plan** (seven, including Turtle and Greed),
+  **each difficulty is one slider for both its base and its fight micro**,
+  and **the menu's Easy/Normal/Hard with 🎲 Random AI is Marshal**, fair,
+  in place of the stock commander with its income handicap. See "Plans,
+  difficulties and the menu" below.
 
 ## The idea
 
@@ -170,6 +177,8 @@ helpers under `src/sim/ai/`), but restructure how it gives orders:
 
 ### 4. In the game
 
+- **Done:** the menu's difficulty (🎲 Random AI, and the Daily Op) plays
+  Marshal at that difficulty (`difficultyBot` in `src/game/meta.ts`).
 - **An APM choice in the pickers** (Opponent and both Watch AI vs AI):
   probably "Unlimited / 150 / 100 / 60 / 40". Saved like the bot picks
   (`gameMode.opponent` and `gameMode.watch` in `src/game/mode.ts`).
@@ -199,11 +208,11 @@ also beat the other five personalities: Rush 86%, Air Swarm 89%, Boom 78%,
 Skyforce 83%, Ironclad 83%. Against the scripted `decent` player it won 33%
 at 10 APM and 78% at 20.
 
-The difficulties (`MARSHAL` in marshal.ts) are Easy 10 APM, Normal 14 and
-Hard 30, with Easy also thinking slower (a plan every 3.5 s, a look at the
-fights every 2 s) and Hard faster (1 s and 0.5 s). **They're a first guess:
-Normal is meant to feel like the stock Normal commander.** A league through
-the real arena, all maps, seeds 1 and 2, 24 games a pairing:
+The first difficulties were Easy 10 APM, Normal 14 and Hard 30, with Easy
+also thinking slower (a plan every 3.5 s, a look at the fights every 2 s)
+and Hard faster (1 s and 0.5 s); "Plans, difficulties and the menu" has
+today's. A league of those through the real arena, all maps, seeds 1 and 2,
+24 games a pairing, Balanced plan only:
 
 | | Won-lost-drawn | Win % | APM |
 |---|---|---|---|
@@ -265,7 +274,82 @@ fire outranking production, and no harassment raids (no clear change).
 off, stepping back, focus fire), apart from the seat's cap. At 60 APM with 10
 of them for micro it won 62%, with 20 88%, uncapped micro 79%: it's a knob
 for how sharp it is in a fight, not a way to play better on the same total.
-No seat syntax or picker sets it yet.
+Each difficulty now sets it (below); no seat syntax sets it.
+
+Over a whole game fight micro spends little: about 1 action a minute on
+Easy, 1.5 on Normal, 6 on Hard (fights are short). Inside a fight it's held
+to the seat's cap, so its pace there is the difficulty's.
+
+## Plans, difficulties and the menu
+
+### Plans
+
+Marshal draws a game plan for each game from its seed (`MARSHAL_PLANS`,
+`MARSHAL_POOL` and `marshalPlan` in marshal.ts): the six stock
+personalities, and two of its own, each built on a stock one (`base`: its
+opener, and the tables keyed by personality in goliath.ts and airlift.ts).
+A bot that picks its own opener says so in `Bot.opener`; the arena and the
+game take it over its `BotDef.opener`. `Bot.plan` names the plan.
+
+- **Turtle** (on Ironclad): a turret, the Tech Lab, a depot, a SAM site,
+  another turret, a second Fab Plant, a radar; five harvesters; no raids;
+  one push at 3000 scrap of army. The first try (five towers, a radar, the
+  usual four harvesters) won 33%: towers cost actions as well as scrap, and
+  it mined half what its enemy did while 2000 scrap sat unspent.
+- **Greed** (on Boom): two depots right after the Fab Plant, six
+  harvesters (plus one a depot), no raids, a push at 2400. 78%; with a
+  turret and the Tech Lab between the depots, 56%.
+
+Each plan at 14 APM against stock Balanced (36 games each): Rush 89%, Boom
+83%, Air Swarm 81%, Greed 78%, Turtle 72%, Balanced 67%, Ironclad 42%,
+Skyforce 28%. At Hard against stock Hard (below): Greed 69%, Turtle 61%,
+Boom 50%, Rush and Air Swarm 44%, Balanced and Ironclad 36%.
+
+The pools: Skyforce is in none (an all-air plan needs more hands than this
+budget); Easy draws Balanced, Boom, Turtle and Greed (no Rush: a beginner
+gets a few minutes' peace); Normal and Hard draw the other seven. With
+mutators on, the game draws only plans the rules allow (`strategyFits`);
+the Daily Op plays its personality as a plan.
+
+### Difficulties: one slider
+
+`MARSHAL` in marshal.ts. Each difficulty sets how fast it thinks and acts,
+and fight micro's share of the actions, at a human's pace for the level:
+
+| | Plan every | Fights every | APM | Of which fight micro |
+|---|---|---|---|---|
+| Easy | 4 s | 3 s | 7 | 3 |
+| Normal | 2 s | 1 s | 14 | 6 |
+| Hard | 1 s | 0.5 s | 30 | 20 |
+
+They're set against what the menu used to play, the stock commander at the
+same difficulty **with its income handicap** (0.75× and a harvester fewer
+on Easy, 1.3× and one more on Hard). Marshal is fair; 36 games each, plans
+drawn:
+
+| | Against stock, same difficulty | Notes |
+|---|---|---|
+| Easy | 72% | 8 APM: 92%; 6 APM, a plan every 5 s: 33%; 5 APM: 11% |
+| Normal | 61% | uncapped micro 58%, 5 or 8 for micro 69% |
+| Hard | 49% (plans forced, 252 games) | uncapped micro 53%, 15 for micro 36% |
+
+Easy is a steep cliff between 5 and 8 APM. Neither Marshal Easy nor stock
+Easy wins against the scripted novice or beginner players (1 in 36, 5 in
+36): those are efficient low-APM turtles, so they don't separate Easy
+candidates. Stock and Marshal Normal both beat the novice about 2 games in 3.
+
+The plan drawn follows the bot's seed, so a batch with few seeds draws few
+plans (six seeds drew Ironclad in half of Hard's games). Force a plan to
+compare plans.
+
+### The menu
+
+With 🎲 Random AI as the opponent, Easy/Normal/Hard plays Marshal at that
+difficulty (`difficultyBot` in `src/game/meta.ts`): fair, capped, a plan
+drawn as above. It keeps the career ladder (stars, XP, tips) and the "vs
+Turtle AI (Normal)" line. The record names the seat `bot:marshal:<difficulty>`.
+Ops keep their scripted commanders, and Watch AI vs AI's 🎲 still plays
+stock Normal commanders.
 
 ## Open questions
 
@@ -291,12 +375,12 @@ No seat syntax or picker sets it yet.
 |---|---|
 | `src/sim/ai/bots.ts` | The bot registry: `Bot` (and `sent`), `BotDef` (and its default `apm`), `ALL`, `botSeat` |
 | `src/sim/ai/apm.ts` | `capApm`, the token bucket |
-| `src/sim/ai/marshal.ts` | Marshal, and `MARSHAL`: each difficulty's speeds and cap |
+| `src/sim/ai/marshal.ts` | Marshal; `MARSHAL` (each difficulty's speeds and caps), `MARSHAL_PLANS`, `MARSHAL_POOL` |
 | `src/sim/ai/commander.ts` | The stock commander: `tickAi`, `DIFFICULTY`, `STRATEGIES` |
 | `src/sim/ai/player.ts` | The scripted players |
 | `src/arena/match.ts` | `parseSeat`, `seatName`, bot seats ticking every tick |
 | `tools/arena.ts` | `run`, `series`, `league`, `bots` |
-| `src/game/meta.ts` | `watchBot`, `opponentBot`, `opponentPicked` |
+| `src/game/meta.ts` | `difficultyBot` (the menu's difficulty), `watchBot`, `opponentBot`, `opponentPicked` |
 | `src/main.ts`, `src/ui/style.css` | The menu's pickers (`watchOptions`, `#opponent`, `#watchrow`) |
 | `tests/bots.test.ts` | Covers every registered bot automatically |
 | `BOTS.md` | How to write a bot |
@@ -308,4 +392,5 @@ In a fresh session on the `selectable-bots` branch:
 > Read APM-BOTS.md and BOTS.md, then do step 4 of APM-BOTS.md: an APM choice
 > in the Opponent and Watch AI vs AI pickers, saved like the bot picks, and
 > the cap in the "vs" line. Marshal already wears its difficulty's cap in the
-> game (`seatBot` in `src/game/meta.ts`); the choice should override it.
+> game (`seatBot` and `difficultyBot` in `src/game/meta.ts`); the choice
+> should override it.

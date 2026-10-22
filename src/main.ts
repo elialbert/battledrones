@@ -706,7 +706,7 @@ function showMenu(linkedMap?: string | null): void {
     if (!ops.locked(op)) ops.openBrief(op);
   });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
-  // who you play (saved): 🎲 the classic commander for the difficulty, or any bot
+  // who you play (saved): 🎲 Marshal at the difficulty, drawing a plan (meta.ts difficultyBot), or any bot
   const oppPick = menu.querySelector<HTMLSelectElement>("#opponent")!;
   oppPick.value = gameMode.opponent;
   oppPick.addEventListener("change", () => {
