@@ -223,6 +223,95 @@ describe("a Goliath in the field", () => {
   }, 30000);
 });
 
+describe("an expander's Goliath (AiState.goliathStyle: Marshal's)", () => {
+  /** Red's Goliath by its HQ on `map`, Boom's plan or `strategy`'s, played as an expander or not. */
+  function setup(map: string, expand: boolean, strategy: StrategyName = "boom") {
+    const w = createMapWorld(map);
+    const ai = createAiState(strategy, "normal", 1);
+    if (expand) ai.goliathStyle = "expand";
+    const hq = buildingCenter(hqOf(w, "red")!);
+    const enemy = buildingCenter(hqOf(w, "blue")!);
+    const g = spawnUnit(w, "goliath", "red", hq.x - 3, hq.y + 5);
+    return { w, ai, hq, enemy, g };
+  }
+
+  it("has the Depot built as it walks in, placed the moment it digs in, then moves on to the next field", () => {
+    const { w, ai, g } = setup("ashlands", true);
+    let started: { tick: number; walking: boolean; to: number } | null = null;
+    let anchoredAt: number | null = null;
+    let depot: { id: number; tick: number; x: number; y: number } | null = null;
+    for (let i = 0; i < 100 * TICK_RATE && !depot; i++) {
+      w.factions.red.scrap = Math.max(w.factions.red.scrap, 1500);
+      runRed(w, 1 / TICK_RATE, ai, (cmds) => {
+        const site = goliathSite(ai, g.id);
+        if (!started && site && cmds.some((c) => c.type === "startBuilding" && c.building === "depot"))
+          started = { tick: w.tick, walking: g.goliath!.mode === "walking", to: Math.hypot(g.x - site.x, g.y - site.y) };
+      });
+      if (anchoredAt === null && isAnchored(g)) anchoredAt = w.tick;
+      const b = buildings(w, "red", "depot").find((d) => d.outpost);
+      if (b) depot = { id: b.id, tick: w.tick, x: g.x, y: g.y };
+    }
+    // started while it was still walking in, a few tiles out
+    expect(started).not.toBeNull();
+    expect(started!.walking).toBe(true);
+    expect(started!.to).toBeGreaterThan(1);
+    expect(started!.to).toBeLessThanOrEqual(GOLIATH_AI.expandAhead);
+    // in its ring as soon as it was dug in, the commander's next look (the Depot was ready and waiting)
+    expect(anchoredAt).not.toBeNull();
+    expect(depot).not.toBeNull();
+    expect(depot!.tick - anchoredAt!).toBeLessThanOrEqual(3 * TICK_RATE);
+    // then on to the next field (and maybe the one after), the Depot left serving the first
+    let next = false;
+    runRed(w, 90, ai, () => {
+      if (isAnchored(g) && Math.hypot(g.x - depot!.x, g.y - depot!.y) > GOLIATH_AI.siteServed) next = true;
+    });
+    expect(next).toBe(true);
+    expect(w.buildings.has(depot!.id)).toBe(true);
+  }, 30000);
+
+  it("never digs in on the enemy's half of the map", () => {
+    // red's own half mined out beyond its home field: the commander's Goliath walks over to theirs
+    const sites = (expand: boolean) => {
+      const { w, ai, hq, enemy, g } = setup("riverlands", expand);
+      for (let i = 0; i < w.scrap.length; i++) {
+        const x = (i % w.width) + 0.5;
+        const y = Math.floor(i / w.width) + 0.5;
+        const d = Math.hypot(x - hq.x, y - hq.y);
+        if (d > 8 && d <= Math.hypot(x - enemy.x, y - enemy.y)) w.scrap[i] = 0;
+      }
+      const seen: { x: number; y: number }[] = [];
+      runRed(w, 90, ai, () => {
+        const s = goliathSite(ai, g.id);
+        if (s) seen.push(s);
+      });
+      const theirs = seen.filter((p) => Math.hypot(p.x - enemy.x, p.y - enemy.y) < Math.hypot(p.x - hq.x, p.y - hq.y));
+      return { theirs: theirs.length, phase: goliathPhases(ai).get(g.id) };
+    };
+    expect(sites(false).theirs).toBeGreaterThan(0);
+    expect(sites(true)).toEqual({ theirs: 0, phase: "guard" });
+  }, 30000);
+
+  it("never holds a forward post: with no field to work, it stands guard at home", () => {
+    // (Ironclad: a personality whose Goliaths dig in toward the enemy when no field pays)
+    const run = (expand: boolean) => {
+      const { w, ai, hq, g } = setup("riverlands", expand, "ironclad");
+      w.scrap.fill(0);
+      const kinds = new Set<string>();
+      const phases = new Set<string>();
+      runRed(w, 60, ai, () => {
+        kinds.add(goliathSite(ai, g.id)?.kind ?? "-");
+        phases.add(goliathPhases(ai).get(g.id) ?? "-");
+      });
+      return { kinds, phases, away: Math.hypot(g.x - hq.x, g.y - hq.y) };
+    };
+    expect(run(false).kinds).toContain("front");
+    const { kinds, phases, away } = run(true);
+    expect([...kinds]).toEqual(["-"]);
+    expect([...phases]).toEqual(["guard"]);
+    expect(away).toBeLessThan(GOLIATH_AI.expandGuard);
+  }, 30000);
+});
+
 describe("Menders and a Goliath", () => {
   it("the commander sends two or three Menders to a Goliath with a weapon down, none to one under an EMP", () => {
     const w = createMapWorld("proving-grounds");

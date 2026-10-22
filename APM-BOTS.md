@@ -600,6 +600,37 @@ in fights than measured: back at 120 it beat Hard 61% of 80 games, at 115
 order a look). "Less fight micro lost" in "Hard, harder" (90 and 60 a
 minute) was partly this.
 
+## Goliaths that expand, not attack
+
+Marshal's Goliaths play as expanders (`AiState.goliathStyle`, ai/goliath.ts).
+Traced over 12 Hard mirror games on four maps, the stock Goliath planner had
+them walk with waves, hold forward posts and dig in at fields on the enemy's
+half. 76 of 1323 ten-second samples were on the enemy's half, often with no
+army within 8 tiles. Now:
+
+- **No attacking.** It never walks with a wave or holds a forward post. It
+  digs in only on our half of the map, by a path that stays there. On the
+  way it turns back if what it sees outweighs ¾ of it and its company. It
+  sets out only above 70% health, and with no field to work it guards a few
+  tiles from the HQ. A walking Goliath gets shoved by its army going past,
+  so it walks back to its guard spot.
+- **Planting a Depot.** Once it is within 12 tiles of a field site
+  (`expandAhead`), the Depot is started. It waits, ready, until the Goliath
+  digs in (`outpostSpot` says "wait"), and goes up in its ring on the next
+  look. Once the Depot has stood 15 s (`expandStay`), the Goliath packs up
+  and walks on to the next unserved field. The Depot keeps serving the
+  field, so the economy spreads a field at a time.
+- **Its orders get through the cap.** A Goliath's move, dig-in and pack-up
+  rank with the economy (`rankOf`). At the army's rank a busy army starved
+  them, and an idle Goliath chases whatever it sees, which is how one
+  walked off toward the enemy after packing up.
+
+Over the same 12 games: no samples on the enemy's half (was 76), 9 of 34
+Goliaths lost (12 of 40), and more time dug in. Head to head against the old
+Marshal, 30 games each on five maps: Hard 13–15 (2 draws), Normal 14–15
+(1 draw). That is level within the noise, since most games are decided
+before the Goliaths matter.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap

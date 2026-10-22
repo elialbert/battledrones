@@ -40,6 +40,7 @@ import { STRATEGIES, createAiState, tickAi, type Difficulty, type Strategy, type
 import { USELESS, effectivenessVs, seenEnemies } from "./intel";
 import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
+import { goliathsOf } from "../goliath";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
 
@@ -260,7 +261,11 @@ const PER_ACTION = 60 * TICK_RATE;
 
 const unitsOf = (c: Command): number[] | null => ("unitIds" in c ? c.unitIds : null);
 
-function rankOf(c: Command, dodging: Set<number>): Rank {
+function rankOf(c: Command, dodging: Set<number>, goliaths: Set<number>): Rank {
+  // (a Goliath's own orders, to walk out to a field, dig in, pack up, go with the economy: it expands
+  // the economy, and an order to it lost to the cap leaves it idle, chasing whatever it sees)
+  if ("unitIds" in c && c.unitIds.length > 0 && c.unitIds.every((id) => goliaths.has(id)) && !c.unitIds.every((id) => dodging.has(id)))
+    return Rank.Economy;
   switch (c.type) {
     case "move":
       return c.unitIds.every((id) => dodging.has(id)) ? Rank.Dodge : Rank.Army;
@@ -320,6 +325,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil, ...opts.tweak });
   s.fair = true;
   s.interval = opts.think;
+  s.goliathStyle = "expand"; // (a Goliath alone is a target: it expands the economy, it never leads an attack)
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
 
   /** The plan's orders not yet sent. */
@@ -373,8 +379,10 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       const plan = tickAi(w, side, s); // the dodge reflex every tick, the plan every `think`
       const dodging = new Set(dodgingUnits(w, s));
       const reflex: Want[] = [];
-      if (s.lastDecisionTick === w.tick) backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging), cmd, planned: true }));
-      else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
+      if (s.lastDecisionTick === w.tick) {
+        const goliaths = new Set(goliathsOf(w, side).map((g) => g.id));
+        backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging, goliaths), cmd, planned: true }));
+      } else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
       if (opts.microApm !== undefined) {
         microTokens = Math.min(microCap, microTokens + (w.tick - microTick) * opts.microApm);
         microTick = w.tick;

@@ -25,6 +25,7 @@ import {
   canGetWithin,
   dist,
   domainOf,
+  hqOf,
   inBounds,
   isResource,
   moveClassOf,
@@ -82,6 +83,14 @@ import { cos, sin } from "../fmath";
  * on to a fresh field when its own runs dry or the ring is full. Under Robot
  * Love its Goliaths keep clear of the enemy's (a meeting is a draw), unless
  * it is plainly losing.
+ *
+ * EXPANDERS (AiState.goliathStyle "expand": ai/marshal.ts): a Goliath alone
+ * is a target, not an attack, so it never walks with a wave, holds a forward
+ * post or digs in on the enemy's half of the map, and it turns back when
+ * what it can see outguns it and its company on the way. It walks out to a
+ * field no drop-off serves, the Depot is built as it arrives (ready by the
+ * time it digs in, and placed at once), and once the Depot stands it packs
+ * up and moves on to the next field: the economy spreads a field at a time.
  */
 
 export const GOLIATH_AI = {
@@ -249,7 +258,18 @@ export const GOLIATH_AI = {
   huntWeak: 0.8,
   /** …no more often than this (s) per Goliath; units that can hit them go for its Menders first, this many each. */
   huntEvery: 12,
-  medicHunters: 2
+  medicHunters: 2,
+
+  /** Expanders (AiState.goliathStyle): the Depot is started once the Goliath is this many tiles from its field site… */
+  expandAhead: 12,
+  /** …for a field still holding this much (it is the point of the trip)… */
+  expandDepotMin: 1200,
+  /** …and once the Depot has stood this long (s), it moves on to the next field. */
+  expandStay: 15,
+  /** On the way, it turns back once what it sees within `danger` tiles is worth this share of it and its company. */
+  expandBack: 0.75,
+  /** It guards the mined field only this close (tiles) to the HQ, else a few tiles out from the HQ toward it. */
+  expandGuard: 14
 };
 
 type P = { x: number; y: number };
@@ -278,6 +298,8 @@ interface Plan {
   harvesters: number[];
   /** Outposts started at the site it holds now (each kind once a stay). */
   outposts: BuildingKind[];
+  /** An expander: the tick its Depot was first seen standing at the site it holds (null: none yet). */
+  depotSeen: number | null;
   /** Condors held for its lift, their HP at take-off, a flank waypoint. */
   carriers: number[];
   launchHp: number[];
@@ -338,6 +360,8 @@ function memo(s: AiState): Memo {
 const value = (us: readonly Unit[]) => us.reduce((v, u) => v + UNITS[u.kind].cost, 0);
 const byId = (a: { id: number }, b: { id: number }) => a.id - b.id;
 const hpShare = (u: Unit) => u.hp / UNITS[u.kind].hp;
+/** Do our Goliaths play as expanders (AiState.goliathStyle) now? (With no HQ a Goliath is the base, and plays as ever.) */
+const expands = (s: AiState, ctx: { hasHq: boolean }) => s.goliathStyle === "expand" && ctx.hasHq;
 const kbCentre = (kb: KnownBuilding): P => ({ x: kb.tx + BUILDINGS[kb.kind].size / 2, y: kb.ty + BUILDINGS[kb.kind].size / 2 });
 
 /**
@@ -714,7 +738,7 @@ function canLift(w: World, faction: Faction, s: AiState): boolean {
  * relay (island maps: by lift), or, when none pays, a forward post (for a
  * personality that holds one). Null: nowhere worth it (it guards home).
  */
-function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: GoliathContext, m: Memo): Site | null {
+function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: GoliathContext, m: Memo, skip?: P): Site | null {
   const known = knownBuildings(w, faction);
   const home = ctx.hqC;
   const enemyHq = ctx.enemyHqPos;
@@ -735,6 +759,9 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   const gap = rulesOf(w).robotLove ? Math.max(GOLIATH_AI.goliathGap, GOLIATH_AI.loveGap + 4) : GOLIATH_AI.goliathGap;
   const clearOfThem = (p: P) => !ctx.seen.some((e) => !!e.goliath && dist(e.x, e.y, p.x, p.y) < gap);
   const exposure = (p: P) => Math.max(-1, Math.min(1, (dist(p.x, p.y, home.x, home.y) - dist(p.x, p.y, enemyHq.x, enemyHq.y)) / 20));
+  // (an expander digs in only on our half of the map: alone over there it is a target)
+  const expand = expands(s, ctx);
+  const theirHalf = (p: P) => expand && exposure(p) > 0;
   const cands: (Site & { key: P })[] = [];
 
   // rich fields no drop-off of ours serves
@@ -746,6 +773,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     if (dist(c.x, c.y, enemyHq.x, enemyHq.y) < GOLIATH_AI.enemyHome) continue;
     if (known.some((kb) => { const k = kbCentre(kb); return dist(k.x, k.y, c.x, c.y) <= GOLIATH_AI.enemyNear; })) continue;
     if (taken.some((t) => dist(t.x, t.y, c.x, c.y) < 6) || avoided(c)) continue;
+    if (skip && dist(skip.x, skip.y, c.x, c.y) < 6) continue;
     const tiles = cl.tiles;
     const nearField = (p: P) => {
       let best = Infinity;
@@ -755,7 +783,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     // beside the field (about two tiles from its nearest tile), on our side of it
     const reach = Math.min(12, GOLIATH_AI.siteReach + Math.sqrt(tiles.length));
     const at = spotNear(w, faction, c, 0, reach, (p) => Math.abs(nearField(p) - 2) * 2 + dist(p.x, p.y, home.x, home.y) * 0.02);
-    if (!at || nearField(at) > 3.2 || underGuns(known, at) || !clearOfThem(at)) continue;
+    if (!at || nearField(at) > 3.2 || underGuns(known, at) || !clearOfThem(at) || theirHalf(at)) continue;
     const lift = regionAt(w, Math.floor(at.x), Math.floor(at.y), "ground") !== gRegion;
     if (lift && !flyable(at)) continue;
     const d = dist(g.x, g.y, at.x, at.y);
@@ -773,7 +801,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       // an enemy Goliath already there: not a landing
       if (ctx.seen.some((e) => e.goliath && regionAt(w, Math.floor(e.x), Math.floor(e.y), "ground") === lr)) continue;
       const at = spotNear(w, faction, l, GOLIATH_AI.relayMin, GOLIATH_AI.relayMax, (p) => dist(p.x, p.y, l.x, l.y) + dist(p.x, p.y, home.x, home.y) * 0.02, lr);
-      if (!at || underGuns(known, at) || !clearOfThem(at) || !flyable(at)) continue;
+      if (!at || underGuns(known, at) || !clearOfThem(at) || !flyable(at) || theirHalf(at)) continue;
       const enemyOwned = l.owner !== null && l.owner !== faction ? 1.3 : 1;
       const v = uplinkPay(l) * GOLIATH_AI.relayWorth * enemyOwned;
       const d = dist(g.x, g.y, at.x, at.y);
@@ -790,6 +818,8 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       if (paths++ >= 3) break;
       const path = findPath(w, g.x, g.y, c.at.x, c.at.y, "ground", faction);
       const end = path?.[path.length - 1];
+      // (an expander's walk stays on our half: across the middle it would meet the enemy's army alone)
+      if (expand && path?.some(theirHalf)) continue;
       if (!path || !end || dist(end.x, end.y, c.at.x, c.at.y) > 1.5) {
         if (!flyable(c.at)) continue;
         c.lift = true; // cut off by ground: fly it
@@ -805,7 +835,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
   }
 
   // a forward post: a share of the way to the enemy, clear of its guns
-  if (GOLIATH_AI.front[s.strategy.name]) {
+  if (GOLIATH_AI.front[s.strategy.name] && !expand) {
     const t = GOLIATH_AI.frontShare;
     const aim = { x: home.x + (enemyHq.x - home.x) * t, y: home.y + (enemyHq.y - home.y) * t };
     if (!avoided(aim)) {
@@ -972,15 +1002,33 @@ function ownBuildingsNear(w: World, faction: Faction, p: P, r: number): Building
  * when the slot is free), or null: the personality's list for a field (a
  * Depot only while the field is rich, a SAM only once enemy air is about),
  * a Turret and a SAM at an island relay or a forward post, one every
- * GOLIATH_AI.outpostEvery seconds, never one it can't place.
+ * GOLIATH_AI.outpostEvery seconds, never one it can't place. An expander's
+ * Goliath (AiState.goliathStyle) wants its Depot first, started while it is
+ * still walking in (GOLIATH_AI.expandAhead): it waits, ready, until the
+ * Goliath digs in (outpostSpot).
  */
 export function outpostWanted(w: World, faction: Faction, s: AiState, scrap: number): BuildingKind | null {
   const m = memos.get(s);
-  if (!m || w.tick - m.lastOutpost < GOLIATH_AI.outpostEvery * TICK_RATE) return null;
+  if (!m) return null;
+  const expand = s.goliathStyle === "expand" && !!hqOf(w, faction);
+  const spaced = w.tick - m.lastOutpost >= GOLIATH_AI.outpostEvery * TICK_RATE;
   for (const [id, plan] of [...m.plans].sort((a, b) => a[0] - b[0])) {
     const g = w.units.get(id);
     const site = plan.site;
-    if (!g || !site || plan.phase !== "hold" || !isAnchored(g)) continue;
+    if (!g || !site) continue;
+    // an expander's Depot, as soon as the Goliath is nearly there (or there), whatever the spacing
+    if (expand && site.kind === "field" && site.field && !plan.outposts.includes("depot") && BUILDINGS.depot.cost <= scrap && !bannedBy(w, "depot", faction)) {
+      const coming = plan.phase === "march" && g.goliath?.mode === "walking" && dist(g.x, g.y, site.at.x, site.at.y) <= GOLIATH_AI.expandAhead;
+      const there = plan.phase === "dig" || (plan.phase === "hold" && isAnchored(g));
+      const near = ownBuildingsNear(w, faction, there ? g : site.at, GOLIATH_AI.post + 2);
+      if ((coming || there) && !near.some((b) => b.kind === "depot") && fieldLeft(w, site.field, 5) >= GOLIATH_AI.expandDepotMin) {
+        m.outpost = { kind: "depot", goliathId: id };
+        m.lastOutpost = w.tick;
+        plan.outposts.push("depot");
+        return "depot";
+      }
+    }
+    if (!spaced || plan.phase !== "hold" || !isAnchored(g)) continue;
     // (the first one goes up whatever; more only on an income, not out of the last of the bank)
     if (plan.outposts.length > 0 && incomeRate(m) < GOLIATH_AI.outpostIncome) continue;
     const near = ownBuildingsNear(w, faction, g, GOLIATH_AI.post + 2);
@@ -989,7 +1037,7 @@ export function outpostWanted(w: World, faction: Faction, s: AiState, scrap: num
     for (const kind of list) {
       // (each once a stay: one the enemy knocked down here isn't put straight back up under its guns)
       if (near.some((b) => b.kind === kind) || plan.outposts.includes(kind)) continue;
-      if (kind === "depot" && (!site.field || fieldLeft(w, site.field, 5) < GOLIATH_AI.depotMin)) continue;
+      if (kind === "depot" && (!site.field || fieldLeft(w, site.field, 5) < (expand ? GOLIATH_AI.expandDepotMin : GOLIATH_AI.depotMin))) continue;
       if (kind === "sam-site" && s.seenAir < GOLIATH_AI.samAir) continue;
       if (BUILDINGS[kind].cost > scrap || bannedBy(w, kind, faction)) break;
       if (!outpostSpotFor(w, faction, g, site, kind)) continue;
@@ -1004,16 +1052,19 @@ export function outpostWanted(w: World, faction: Faction, s: AiState, scrap: num
 
 /**
  * Where a finished building goes if it was started as an outpost (construction
- * pass, `kind` ready): a spot in its Goliath's ring, or null (not an outpost,
- * or its Goliath has gone: the commander places it as usual).
+ * pass, `kind` ready): a spot in its Goliath's ring; "wait" for a Depot built
+ * ahead of its Goliath, still walking in or digging in; or null (not an
+ * outpost, or its Goliath has gone or turned back: the commander places it
+ * as usual).
  */
-export function outpostSpot(w: World, faction: Faction, s: AiState, kind: BuildingKind, enemyHq: P): { tx: number; ty: number } | null {
+export function outpostSpot(w: World, faction: Faction, s: AiState, kind: BuildingKind, enemyHq: P): { tx: number; ty: number } | "wait" | null {
   const m = memos.get(s);
   const o = m?.outpost;
   if (!m || !o || o.kind !== kind) return null;
-  m.outpost = null;
   const g = w.units.get(o.goliathId);
   const plan = m.plans.get(o.goliathId);
+  if (g && plan?.site && !isAnchored(g) && (plan.phase === "march" || plan.phase === "dig")) return "wait";
+  m.outpost = null;
   if (!g || !plan?.site || !isAnchored(g)) return null;
   return outpostSpotFor(w, faction, g, plan.site, kind, enemyHq);
 }
@@ -1103,13 +1154,17 @@ export function goliathBarracks(
 function newPlan(w: World): Plan {
   return {
     phase: "muster", since: w.tick, site: null, next: "muster", escorts: [], harvesters: [], outposts: [], carriers: [], launchHp: [],
-    waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, noLift: -1e9, tries: 0, moved: -1e9, checked: w.tick
+    waypoint: null, lifting: false, liftTick: 0, origin: null, landing: null, noLift: -1e9, tries: 0, moved: -1e9, checked: w.tick,
+    depotSeen: null
   };
 }
 
 function setPhase(w: World, plan: Plan, p: Phase): void {
   if (plan.phase !== p) plan.since = w.tick;
-  if (plan.phase !== p && (p === "dig" || p === "pack")) plan.outposts = []; // (a new stay, or the end of one)
+  if (plan.phase !== p && (p === "dig" || p === "pack")) {
+    plan.outposts = []; // (a new stay, or the end of one)
+    plan.depotSeen = null;
+  }
   plan.phase = p;
   plan.tries = 0;
 }
@@ -1274,15 +1329,23 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         return;
       }
       if (gs.mode === "packing") return;
-      if (plan.phase === "guard" && w.tick - plan.since < GOLIATH_AI.recheck * TICK_RATE) return;
+      if (plan.phase === "guard" && w.tick - plan.since < GOLIATH_AI.recheck * TICK_RATE) {
+        // (an expander's, shoved off its spot by the army walking by, walks back: a walking Goliath gets pushed)
+        if (expands(s, ctx)) {
+          const at = expandGuard(ctx);
+          if (dist(g.x, g.y, at.x, at.y) > 4) move(at);
+        }
+        return;
+      }
       // siege personalities fall in with a wave going by
       if (joinsWave(w, s, g, ctx, m, hp)) {
         setPhase(w, plan, "siege");
         return;
       }
-      const site = chooseSite(w, faction, s, g, ctx, m);
+      // (an expander sets out only healthy: hurt, it waits for its Menders at home)
+      const site = expands(s, ctx) && hp < GOLIATH_AI.resumeHp ? null : chooseSite(w, faction, s, g, ctx, m);
       plan.site = site;
-      if (!site && ctx.mode === "assault" && ctx.hasHq && hp >= GOLIATH_AI.resumeHp) {
+      if (!site && ctx.mode === "assault" && ctx.hasHq && hp >= GOLIATH_AI.resumeHp && !expands(s, ctx)) {
         // nowhere worth digging in, and an assault on: whatever the personality, it walks with
         // the waves rather than stand idle at home
         setPhase(w, plan, "siege");
@@ -1299,7 +1362,8 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         }
         setPhase(w, plan, "guard");
         plan.since = w.tick; // (a look round again GOLIATH_AI.recheck from now, not every pass)
-        if (dist(g.x, g.y, ctx.guardPoint.x, ctx.guardPoint.y) > 4) move(ctx.guardPoint);
+        const guard = expands(s, ctx) ? expandGuard(ctx) : ctx.guardPoint;
+        if (dist(g.x, g.y, guard.x, guard.y) > 4) move(guard);
         return;
       }
       if (site.lift) {
@@ -1318,6 +1382,18 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       if (!site || gs.mode !== "walking") {
         setPhase(w, plan, "muster");
         return;
+      }
+      // an expander outgunned on the way (what it sees against it and its company): back home, and
+      // the site left alone a while
+      if (expands(s, ctx)) {
+        const threat = enemyNear(ctx.seen, g, GOLIATH_AI.danger);
+        const local = UNITS.goliath.cost * hp + value(ctx.army.filter((u) => dist(u.x, u.y, g.x, g.y) <= 8));
+        if (threat > 0 && threat > GOLIATH_AI.expandBack * local) {
+          avoidSite(w, m, site);
+          plan.site = null;
+          setPhase(w, plan, "retreat");
+          return;
+        }
       }
       // re-check now and then: taken by the enemy, under its guns?
       if (w.tick - plan.checked > GOLIATH_AI.recheck * TICK_RATE) {
@@ -1410,6 +1486,24 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
         setPhase(w, plan, "pack");
         return;
       }
+      // an expander moves on once its Depot has stood a while: the Depot serves this field now
+      if (expands(s, ctx) && site?.kind === "field" && site.field) {
+        const depot = ownBuildingsNear(w, faction, g, GOLIATH_AI.post + 2).some((b) => b.kind === "depot");
+        plan.depotSeen = depot ? plan.depotSeen ?? w.tick : null;
+        const stood = plan.depotSeen !== null && w.tick - plan.depotSeen >= GOLIATH_AI.expandStay * TICK_RATE;
+        const calm = !ctx.threatened && enemyNear(ctx.seen, g, GOLIATH_AI.danger) === 0 && hp >= GOLIATH_AI.resumeHp;
+        if (stood && calm && w.tick - plan.checked > GOLIATH_AI.recheck * TICK_RATE) {
+          plan.checked = w.tick;
+          const next = chooseSite(w, faction, s, g, ctx, m, site.field);
+          if (next && next.kind === "field" && !next.lift) {
+            cmds.push({ type: "packUp", faction, unitIds: [g.id] });
+            plan.site = next;
+            plan.next = "march";
+            setPhase(w, plan, "pack");
+            return;
+          }
+        }
+      }
       // the field ran dry: move on
       if (site?.kind === "field" && site.field && fieldLeft(w, site.field, 5) < GOLIATH_AI.leaveBelow) {
         cmds.push({ type: "packUp", faction, unitIds: [g.id] });
@@ -1445,7 +1539,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       return;
     }
     case "siege": {
-      if (ctx.mode !== "assault" || !ctx.hasHq || gs.mode !== "walking") {
+      if (ctx.mode !== "assault" || !ctx.hasHq || gs.mode !== "walking" || expands(s, ctx)) {
         setPhase(w, plan, "muster");
         return;
       }
@@ -1506,7 +1600,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
  * it doesn't chase one across the map)?
  */
 function joinsWave(w: World, s: AiState, g: Unit, ctx: GoliathContext, m: Memo, hp: number, idle = false): boolean {
-  if (ctx.mode !== "assault" || !ctx.hasHq || hp < GOLIATH_AI.resumeHp) return false;
+  if (ctx.mode !== "assault" || !ctx.hasHq || hp < GOLIATH_AI.resumeHp || expands(s, ctx)) return false;
   // (late on, a Goliath with nothing better to hold — a forward post — joins the assault whatever
   // the personality: dried-out fields and trickling waves otherwise stall into a 25-minute draw)
   if (idle && w.tick >= GOLIATH_AI.lateSiege * 60 * TICK_RATE) return true;
@@ -1538,6 +1632,14 @@ function waveLead(ctx: GoliathContext, escorts: ReadonlySet<number>): P | null {
     }
   }
   return lead && best >= GOLIATH_AI.company ? { x: lead.x, y: lead.y } : null;
+}
+
+/** Where an expander's Goliath stands guard: by the mined field, or once that is far out, a few tiles from the HQ toward it. */
+function expandGuard(ctx: GoliathContext): P {
+  const { guardPoint: gp, hqC: hq } = ctx;
+  const d = dist(gp.x, gp.y, hq.x, hq.y);
+  if (d <= GOLIATH_AI.expandGuard) return gp;
+  return { x: hq.x + ((gp.x - hq.x) / d) * 4, y: hq.y + ((gp.y - hq.y) / d) * 4 };
 }
 
 /** Can Goliath `g` walk to within reach of `p` (not across the water)? */

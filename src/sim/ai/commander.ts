@@ -271,6 +271,13 @@ export interface AiState {
   fair?: boolean;
   /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
   interval?: number;
+  /**
+   * How its Goliaths play (ai/goliath.ts): "expand" (ai/marshal.ts) never
+   * walks one with a wave or to a forward post, only to fields on our half
+   * of the map, falls back when it's outgunned on the way, has the Depot
+   * built as it arrives and moves on to the next field once the Depot stands.
+   */
+  goliathStyle?: "expand";
 }
 
 /**
@@ -433,12 +440,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (f.pending?.ready) {
     const kind = f.pending.kind;
     // an outpost goes up in its Goliath's ring (ai/goliath.ts)
-    let spot: { tx: number; ty: number } | null = outpostSpot(w, faction, s, kind, enemyHqPos);
-    if (!spot && kind === "depot" && hq) {
+    const outpost = outpostSpot(w, faction, s, kind, enemyHqPos);
+    let spot = outpost === "wait" ? null : outpost;
+    if (!spot && outpost !== "wait" && kind === "depot" && hq) {
       const site = depotSite(w, faction, hqC, s.strategy.depotReach);
       spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
-    } else if (!spot) spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
-    if (spot) cmds.push({ type: "placeBuilding", faction, tx: spot.tx, ty: spot.ty });
+    } else if (!spot && outpost !== "wait") spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
+    if (outpost === "wait") {
+      // (an outpost Depot built ahead of its Goliath waits, ready, until it digs in)
+    } else if (spot) cmds.push({ type: "placeBuilding", faction, tx: spot.tx, ty: spot.ty });
     else {
       cmds.push({ type: "cancelBuilding", faction }); // nowhere to put it
       if (kind === "gantry") noteGantryFailed(w, s);
