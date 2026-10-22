@@ -1356,6 +1356,27 @@ button {
   font-size: 13px;
   font-weight: 800;
 }
+/* the skirmish opponent: the same picker, under the difficulty */
+.watchpick.opppick {
+  --side: var(--line-hi);
+}
+.opplabel {
+  align-self: center;
+  padding-left: 10px;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 800;
+}
+.opphint {
+  margin: -4px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+  text-align: center;
+}
+/* a picked bot with no difficulties: Easy/Normal/Hard don't apply */
+#diff.na button {
+  opacity: 0.45;
+}
 .menu .help {
   background: rgba(12, 18, 28, 0.92);
   border: 1px solid var(--line);

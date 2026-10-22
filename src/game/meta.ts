@@ -28,12 +28,40 @@ export function aiStrategy(difficulty: Difficulty): StrategyName | undefined {
   return pool.length ? pool[Math.floor(Math.random() * pool.length)] : "balanced";
 }
 
-/** A side's bot when watching AI vs AI: what it is, its opener, and the record's name for it. */
+/** A bot on one side of a match (AI vs AI, or the opponent picked on the menu): what it is, its opener, and the record's name for it. */
 export interface WatchedBot {
   bot: Bot;
+  /** "Rush", "Novice player". */
   label: string;
+  /** "vs Rush bot · Hard", "vs Novice player bot": a picked opponent on the opener cards, pause screen and report. */
+  versus: string;
   opener: OpenerId;
   seat: string;
+}
+
+function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty): WatchedBot {
+  const def = BOTS[id]!;
+  return {
+    bot: def.create(side, aiSeed(side === "blue" ? 2 : 1), difficulty),
+    label: def.label,
+    versus: `vs ${def.label} bot${def.difficulties ? ` · ${DIFFICULTY[difficulty].label}` : ""}`,
+    opener: def.opener(seed, side),
+    seat: botSeat(id, difficulty)
+  };
+}
+
+/** Is the coming skirmish against a bot picked on the menu (not 🎲 the classic commander)? */
+export const opponentPicked = (): boolean =>
+  gameMode.mode === "skirmish" && !gameMode.spectator && !gameMode.daily && !gameMode.op && isBotId(gameMode.opponent);
+
+/**
+ * The menu's picked opponent for `side`, at the menu's difficulty if it takes
+ * one. It plays fair: no income handicap (🎲 Random keeps the classic one).
+ */
+export function opponentBot(side: Faction, seed: number): WatchedBot | null {
+  if (!opponentPicked()) return null;
+  const def = BOTS[gameMode.opponent]!;
+  return seatBot(def.id, side, seed, def.difficulties ? gameMode.difficulty : "normal");
 }
 
 /**
@@ -45,13 +73,7 @@ export function watchBot(side: Faction, seed: number): WatchedBot {
   const picked = gameMode.mode === "skirmish" && !gameMode.daily && isBotId(pick);
   const pool = DIFFICULTY.normal.pool;
   const id = picked ? pick : aiStrategy("normal") ?? pool[Math.floor(Math.random() * pool.length)]!;
-  const def = BOTS[id]!;
-  return {
-    bot: def.create(side, aiSeed(side === "blue" ? 2 : 1), "normal"),
-    label: def.label,
-    opener: def.opener(seed, side),
-    seat: botSeat(id, "normal")
-  };
+  return seatBot(id, side, seed, "normal");
 }
 
 /** Seed for the AI's tie-breaks: the Daily Op's (same match for everyone) or random. */
@@ -83,9 +105,9 @@ export function announceRules(w: World): void {
   });
 }
 
-/** Bank the finished match in the career (spectators never do). */
+/** Bank the finished match in the career (spectators never do, nor a match against a picked opponent: stars are for the classic AI). */
 export function settleCareer(w: World, pov: Faction): Settlement | null {
-  if (gameMode.spectator) return null;
+  if (gameMode.spectator || opponentPicked()) return null;
   const d = gameMode.daily;
   return settleMatch(w, {
     pov,

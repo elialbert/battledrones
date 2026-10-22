@@ -43,7 +43,8 @@ export interface ReportOpts {
   secs: number;
   /** Spectator: both strategy names. */
   strategies: { blue: string; red: string } | null;
-  enemy: { strategy: string; difficulty: string };
+  /** `versus`: the whole "vs …" line, for a bot picked on the menu. */
+  enemy: { strategy: string; difficulty: string; versus?: string };
   onRematch(): void;
   onMenu(): void;
   /** Replace the VICTORY / DEFEAT headline (Ops: "OP COMPLETE", the op and its time). */
@@ -255,7 +256,7 @@ function headHtml(ctx: ReportContext): string {
   }
   const vs = spec
     ? escapeHtml(`${ctx.strategies?.blue ?? "Blue"} vs ${ctx.strategies?.red ?? "Red"}`)
-    : `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`;
+    : escapeHtml(ctx.enemy.versus ?? `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`);
   return `<h1 class="${h.cls}">${h.title}</h1><p class="time">${h.note ? `${h.note} · ` : ""}${vs} · ${fmtTime(ctx.secs)}</p>`;
 }
 

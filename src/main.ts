@@ -348,6 +348,8 @@ function showMenu(linkedMap?: string | null): void {
       <div class="seg" id="diff">
         ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
       </div>
+      <label class="watchpick opppick" id="opprow"><span class="opplabel">Opponent</span><select id="opponent" aria-label="Opponent">${watchOptions()}</select></label>
+      <p class="opphint" id="opphint" hidden></p>
       <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
       <div class="row" id="duelrow" hidden>
@@ -500,6 +502,13 @@ function showMenu(linkedMap?: string | null): void {
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
     menu.querySelector<HTMLElement>("#watchrow")!.hidden = gameMode.mode !== "skirmish";
+    // a picked opponent plays fair and banks no career stars; one with no difficulties ignores Easy/Normal/Hard
+    const foe = gameMode.opponent === "random" ? null : BOTS[gameMode.opponent];
+    menu.querySelector<HTMLElement>("#opprow")!.hidden = gameMode.mode !== "skirmish";
+    const hint = menu.querySelector<HTMLElement>("#opphint")!;
+    hint.hidden = gameMode.mode !== "skirmish" || !foe;
+    hint.textContent = foe ? `${foe.label}: plays fair · no career stars${foe.difficulties ? "" : " · one speed, whatever the difficulty"}` : "";
+    menu.querySelector<HTMLElement>("#diff")!.classList.toggle("na", gameMode.mode === "skirmish" && !!foe && !foe.difficulties);
     duelRow.hidden = gameMode.mode !== "skirmish";
     menu.classList.toggle("ops-mode", opsMode);
     // Last Stand isn't offered on every map (the island map): show the first that is, without
@@ -697,6 +706,14 @@ function showMenu(linkedMap?: string | null): void {
     if (!ops.locked(op)) ops.openBrief(op);
   });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
+  // who you play (saved): 🎲 the classic commander for the difficulty, or any bot
+  const oppPick = menu.querySelector<HTMLSelectElement>("#opponent")!;
+  oppPick.value = gameMode.opponent;
+  oppPick.addEventListener("change", () => {
+    gameMode.opponent = oppPick.value;
+    saveSettings();
+    sync();
+  });
   // who plays Watch AI vs AI (saved): a bot per side, or 🎲 a random commander as ever
   for (const side of ["blue", "red"] as const) {
     const pick = menu.querySelector<HTMLSelectElement>(`#watch-${side}`)!;

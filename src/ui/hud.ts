@@ -36,7 +36,8 @@ export interface HudApi {
   matchSeconds(): number;
   /** Spectator mode: the two AI strategy names, else null. */
   strategies: { blue: string; red: string } | null;
-  enemy: { strategy: string; difficulty: string };
+  /** `versus`: the whole "vs …" line, for a bot picked on the menu. */
+  enemy: { strategy: string; difficulty: string; versus?: string };
   /** Extra info-card line for a build option (the counter advisor). */
   cardNote?(kind: UnitKind | BuildingKind): string | null;
   /** Battlefield wrecks the player knows about (tiles), drawn as gold minimap dots. */
@@ -1130,7 +1131,7 @@ export function createHud(api: HudApi): Hud {
     const duel = api.duel;
     const line = duel
       ? `vs ${duel.opponent} · ${duel.online ? "🌐" : "🔊"} ${duel.delayMs()} ms`
-      : ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`;
+      : ops ? ops.pauseLine() : surv ? surv.pauseLine() : api.strategies ? "AI vs AI" : api.enemy.versus ?? `vs ${api.enemy.strategy} AI · ${api.enemy.difficulty}`;
     pauseEl.innerHTML = `
       <div class="panel">
         <h1>PAUSED</h1>

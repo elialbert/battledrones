@@ -27,7 +27,7 @@ import { chronicleOf, type Chronicle } from "./chronicle";
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer, watchBot, type WatchedBot } from "./meta";
+import { aiSeed, aiStrategy, announceRules, opEnemyAi, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
 import { OpsPresenter } from "./ops";
 import { MatchRecorder } from "./recorder";
 import type { BattleRecord } from "../arena/record";
@@ -127,6 +127,8 @@ export class GameScene {
   private ai: AiState | null = null;
   /** Watching AI vs AI: the bots playing each side (red's is null in a watched Last Stand: the waves). */
   private watched: { blue: WatchedBot; red: WatchedBot | null } | null = null;
+  /** The bot the player picked to play against on the menu, playing ENEMY (null: the classic commander in `ai`). */
+  private foe: WatchedBot | null = null;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
   private fogSide: Faction = PLAYER;
   /** Last Stand banners and spawn marker (null in skirmish). */
@@ -241,7 +243,9 @@ export class GameScene {
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     if (gameMode.spectator && !feed)
       this.watched = { blue: watchBot("blue", this.world.seed), red: this.world.survival ? null : watchBot("red", this.world.seed) };
-    this.ai = this.world.survival || feed || this.watched ? null : opEnemyAi() ?? createAiState(aiStrategy(gameMode.difficulty), gameMode.difficulty, aiSeed(1));
+    if (!gameMode.spectator && !feed && !this.world.survival && !this.world.ops) this.foe = opponentBot(ENEMY, this.world.seed);
+    this.ai =
+      this.world.survival || feed || this.watched || this.foe ? null : opEnemyAi() ?? createAiState(aiStrategy(gameMode.difficulty), gameMode.difficulty, aiSeed(1));
     if (gameMode.spectator) {
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
@@ -249,7 +253,7 @@ export class GameScene {
     if (opts) {
       const commander = (s: AiState) => `ai:${s.strategy.name}:${s.difficulty}`;
       const enemy =
-        this.watched?.red?.seat ?? (this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
+        this.watched?.red?.seat ?? this.foe?.seat ?? (this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
       this.recorder = new MatchRecorder(this.world.mapId, opts, {
         [PLAYER]: { player: this.watched?.blue.seat ?? "player" },
         [ENEMY]: { player: enemy }
@@ -408,7 +412,9 @@ export class GameScene {
             red: !this.watched.red ? "the waves" : `${this.watched.red.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
           }
         : null,
-      enemy: { strategy: this.ai?.strategy.label ?? this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
+      enemy: this.foe
+        ? { strategy: this.foe.label, difficulty: "", versus: this.foe.versus } // (no "try a harder AI" tips: it's not the career ladder)
+        : { strategy: this.ai?.strategy.label ?? this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
       battleRecord: () => this.battleRecord(),
@@ -473,7 +479,7 @@ export class GameScene {
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
       const picker = showOpenerPicker({
-        context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
+        context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · ${this.foe ? this.foe.versus : `vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`}`,
         onPick: (id) => this.startWithOpener(id),
         blocked: (id) => openerBlocked(this.world, PLAYER, id),
         // islands are taken by troops and defended from the air: the Airpad matters most there
@@ -616,7 +622,9 @@ export class GameScene {
     if (!this.holdStart) return;
     const picks: Partial<Record<Faction, OpenerId>> = { [PLAYER]: id };
     // (the rules alone decide what's allowed, so the AI's pick is the same before or after ours lands)
-    const theirs = this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
+    const theirs = this.foe
+      ? allowedOpener(this.world, ENEMY, this.foe.opener)
+      : this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
     if (theirs) picks[ENEMY] = theirs;
     const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
     this.recorder?.setOpeners(picks);
@@ -756,7 +764,8 @@ export class GameScene {
         // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
         const mine = this.watched ? this.watched.blue.bot.tick(this.world) : this.interactive ? [] : this.ctrl.drainCommands();
         // (Last Stand: the waves have no commander)
-        const theirs = this.watched?.red ? this.watched.red.bot.tick(this.world) : this.ai ? tickAi(this.world, ENEMY, this.ai) : [];
+        const bot = this.watched?.red ?? this.foe;
+        const theirs = bot ? bot.bot.tick(this.world) : this.ai ? tickAi(this.world, ENEMY, this.ai) : [];
         const cmds = fed ?? composeTick(PLAYER, mine, theirs);
         step(this.world, cmds);
         if (!fed) this.recorder?.stepped(this.world, cmds);

@@ -128,8 +128,9 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   rules and fog of war as you — it gathers real waves, fights for the
   Uplinks, answers your infantry, flies Condor drops at your harvesters and
   calls down strikes, and rolls out Goliaths to dig in at distant fields
-  and hunt yours — or watch two AIs fight (pick each side's bot: any
-  personality, or a scripted novice, beginner or decent player), with a 🎥 **cinematic camera**
+  and hunt yours. Or pick your opponent from the bots (any personality, or a
+  scripted novice, beginner or decent player, all playing fair, with no
+  career stars), or watch two bots fight, with a 🎥 **cinematic camera**
   (key C, on by default) that follows the action until you pan or zoom. Matches are tuned for
   comebacks: the side ahead at 4:00 now wins 70% of AI-vs-AI games, not
   90%, and a decided AI-vs-AI game runs a median of about 10½ minutes.

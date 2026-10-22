@@ -3,7 +3,9 @@
 A bot is an AI that can take a seat in Battle Drones. Once it's registered,
 it turns up everywhere at once:
 
-- **In the game**, in the bot picker under 🤖 Watch AI vs AI, for either side.
+- **In the game**, in the menu's Opponent picker (you against it, under
+  Easy/Normal/Hard, which it follows if it takes a difficulty) and in the
+  pickers under 🤖 Watch AI vs AI, for either side.
 - **In the arena**, as a seat against a model or another bot:
   `npx vite-node tools/arena.ts run --blue bot:<id> --red bot:rush`, or
   `llm battledrones run --blue claude-opus-5-5 --red bot:<id>`.
