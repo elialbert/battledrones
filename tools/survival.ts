@@ -278,7 +278,7 @@ function main(): void {
   const seeds = Number(pos[3] ?? 3);
   const defenders: Defender[] = defArg === "both" ? ["ai", "human"] : [defArg as Defender];
   const maps = MAPS.filter((m) => mapArg === "all" || m.id === mapArg);
-  const diffs: SurvivalDifficulty[] = diffArg === "all" ? ["easy", "normal", "hard"] : [diffArg as SurvivalDifficulty];
+  const diffs: SurvivalDifficulty[] = diffArg === "all" ? ["easy", "casual", "normal", "hard", "brutal"] : [diffArg as SurvivalDifficulty];
   const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   for (const def of defenders)
     for (const d of diffs) {

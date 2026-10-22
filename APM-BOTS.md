@@ -565,7 +565,40 @@ airlift): there the old Hard sent 100 a minute, and with the cap at 120 + 10
 the new one won 12 of 20; under the strict 120 it wins about a third.
 
 Its busiest minute is now 119 actions; fight orders are at most one every
-0.52 s.
+half second. (This level is now Brutal: see "Five levels".)
+
+## Five levels
+
+Easy · Casual · Normal · Hard · Brutal (`Difficulty` in commander.ts). Brutal
+is "Hard, harder" above; Hard is the Hard before it, at 80 actions a minute;
+Casual is new, between Easy and Normal. Saved settings keep their names, so
+a saved "hard" is now the old Hard. The stock commander gets Casual and Brutal too
+(Casual: a plan every 2.75 s, 0.875× income; Brutal: plays as Hard, 1.5×
+income and two more harvesters), and so do the tables keyed by difficulty
+(the airlift, Goliaths, calldowns, Last Stand's waves, career XP).
+
+| | Plan / fights | APM / micro | Plans | Peace |
+|---|---|---|---|---|
+| Easy | 4 s / 3 s | 10 / 3 | Balanced, Boom, Turtle | 5 min |
+| Casual | 3 s / 2 s | 18 / 8 | Balanced, Boom, Turtle, Air Swarm | 3 min |
+| Normal | 2 s / 1 s | 30 / 20 | all but Skyforce, fast | none |
+| Hard | 1.5 s / 0.5 s | 80 / 60 | Balanced, Air Swarm, Ironclad, Greed, fast | none |
+| Brutal | 2 s / 0.5 s | 115 + 5 / 120 | the same, 12 harvesters, early factories, waves at 2500 | none |
+
+60 games each, all five maps: Casual beat Easy 98%, Normal beat Casual 92%,
+Hard beat Normal 99%, Brutal beat Hard 87%. Against stock Hard (1.3×
+income): Hard 92%, Brutal 91%. Casual beat the scripted beginner 74%. Hard
+at 120 actions (its old cap) beat Normal 99% and lost only 39% to Brutal; at
+60, Brutal beat it 96%.
+
+**A bug in the fight micro's budget, found here.** Its bank held exactly one
+action. With a look every 0.5 s, a budget of 115 a minute refills 0.96 of an
+action a look; the bank clamped the rest away, so it acted on every other
+look: 60 a minute. Brutal had shipped (43489c8) with 115 and was much weaker
+in fights than measured: back at 120 it beat Hard 61% of 80 games, at 115
+40%. The bank now keeps what a look's refill leaves over (still one fight
+order a look). "Less fight micro lost" in "Hard, harder" (90 and 60 a
+minute) was partly this.
 
 ## Open questions
 

@@ -30,7 +30,7 @@ export interface SurvivalHud {
   pauseLine(): string;
 }
 
-const DIFF_LABEL: Record<string, string> = { easy: "Easy", normal: "Normal", hard: "Hard" };
+const DIFF_LABEL: Record<string, string> = { easy: "Easy", casual: "Casual", normal: "Normal", hard: "Hard", brutal: "Brutal" };
 
 export function createSurvivalHud(
   pill: HTMLElement,

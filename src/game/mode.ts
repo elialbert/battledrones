@@ -1,5 +1,5 @@
 import { isBotId } from "../sim/ai/bots";
-import type { Difficulty } from "../sim/ai/commander";
+import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isRandomMapId } from "../sim/mapgen";
 import { isMutatorId, type MutatorId } from "../sim/rules";
@@ -116,7 +116,7 @@ export function loadSettings(): void {
     const s = JSON.parse(raw) as Partial<typeof gameMode>;
     // (a map this build doesn't have, or a malformed random id: back to the default)
     gameMode.mapId = typeof s.mapId === "string" && isKnownMapId(s.mapId) ? s.mapId : "riverlands";
-    if (s.difficulty === "easy" || s.difficulty === "normal" || s.difficulty === "hard")
+    if (typeof s.difficulty === "string" && Object.hasOwn(DIFFICULTY, s.difficulty))
       gameMode.difficulty = s.difficulty;
     if (s.mode === "skirmish" || s.mode === "survival" || s.mode === "ops") gameMode.mode = s.mode;
     if (typeof s.opId === "string" && opById(s.opId)) gameMode.opId = s.opId;

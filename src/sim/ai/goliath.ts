@@ -88,7 +88,7 @@ export const GOLIATH_AI = {
   /** Seconds into a match from which each personality considers a Gantry (Infinity: never). */
   gantryFrom: { balanced: 300, rush: 480, airswarm: 420, boom: 240, skyforce: 450, ironclad: 210 } as Record<StrategyName, number>,
   /** That hour, scaled by difficulty (Easy never builds one: a first-week player meets no Goliath). */
-  gantryPace: { easy: Infinity, normal: 1, hard: 0.85 } as Record<Difficulty, number>,
+  gantryPace: { easy: Infinity, casual: 1.2, normal: 1, hard: 0.85, brutal: 0.85 } as Record<Difficulty, number>,
   /** …and this much sooner (share of it) once an enemy Gantry is known. */
   answerGantry: 0.75,
   /** Income (scrap a minute, harvest + salvage + objectives) a side needs before it starts a Gantry… */
@@ -113,7 +113,7 @@ export const GOLIATH_AI = {
    */
   gantryFields: 15000,
   /** Goliaths alive or on the cradle, at most. */
-  max: { easy: 1, normal: 2, hard: 2 } as Record<Difficulty, number>,
+  max: { easy: 1, casual: 1, normal: 2, hard: 2, brutal: 2 } as Record<Difficulty, number>,
   /**
    * …and one on the island maps, where the war is squads, Condors and air over
    * the islands and a slow walk by the bridges (with two, the Archipelago's

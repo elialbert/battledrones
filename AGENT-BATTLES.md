@@ -364,7 +364,8 @@ and coding-agent seats are the fun one.
   `tools/beginner.ts` tunes the difficulties against. They follow a fixed
   build list, look at the battle every few seconds, and make one all-in push.
 - **Marshal** (`marshal`): the commander's plans played on a human's
-  budget of actions: 7, 14 or 30 a minute on Easy, Normal or Hard unless
+  budget of actions: 10, 18, 30, 80 or 120 a minute on Easy, Casual, Normal,
+  Hard or Brutal unless
   the seat sets `@apm=`. It draws a plan each game (a stock personality,
   Turtle or Greed). No wasted orders, focus fire, and it knows when to quit
   a fight and when to finish one. The game's own difficulties play it

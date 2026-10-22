@@ -66,7 +66,7 @@ import {
 } from "../world";
 
 export type AiMode = "buildup" | "harass" | "assault";
-export type Difficulty = "easy" | "normal" | "hard";
+export type Difficulty = "easy" | "casual" | "normal" | "hard" | "brutal";
 
 /** A commander personality: opening, economy size, army mix, aggression. */
 export interface Strategy {
@@ -218,12 +218,22 @@ export const DIFFICULTY: Record<
     // 11 games in 15 on Easy (tools/beginner.ts); the other three lost 6 in 45
     pool: ["balanced", "rush", "airswarm"]
   },
+  // (between Easy and Normal: a little slower, no handicap below Normal's harvesters)
+  casual: {
+    label: "Casual", interval: 2.75, incomeMult: 0.875, extraHarvesters: 0, assaultMult: 1.15, harass: false,
+    pool: ["balanced", "rush", "airswarm", "boom"]
+  },
   normal: {
     label: "Normal", interval: 2, incomeMult: 1, extraHarvesters: 0, assaultMult: 1, harass: true,
     pool: ["balanced", "rush", "airswarm", "boom", "skyforce", "ironclad"]
   },
   hard: {
     label: "Hard", interval: 1.2, incomeMult: 1.3, extraHarvesters: 1, assaultMult: 0.9, harass: true,
+    pool: ["balanced", "airswarm", "boom", "ironclad"]
+  },
+  // (plays as Hard; only a stock commander's handicap grows. Marshal's Brutal smaller waves lost: APM-BOTS.md)
+  brutal: {
+    label: "Brutal", interval: 1.2, incomeMult: 1.5, extraHarvesters: 2, assaultMult: 0.9, harass: true,
     pool: ["balanced", "airswarm", "boom", "ironclad"]
   }
 };

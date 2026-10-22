@@ -130,8 +130,10 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
  */
 export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   easy: ["balanced", "boom", "turtle"],
+  casual: ["balanced", "boom", "turtle", "airswarm"],
   normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"],
-  hard: ["balanced", "airswarm", "ironclad", "greed"]
+  hard: ["balanced", "airswarm", "ironclad", "greed"],
+  brutal: ["balanced", "airswarm", "ironclad", "greed"]
 };
 
 /**
@@ -157,12 +159,13 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
  * Each difficulty: how fast it thinks and acts, fight micro's share of its
  * actions, whether it plays the fast-expanding plans, and its seconds of
  * peace. `burst` is how many actions its cap banks (ai/apm.ts; APM_BURST if
- * left out): Hard's `apm` plus `burst` is 120, so no minute of a game sees
+ * left out): Brutal's `apm` plus `burst` is 120, so no minute of a game sees
  * more than 120 actions. Fight micro never gives more than one order at a
- * time (MICRO_BURST), so even Hard's is at most 2 a second, a human's pace.
- * Hard also plays every plan with a bigger economy and army (`tweak`) and
- * fights its own way (`fight`). APM-BOTS.md, "Retuning the levels" and
- * "Hard, harder", has the numbers.
+ * time (MICRO_BURST), so even Brutal's is at most 2 a second, a human's pace.
+ * Brutal also plays every plan with a bigger economy and army (`tweak`) and
+ * fights its own way (`fight`). Each level beats the one below it 87–99% of
+ * 60 games. APM-BOTS.md ("Retuning the levels", "Hard, harder", "Five
+ * levels") has the numbers.
  */
 export const MARSHAL: Record<
   Difficulty,
@@ -172,11 +175,14 @@ export const MARSHAL: Record<
   }
 > = {
   easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300 },
+  // (between Easy and Normal: three minutes' peace, the slow plans and Air Swarm)
+  casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180 },
   normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
-  // (a plan every 1.5 s beat a plan every second 69% of 40 games, and every half second lost 79%: replanning
-  // too often re-sends orders that spend its actions)
-  hard: {
-    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 115, fast: true, holdUntil: 0,
+  // (Hard before Brutal took its place, at 80 actions a minute: at 120 it beat Normal 99%, and lost only 39% to Brutal)
+  hard: { think: 1.5, react: 0.5, apm: 80, microApm: 60, fast: true, holdUntil: 0 },
+  // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
+  brutal: {
+    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 120, fast: true, holdUntil: 0,
     // twelve harvesters (and one per depot), waves at 2500, factories as soon as scrap piles up
     tweak: { harvesters: 12, assaultValue: 2500, expandEarly: true },
     // a lost fight broken off sooner, and stayed out of longer; the finishing push at 1.5× the enemy army
@@ -333,6 +339,9 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   let finishing = false;
   // the fight micro's own budget (opts.microApm), a token bucket like ai/apm.ts's
   let microTokens = MICRO_BURST * PER_ACTION;
+  // (the bank also holds what a look's refill leaves over: at 115 a minute and a look every 0.5 s, a bank of
+  // exactly one action threw away 57.5 of every 60 and it acted on every other look, 60 a minute)
+  const microCap = MICRO_BURST * PER_ACTION + Math.max(0, reactTicks * (opts.microApm ?? 0) - 1);
   let microTick = 0;
 
   /** `c` cut down to the units it would change (null: none). The plan doesn't pull held units out of a fight. */
@@ -367,7 +376,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       if (s.lastDecisionTick === w.tick) backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging), cmd, planned: true }));
       else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
       if (opts.microApm !== undefined) {
-        microTokens = Math.min(MICRO_BURST * PER_ACTION, microTokens + (w.tick - microTick) * opts.microApm);
+        microTokens = Math.min(microCap, microTokens + (w.tick - microTick) * opts.microApm);
         microTick = w.tick;
       }
       if (opts.react > 0 && w.tick % reactTicks === 0 && !w.winner) {
@@ -376,7 +385,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         if (opts.microApm !== undefined) {
           // (the most urgent first: breaking off and stepping back, then focus fire)
           micro.sort((a, b) => a.rank - b.rank);
-          const n = Math.min(micro.length, Math.floor(microTokens / PER_ACTION));
+          const n = Math.min(micro.length, MICRO_BURST, Math.floor(microTokens / PER_ACTION));
           for (const x of micro.slice(n)) for (const id of unitsOf(x.cmd) ?? []) held.delete(id);
           micro = micro.slice(0, n);
           microTokens -= n * PER_ACTION;

@@ -2,6 +2,7 @@ import { BUILDINGS, COMBAT, TICK_RATE, UNITS } from "../balance";
 import { isInfantry, unitSeenBy } from "../infantry";
 import { worldPick, worldRandom } from "../rand";
 import type { Building, Faction, Unit, UnitKind, World } from "../types";
+import type { Difficulty } from "../ai/commander";
 import {
   buildingCenter,
   dist,
@@ -29,7 +30,7 @@ import { atan2, pow } from "../fmath";
 export type WaveTheme = "air" | "armour" | "artillery" | "mixed" | "swarm" | "boss";
 /** The themes that rotate through the four regular slots of each block of five waves. */
 export type RegularTheme = Exclude<WaveTheme, "boss">;
-export type SurvivalDifficulty = "easy" | "normal" | "hard";
+export type SurvivalDifficulty = Difficulty;
 
 export interface SurvivalOptions {
   difficulty?: SurvivalDifficulty;
@@ -41,7 +42,7 @@ export interface SurvivalOptions {
 /** Every tunable number of the mode (kept here so it merges cleanly). */
 export const SURVIVAL = {
   /** Seconds before the first wave lands, by difficulty. */
-  firstWave: { easy: 110, normal: 95, hard: 85 } as Record<SurvivalDifficulty, number>,
+  firstWave: { easy: 110, casual: 102, normal: 95, hard: 85, brutal: 78 } as Record<SurvivalDifficulty, number>,
   /** Seconds from one wave spawning to the next. */
   interval: 50,
   /** …and after a boss wave. */
@@ -54,7 +55,7 @@ export const SURVIVAL = {
   budgetBase: 240,
   budgetGrowth: 228,
   budgetExp: 1.4,
-  budgetMult: { easy: 0.7, normal: 1, hard: 1.3 } as Record<SurvivalDifficulty, number>,
+  budgetMult: { easy: 0.7, casual: 0.85, normal: 1, hard: 1.3, brutal: 1.6 } as Record<SurvivalDifficulty, number>,
   /**
    * The regular themes. Each block of five waves plays four of them in a
    * seeded order, then a boss; with five themes one sits each block out, in

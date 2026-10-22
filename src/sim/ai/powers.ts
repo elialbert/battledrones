@@ -16,7 +16,7 @@ import { cos, hypot, sin } from "../fmath";
  */
 
 /** Seconds before the AI notices a reticle and scatters (its reaction time). */
-const REACTION: Record<Difficulty, number> = { easy: 1.1, normal: 0.6, hard: 0.4 };
+const REACTION: Record<Difficulty, number> = { easy: 1.1, casual: 0.85, normal: 0.6, hard: 0.4, brutal: 0.4 };
 /** How far (tiles) a unit runs from a reticle's centre direction. */
 const DODGE_DIST = 4;
 /** Visible ground clump worth barraging (scrap within the shell spread): rarer, bigger hits leave charge for EMPs and pods. */

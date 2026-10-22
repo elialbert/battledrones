@@ -1374,7 +1374,14 @@ button {
   font-size: 12px;
   text-align: center;
 }
-/* a picked bot with no difficulties: Easy/Normal/Hard don't apply */
+/* five difficulties in one row: a little tighter on a narrow phone */
+@media (max-width: 400px) {
+  #diff button {
+    font-size: 13px;
+    padding: 0 2px;
+  }
+}
+/* a picked bot with no difficulties: the difficulties don't apply */
 #diff.na button {
   opacity: 0.45;
 }
@@ -3298,7 +3305,7 @@ button {
 .dl-what b { font-size: 16px; }
 .dl-vs { font-size: 13px; color: #c3cde0; }
 .dl-vs i { font-style: normal; }
-.dl-vs i.hard { color: var(--red); font-weight: 700; }
+.dl-vs i.hard, .dl-vs i.brutal { color: var(--red); font-weight: 700; }
 .dl-muts {
   display: flex;
   flex-wrap: wrap;

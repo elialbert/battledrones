@@ -4,7 +4,7 @@ A bot is an AI that can take a seat in Battle Drones. Once it's registered,
 it turns up everywhere at once:
 
 - **In the game**, in the menu's Opponent picker (you against it, under
-  Easy/Normal/Hard, which it follows if it takes a difficulty) and in the
+  the difficulty, which it follows if it takes a difficulty) and in the
   pickers under 🤖 Watch AI vs AI, for either side.
 - **In the arena**, as a seat against a model or another bot:
   `npx vite-node tools/arena.ts run --blue bot:<id> --red bot:rush`, or
@@ -17,7 +17,7 @@ There are ten today. Six are the built-in commander with each of its
 personalities (`src/sim/ai/commander.ts`), three are the scripted phone
 players (`src/sim/ai/player.ts`), and one is Marshal
 (`src/sim/ai/marshal.ts`), the commander's plans played on a human's budget
-of actions; the menu's Easy/Normal/Hard play it. The registry is `src/sim/ai/bots.ts`.
+of actions; the menu's difficulties (Easy, Casual, Normal, Hard, Brutal) play it. The registry is `src/sim/ai/bots.ts`.
 
 ## The rules
 
@@ -94,7 +94,7 @@ export interface BotDef {
   label: string;          // the picker's name for it
   about: string;          // one line: the picker's tooltip, `arena.ts bots`
   group: string;          // the picker's heading: "Commander", "Scripted player"…
-  difficulties: boolean;  // does bot:<id>:<easy|normal|hard> mean anything?
+  difficulties: boolean;  // does bot:<id>:<easy|casual|normal|hard|brutal> mean anything?
   opener(seed: number, side: Faction): OpenerId;  // "blitz" | "industry" | "airwing"
   create(side: Faction, seed: number, difficulty: Difficulty): Bot;
   apm?(difficulty: Difficulty): number;  // its APM cap when the seat names none

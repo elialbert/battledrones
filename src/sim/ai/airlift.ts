@@ -46,11 +46,11 @@ import { cos, sin } from "../fmath";
 
 export const AIRLIFT = {
   /** First lift boards no sooner than this (s). */
-  from: { easy: 30, normal: 0, hard: 0 } as Record<Difficulty, number>,
+  from: { easy: 30, casual: 15, normal: 0, hard: 0, brutal: 0 } as Record<Difficulty, number>,
   /** Seconds between one lift launching and the next (any Condor). */
-  every: { easy: 30, normal: 4, hard: 2 } as Record<Difficulty, number>,
+  every: { easy: 30, casual: 12, normal: 4, hard: 2, brutal: 2 } as Record<Difficulty, number>,
   /** Condors the commander runs at most (built, starting and free ones). */
-  condors: { easy: 1, normal: 2, hard: 3 } as Record<Difficulty, number>,
+  condors: { easy: 1, casual: 2, normal: 2, hard: 3, brutal: 3 } as Record<Difficulty, number>,
   /** A second Condor is built no sooner than this (s). */
   secondFrom: 75,
   /** A boarding not full after this long (s) goes with whoever is aboard, or is called off. */

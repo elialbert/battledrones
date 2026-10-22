@@ -83,7 +83,7 @@ export const XP = {
   opLoss: 15,
   opFirstClear: 100,
   opStar: 40,
-  difficulty: { easy: 1, normal: 1.5, hard: 2.2 } as Record<string, number>
+  difficulty: { easy: 1, casual: 1.25, normal: 1.5, hard: 2.2, brutal: 3 } as Record<string, number>
 };
 
 /** Stars per map × difficulty: win · win under 8:00 (a big map gives longer) · win without losing a building. */

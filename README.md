@@ -246,12 +246,12 @@ npm run balance matches [map]   # AI-vs-AI round robin (openers + objectives; --
                        # with the Goliath numbers (--no-goliath bans it, for an A/B run)
 npm run balance goliath [--menders N]   # a Goliath (plus N Menders) vs cost-equal groups of every unit
                        # (any mode takes --tune '{"UNITS.trooper.hp":200}' for an A/B run)
-npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|normal|hard|all] [seeds] [--calldowns]
+npx vite-node tools/survival.ts [ai|human|both] [map|all] [easy|casual|normal|hard|brutal|all] [seeds] [--calldowns]
                        # Last Stand: waves survived by an AI / scripted-player defender, and scrap
                        # lost per wave by theme and stage (--tune '{"themes":["swarm",…]}': one theme only)
 npx vite-node tools/ops.ts [op|all] [seeds]
                        # Ops: can the stand-in pilots clear each op, and with how many stars
-npx vite-node tools/beginner.ts [novice|beginner|decent] [easy|normal|hard] [seeds]
+npx vite-node tools/beginner.ts [novice|beginner|decent] [easy|casual|normal|hard|brutal] [seeds]
                        # difficulty on-ramp: a scripted phone player vs the AI on every map
 npx vite-node tools/pacing.ts run out.jsonl --seeds 8 --shard 0/4   # pacing & snowball panel (shard across processes)
 npx vite-node tools/pacing.ts summary out*.jsonl                    # …the table in DESIGN.md "Balance & pacing"

@@ -662,7 +662,7 @@ export function pickTip(i: TipInput): string {
   if (i.won)
     tips.push({
       score: 10,
-      text: i.difficulty === "hard" ? `Won on Hard in ${fmtTime(i.duration)}. Can you do it faster?` : "A clean win. Ready to try a harder AI?"
+      text: i.difficulty === "hard" || i.difficulty === "brutal" ? `Won on ${i.difficulty === "hard" ? "Hard" : "Brutal"} in ${fmtTime(i.duration)}. Can you do it faster?` : "A clean win. Ready to try a harder AI?"
     });
   tips.push({ score: 5, text: "Scout early and build counters: long-press any build button to see what beats what." });
   // after a win, only a serious problem outranks the congratulations

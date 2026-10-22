@@ -502,7 +502,7 @@ function showMenu(linkedMap?: string | null): void {
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
     menu.querySelector<HTMLElement>("#watchrow")!.hidden = gameMode.mode !== "skirmish";
-    // a picked opponent plays fair and banks no career stars; one with no difficulties ignores Easy/Normal/Hard
+    // a picked opponent plays fair and banks no career stars; one with no difficulties ignores the difficulty
     const foe = gameMode.opponent === "random" ? null : BOTS[gameMode.opponent];
     menu.querySelector<HTMLElement>("#opprow")!.hidden = gameMode.mode !== "skirmish";
     const hint = menu.querySelector<HTMLElement>("#opphint")!;
