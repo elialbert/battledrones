@@ -73,7 +73,8 @@ and only a quick reflex, like the commander's dodge away from calldowns,
 should run every tick.
 
 **List your most important commands first.** A planned difficulty knob
-caps actions per minute and keeps the first commands a bot returns. Put
+caps actions per minute and keeps the first commands a bot returns
+([APM-BOTS.md](APM-BOTS.md)). Put
 defence and the economy before re-sending an attack order.
 
 ## The interface
