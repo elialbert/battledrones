@@ -89,7 +89,7 @@ public leaderboards.
 npx vite-node tools/arena.ts run \
   --blue claude-opus-5-5 --red gpt-6-sol \
   --map riverlands --seed 42 [--mutators blitz] [--round 5] [--out battles/]
-npx vite-node tools/arena.ts run --blue claude-opus-5-5 --red ai:ironclad:hard   # against the built-in AI
+npx vite-node tools/arena.ts run --blue claude-opus-5-5 --red bot:ironclad:hard   # against a bot
 npx vite-node tools/arena.ts series --a claude-opus-5-5 --b gpt-6-sol --maps all --seeds 3   # mirror pairs
 npx vite-node tools/arena.ts stats battles/*.json
 npx vite-node tools/arena.ts watch battles/2026-10-11-opus-vs-sol-42.json
@@ -122,8 +122,8 @@ while (!w.winner && w.tick < MAX_TICKS) {
 `stamp` sets each command's `faction` to the seat's own side, whatever the
 model wrote. A seat can only ever command its own army.
 
-A match with the built-in AI as a seat (`ai:<personality>:<difficulty>`)
-calls `tickAi` every tick as in a normal game. So it reacts inside rounds
+A match with a bot as a seat (`bot:<id>` or `bot:<id>:<difficulty>`; see
+*Bot seats*) ticks the bot every tick as in a normal game. So it reacts inside rounds
 where an agent can't. That's the opponent people play, so beating it means
 something, and it gives every model a fixed yardstick: "Opus beats Hard
 Ironclad 7 games out of 10".
@@ -350,11 +350,41 @@ model. Each client has its own system prompt and its own way of managing
 context and deciding when to stop. API seats are the controlled comparison,
 and coding-agent seats are the fun one.
 
-### The built-in AI
+### Bot seats
 
-`ai:<personality>:<difficulty>`, for example `ai:rush:hard`: the game's own
-commander, with 6 personalities and 3 difficulties. It's the baseline, and it
-makes a cheap sparring partner while the tools are being tuned.
+`bot:<id>`, or `bot:<id>:<difficulty>` for a commander bot, for example
+`bot:rush:hard`: one of the game's own AIs, from the registry in
+`src/sim/ai/bots.ts` (`npx vite-node tools/arena.ts bots` lists them).
+
+- **Commander bots** (`balanced`, `rush`, `airswarm`, `boom`, `skyforce`,
+  `ironclad`): the built-in commander with each of its 6 personalities. The
+  difficulty (Normal if left out) changes how often it decides, how many
+  harvesters it keeps and when it attacks.
+- **Scripted players** (`novice`, `beginner`, `decent`): the phone players
+  `tools/beginner.ts` tunes the difficulties against. They follow a fixed
+  build list, look at the battle every few seconds, and make one all-in push.
+
+**Every bot plays fair.** It sees only what its side has seen, and it gets
+no income handicap, not even on Easy or Hard. (Before bot seats, `ai:` seats
+had the skirmish AI's Easy 0.75× and Hard 1.3× scrap. Old records keep that
+in `income`, so they still replay.) `ai:<personality>:<difficulty>` still
+works as the old name for a commander bot.
+
+A new bot is a module under `src/sim/ai/` and an entry in `BOTS`. It must be
+deterministic: no `Math.random` and no clocks (a seeded RNG from the `seed`
+it's given), and `src/sim/fmath` instead of `Math.hypot` and its friends.
+
+`tools/arena.ts league` plays a round robin: every pair of bots, or the
+seats you pass with `--bots`, plays every map and seed twice with the sides
+swapped. It prints a table and the head-to-head results:
+
+```bash
+npx vite-node tools/arena.ts league --maps all --seeds 2 --no-records
+npx vite-node tools/arena.ts league --bots bot:decent,bot:rush:hard,bot:boom --maps riverlands
+```
+
+In the game, the menu's 🤖 Watch AI vs AI has a bot picker for each side
+(🎲 Random AI is the old random Normal commander).
 
 ### Scripted seats
 
@@ -404,7 +434,7 @@ Each seat URL takes the six tools as JSON POSTs (`/briefing`, `/observe`,
 `/look`, `/orders`, `/end_round`, `/wait`). It answers with the same text the
 tools return everywhere else. The token in the URL is the seat: it can only
 see and command its own side. A seat can also be the built-in AI
-(`--red ai:balanced:easy`).
+(`--red bot:balanced:easy`).
 
 The same server speaks MCP for coding agents (see *Coding agents through a
 local MCP server*), so LLM's `llm-mcp-client` plugin could already connect
@@ -504,7 +534,7 @@ def register_tools(register):
 words, and the model turns it into orders:
 
 ```bash
-npx vite-node tools/arena.ts serve --map riverlands --blue seat --red ai:balanced:easy
+npx vite-node tools/arena.ts serve --map riverlands --blue seat --red bot:balanced:easy
 llm chat -m claude-opus-5-5 -T 'BattleDrones("http://127.0.0.1:8790/seat/7f3a91…")' --cl 0 --td
 > You're blue. Read the briefing, open with Blitz and go for their harvesters.
 > They're switching to air. Get some Flak up and pull the Stingers back.
@@ -783,10 +813,11 @@ limits.
 | `src/arena/observe.ts` | World and side → observation (structured, then text), `look`, the briefing, the ASCII map. Pure, engine-free, tested |
 | `src/arena/events.ts` | "Since your last turn": losses, kills, builds and the announcer's alerts for one side, through the game's filters; what makes a `wait` end early |
 | `src/arena/orders.ts` | Orders → `Command[]` with per-order results, selectors, the frame conversion, where an unplaced building goes |
-| `src/arena/match.ts` | The arena: rounds, seats (agent and built-in AI), openers, waits, auto-placement, the record |
+| `src/arena/match.ts` | The arena: rounds, seats (agent and bot), openers, waits, auto-placement, the record |
+| `src/sim/ai/bots.ts` | The bots a seat can name: the commander's personalities and the scripted players (`src/sim/ai/player.ts`) |
 | `src/arena/record.ts` | The record format, world hashing, setting a recorded match up, replaying it |
 | `src/arena/scripted.ts` | Scripted seats (fixed orders per round, for tests) |
-| `tools/arena.ts` | The CLI: `run`, `serve`, `series`, `replay`, `stats`, `watch`, `upgrade`, `pin` |
+| `tools/arena.ts` | The CLI: `run`, `serve`, `series`, `league`, `bots`, `replay`, `stats`, `watch`, `upgrade`, `pin` |
 | `tools/arena/server.ts` | The loopback seats: HTTP for LLM, MCP for coding agents, control calls for the driver |
 | `tools/arena/files.ts` | Record files, the sim hash, the commit |
 | `tools/arena-viewer-check.mjs` | The Playwright check: a record played in the dev viewer, hash trail checked in Chromium |
@@ -850,13 +881,13 @@ All four are built.
 
 Where the build differs from, or adds to, the text above:
 
-- **Model seats run through LLM only.** `tools/arena.ts run` and `series`
-  play built-in AI and scripted seats in-process; a model seat is played by
+- **Model seats run through LLM only.** `tools/arena.ts run`, `series` and
+  `league` play bot and scripted seats in-process; a model seat is played by
   `llm battledrones run` (which starts `tools/arena.ts serve` itself) or by
   any agent connected to a `serve` seat. The runner's own `fetch` adapters
   for Anthropic and OpenAI were not built: LLM covers them.
-- **Seats on the command line**: `ai:<personality>:<difficulty>`,
-  `scripted` or `scripted:<file.json>`, and for `serve` `seat` or
+- **Seats on the command line**: `bot:<id>[:<difficulty>]` (or the old
+  `ai:<personality>:<difficulty>`), `scripted` or `scripted:<file.json>`, and for `serve` `seat` or
   `seat:<name>` (an outside agent; the name labels the record).
 - **The opener round.** Round 0 deals the cards: `orders([{"opener":
   "blitz"}])`, then `end_round`. A seat that doesn't pick gets Industry.

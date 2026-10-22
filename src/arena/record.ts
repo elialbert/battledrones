@@ -21,7 +21,7 @@ import { worldHash } from "../sim/checksum";
 export const HASH_EVERY = 100;
 
 export interface SeatInfo {
-  /** "ai:rush:hard", "scripted", "openai:gpt-6-luna", "seat" (an outside agent)… */
+  /** "bot:rush:hard", "bot:novice", "scripted", "openai:gpt-6-luna", "seat" (an outside agent)… (older records: "ai:rush:hard") */
   player: string;
   /** Model options (reasoning effort, temperature), budgets, client versions. */
   settings?: Record<string, unknown>;
@@ -85,7 +85,7 @@ export interface BattleRecord {
   round: number;
   maxTicks: number;
   openers: Partial<Record<Faction, OpenerId>>;
-  /** Income multiplier per side when not 1 (the built-in AI's difficulty handicap: tickAi sets it every tick). */
+  /** Income multiplier per side when not 1 (older records: the built-in AI's difficulty handicap, before bot seats were made fair). */
   income?: Partial<Record<Faction, number>>;
   /** A Last Stand played in the game (game/recorder.ts): the waves' options. sim/setup.ts sets it up again. */
   survival?: SurvivalOptions;

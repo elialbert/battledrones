@@ -128,7 +128,8 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   rules and fog of war as you — it gathers real waves, fights for the
   Uplinks, answers your infantry, flies Condor drops at your harvesters and
   calls down strikes, and rolls out Goliaths to dig in at distant fields
-  and hunt yours — or watch two AIs fight, with a 🎥 **cinematic camera**
+  and hunt yours — or watch two AIs fight (pick each side's bot: any
+  personality, or a scripted novice, beginner or decent player), with a 🎥 **cinematic camera**
   (key C, on by default) that follows the action until you pan or zoom. Matches are tuned for
   comebacks: the side ahead at 4:00 now wins 70% of AI-vs-AI games, not
   90%, and a decided AI-vs-AI game runs a median of about 10½ minutes.
@@ -280,8 +281,10 @@ tools that show only what their side can see, in 5-second rounds.
 ```bash
 llm install -e llm-tools-battledrones   # the LLM plugin (llm: uv tool install llm)
 llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
-npm run arena run -- --blue scripted --red ai:rush:hard    # built-in seats, no model
-npm run arena serve -- --blue seat --red ai:balanced:easy  # seat URLs for any agent (HTTP or MCP)
+npm run arena run -- --blue scripted --red bot:rush:hard   # built-in seats, no model
+npm run arena bots                                         # the bots a seat can name
+npm run arena league -- --maps all --seeds 2 --no-records  # every bot against every other
+npm run arena serve -- --blue seat --red bot:balanced:easy # seat URLs for any agent (HTTP or MCP)
 npm run arena replay battles/<file>.json                   # re-run a record, check its hash trail
 npm run arena upgrade battles/<file>.json                  # bring a record from older sim code up to this one
 npm run arena pin -- --version v11 battles/<file>.json     # replays exactly on this sim? pin it to that version tag

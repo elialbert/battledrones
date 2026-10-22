@@ -3,22 +3,25 @@
  * copy of the world and plays it in rounds. Every round both seats see the
  * same tick and give orders without seeing each other's; then the sim runs
  * the next `roundTicks` ticks with both sides' orders applied at the first
- * of them (blue's, then red's). A seat played by the built-in AI ticks
- * every tick, as in a normal game.
+ * of them (blue's, then red's). A seat played by a bot ticks every tick,
+ * as in a normal game.
  *
  * Seats:
  *  - "agent": anything that plays through the tools (an LLM through the
  *    loopback HTTP seats, a coding agent through MCP, a scripted seat in
  *    tests). Its turn is open until it calls endRound or wait.
- *  - "ai": the game's own commander, `ai:<personality>:<difficulty>`.
+ *  - "bot": one of the game's own AIs (sim/ai/bots.ts), `bot:<id>` or
+ *    `bot:<id>:<difficulty>`; `ai:<personality>:<difficulty>` is the old
+ *    name for a commander bot. No bot gets an income handicap.
  *
  * Nothing here touches the network or the file system: tools/arena.ts
  * drives it, and tests drive it directly.
  */
-import { DIFFICULTY, createAiState, tickAi, type AiState, type Difficulty, type StrategyName, STRATEGIES } from "../sim/ai/commander";
+import { BOTS, BOT_IDS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
+import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import { TICK_RATE } from "../sim/balance";
 import { hash32 } from "../sim/rand";
-import { OPENER_IDS, allowedOpener, pickAiOpener, type OpenerId } from "../sim/openers";
+import { OPENER_IDS, allowedOpener, type OpenerId } from "../sim/openers";
 import { placementBlocker } from "../sim/placement";
 import type { MutatorId } from "../sim/rules";
 import { step } from "../sim/sim";
@@ -44,22 +47,26 @@ export const SIDES: Faction[] = ["blue", "red"];
 
 export type SeatSpec =
   | { kind: "agent"; player?: string; settings?: Record<string, unknown> }
-  | { kind: "ai"; strategy: StrategyName; difficulty: Difficulty };
+  | { kind: "bot"; bot: string; difficulty: Difficulty };
 
-/** "ai:rush:hard" → an AI seat; anything else is an agent seat named by it. */
+/**
+ * "bot:rush:hard" (or the old "ai:rush:hard") → a bot seat; anything else is
+ * an agent seat named by it. A bare "ai" is the Balanced commander.
+ */
 export function parseSeat(s: string): SeatSpec {
-  const m = /^ai(?::([a-z]+))?(?::([a-z]+))?$/.exec(s.trim());
-  if (m) {
-    const strategy = (m[1] ?? "balanced") as StrategyName;
-    const difficulty = (m[2] ?? "normal") as Difficulty;
-    if (!(strategy in STRATEGIES)) throw new Error(`unknown AI personality "${strategy}": ${Object.keys(STRATEGIES).join(", ")}`);
-    if (!(difficulty in DIFFICULTY)) throw new Error(`unknown AI difficulty "${difficulty}": ${Object.keys(DIFFICULTY).join(", ")}`);
-    return { kind: "ai", strategy, difficulty };
-  }
-  return { kind: "agent", player: s };
+  const m = /^(bot|ai)(?::([a-z]+))?(?::([a-z]+))?$/.exec(s.trim());
+  if (!m) return { kind: "agent", player: s };
+  if (m[1] === "bot" && !m[2]) throw new Error(`a bot seat names its bot, bot:<id>: ${BOT_IDS.join(", ")}`);
+  const bot = m[2] ?? "balanced";
+  const difficulty = (m[3] ?? "normal") as Difficulty;
+  if (!isBotId(bot) || (m[1] === "ai" && !BOTS[bot]!.difficulties))
+    throw new Error(`unknown ${m[1] === "ai" ? "AI personality" : "bot"} "${bot}": ${BOT_IDS.filter((id) => m[1] === "bot" || BOTS[id]!.difficulties).join(", ")}`);
+  if (!(difficulty in DIFFICULTY)) throw new Error(`unknown difficulty "${difficulty}": ${Object.keys(DIFFICULTY).join(", ")}`);
+  if (m[3] && !BOTS[bot]!.difficulties) throw new Error(`bot "${bot}" has no difficulties: seat it as bot:${bot}`);
+  return { kind: "bot", bot, difficulty };
 }
 
-export const seatName = (s: SeatSpec) => (s.kind === "ai" ? `ai:${s.strategy}:${s.difficulty}` : s.player ?? "agent");
+export const seatName = (s: SeatSpec) => (s.kind === "bot" ? botSeat(s.bot, s.difficulty) : s.player ?? "agent");
 
 export interface ArenaOptions {
   map: string;
@@ -77,9 +84,9 @@ export interface ArenaOptions {
 interface Seat {
   side: Faction;
   spec: SeatSpec;
-  ai: AiState | null;
+  bot: Bot | null;
   log: SideLog;
-  /** This round's turn is over (or the seat is an AI, or waiting). */
+  /** This round's turn is over (or the seat is a bot, or waiting). */
   ended: boolean;
   /** Skip turns through this round (wait), unless something urgent happens. */
   waitUntil: number;
@@ -122,9 +129,9 @@ export class Arena {
       const spec = opts.seats[side];
       return {
         side, spec,
-        ai: spec.kind === "ai" ? createAiState(spec.strategy, spec.difficulty, hash32(opts.seed, side === "blue" ? 1 : 2)) : null,
+        bot: spec.kind === "bot" ? BOTS[spec.bot]!.create(side, hash32(opts.seed, side === "blue" ? 1 : 2), spec.difficulty) : null,
         log: new SideLog(side),
-        ended: spec.kind === "ai",
+        ended: spec.kind === "bot",
         waitUntil: 0,
         notes: "",
         opener: null,
@@ -163,13 +170,6 @@ export class Arena {
       end: null,
       usage: {}
     };
-    // the built-in AI's difficulty handicap (tickAi sets it every tick): in the record, so a replay without the AI matches
-    for (const s of SIDES) {
-      const spec = this.seats[s].spec;
-      if (spec.kind !== "ai" || DIFFICULTY[spec.difficulty].incomeMult === 1) continue;
-      this.w.factions[s].incomeMult = DIFFICULTY[spec.difficulty].incomeMult;
-      (this.record.income ??= {})[s] = DIFFICULTY[spec.difficulty].incomeMult;
-    }
     for (const s of SIDES) this.briefings.set(s, briefing(this.w, s, { roundTicks: this.roundTicks, maxTicks: this.maxTicks }));
   }
 
@@ -252,7 +252,7 @@ export class Arena {
   orders(side: Faction, list: unknown): string {
     const s = this.seats[side];
     if (this.over) return this.result(side);
-    if (s.spec.kind === "ai") return "This seat is played by the built-in AI.";
+    if (s.spec.kind === "bot") return "This seat is played by a bot.";
     if (s.ended) return `Your turn for round ${this.round} is over: wait for the next round.`;
     s.staged ??= structuredClone(this.w);
     const batch = parseOrders(s.staged, side, list, this.round === 0 ? "opener" : "play");
@@ -341,7 +341,7 @@ export class Arena {
     if (this.round === 0) {
       for (const side of SIDES) {
         const s = this.seats[side];
-        const pick = s.ai ? pickAiOpener(s.ai.strategy.name, w.seed, side) : s.opener ?? DEFAULT_OPENER;
+        const pick = s.spec.kind === "bot" ? BOTS[s.spec.bot]!.opener(w.seed, side) : s.opener ?? DEFAULT_OPENER;
         const o = allowedOpener(w, side, pick);
         if (o) {
           applyOpener(w, side, o);
@@ -356,8 +356,8 @@ export class Arena {
         const all: Command[] = [];
         for (const side of SIDES) {
           const s = this.seats[side];
-          const cmds: Command[] = s.ai ? tickAi(w, side, s.ai) : i === 0 ? [...s.commands] : [];
-          if (!s.ai) cmds.push(...this.autoPlace(s));
+          const cmds: Command[] = s.bot ? s.bot.tick(w) : i === 0 ? [...s.commands] : [];
+          if (!s.bot) cmds.push(...this.autoPlace(s));
           if (cmds.length) this.record.turns.push([w.tick, side, cmds]);
           all.push(...cmds);
         }
@@ -389,7 +389,7 @@ export class Arena {
   private logRound(tick: number): void {
     for (const side of SIDES) {
       const s = this.seats[side];
-      if (s.ai) continue;
+      if (s.bot) continue;
       if (s.endedHow !== "waiting") {
         const entry: RoundLog = { round: this.round, tick, side, orders: s.orders, results: s.results, notes: s.notes, ended: s.endedHow };
         if (s.radio) entry.radio = s.radio;
@@ -407,7 +407,7 @@ export class Arena {
       s.orders = [];
       s.staged = null;
       s.radio = undefined;
-      if (s.ai) continue;
+      if (s.bot) continue;
       if (s.endedHow !== "waiting") s.lastResults = s.results;
       s.results = [];
       const urgent = [...s.log.urgent];

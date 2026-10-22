@@ -1,3 +1,4 @@
+import { BOTS, BOT_IDS } from "./sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
 import { MAPS, isKnownMapId, mapById } from "./sim/maps";
 import { BIOMES, RANDOM_MAP_SIZE, RANDOM_PREFIX, isRandomMapId, parseRandomMapId, randomMapId, rollRandomMapId, seedCode, seedFromText } from "./sim/mapgen";
@@ -105,6 +106,18 @@ const duelPractice = ["loop", "relay"].includes(new URLSearchParams(location.sea
 const canDuel = (): boolean =>
   duelPractice || (window.isSecureContext && typeof AudioWorkletNode === "function" && typeof navigator.mediaDevices?.getUserMedia === "function");
 const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend's)";
+
+/** Watch AI vs AI's bot picker: 🎲 a random commander, then every bot (sim/ai/bots.ts), commanders first. */
+function watchOptions(): string {
+  const opt = (id: string) => `<option value="${id}" title="${BOTS[id]!.about}">${BOTS[id]!.label}</option>`;
+  const group = (label: string, ids: string[]) => `<optgroup label="${label}">${ids.map(opt).join("")}</optgroup>`;
+  return (
+    '<option value="random">🎲 Random AI</option>' +
+    group("Commander", BOT_IDS.filter((id) => BOTS[id]!.difficulties)) +
+    group("Scripted player", BOT_IDS.filter((id) => !BOTS[id]!.difficulties))
+  );
+}
+
 /**
  * sessionStorage: what the next boot skips into (the end screen's Rematch: "1", "spectate", "daily", "op:<id>",
  * or a sound duel's "duel"). The duel's records.ts owns the key and the duel's token; main.ts may import the
@@ -347,6 +360,9 @@ function showMenu(linkedMap?: string | null): void {
         <button class="cta alt" id="play-replay">🎬 Watch a replay</button>
         <button class="cta alt" id="howto">? How to play</button>
       </div>
+      <div class="row watchrow" id="watchrow">
+        ${(["blue", "red"] as const).map((side) => `<label class="watchpick ${side}"><select id="watch-${side}" aria-label="${side === "blue" ? "Blue" : "Red"} AI to watch">${watchOptions()}</select></label>`).join('<span class="watchvs">vs</span>')}
+      </div>
       <div class="help" id="helpbox" hidden>${HELP_HTML}</div>
       <p class="credits">Art generated with OpenAI gpt-image-2.5 · sound synthesised live</p>
     </div>
@@ -484,6 +500,7 @@ function showMenu(linkedMap?: string | null): void {
     syncRandom();
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
+    menu.querySelector<HTMLElement>("#watchrow")!.hidden = gameMode.mode !== "skirmish";
     duelRow.hidden = gameMode.mode !== "skirmish";
     menu.classList.toggle("ops-mode", opsMode);
     // Last Stand isn't offered on every map (the island map): show the first that is, without
@@ -681,6 +698,15 @@ function showMenu(linkedMap?: string | null): void {
     if (!ops.locked(op)) ops.openBrief(op);
   });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
+  // who plays Watch AI vs AI (saved): a bot per side, or 🎲 a random commander as ever
+  for (const side of ["blue", "red"] as const) {
+    const pick = menu.querySelector<HTMLSelectElement>(`#watch-${side}`)!;
+    pick.value = gameMode.watch[side];
+    pick.addEventListener("change", () => {
+      gameMode.watch[side] = pick.value;
+      saveSettings();
+    });
+  }
   // an agent battle's record, pasted or picked: the viewer loads only now (game/replay.ts)
   menu.querySelector("#play-replay")!.addEventListener("click", () => {
     sfx.play("click", 0.5);

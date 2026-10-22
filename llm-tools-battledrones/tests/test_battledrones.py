@@ -149,7 +149,7 @@ def test_llm_battledrones_plays_a_battle(tmp_path):
 def test_a_seat_out_of_budget_plays_what_it_ordered(tmp_path):
     # never ends its round: keeps calling observe until the chain limit
     looper = StandIn(end=False)
-    rec, lines = battle(tmp_path, looper, "ai:balanced:easy", chain_limit=3, tool_calls=12)
+    rec, lines = battle(tmp_path, looper, "bot:balanced:easy", chain_limit=3, tool_calls=12)
     assert rec["end"]["reason"] == "time"
     blue_log = [l for l in rec["log"] if l["side"] == "blue"]
     assert all(l["ended"] == "chain limit" for l in blue_log)

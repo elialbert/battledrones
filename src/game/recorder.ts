@@ -17,8 +17,9 @@
  *  - the built-in AI's income handicap (tickAi sets it every tick, from the
  *    first) goes into `income`, read off the world when the record is made;
  *  - the seats say who played: "player" for this phone, "ai:<strategy>:
- *    <difficulty>" for a commander, "waves:<difficulty>" for Last Stand's
- *    director, "op:<id>" for an op's enemy;
+ *    <difficulty>" for the commander it plays, "bot:<id>…" for a bot
+ *    watched in AI vs AI (sim/ai/bots.ts), "waves:<difficulty>" for Last
+ *    Stand's director, "op:<id>" for an op's enemy;
  *  - commands are copied as they are stepped: the Controller may keep
  *    references to the arrays it sent;
  *  - a match not decided (the record is made mid-match) has no end, and its

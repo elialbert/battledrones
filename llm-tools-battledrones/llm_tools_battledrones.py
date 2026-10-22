@@ -225,7 +225,7 @@ class Battle:
 
     @staticmethod
     def is_builtin(spec: str) -> bool:
-        return spec.startswith("ai:") or spec == "ai" or spec.startswith("scripted")
+        return spec.startswith(("bot:", "ai:")) or spec == "ai" or spec.startswith("scripted")
 
     def start(self) -> None:
         seat_arg = {s: (v if self.is_builtin(v) else f"seat:{v}") for s, v in self.spec.items()}
@@ -510,8 +510,8 @@ def register_commands(cli):
         """Agent battles in Battle Drones: models play each other through tools/arena.ts."""
 
     @battledrones.command()
-    @click.option("--blue", required=True, help="A model id, or ai:<personality>:<difficulty>, or scripted")
-    @click.option("--red", required=True, help="A model id, or ai:<personality>:<difficulty>, or scripted")
+    @click.option("--blue", required=True, help="A model id, a bot (bot:<id> or bot:<id>:<difficulty>), or scripted")
+    @click.option("--red", required=True, help="A model id, a bot (bot:<id> or bot:<id>:<difficulty>), or scripted")
     @click.option("--blue-option", "blue_options", type=(str, str), multiple=True, help="Model option for blue")
     @click.option("--red-option", "red_options", type=(str, str), multiple=True, help="Model option for red")
     @click.option("--seed", type=int, default=42, show_default=True)
@@ -521,7 +521,7 @@ def register_commands(cli):
 
         \b
         llm battledrones run --blue gpt-6-luna --red gpt-6-luna --seed 42
-        llm battledrones run --blue claude-opus-5-5 --red ai:rush:hard -o reasoning_effort low
+        llm battledrones run --blue claude-opus-5-5 --red bot:rush:hard -o reasoning_effort low
         """
         base = _opts(both_options)
         run_battle(

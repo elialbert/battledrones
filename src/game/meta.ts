@@ -1,4 +1,6 @@
+import { BOTS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
+import type { OpenerId } from "../sim/openers";
 import { opAiState } from "../sim/ops";
 import { MUTATORS, makeRules, rulesOf, strategyFits } from "../sim/rules";
 import type { Faction, World } from "../sim/types";
@@ -24,6 +26,32 @@ export function aiStrategy(difficulty: Difficulty): StrategyName | undefined {
   const rules = makeRules(muts);
   const pool = DIFFICULTY[difficulty].pool.filter((n) => strategyFits(STRATEGIES[n], rules));
   return pool.length ? pool[Math.floor(Math.random() * pool.length)] : "balanced";
+}
+
+/** A side's bot when watching AI vs AI: what it is, its opener, and the record's name for it. */
+export interface WatchedBot {
+  bot: Bot;
+  label: string;
+  opener: OpenerId;
+  seat: string;
+}
+
+/**
+ * The bot watching puts on `side`: the menu's pick in a skirmish, else (and
+ * for "random") a Normal commander whose plan the rules allow, as before.
+ */
+export function watchBot(side: Faction, seed: number): WatchedBot {
+  const pick = gameMode.watch[side];
+  const picked = gameMode.mode === "skirmish" && !gameMode.daily && isBotId(pick);
+  const pool = DIFFICULTY.normal.pool;
+  const id = picked ? pick : aiStrategy("normal") ?? pool[Math.floor(Math.random() * pool.length)]!;
+  const def = BOTS[id]!;
+  return {
+    bot: def.create(side, aiSeed(side === "blue" ? 2 : 1), "normal"),
+    label: def.label,
+    opener: def.opener(seed, side),
+    seat: botSeat(id, "normal")
+  };
 }
 
 /** Seed for the AI's tie-breaks: the Daily Op's (same match for everyone) or random. */

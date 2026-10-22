@@ -27,7 +27,7 @@ import { chronicleOf, type Chronicle } from "./chronicle";
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer } from "./meta";
+import { aiSeed, aiStrategy, announceRules, opEnemyAi, settleCareer, watchBot, type WatchedBot } from "./meta";
 import { OpsPresenter } from "./ops";
 import { MatchRecorder } from "./recorder";
 import type { BattleRecord } from "../arena/record";
@@ -125,7 +125,8 @@ export class GameScene {
   ctrl!: Controller;
   /** The enemy commander, playing ENEMY (null in Last Stand and survival ops: the waves have none). */
   private ai: AiState | null = null;
-  private blueAi: AiState | null = null;
+  /** Watching AI vs AI: the bots playing each side (red's is null in a watched Last Stand: the waves). */
+  private watched: { blue: WatchedBot; red: WatchedBot | null } | null = null;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
   private fogSide: Faction = PLAYER;
   /** Last Stand banners and spawn marker (null in skirmish). */
@@ -236,20 +237,21 @@ export class GameScene {
         ping: (x, y) => this.hud?.ping(x, y),
         gfx: over
       });
-    // spectating pits two Normal commanders against each other
+    // spectating pits the menu's two bots against each other (random: two Normal commanders);
     // mutators / the Daily Op decide which personalities can play (meta.ts)
-    const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
-    this.ai = this.world.survival || feed ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+    if (gameMode.spectator && !feed)
+      this.watched = { blue: watchBot("blue", this.world.seed), red: this.world.survival ? null : watchBot("red", this.world.seed) };
+    this.ai = this.world.survival || feed || this.watched ? null : opEnemyAi() ?? createAiState(aiStrategy(gameMode.difficulty), gameMode.difficulty, aiSeed(1));
     if (gameMode.spectator) {
-      this.blueAi = feed ? null : createAiState(aiStrategy("normal"), "normal", aiSeed(2));
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
     if (opts) {
       const commander = (s: AiState) => `ai:${s.strategy.name}:${s.difficulty}`;
-      const enemy = this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none";
+      const enemy =
+        this.watched?.red?.seat ?? (this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
       this.recorder = new MatchRecorder(this.world.mapId, opts, {
-        [PLAYER]: { player: this.blueAi ? commander(this.blueAi) : "player" },
+        [PLAYER]: { player: this.watched?.blue.seat ?? "player" },
         [ENEMY]: { player: enemy }
       } as Record<Faction, { player: string }>);
     }
@@ -258,10 +260,10 @@ export class GameScene {
     const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
     if (this.world.survival || this.world.ops || feed) {
       /* no opener cards (a fed match was dealt its own) */
-    } else if (this.blueAi && this.ai) {
+    } else if (this.watched?.red) {
       // (match rules may ban a pick, e.g. no Fab Plants under Air War: take an allowed one)
-      openers.blue = allowedOpener(this.world, "blue", pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue")) ?? undefined;
-      openers.red = allowedOpener(this.world, "red", pickAiOpener(this.ai.strategy.name, this.world.seed, "red")) ?? undefined;
+      openers.blue = allowedOpener(this.world, "blue", this.watched.blue.opener) ?? undefined;
+      openers.red = allowedOpener(this.world, "red", this.watched.red.opener) ?? undefined;
       if (openers.blue) applyOpener(this.world, "blue", openers.blue);
       if (openers.red) applyOpener(this.world, "red", openers.red);
       this.recorder?.setOpeners(openers);
@@ -400,13 +402,13 @@ export class GameScene {
         ? null
         : feed
         ? feed.labels
-        : this.blueAi
+        : this.watched
         ? {
-            blue: `${this.blueAi.strategy.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
-            red: !this.ai ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
+            blue: `${this.watched.blue.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
+            red: !this.watched.red ? "the waves" : `${this.watched.red.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
           }
         : null,
-      enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
+      enemy: { strategy: this.ai?.strategy.label ?? this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
       battleRecord: () => this.battleRecord(),
@@ -752,8 +754,9 @@ export class GameScene {
         }
         this.snapshotPrev();
         // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
-        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
-        const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
+        const mine = this.watched ? this.watched.blue.bot.tick(this.world) : this.interactive ? [] : this.ctrl.drainCommands();
+        // (Last Stand: the waves have no commander)
+        const theirs = this.watched?.red ? this.watched.red.bot.tick(this.world) : this.ai ? tickAi(this.world, ENEMY, this.ai) : [];
         const cmds = fed ?? composeTick(PLAYER, mine, theirs);
         step(this.world, cmds);
         if (!fed) this.recorder?.stepped(this.world, cmds);

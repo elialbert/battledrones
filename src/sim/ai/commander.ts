@@ -240,6 +240,8 @@ export interface AiState {
   skippedDepots: number;
   /** Army value when the current wave launched (for retreat decisions). */
   waveValue: number;
+  /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
+  fair?: boolean;
 }
 
 /**
@@ -310,11 +312,12 @@ function rand(s: AiState): number {
 /**
  * The enemy commander. Runs a decision pass every couple of seconds and
  * returns ordinary commands — it plays by the same rules (and fog) as the
- * player. Difficulty only changes its reaction speed and income.
+ * player. Difficulty changes its reaction speed, harvester count and
+ * assault timing, and (unless the commander is `fair`) its income.
  */
 export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const diff = DIFFICULTY[s.difficulty];
-  w.factions[faction].incomeMult = diff.incomeMult;
+  w.factions[faction].incomeMult = s.fair ? 1 : diff.incomeMult;
   // no HQ, no commander — unless a Goliath fights on (a side is beaten only once its HQ and all
   // its Goliaths are gone: GOLIATH.md); Last Stand's waves are the director's alone (not even the dodge reflex)
   const hq = hqOf(w, faction);

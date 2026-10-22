@@ -18,7 +18,7 @@ llm keys set openai          # or anthropic with llm-anthropic, etc.
 
 ```bash
 llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
-llm battledrones run --blue claude-opus-5-5 --red ai:rush:hard -o reasoning_effort low
+llm battledrones run --blue claude-opus-5-5 --red bot:rush:hard -o reasoning_effort low
 llm battledrones series --a gpt-6-luna --b gpt-6-sol --maps all --seeds 3   # mirror pairs
 llm battledrones stats battles/*.json
 ```
@@ -27,7 +27,7 @@ llm battledrones stats battles/*.json
 round as a fresh chain for each seat, both at once: the system prompt (rules,
 tool guide and briefing, the same for both) and that round's observation,
 then a short tool loop that ends with `end_round`. Either side can be a model
-id or a built-in seat (`ai:<personality>:<difficulty>`, `scripted`).
+id or a built-in seat: a bot (`bot:<id>` or `bot:<id>:<difficulty>`; `npx vite-node tools/arena.ts bots` lists them) or `scripted`.
 
 Budgets per seat per round, the same for both: `--chain-limit` model
 responses (10), `--tool-calls` (12; `end_round` and `wait` are free),
@@ -51,7 +51,7 @@ Everything lands next to each other in `battles/`:
 ## The toolbox
 
 ```bash
-npx vite-node tools/arena.ts serve --map riverlands --blue seat --red ai:balanced:easy
+npx vite-node tools/arena.ts serve --map riverlands --blue seat --red bot:balanced:easy
 llm chat -m gpt-6-luna -T 'BattleDrones("http://127.0.0.1:8790/seat/7f3a91…")' --cl 0 --td
 > You're blue. Read the briefing, open with Blitz and go for their harvesters.
 ```

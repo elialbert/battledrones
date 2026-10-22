@@ -1,16 +1,19 @@
 // Agent battles (AGENT-BATTLES.md): two commanders play a Battle Drones
 // skirmish in 5-second rounds, each seeing only what its side could see.
 //
-//   npx vite-node tools/arena.ts run --blue scripted --red ai:rush:hard --map riverlands --seed 42
+//   npx vite-node tools/arena.ts run --blue scripted --red bot:rush:hard --map riverlands --seed 42
 //   npx vite-node tools/arena.ts serve --map riverlands --seed 42 --blue seat --red seat [--json]
-//   npx vite-node tools/arena.ts series --a scripted --b ai:balanced:normal --maps all --seeds 3
+//   npx vite-node tools/arena.ts series --a bot:decent --b bot:balanced --maps all --seeds 3
+//   npx vite-node tools/arena.ts league [--bots bot:rush,bot:decent,…] --maps all --seeds 2 [--no-records]
+//   npx vite-node tools/arena.ts bots
 //   npx vite-node tools/arena.ts replay battles/<file>.json
 //   npx vite-node tools/arena.ts stats battles/*.json [--detail]
 //   npx vite-node tools/arena.ts watch battles/<file>.json
 //   npx vite-node tools/arena.ts upgrade battles/<file>.json [...] [--commit <sha>]
 //   npx vite-node tools/arena.ts pin --version v11 battles/<file>.json [...]
 //
-// Seats: `ai:<personality>:<difficulty>` (the built-in commander),
+// Seats: `bot:<id>` or `bot:<id>:<difficulty>` (the game's own AIs, listed by
+// `bots`; `ai:<personality>:<difficulty>` is the old name for a commander bot),
 // `scripted` or `scripted:<file.json>` (a fixed script, for tests), and in
 // `serve` mode `seat` (an outside agent playing through the loopback HTTP or
 // MCP seat URL). Models play through LLM and the llm-tools-battledrones plugin:
@@ -20,9 +23,11 @@
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import { Arena, SIDES, parseSeat, type SeatSpec } from "../src/arena/match";
+import { Arena, SIDES, parseSeat, seatName, type SeatSpec } from "../src/arena/match";
 import { replay, resimulate, type BattleEnd, type BattleRecord } from "../src/arena/record";
 import { DEFAULT_SCRIPT, playScripted, type Script } from "../src/arena/scripted";
+import { BOTS, BOT_IDS } from "../src/sim/ai/bots";
+import { DIFFICULTY } from "../src/sim/ai/commander";
 import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { MAPS, isKnownMapId } from "../src/sim/maps";
 import { isMutatorId, type MutatorId } from "../src/sim/rules";
@@ -47,7 +52,7 @@ function die(msg: string): never {
   process.exit(1);
 }
 
-/** A seat from the command line: ai:…, scripted[:file], or (serve only) an outside agent. */
+/** A seat from the command line: bot:… (or ai:…), scripted[:file], or (serve only) an outside agent. */
 function seatOf(s: string, outside: boolean): { spec: SeatSpec; script?: Script } {
   if (s === "scripted" || s.startsWith("scripted:")) {
     const file = s.slice("scripted:".length);
@@ -56,12 +61,18 @@ function seatOf(s: string, outside: boolean): { spec: SeatSpec; script?: Script 
   }
   // "seat" or "seat:<name>": an outside agent (the name labels the record, e.g. seat:gpt-6-luna)
   if (outside && (s === "seat" || s.startsWith("seat:"))) return { spec: { kind: "agent", player: s.slice(5) || "seat" } };
-  const spec = parseSeat(s);
+  let spec: SeatSpec;
+  try {
+    spec = parseSeat(s);
+  } catch (e) {
+    die((e as Error).message);
+  }
   if (spec.kind === "agent" && !outside)
     die(
       `"${s}" isn't a seat this command can play. Models play through LLM:\n` +
-        `  llm install -e llm-tools-battledrones\n  llm battledrones run --blue ${s} --red ai:balanced:normal\n` +
-        `or serve the battle and connect any agent to the seat URLs:\n  npx vite-node tools/arena.ts serve --blue seat --red ai:balanced:normal`
+        `  llm install -e llm-tools-battledrones\n  llm battledrones run --blue ${s} --red bot:balanced\n` +
+        `or serve the battle and connect any agent to the seat URLs:\n  npx vite-node tools/arena.ts serve --blue seat --red bot:balanced\n` +
+        `(bots: npx vite-node tools/arena.ts bots)`
     );
   return { spec };
 }
@@ -82,7 +93,7 @@ const clock = (t: number) => `${Math.floor(t / TICK_RATE / 60)}:${String(Math.fl
 const verdict = (r: BattleRecord) =>
   !r.end ? "unfinished" : r.end.winner ? `${r.end.winner} (${who(r, r.end.winner)}) wins at ${clock(r.end.tick)}${r.end.reason === "hq" ? "" : ` (${r.end.reason})`}` : `${r.end.reason === "aborted" ? "aborted" : "draw"} at ${clock(r.end.tick)}`;
 
-/** Play a whole battle in-process (AI and scripted seats). */
+/** Play a whole battle in-process (bot and scripted seats). */
 function playLocal(o: ReturnType<typeof matchArgs>, blue: string, red: string, write = true): BattleRecord {
   const seats = { blue: seatOf(blue, false), red: seatOf(red, false) };
   const path = write ? recordPath(o.out, o.map, o.seed, blue, red) : null;
@@ -108,7 +119,7 @@ function playLocal(o: ReturnType<typeof matchArgs>, blue: string, red: string, w
 async function run() {
   const o = matchArgs();
   const blue = arg("blue", "scripted")!;
-  const red = arg("red", "ai:balanced:normal")!;
+  const red = arg("red", "bot:balanced")!;
   const r = playLocal(o, blue, red);
   console.log(`${o.map} seed ${o.seed}: blue ${blue} (${r.openers.blue}) vs red ${red} (${r.openers.red}): ${verdict(r)}`);
 }
@@ -140,7 +151,7 @@ async function serve() {
     console.log(`Battle Drones arena: ${o.map}, seed ${o.seed}, ${o.roundTicks / TICK_RATE} s rounds, record ${rel}`);
     for (const s of SIDES) {
       const spec = seats[s].spec;
-      console.log(`  ${s}: ${spec.kind === "ai" ? `ai:${spec.strategy}:${spec.difficulty}` : seats[s].script ? "scripted" : srv.urls[s]}`);
+      console.log(`  ${s}: ${spec.kind === "bot" ? seatName(spec) : seats[s].script ? "scripted" : srv.urls[s]}`);
     }
     for (const s of SIDES) if (seats[s].spec.kind === "agent" && !seats[s].script) console.log(`  ${s} (MCP): ${srv.urls.mcp[s]}`);
     console.log(`  control: ${srv.urls.control}`);
@@ -161,27 +172,87 @@ async function serve() {
   setTimeout(() => void srv.close().then(() => process.exit(0)), Number(arg("linger", "20")) * 1000);
 }
 
+/** Maps and seeds for series and league: --maps a,b|all, --seeds n, --seed first. */
+function schedule(o: ReturnType<typeof matchArgs>) {
+  const mapsArg = arg("maps", o.map)!;
+  const maps = mapsArg === "all" ? MAPS.map((m) => m.id) : mapsArg.split(",");
+  for (const m of maps) if (!isKnownMapId(m)) die(`unknown map "${m}"`);
+  const seeds = Number(arg("seeds", "3"));
+  const firstSeed = Number(arg("seed", "1"));
+  return maps.flatMap((map) => Array.from({ length: seeds }, (_, i) => ({ map, seed: firstSeed + i })));
+}
+
+/** Every map and seed twice, the sides swapped: a's wins, b's wins, draws. */
+function mirrorPairs(o: ReturnType<typeof matchArgs>, games: { map: string; seed: number }[], a: string, b: string) {
+  const tally = { a: 0, b: 0, draw: 0 };
+  for (const { map, seed } of games)
+    for (const [blue, red] of [[a, b], [b, a]] as const) {
+      const r = playLocal({ ...o, map, seed }, blue, red, !flag("no-records"));
+      const w = r.end?.winner;
+      if (!w) tally.draw++;
+      else if ((w === "blue" ? blue : red) === a) tally.a++;
+      else tally.b++;
+      console.log(`${map} seed ${seed}: blue ${blue} vs red ${red}: ${verdict(r)}`);
+    }
+  return tally;
+}
+
 async function series() {
   const o = matchArgs();
   const a = arg("a") ?? die("series needs --a and --b");
   const b = arg("b") ?? die("series needs --a and --b");
-  const mapsArg = arg("maps", o.map)!;
-  const maps = mapsArg === "all" ? MAPS.map((m) => m.id) : mapsArg.split(",");
-  const seeds = Number(arg("seeds", "3"));
-  const firstSeed = Number(arg("seed", "1"));
-  const tally: Record<string, number> = { [a]: 0, [b]: 0, draw: 0 };
-  for (const map of maps)
-    for (let i = 0; i < seeds; i++) {
-      const seed = firstSeed + i;
-      // mirror pairs: the same seed with the sides swapped
-      for (const [blue, red] of [[a, b], [b, a]] as const) {
-        const r = playLocal({ ...o, map, seed }, blue, red, !flag("no-records"));
-        const w = r.end?.winner;
-        tally[w ? (w === "blue" ? blue : red) : "draw"]!++;
-        console.log(`${map} seed ${seed}: blue ${blue} vs red ${red}: ${verdict(r)}`);
-      }
+  const t = mirrorPairs(o, schedule(o), a, b);
+  console.log(`\n${a}: ${t.a} wins, ${b}: ${t.b} wins, ${t.draw} draws`);
+}
+
+/** A round robin: every pair of seats plays mirror pairs on every map and seed. */
+async function league() {
+  const o = matchArgs();
+  const seats = (arg("bots") ?? BOT_IDS.map((id) => `bot:${id}`).join(",")).split(",").filter(Boolean);
+  if (seats.length < 2) die("league needs two or more seats: --bots bot:rush,bot:decent,…");
+  for (const s of seats) seatOf(s, false); // (a bad seat stops it before the first game)
+  const games = schedule(o);
+  // [wins, losses, draws] per seat, and wins of the row seat over the column seat
+  const table = new Map(seats.map((s) => [s, [0, 0, 0]]));
+  const h2h = new Map<string, number>();
+  for (let i = 0; i < seats.length; i++)
+    for (let j = i + 1; j < seats.length; j++) {
+      const a = seats[i]!;
+      const b = seats[j]!;
+      const t = mirrorPairs(o, games, a, b);
+      table.get(a)![0]! += t.a;
+      table.get(a)![1]! += t.b;
+      table.get(b)![0]! += t.b;
+      table.get(b)![1]! += t.a;
+      table.get(a)![2]! += t.draw;
+      table.get(b)![2]! += t.draw;
+      h2h.set(`${a} ${b}`, t.a);
+      h2h.set(`${b} ${a}`, t.b);
     }
-  console.log(`\n${a}: ${tally[a]} wins, ${b}: ${tally[b]} wins, ${tally.draw} draws`);
+  const per = 2 * games.length;
+  const w = Math.max(...seats.map((s) => s.length));
+  console.log(`\nleague: ${games.length} map/seed pairs, ${per} games per pairing (sides swapped)\n`);
+  console.log(`${"".padEnd(w)}  ${"won".padStart(5)} ${"lost".padStart(5)} ${"drew".padStart(5)}   win%`);
+  for (const s of [...seats].sort((x, y) => table.get(y)![0]! - table.get(x)![0]!)) {
+    const [won, lost, drew] = table.get(s)!;
+    console.log(`${s.padEnd(w)}  ${String(won).padStart(5)} ${String(lost).padStart(5)} ${String(drew).padStart(5)}   ${((100 * won!) / (won! + lost! + drew!)).toFixed(0).padStart(4)}`);
+  }
+  console.log(`\nhead to head (row's wins over column, of ${per}):`);
+  console.log(`${"".padEnd(w + 5)}${seats.map((_, i) => `#${i + 1}`.padStart(4)).join("")}`);
+  seats.forEach((r, i) =>
+    console.log(`${`#${i + 1}`.padStart(3)}  ${r.padEnd(w)}${seats.map((c) => (c === r ? "-" : String(h2h.get(`${r} ${c}`))).padStart(4)).join("")}`)
+  );
+}
+
+/** The bots a seat can name. */
+function bots() {
+  const w = Math.max(...BOT_IDS.map((id) => id.length)) + 4;
+  for (const id of BOT_IDS) {
+    const b = BOTS[id]!;
+    console.log(`${`bot:${id}`.padEnd(w)}  ${b.about}`);
+  }
+  console.log(`\nCommander bots also take a difficulty, bot:<id>:<${Object.keys(DIFFICULTY).join("|")}> (normal if left out):`);
+  console.log("it changes how fast they react, how many harvesters they keep and when they attack, never their income.");
 }
 
 /** Re-run a record, in a worktree at its commit when the sim has changed since. */
@@ -379,7 +450,7 @@ function pin() {
   }
 }
 
-const commands: Record<string, () => unknown> = { run, serve, series, replay: replayCmd, stats, watch, upgrade, pin };
+const commands: Record<string, () => unknown> = { run, serve, series, league, bots, replay: replayCmd, stats, watch, upgrade, pin };
 const fn = cmd ? commands[cmd] : undefined;
 if (!fn) die(`usage: npx vite-node tools/arena.ts <${Object.keys(commands).join("|")}> [options]\nsee the header of tools/arena.ts and AGENT-BATTLES.md`);
 await fn();

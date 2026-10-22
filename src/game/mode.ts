@@ -1,3 +1,4 @@
+import { isBotId } from "../sim/ai/bots";
 import type { Difficulty } from "../sim/ai/commander";
 import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isRandomMapId } from "../sim/mapgen";
@@ -14,6 +15,8 @@ export type GameType = "skirmish" | "survival" | "ops";
 export const gameMode = {
   /** AI vs AI: both factions computer-controlled, player just watches. */
   spectator: false,
+  /** Watch AI vs AI's bot for each side (saved): a sim/ai/bots.ts id, or "random" (a commander personality). */
+  watch: { blue: "random", red: "random" } as Record<Faction, string>,
   mapId: "riverlands",
   difficulty: "normal" as Difficulty,
   mode: "skirmish" as GameType,
@@ -117,6 +120,10 @@ export function loadSettings(): void {
     if (typeof s.opId === "string" && opById(s.opId)) gameMode.opId = s.opId;
     if (Array.isArray(s.mutators)) gameMode.mutators = s.mutators.filter(isMutatorId);
     gameMode.uncharted = s.uncharted === true;
+    for (const side of ["blue", "red"] as const) {
+      const pick = s.watch?.[side];
+      if (typeof pick === "string" && (pick === "random" || isBotId(pick))) gameMode.watch[side] = pick;
+    }
   } catch {
     /* storage unavailable — defaults are fine */
   }
@@ -125,7 +132,7 @@ export function loadSettings(): void {
 export function saveSettings(): void {
   if (gameMode.daily || gameMode.op) return; // the Daily Op's / an op's map and difficulty are not the player's picks
   try {
-    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted }));
+    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted, watch: gameMode.watch }));
   } catch {
     /* ignore */
   }

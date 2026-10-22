@@ -218,7 +218,7 @@ describe("a whole match with no model", () => {
     expect(r1.turns).toEqual(r2.turns);
     expect(r1.hashes).toEqual(r2.hashes);
     expect(r1.hashes.length).toBeGreaterThan(10);
-    expect(r1.income).toEqual({ red: 0.75 }); // the Easy AI's handicap, so the replay matches without it
+    expect(r1.income).toBeUndefined(); // bot seats are fair: no income handicap, even on Easy
     const res = replay(r1);
     expect(res.divergedAt).toBeNull();
     expect(res.checked).toBe(r1.hashes.length);
