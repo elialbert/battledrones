@@ -363,6 +363,10 @@ and coding-agent seats are the fun one.
 - **Scripted players** (`novice`, `beginner`, `decent`): the phone players
   `tools/beginner.ts` tunes the difficulties against. They follow a fixed
   build list, look at the battle every few seconds, and make one all-in push.
+- **Marshal** (`marshal`): the commander's Balanced plan played on a human's
+  budget of actions: 10, 14 or 30 a minute on Easy, Normal or Hard unless
+  the seat sets `@apm=`. No wasted orders, focus fire, and it knows when to
+  quit a fight and when to finish one (APM-BOTS.md).
 
 **Every bot plays fair.** It sees only what its side has seen, and it gets
 no income handicap, not even on Easy or Hard. (Before bot seats, `ai:` seats

@@ -15,6 +15,7 @@
  * never re-run it.
  */
 import { createAiState, tickAi, STRATEGIES, type Difficulty, type StrategyName } from "./commander";
+import { MARSHAL, marshal } from "./marshal";
 import { PROFILES, scriptedPlayer, type ProfileName } from "./player";
 import { pickAiOpener, type OpenerId } from "../openers";
 import type { Command, Faction, World } from "../types";
@@ -45,6 +46,8 @@ export interface BotDef {
   opener(seed: number, side: Faction): OpenerId;
   /** `seed` feeds its tie-break RNG. */
   create(side: Faction, seed: number, difficulty: Difficulty): Bot;
+  /** Its APM cap when the seat names none (ai/apm.ts): a bot built for a budget. Uncapped if left out. */
+  apm?(difficulty: Difficulty): number;
 }
 
 const ABOUT: Record<StrategyName, string> = {
@@ -96,7 +99,17 @@ function playerBot(name: ProfileName): BotDef {
 /** Every bot, in the order the menu's picker and `tools/arena.ts bots` list them. */
 const ALL: BotDef[] = [
   ...(Object.keys(STRATEGIES) as StrategyName[]).map(commanderBot),
-  ...(Object.keys(PROFILES) as ProfileName[]).map(playerBot)
+  ...(Object.keys(PROFILES) as ProfileName[]).map(playerBot),
+  {
+    id: "marshal",
+    label: "Marshal",
+    about: "The Balanced plan on a human's budget (10/14/30 actions a minute): no wasted orders, focus fire, knows when to quit a fight and when to finish one",
+    group: "Commander",
+    difficulties: true,
+    opener: (seed, side) => pickAiOpener("balanced", seed, side),
+    create: (side, seed, difficulty) => marshal(side, seed, difficulty, { ...MARSHAL[difficulty], strategy: "balanced" }),
+    apm: (difficulty) => MARSHAL[difficulty].apm
+  }
 ];
 
 export const BOTS: Record<string, BotDef> = Object.fromEntries(ALL.map((b) => [b.id, b]));

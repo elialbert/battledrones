@@ -2,10 +2,17 @@
 
 ## Status
 
-**Planned.** This builds on the `selectable-bots` branch: the bot registry
-(`src/sim/ai/bots.ts`), `bot:` seats, `tools/arena.ts league`, and the menu's
-Opponent and Watch AI vs AI pickers. **[BOTS.md](BOTS.md)** is the guide to
-writing a bot. Read it first.
+**Steps 1 and 2 are done; 3 is mostly answered; 4 is next.** This builds on
+the `selectable-bots` branch: the bot registry (`src/sim/ai/bots.ts`), `bot:`
+seats, `tools/arena.ts league`, and the menu's Opponent and Watch AI vs AI
+pickers. **[BOTS.md](BOTS.md)** is the guide to writing a bot. Read it first.
+
+- Step 1: `bot:<id>[:<difficulty>]@apm=<n>` seats, `capApm`
+  (`src/sim/ai/apm.ts`), `Bot.sent`, `tools/arena.ts apm`, APM in the league
+  and series tables.
+- Step 2: `bot:marshal` (`src/sim/ai/marshal.ts`). **At 13 APM it plays the
+  stock Normal commander, at 60–100 APM, about even; at 16 APM and up it wins
+  83–100%.** See "What Marshal showed" below.
 
 ## The idea
 
@@ -81,15 +88,17 @@ What this shows:
   repeats.
 - **The draws at 60 APM** are capped bots that stall without losing their
   base.
-- **The baseline isn't measured.** Stock against stock in the same setup
-  should be close to 50%, but it hasn't been run. Run it first, so the
-  numbers above have something to compare to.
+- **The baseline:** stock against stock in the same setup is 50% by
+  construction (a bot's seed follows its side, so the swapped game is the
+  same game). What it does show: 17% draws (so the capped bots' 38% at 60
+  APM is the cap's doing), about 105 APM with busiest minutes near 300, and
+  two thirds of it `attackMove` and `attack` re-sends.
 
 The experiment was a throwaway script. Step 1 below makes it repeatable.
 
 ## The plan
 
-### 1. An APM cap as a seat option
+### 1. An APM cap as a seat option (done)
 
 - **Seat syntax:** `bot:<id>[:<difficulty>]@apm=<n>`, for example
   `bot:ironclad:hard@apm=100` or `bot:decent@apm=40`. Changes:
@@ -119,9 +128,9 @@ The experiment was a throwaway script. Step 1 below makes it repeatable.
   - the same match twice gives the same commands;
   - `parseSeat` and `seatName` round-trip with `@apm=`.
 
-### 2. A bot built for a budget
+### 2. A bot built for a budget (done)
 
-A new bot, say `bot:marshal`, written for a cap from the start. Begin from
+A new bot, `bot:marshal`, written for a cap from the start. Begin from
 the commander's plan (build orders, counters, waves: `commander.ts` and its
 helpers under `src/sim/ai/`), but restructure how it gives orders:
 
@@ -147,7 +156,7 @@ helpers under `src/sim/ai/`), but restructure how it gives orders:
   default cap, for example 40, 80 and 150, plus the commander's existing
   knobs. An explicit `@apm=` overrides the default.
 
-### 3. The head-to-head
+### 3. The head-to-head (mostly answered: "What Marshal showed")
 
 - `bot:marshal@apm=100` against each stock commander, uncapped, in mirror
   pairs on every map with several seeds. Use
@@ -172,11 +181,98 @@ helpers under `src/sim/ai/`), but restructure how it gives orders:
   `sent()`), and the reason the cap drops commands rather than queueing
   them.
 
+## What Marshal showed
+
+Marshal (`bot:marshal`) is the stock commander's plan (Balanced) with new
+hands. Every number below is Marshal against the stock Normal commander
+(uncapped, Balanced unless named), on all six maps, seeds 1 to 3, both sides:
+36 games, so about ±8 points of noise.
+
+### The win-rate curve against APM
+
+| Marshal's cap | 10 | 13 | 16 | 20 | 30 | 40 | 60 | 100 |
+|---|---|---|---|---|---|---|---|---|
+| Wins | 11% | 56% | 83% | 86% | 89% | 92% | 94% | 100% |
+
+The stock commander sent 70 to 100 APM in these games. At 40 APM Marshal
+also beat the other five personalities: Rush 86%, Air Swarm 89%, Boom 78%,
+Skyforce 83%, Ironclad 83%. Against the scripted `decent` player it won 33%
+at 10 APM and 78% at 20.
+
+The difficulties (`MARSHAL` in marshal.ts) are Easy 10 APM, Normal 14 and
+Hard 30, with Easy also thinking slower (a plan every 3.5 s, a look at the
+fights every 2 s) and Hard faster (1 s and 0.5 s). **They're a first guess:
+Normal is meant to feel like the stock Normal commander.** A league through
+the real arena, all maps, seeds 1 and 2, 24 games a pairing:
+
+| | Won-lost-drawn | Win % | APM |
+|---|---|---|---|
+| `bot:marshal:hard` | 86-8-2 | 90% | 30 |
+| `bot:marshal:normal` | 52-36-8 | 54% | 15 |
+| `bot:ironclad` (stock Normal) | 43-40-13 | 45% | 110 |
+| `bot:balanced` (stock Normal) | 37-54-5 | 39% | 97 |
+| `bot:marshal:easy` | 5-85-6 | 5% | 11 |
+
+Marshal Normal beat stock Balanced 18-5 and stock Ironclad 10-8. Easy sits
+just under the curve's cliff (10 to 13 APM) and loses almost every game to
+the stock Normal commanders; whether that's right for an Easy opponent is a
+question for play, not the league.
+
+### What made the difference
+
+Measured one at a time (24 to 36 games each):
+
+- **Dropping orders that change nothing.** With only that, and no fight
+  micro, it beat stock Balanced 15-7-2 at slightly lower APM. Two thirds of
+  the stock commander's actions re-send `attackMove` to units already doing
+  it. **This is also why thinking every tick hurt the stock commander:**
+  with the re-sends dropped, Marshal plans every 0.5 s with no harm.
+- **Fight micro is the big one.** Re-planning each fight every second took
+  uncapped Marshal from 62% to 96–100%. Focus fire alone or breaking off
+  alone each got 92%; sending units back to their wave after a kill added
+  nothing (removed).
+- **Orders wait for an action instead of being dropped.** The first version
+  made fight micro fresh on each look and threw away whatever the cap
+  refused. The plan's orders, which waited, took every action as it came, so
+  focus fire got about 1 action a minute. Letting micro orders wait until
+  the next look took 50 APM from 58% to 81%, and 40 APM from 58% to 72%.
+- **Under a cap, thinking faster helps.** At 40 APM, looking at the fights
+  every 0.5 s instead of every 1 s took it from 72% to 89%. Uncapped, think
+  speed hardly mattered. So both levers work: act faster mostly; think
+  faster once actions are scarce.
+- **Finishing a won game.** At 30 APM a quarter of its games were draws it
+  was winning, 77 units against 5 at 19:00. A push that sends everything at
+  the nearest known enemy building once its army is twice what it has seen
+  of theirs took 30 APM from 69% to 89% and shortened games from 14 to 9
+  minutes. The push order has to wait for an action too: tried only on the
+  tick it was planned, it rarely got one.
+- **Menders follow loosely.** The commander re-sent Menders after the units
+  they followed, 7 to 15 times a minute. Marshal leaves a Mender alone
+  within 4 tiles of where it's wanted.
+- **Switching targets only for a much better one** (3×, not 1.5×). Each
+  switch costs an action, and another when the target dies.
+
+Tried and dropped: rally points at the staging area (no change: few orders
+are for new units); more harvesters and depots (no clear change); production,
+army and focus taking turns at the budget (worse: 56% at 30 APM against 89%);
+group orders outranking production (much worse); breaking off only when
+reinforcements are outmatched too (worse: retreating early is right); focus
+fire outranking production, and no harassment raids (no clear change).
+
+### A separate budget for fight micro
+
+`MarshalOptions.microApm` caps the actions fight micro may spend (breaking
+off, stepping back, focus fire), apart from the seat's cap. At 60 APM with 10
+of them for micro it won 62%, with 20 88%, uncapped micro 79%: it's a knob
+for how sharp it is in a fight, not a way to play better on the same total.
+No seat syntax or picker sets it yet.
+
 ## Open questions
 
-- **Drop or queue over-budget commands?** The plan says drop, because a
-  queued order goes stale while it waits. Confirm it with marshal: does
-  queueing ever do better?
+- **Drop or queue over-budget commands?** Answered for Marshal: the cap
+  still drops, but Marshal keeps its own refused orders until a newer plan
+  replaces them (the plan's every `think`, the fight micro's every `react`).
+  That beat dropping by a lot (above).
 - **Does a command for 30 units count as one action?** A human needs a
   box-select and a click for that, about two actions. The plan counts 1,
   for simplicity. Revisit it if mass orders turn out to dominate.
@@ -184,14 +280,18 @@ helpers under `src/sim/ai/`), but restructure how it gives orders:
   says yes, every command counts. Mention it if that makes capped bots
   stand in reticles.
 - **Is uncapped turbo bad because of the re-sent orders, or for another
-  reason?** Worth a quick look while building marshal, because the same
-  flaw would hurt it.
+  reason?** The re-sent orders: once they're dropped, planning every 0.5 s
+  does no harm.
+- **Does Marshal's Normal (14 APM) feel right to a person?** Only play will
+  tell. The scripted players are the closest stand-in measured so far.
 
 ## Where things are
 
 | | |
 |---|---|
-| `src/sim/ai/bots.ts` | The bot registry: `Bot`, `BotDef`, `ALL`, `botSeat` |
+| `src/sim/ai/bots.ts` | The bot registry: `Bot` (and `sent`), `BotDef` (and its default `apm`), `ALL`, `botSeat` |
+| `src/sim/ai/apm.ts` | `capApm`, the token bucket |
+| `src/sim/ai/marshal.ts` | Marshal, and `MARSHAL`: each difficulty's speeds and cap |
 | `src/sim/ai/commander.ts` | The stock commander: `tickAi`, `DIFFICULTY`, `STRATEGIES` |
 | `src/sim/ai/player.ts` | The scripted players |
 | `src/arena/match.ts` | `parseSeat`, `seatName`, bot seats ticking every tick |
@@ -205,7 +305,7 @@ helpers under `src/sim/ai/`), but restructure how it gives orders:
 
 In a fresh session on the `selectable-bots` branch:
 
-> Read APM-BOTS.md and BOTS.md, then do step 1 of APM-BOTS.md: the
-> `@apm=` seat option and `capApm` wrapper, `tools/arena.ts apm`, APM in
-> the league table, the tests, and the stock-vs-stock baseline. Stop and
-> report before starting step 2.
+> Read APM-BOTS.md and BOTS.md, then do step 4 of APM-BOTS.md: an APM choice
+> in the Opponent and Watch AI vs AI pickers, saved like the bot picks, and
+> the cap in the "vs" line. Marshal already wears its difficulty's cap in the
+> game (`seatBot` in `src/game/meta.ts`); the choice should override it.

@@ -1,0 +1,463 @@
+/**
+ * Marshal (APM-BOTS.md): a bot built to play under an actions-per-minute
+ * cap, the way a human does. Two speeds make it better or worse:
+ *
+ *  - how fast it acts: the APM cap (ai/apm.ts) its seat wears, by default
+ *    its difficulty's (MARSHAL);
+ *  - how fast it thinks: the commander's plan (commander.ts) every `think`
+ *    seconds, and a look at every fight every `react` seconds.
+ *
+ * The plan is the stock commander's: build order, counters, waves. What
+ * differs is how it gives orders:
+ *
+ *  - **Only orders that change something.** An order to a unit already doing
+ *    it (the same target, a destination within a tile or two, a Mender within
+ *    reach of where it's wanted) is dropped before it costs an action.
+ *  - **Ranked wants that wait.** Orders are ranked (dodging calldowns and
+ *    pulling out of fights, the economy, the finishing push, production,
+ *    focus fire, then the plan's army orders), and the cap spends from the
+ *    top. What it can't pay for yet waits (`sent`) until the plan or the next
+ *    look at the fights replaces it, so an order planned on a tick with no
+ *    action to spare isn't lost.
+ *  - **Fights are re-planned while they happen.** Focus fire on what dies
+ *    fastest for the harm it does, spread so it doesn't overkill and only
+ *    switched for a much better target; hurt expensive units step back; and
+ *    a fight that's lost, away from home, is broken off.
+ *  - **It finishes a won game.** Once its army is twice the enemy army it
+ *    has seen lately, everything attack-moves on the enemy's buildings, one
+ *    order every few seconds; a capped commander otherwise sits on a won game
+ *    till time runs out.
+ *
+ * It reads what the commander reads: its own side, and the enemy only
+ * through seenEnemies, knownBuildings and visible tiles. No income handicap.
+ */
+import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
+import { isVisible, knownBuildings } from "../fog";
+import type { Command, Faction, Unit, World } from "../types";
+import { buildingCenter, dist, domainOf, hqOf } from "../world";
+import { createAiState, tickAi, type Difficulty, type StrategyName } from "./commander";
+import { USELESS, effectivenessVs, seenEnemies } from "./intel";
+import { dodgingUnits } from "./powers";
+import type { Bot } from "./bots";
+
+export interface MarshalOptions {
+  /** Seconds between the commander's planning passes. */
+  think: number;
+  /** Seconds between looks at the fights (0: no fight micro). */
+  react: number;
+  /** The plan it follows. */
+  strategy: StrategyName;
+  /**
+   * Actions a minute it may spend on fight micro (breaking off, stepping
+   * back, focus fire), out of what its cap allows: how sharp it is in a
+   * fight, apart from how well it runs its base. Unlimited if left out.
+   */
+  microApm?: number;
+}
+
+/**
+ * Each difficulty's speeds and default APM cap. Against the stock Normal
+ * commander (Balanced, 60–100 APM), Marshal at 10 APM won 11% of 36 games,
+ * at 13 56%, at 16 83%, at 30 89%, at 60 94% (APM-BOTS.md).
+ */
+export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number }> = {
+  easy: { think: 3.5, react: 2, apm: 10 },
+  normal: { think: 2, react: 1, apm: 14 },
+  hard: { think: 1, react: 0.5, apm: 30 }
+};
+
+/** Orders by rank: the cap spends from the top. */
+const enum Rank {
+  Dodge,
+  Retreat,
+  Economy,
+  Push,
+  Production,
+  Focus,
+  Army,
+  Other
+}
+
+interface Want {
+  rank: Rank;
+  cmd: Command;
+  /** From the commander's plan (kept until sent or replanned); else the fight micro's (kept till the next look). */
+  planned: boolean;
+  /** The finishing push (kept until sent). */
+  push?: boolean;
+}
+
+/** Destinations this close count as the same order. */
+const SAME_SPOT = 1.5;
+/** …and for Menders, which heal anything in reach. */
+const MENDER_SLACK = 4;
+/** Fight micro looks this far round a fight for both sides' strength. */
+const FIGHT_RADIUS = 8;
+/** Break off when our strength is under this share of theirs (Lanchester: dps × hp). */
+const BREAK_OFF = 0.3;
+/** Fights this close to home are never broken off: there's nowhere to go. */
+const HOME_STAND = 12;
+/** A unit worth at least this steps back when hurt below HURT. */
+const PRECIOUS = 250;
+const HURT = 0.25;
+/** A target with this much damage aimed at it (in seconds to kill) takes no more shooters. */
+const OVERKILL_SECS = 1.5;
+/** Switch a shooter's target only for one this much better (each switch costs an action, and another when it ends). */
+const SWITCH = 3;
+/** Finish when our army is this many times the enemy army seen lately, and worth at least FINISH_MIN. */
+const FINISH = 2;
+const FINISH_MIN = 3000;
+/** Seconds between the finishing push's orders. */
+const FINISH_EVERY = 10;
+/** An enemy unit unseen this long no longer counts toward its army (ticks). */
+const SIGHTING_TTL = 90 * TICK_RATE;
+/** The fight micro's budget: how many actions it can bank. */
+const MICRO_BURST = 5;
+const PER_ACTION = 60 * TICK_RATE;
+
+const unitsOf = (c: Command): number[] | null => ("unitIds" in c ? c.unitIds : null);
+
+function rankOf(c: Command, dodging: Set<number>): Rank {
+  switch (c.type) {
+    case "move":
+      return c.unitIds.every((id) => dodging.has(id)) ? Rank.Dodge : Rank.Army;
+    case "calldown":
+      return Rank.Retreat;
+    case "harvest":
+    case "placeBuilding":
+    case "cancelBuilding":
+      return Rank.Economy;
+    case "produce":
+      return c.unit === "harvester" ? Rank.Economy : Rank.Production;
+    case "startBuilding":
+    case "cancelProduce":
+    case "sell":
+      return Rank.Production;
+    case "attack":
+    case "attackMove":
+    case "stop":
+    case "board":
+    case "unload":
+    case "anchor":
+    case "packUp":
+    case "lift":
+      return Rank.Army;
+    default:
+      return Rank.Other;
+  }
+}
+
+/** Is `u` already doing what `c` would tell it? */
+function alreadyDoing(u: Unit, c: Command): boolean {
+  const o = u.order;
+  switch (c.type) {
+    case "move":
+    case "attackMove": {
+      // (Menders heal whatever's in reach: they follow the army loosely, not step for step)
+      const near = u.kind === "mender" ? MENDER_SLACK : SAME_SPOT;
+      if (o.type === c.type && dist(o.x, o.y, c.x, c.y) <= near) return true;
+      return c.type === "attackMove" && o.type === "idle" && dist(u.x, u.y, c.x, c.y) <= near; // (already there)
+    }
+    case "attack":
+      return o.type === "attack" && o.targetId === c.targetId;
+    case "harvest":
+      return o.type === "harvest" && dist(o.fieldX + 0.5, o.fieldY + 0.5, c.x, c.y) <= SAME_SPOT;
+    case "stop":
+      return o.type === "idle";
+    case "board":
+      return o.type === "board" && o.carrierId === c.carrierId;
+    default:
+      return false; // (anything else always changes something)
+  }
+}
+
+export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
+  const s = createAiState(opts.strategy, difficulty, seed);
+  s.fair = true;
+  s.interval = opts.think;
+  const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
+
+  /** The plan's orders not yet sent. */
+  let backlog: Want[] = [];
+  /** The fight micro's orders not yet sent: they wait until the next look at the fights. */
+  let microLog: Want[] = [];
+  /** The finishing push's order, until it's sent. */
+  let push: Want | null = null;
+  let lastPush = -1e9;
+  /** What went out last tick, until sent() says what got through (uncapped, all of it). */
+  let out: Want[] = [];
+  let pushedAt = -1e9;
+  /** Units the fight micro holds, until a tick: the plan's attack orders don't pull them away. */
+  const held = new Map<number, number>();
+  /** Enemy units seen lately: what each is worth and when it was last seen. */
+  const sighted = new Map<number, { value: number; tick: number }>();
+  let finishing = false;
+  // the fight micro's own budget (opts.microApm), a token bucket like ai/apm.ts's
+  let microTokens = MICRO_BURST * PER_ACTION;
+  let microTick = 0;
+
+  /** `c` cut down to the units it would change (null: none). The plan doesn't pull held units out of a fight. */
+  function trim(w: World, c: Command, planned: boolean): Command | null {
+    const ids = unitsOf(c);
+    if (!ids) return c;
+    const keep: number[] = [];
+    for (const id of ids) {
+      const u = w.units.get(id);
+      if (!u || u.faction !== side) continue;
+      if (planned && (c.type === "attackMove" || c.type === "attack") && (held.get(id) ?? -1) > w.tick) continue;
+      if (!alreadyDoing(u, c)) keep.push(id);
+    }
+    if (!keep.length) return null;
+    return keep.length === ids.length ? c : ({ ...c, unitIds: keep } as Command);
+  }
+
+  const cut = (w: World, wants: Want[], planned: boolean) =>
+    wants.flatMap((want) => {
+      const cmd = trim(w, want.cmd, planned);
+      return cmd ? [{ ...want, cmd }] : [];
+    });
+
+  return {
+    tick(w: World): Command[] {
+      for (const [id, until] of held) if (until <= w.tick) held.delete(id);
+      const plan = tickAi(w, side, s); // the dodge reflex every tick, the plan every `think`
+      const dodging = new Set(dodgingUnits(w, s));
+      const reflex: Want[] = [];
+      if (s.lastDecisionTick === w.tick) backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging), cmd, planned: true }));
+      else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
+      if (opts.microApm !== undefined) {
+        microTokens = Math.min(MICRO_BURST * PER_ACTION, microTokens + (w.tick - microTick) * opts.microApm);
+        microTick = w.tick;
+      }
+      if (opts.react > 0 && w.tick % reactTicks === 0 && !w.winner) {
+        push = finish(w) ?? (finishing ? push : null);
+        let micro = fights(w, dodging);
+        if (opts.microApm !== undefined) {
+          // (the most urgent first: breaking off and stepping back, then focus fire)
+          micro.sort((a, b) => a.rank - b.rank);
+          const n = Math.min(micro.length, Math.floor(microTokens / PER_ACTION));
+          for (const x of micro.slice(n)) for (const id of unitsOf(x.cmd) ?? []) held.delete(id);
+          micro = micro.slice(0, n);
+          microTokens -= n * PER_ACTION;
+        }
+        microLog = micro;
+      }
+      const all = merge([...cut(w, [...reflex, ...(push ? [push] : []), ...microLog], false), ...cut(w, backlog, true)]);
+      all.sort((a, b) => a.rank - b.rank); // (stable: the plan's own order within a rank)
+      // (all of it sent, unless sent() says otherwise)
+      out = all;
+      backlog = [];
+      microLog = [];
+      if (push) {
+        push = null;
+        pushedAt = lastPush;
+        lastPush = w.tick;
+      }
+      return all.map((x) => x.cmd);
+    },
+    sent(cmds: Command[]) {
+      const went = new Set(cmds);
+      const left = out.filter((x) => !went.has(x.cmd));
+      backlog = left.filter((x) => x.planned);
+      microLog = left.filter((x) => !x.planned && !x.push && x.rank !== Rank.Dodge);
+      const p = left.find((x) => x.push);
+      if (p) {
+        push = p;
+        lastPush = pushedAt;
+      }
+      out = [];
+    }
+  };
+
+  /** One order for many units: orders of a kind to one spot, or one target, are merged. */
+  function merge(wants: Want[]): Want[] {
+    const res: Want[] = [];
+    for (const want of wants) {
+      const c = want.cmd;
+      if (c.type === "attackMove" || c.type === "move" || c.type === "attack") {
+        const twin = res.find((o) => {
+          const d = o.cmd;
+          if (o.rank !== want.rank || o.planned !== want.planned || o.push !== want.push || d.type !== c.type) return false;
+          if (d.type === "attack" && c.type === "attack") return d.targetId === c.targetId;
+          return d.type !== "attack" && c.type !== "attack" && dist(d.x, d.y, c.x, c.y) <= 0.5;
+        });
+        if (twin) {
+          const ids = unitsOf(twin.cmd)!;
+          twin.cmd = { ...twin.cmd, unitIds: [...ids, ...c.unitIds.filter((id) => !ids.includes(id))] } as Command;
+          continue;
+        }
+      }
+      res.push({ ...want });
+    }
+    return res;
+  }
+
+  /** The finishing push, once the game is won: everything at the nearest enemy building it knows of. */
+  function finish(w: World): Want | null {
+    for (const e of seenEnemies(w, side)) if (e.kind !== "harvester") sighted.set(e.id, { value: UNITS[e.kind].cost, tick: w.tick });
+    let enemy = 0;
+    for (const [id, x] of sighted) {
+      if (w.tick - x.tick > SIGHTING_TTL) sighted.delete(id);
+      else enemy += x.value;
+    }
+    const army = [...w.units.values()].filter(
+      (u) =>
+        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" &&
+        (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
+    );
+    const ours = army.reduce((v, u) => v + UNITS[u.kind].cost, 0);
+    if (!finishing && ours >= Math.max(FINISH_MIN, FINISH * enemy)) finishing = true;
+    else if (finishing && ours < Math.max(FINISH_MIN * 0.6, 1.5 * enemy)) finishing = false;
+    if (!finishing || w.tick - lastPush < FINISH_EVERY * TICK_RATE || !army.length) return null;
+    const cx = army.reduce((a, u) => a + u.x, 0) / army.length;
+    const cy = army.reduce((a, u) => a + u.y, 0) / army.length;
+    const known = knownBuildings(w, side).filter((b) => b.faction !== side);
+    const centre = (b: (typeof known)[number]) => ({ x: b.tx + BUILDINGS[b.kind].size / 2, y: b.ty + BUILDINGS[b.kind].size / 2 });
+    known.sort((a, b) => dist(centre(a).x, centre(a).y, cx, cy) - dist(centre(b).x, centre(b).y, cx, cy) || a.id - b.id);
+    // (none known: where their HQ must be, the mirror of ours)
+    const hq = hqOf(w, side);
+    const home = hq ? buildingCenter(hq) : { x: cx, y: cy };
+    const at = known[0] ? centre(known[0]) : { x: w.width - home.x, y: w.height - home.y };
+    const ids = army.map((u) => u.id);
+    for (const id of ids) held.set(id, w.tick + (FINISH_EVERY + 2) * TICK_RATE);
+    return { rank: Rank.Push, cmd: { type: "attackMove", faction: side, unitIds: ids, x: at.x, y: at.y }, planned: false, push: true };
+  }
+
+  /** The fight micro: break off lost fights, step hurt units back, focus fire. */
+  function fights(w: World, dodging: Set<number>): Want[] {
+    const res: Want[] = [];
+    const hq = hqOf(w, side);
+    const home = hq ? buildingCenter(hq) : null;
+    const enemies = seenEnemies(w, side).filter((e) => !e.goliath && (UNITS[e.kind].dps > 0 || UNITS[e.kind].heal));
+    const army = [...w.units.values()].filter(
+      (u) =>
+        u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" &&
+        !dodging.has(u.id) && (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
+    );
+    const defences = [...w.buildings.values()].filter(
+      (b) => b.faction !== side && BUILDINGS[b.kind].dps > 0 && isVisible(w, side, b.tx, b.ty)
+    );
+    const inFight = army.filter((u) => enemies.some((e) => dist(u.x, u.y, e.x, e.y) <= UNITS[u.kind].range + 2.5));
+    const fightIds = new Set(inFight.map((u) => u.id));
+
+    // the units in each fight
+    const done = new Set<number>();
+    const clusters: Unit[][] = [];
+    for (const u of inFight) {
+      if (done.has(u.id)) continue;
+      const c = [u];
+      done.add(u.id);
+      for (let i = 0; i < c.length; i++)
+        for (const v of inFight)
+          if (!done.has(v.id) && dist(c[i]!.x, c[i]!.y, v.x, v.y) <= 5) {
+            done.add(v.id);
+            c.push(v);
+          }
+      clusters.push(c);
+    }
+
+    const leaving = new Set<number>();
+    for (const c of clusters) {
+      const cx = c.reduce((a, u) => a + u.x, 0) / c.length;
+      const cy = c.reduce((a, u) => a + u.y, 0) / c.length;
+      const ours = army.filter((u) => dist(u.x, u.y, cx, cy) <= FIGHT_RADIUS);
+      const theirs = enemies.filter((e) => dist(e.x, e.y, cx, cy) <= FIGHT_RADIUS + 2);
+      const towers = defences.filter((b) => {
+        const bc = buildingCenter(b);
+        return dist(bc.x, bc.y, cx, cy) <= FIGHT_RADIUS + 2;
+      });
+      // --- a lost fight away from home: everyone in it falls back toward home
+      if (!finishing && home && dist(cx, cy, home.x, home.y) > HOME_STAND) {
+        const mine = strength(ours, theirs, towers.length > 0);
+        const them =
+          strength(theirs, ours, false) + towers.reduce((a, b) => a + BUILDINGS[b.kind].dps, 0) * towers.reduce((a, b) => a + b.hp, 0);
+        if (mine < BREAK_OFF * them) {
+          const back = toward(cx, cy, home, 10);
+          const ids = ours.filter((u) => u.kind !== "mender").map((u) => u.id);
+          for (const id of ids) {
+            leaving.add(id);
+            held.set(id, w.tick + 8 * TICK_RATE);
+          }
+          if (ids.length) res.push({ rank: Rank.Retreat, cmd: { type: "move", faction: side, unitIds: ids, x: back.x, y: back.y }, planned: false });
+          continue;
+        }
+      }
+      // --- hurt, expensive units step back out of it
+      if (home)
+        for (const u of c) {
+          if (UNITS[u.kind].cost < PRECIOUS || u.hp > HURT * UNITS[u.kind].hp || leaving.has(u.id)) continue;
+          const back = toward(u.x, u.y, home, 7);
+          leaving.add(u.id);
+          held.set(u.id, w.tick + 6 * TICK_RATE);
+          res.push({ rank: Rank.Retreat, cmd: { type: "move", faction: side, unitIds: [u.id], x: back.x, y: back.y }, planned: false });
+        }
+      // --- focus fire: each shooter on what dies fastest for the harm it does, no overkill
+      const aimed = new Map<number, number>(); // damage a second already on each target
+      const shooters = c.filter((u) => !leaving.has(u.id));
+      const options = new Map<number, Unit[]>();
+      for (const u of shooters) {
+        const st = UNITS[u.kind];
+        options.set(
+          u.id,
+          theirs.filter((e) => {
+            const d = dist(u.x, u.y, e.x, e.y);
+            return d <= st.range + 0.3 && d >= (st.minRange ?? 0) && effectivenessVs(u.kind, UNITS[e.kind].armor, domainOf(e)) >= USELESS;
+          })
+        );
+      }
+      // (the shooters with the fewest choices pick first)
+      shooters.sort((a, b) => options.get(a.id)!.length - options.get(b.id)!.length || a.id - b.id);
+      const orders = new Map<number, number[]>();
+      for (const u of shooters) {
+        const can = options.get(u.id)!;
+        if (!can.length) continue;
+        const dps = (e: Unit) => UNITS[u.kind].dps * effectivenessVs(u.kind, UNITS[e.kind].armor, domainOf(e));
+        const score = (e: Unit) => (harm(e) * dps(e)) / Math.max(1, e.hp);
+        const open = (e: Unit) => (aimed.get(e.id) ?? 0) * OVERKILL_SECS < e.hp;
+        let best: Unit | null = null;
+        for (const e of can) if (open(e) && (!best || score(e) > score(best) || (score(e) === score(best) && e.id < best.id))) best = e;
+        best ??= can.reduce((a, e) => (score(e) > score(a) ? e : a));
+        const curId = u.order.type === "attack" ? u.order.targetId : u.autoTargetId;
+        const cur = curId === null ? undefined : can.find((e) => e.id === curId);
+        const pick = cur && open(cur) && score(best) < SWITCH * score(cur) ? cur : best;
+        aimed.set(pick.id, (aimed.get(pick.id) ?? 0) + dps(pick));
+        if (pick.id === curId) continue;
+        held.set(u.id, w.tick + 3 * TICK_RATE);
+        orders.set(pick.id, [...(orders.get(pick.id) ?? []), u.id]);
+      }
+      for (const [targetId, ids] of orders) res.push({ rank: Rank.Focus, cmd: { type: "attack", faction: side, unitIds: ids, targetId }, planned: false });
+    }
+    // (units out of the fight aren't held: the plan has them again)
+    for (const id of held.keys()) if (!fightIds.has(id) && !leaving.has(id) && w.units.get(id)?.order.type !== "move") held.delete(id);
+    return res;
+  }
+}
+
+/** How much harm an enemy unit does a second (a healer counts for what it heals). */
+function harm(e: Unit): number {
+  const st = UNITS[e.kind];
+  return st.dps + (st.heal ?? 0) * 1.5 + 1;
+}
+
+/** Lanchester strength of `a` against `b`: its damage a second (by how well it hurts them) × its hit points. */
+function strength(a: Unit[], b: Unit[], vsStructures: boolean): number {
+  if (!a.length) return 0;
+  const bHp = b.reduce((n, e) => n + e.hp, 0);
+  let dps = 0;
+  for (const u of a) {
+    const st = UNITS[u.kind];
+    if (st.dps <= 0) continue;
+    // its damage against their mix, weighted by their hit points (structures if that's all there is)
+    let eff = 0;
+    if (bHp > 0) for (const e of b) eff += (effectivenessVs(u.kind, UNITS[e.kind].armor, domainOf(e)) * e.hp) / bHp;
+    else eff = vsStructures ? effectivenessVs(u.kind, "structure", "ground") : 1;
+    dps += st.dps * eff;
+  }
+  return dps * a.reduce((n, u) => n + u.hp, 0);
+}
+
+function toward(x: number, y: number, to: { x: number; y: number }, d: number) {
+  const len = Math.max(1, dist(x, y, to.x, to.y));
+  const k = Math.min(1, d / len);
+  return { x: x + (to.x - x) * k, y: y + (to.y - y) * k };
+}

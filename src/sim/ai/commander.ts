@@ -242,6 +242,8 @@ export interface AiState {
   waveValue: number;
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
   fair?: boolean;
+  /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
+  interval?: number;
 }
 
 /**
@@ -324,7 +326,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   if (!hq && !hasGoliath(w, faction)) return [];
   // calldown reflex: scatter from enemy reticles every tick, not just on decision passes
   const reflex = w.winner ? [] : dodgeCalldowns(w, faction, s);
-  if (w.tick - s.lastDecisionTick < diff.interval * TICK_RATE || w.winner) return reflex;
+  if (w.tick - s.lastDecisionTick < (s.interval ?? diff.interval) * TICK_RATE || w.winner) return reflex;
   s.lastDecisionTick = w.tick;
 
   const cmds: Command[] = reflex;

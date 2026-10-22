@@ -13,9 +13,11 @@ it turns up everywhere at once:
   other bot.
 - **In `tools/arena.ts bots`**, the list.
 
-There are nine today. Six are the built-in commander with each of its
-personalities (`src/sim/ai/commander.ts`), and three are the scripted phone
-players (`src/sim/ai/player.ts`). The registry is `src/sim/ai/bots.ts`.
+There are ten today. Six are the built-in commander with each of its
+personalities (`src/sim/ai/commander.ts`), three are the scripted phone
+players (`src/sim/ai/player.ts`), and one is Marshal
+(`src/sim/ai/marshal.ts`), the commander's plan played on a human's budget of
+actions. The registry is `src/sim/ai/bots.ts`.
 
 ## The rules
 
@@ -95,6 +97,7 @@ export interface BotDef {
   difficulties: boolean;  // does bot:<id>:<easy|normal|hard> mean anything?
   opener(seed: number, side: Faction): OpenerId;  // "blitz" | "industry" | "airwing"
   create(side: Faction, seed: number, difficulty: Difficulty): Bot;
+  apm?(difficulty: Difficulty): number;  // its APM cap when the seat names none
 }
 ```
 
@@ -134,6 +137,37 @@ kind, near)` in `sim/placement.ts` finds a valid spot. `canPlaceBuilding` in
 `tick` returns, so `f.scrap` doesn't drop while you're queueing. Keep a
 local `scrap` and subtract as you spend, as every bot here does. A command
 you can't afford is refused, and under an action cap it's wasted.
+
+## Writing a bot for a budget
+
+Any bot can be capped (`bot:<id>@apm=60`), but one written for it plays far
+better on the same budget. Marshal, the commander's plan with new hands, plays
+the uncapped commander about even at 13 APM ([APM-BOTS.md](APM-BOTS.md)).
+What it does, and what to copy:
+
+- **Never send an order that changes nothing.** Before an order costs an
+  action, drop the units already doing it: the same target, a destination
+  within a tile or two. Re-sent `attackMove`s are most of the stock
+  commander's actions, and they reset paths and targets too.
+- **Rank what you want, and keep what you couldn't send.** Return your
+  orders most important first; the cap keeps the first it can pay for.
+  Implement `sent(cmds)` to learn which got through, and keep the rest for
+  the next tick, until your next plan replaces them. An order made only on
+  the tick you planned it rarely finds an action free: the orders that wait
+  take each one as it refills.
+- **Spend actions where they move the game.** In Marshal's tests: focus fire
+  and breaking off lost fights were worth far more than tidy army orders;
+  one order that sends the whole army at the enemy finishes games a capped
+  bot otherwise sits on; Menders and other followers can follow loosely.
+- **Think as often as you like.** Planning is cheap and, once nothing is
+  re-sent, does no harm. Under a tight cap, looking at fights more often
+  helps, because each scarce action goes to a fresher choice.
+- **Set a default cap** with `BotDef.apm(difficulty)` if the bot is meant to
+  play on one. A seat's `@apm=` overrides it, and the game wears it too.
+
+The cap drops what it can't pay for rather than queueing it, because a
+queued order goes stale while it waits. A bot knows better than the cap which
+of its orders are still worth sending, so keeping them is the bot's job.
 
 ## Helpers worth knowing
 
@@ -288,7 +322,8 @@ bots at Normal.
 - [ ] Enemies only through `seenEnemies`, `unitSeenBy`, `knownBuildings`
       and the fog checks
 - [ ] No `Math.random`, clocks or `Math.hypot`/`sin`/`cos`/`atan2`/`pow`
-- [ ] Thinks every second or so, not every tick
+- [ ] Thinks every second or so, not every tick (or, if it thinks more
+      often, never re-sends an order a unit is already following)
 - [ ] Spends from a local `scrap`
 - [ ] Important commands first
 - [ ] An entry in `ALL` with a lowercase `id`, a `label`, a one-line

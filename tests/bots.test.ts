@@ -3,6 +3,7 @@ import { Arena, SIDES, parseSeat, seatName } from "../src/arena/match";
 import { replay, type BattleRecord } from "../src/arena/record";
 import { APM_BURST, capApm } from "../src/sim/ai/apm";
 import { BOTS, BOT_IDS, type Bot } from "../src/sim/ai/bots";
+import { MARSHAL } from "../src/sim/ai/marshal";
 import { STRATEGIES } from "../src/sim/ai/commander";
 import { PROFILES } from "../src/sim/ai/player";
 
@@ -130,5 +131,25 @@ describe("an APM cap", () => {
     expect(n).toBeGreaterThan(30); // it plays, up to the cap
     withinBudget(r, "blue", 30);
     expect(play().turns).toEqual(r.turns);
+  });
+});
+
+describe("Marshal, the bot built for a budget", () => {
+  const actions = (r: BattleRecord, side: string) => r.turns.filter(([, s]) => s === side).reduce((n, [, , c]) => n + c.length, 0);
+  function play(blue: string) {
+    const a = new Arena({ map: "riverlands", seed: 2, seats: { blue: parseSeat(blue), red: parseSeat("bot:balanced") }, maxTicks: 5 * 600 });
+    while (!a.over) a.advance();
+    return a.record;
+  }
+
+  it("plays under its difficulty's cap unless the seat names one", () => {
+    const capped = play("bot:marshal");
+    expect(capped.seats.blue.player).toBe("bot:marshal:normal");
+    const mins = capped.tick / 600;
+    expect(actions(capped, "blue")).toBeLessThanOrEqual(APM_BURST + MARSHAL.normal.apm * mins);
+    expect(actions(capped, "blue")).toBeGreaterThan(MARSHAL.normal.apm * mins * 0.5); // (it uses its budget)
+    const loose = play("bot:marshal@apm=200");
+    expect(loose.seats.blue.player).toBe("bot:marshal:normal@apm=200");
+    expect(actions(loose, "blue")).toBeGreaterThan(actions(capped, "blue"));
   });
 });

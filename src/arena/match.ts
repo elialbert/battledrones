@@ -74,10 +74,12 @@ export function parseSeat(s: string): SeatSpec {
 
 export const seatName = (s: SeatSpec) => (s.kind === "bot" ? botSeat(s.bot, s.difficulty, s.apm) : s.player ?? "agent");
 
-/** A bot seat's bot, capped if the seat says so. */
+/** A bot seat's bot, capped if the seat (or else the bot itself) says so. */
 function seatBot(spec: SeatSpec & { kind: "bot" }, side: Faction, seed: number): Bot {
-  const bot = BOTS[spec.bot]!.create(side, hash32(seed, side === "blue" ? 1 : 2), spec.difficulty);
-  return spec.apm ? capApm(bot, spec.apm) : bot;
+  const def = BOTS[spec.bot]!;
+  const bot = def.create(side, hash32(seed, side === "blue" ? 1 : 2), spec.difficulty);
+  const apm = spec.apm ?? def.apm?.(spec.difficulty);
+  return apm ? capApm(bot, apm) : bot;
 }
 
 export interface ArenaOptions {

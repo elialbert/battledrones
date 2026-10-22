@@ -1,3 +1,4 @@
+import { capApm } from "../sim/ai/apm";
 import { BOTS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
@@ -41,8 +42,10 @@ export interface WatchedBot {
 
 function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty): WatchedBot {
   const def = BOTS[id]!;
+  const bot = def.create(side, aiSeed(side === "blue" ? 2 : 1), difficulty);
+  const apm = def.apm?.(difficulty); // (a bot built for a budget plays under it, as in the arena)
   return {
-    bot: def.create(side, aiSeed(side === "blue" ? 2 : 1), difficulty),
+    bot: apm ? capApm(bot, apm) : bot,
     label: def.label,
     versus: `vs ${def.label} bot${def.difficulties ? ` · ${DIFFICULTY[difficulty].label}` : ""}`,
     opener: def.opener(seed, side),
