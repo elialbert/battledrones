@@ -1359,6 +1359,7 @@ button {
 /* the skirmish opponent: the same picker, under the difficulty */
 .watchpick.opppick {
   --side: var(--line-hi);
+  flex: none; /* (in the menu's column, flex: 1 would grow it into the spare height) */
 }
 .opplabel {
   align-self: center;
