@@ -72,10 +72,11 @@ far thinks every second or so (`if (w.tick % (2 * TICK_RATE) !== 0) return []`),
 and only a quick reflex, like the commander's dodge away from calldowns,
 should run every tick.
 
-**List your most important commands first.** A planned difficulty knob
-caps actions per minute and keeps the first commands a bot returns
-([APM-BOTS.md](APM-BOTS.md)). Put
-defence and the economy before re-sending an attack order.
+**List your most important commands first.** A seat can cap any bot's
+actions per minute, `bot:<id>@apm=100`, and the cap keeps the first commands
+a bot returns and drops the rest ([APM-BOTS.md](APM-BOTS.md)). Put defence
+and the economy before re-sending an attack order. A bot that wants to know
+what got through can implement `sent(cmds)`, below.
 
 ## The interface
 
@@ -83,6 +84,7 @@ defence and the economy before re-sending an attack order.
 // src/sim/ai/bots.ts
 export interface Bot {
   tick(w: World): Command[];  // this tick's commands; usually []
+  sent?(cmds: Command[]): void;  // under an APM cap: the ones that got through
 }
 
 export interface BotDef {

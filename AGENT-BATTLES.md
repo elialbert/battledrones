@@ -370,6 +370,13 @@ had the skirmish AI's Easy 0.75× and Hard 1.3× scrap. Old records keep that
 in `income`, so they still replay.) `ai:<personality>:<difficulty>` still
 works as the old name for a commander bot.
 
+**An APM cap:** `@apm=<n>` after any bot seat, for example
+`bot:ironclad:hard@apm=100`, caps it at n actions (commands) a minute, with
+up to 10 banked for a burst. Commands over the budget are dropped
+(`src/sim/ai/apm.ts`, [APM-BOTS.md](APM-BOTS.md)). `tools/arena.ts apm
+<records…>` measures what each seat sent, and the league prints each seat's
+APM.
+
 A new bot is a module under `src/sim/ai/` and an entry in the registry.
 **[BOTS.md](BOTS.md)** is the guide: the rules (fair, deterministic,
 cheap), the order vocabulary, the helpers, a worked example, and how to test

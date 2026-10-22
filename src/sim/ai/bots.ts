@@ -1,7 +1,8 @@
 /**
  * Bots: every AI that can take a seat, by id. The arena seats them as
  * `bot:<id>` or `bot:<id>:<difficulty>` (AGENT-BATTLES.md "Bot seats"), to
- * play a model or each other (tools/arena.ts league).
+ * play a model or each other (tools/arena.ts league). `@apm=<n>` after either
+ * caps its actions per minute (ai/apm.ts, APM-BOTS.md).
  *
  * Every bot plays by the same rules and fog of war as a player: it reads the
  * world as its side could see it and returns ordinary commands. None gets an
@@ -22,6 +23,12 @@ import type { Command, Faction, World } from "../types";
 export interface Bot {
   /** This tick's commands (called every tick; most ticks it has none). */
   tick(w: World): Command[];
+  /**
+   * Under an APM cap (ai/apm.ts capApm), the commands of this tick's that got
+   * through: the first ones, the rest dropped. Uncapped, everything it returns
+   * is sent and this isn't called.
+   */
+  sent?(cmds: Command[]): void;
 }
 
 export interface BotDef {
@@ -98,6 +105,6 @@ export const BOT_IDS: string[] = Object.keys(BOTS);
 
 export const isBotId = (s: string): boolean => Object.hasOwn(BOTS, s);
 
-/** A bot's seat in a battle record: "bot:rush:hard", or "bot:novice" for one with no difficulties. */
-export const botSeat = (id: string, difficulty: Difficulty): string =>
-  BOTS[id]!.difficulties ? `bot:${id}:${difficulty}` : `bot:${id}`;
+/** A bot's seat in a battle record: "bot:rush:hard", "bot:novice" for one with no difficulties, "bot:rush:hard@apm=100" capped. */
+export const botSeat = (id: string, difficulty: Difficulty, apm?: number): string =>
+  `${BOTS[id]!.difficulties ? `bot:${id}:${difficulty}` : `bot:${id}`}${apm ? `@apm=${apm}` : ""}`;

@@ -8,12 +8,14 @@
 //   npx vite-node tools/arena.ts bots
 //   npx vite-node tools/arena.ts replay battles/<file>.json
 //   npx vite-node tools/arena.ts stats battles/*.json [--detail]
+//   npx vite-node tools/arena.ts apm battles/*.json
 //   npx vite-node tools/arena.ts watch battles/<file>.json
 //   npx vite-node tools/arena.ts upgrade battles/<file>.json [...] [--commit <sha>]
 //   npx vite-node tools/arena.ts pin --version v11 battles/<file>.json [...]
 //
 // Seats: `bot:<id>` or `bot:<id>:<difficulty>` (the game's own AIs, listed by
-// `bots`; `ai:<personality>:<difficulty>` is the old name for a commander bot),
+// `bots`), either with `@apm=<n>` to cap its actions per minute (APM-BOTS.md;
+// `ai:<personality>:<difficulty>` is the old name for a commander bot),
 // `scripted` or `scripted:<file.json>` (a fixed script, for tests), and in
 // `serve` mode `seat` (an outside agent playing through the loopback HTTP or
 // MCP seat URL). Models play through LLM and the llm-tools-battledrones plugin:
@@ -182,12 +184,15 @@ function schedule(o: ReturnType<typeof matchArgs>) {
   return maps.flatMap((map) => Array.from({ length: seeds }, (_, i) => ({ map, seed: firstSeed + i })));
 }
 
-/** Every map and seed twice, the sides swapped: a's wins, b's wins, draws. */
+/** Every map and seed twice, the sides swapped: a's wins, b's wins, draws; and each seat's actions and ticks played. */
 function mirrorPairs(o: ReturnType<typeof matchArgs>, games: { map: string; seed: number }[], a: string, b: string) {
-  const tally = { a: 0, b: 0, draw: 0 };
+  const tally = { a: 0, b: 0, draw: 0, actions: { a: 0, b: 0 }, ticks: 0 };
   for (const { map, seed } of games)
     for (const [blue, red] of [[a, b], [b, a]] as const) {
       const r = playLocal({ ...o, map, seed }, blue, red, !flag("no-records"));
+      tally.actions.a += actionsOf(r, blue === a ? "blue" : "red").total;
+      tally.actions.b += actionsOf(r, blue === a ? "red" : "blue").total;
+      tally.ticks += r.tick;
       const w = r.end?.winner;
       if (!w) tally.draw++;
       else if ((w === "blue" ? blue : red) === a) tally.a++;
@@ -202,7 +207,8 @@ async function series() {
   const a = arg("a") ?? die("series needs --a and --b");
   const b = arg("b") ?? die("series needs --a and --b");
   const t = mirrorPairs(o, schedule(o), a, b);
-  console.log(`\n${a}: ${t.a} wins, ${b}: ${t.b} wins, ${t.draw} draws`);
+  const apm = (n: number) => Math.round(n / (t.ticks / TICK_RATE / 60));
+  console.log(`\n${a}: ${t.a} wins (${apm(t.actions.a)} APM), ${b}: ${t.b} wins (${apm(t.actions.b)} APM), ${t.draw} draws`);
 }
 
 /** A round robin: every pair of seats plays mirror pairs on every map and seed. */
@@ -212,8 +218,8 @@ async function league() {
   if (seats.length < 2) die("league needs two or more seats: --bots bot:rush,bot:decent,…");
   for (const s of seats) seatOf(s, false); // (a bad seat stops it before the first game)
   const games = schedule(o);
-  // [wins, losses, draws] per seat, and wins of the row seat over the column seat
-  const table = new Map(seats.map((s) => [s, [0, 0, 0]]));
+  // [wins, losses, draws, actions, ticks] per seat, and wins of the row seat over the column seat
+  const table = new Map(seats.map((s) => [s, [0, 0, 0, 0, 0]]));
   const h2h = new Map<string, number>();
   for (let i = 0; i < seats.length; i++)
     for (let j = i + 1; j < seats.length; j++) {
@@ -226,16 +232,21 @@ async function league() {
       table.get(b)![1]! += t.a;
       table.get(a)![2]! += t.draw;
       table.get(b)![2]! += t.draw;
+      table.get(a)![3]! += t.actions.a;
+      table.get(b)![3]! += t.actions.b;
+      table.get(a)![4]! += t.ticks;
+      table.get(b)![4]! += t.ticks;
       h2h.set(`${a} ${b}`, t.a);
       h2h.set(`${b} ${a}`, t.b);
     }
   const per = 2 * games.length;
   const w = Math.max(...seats.map((s) => s.length));
   console.log(`\nleague: ${games.length} map/seed pairs, ${per} games per pairing (sides swapped)\n`);
-  console.log(`${"".padEnd(w)}  ${"won".padStart(5)} ${"lost".padStart(5)} ${"drew".padStart(5)}   win%`);
+  console.log(`${"".padEnd(w)}  ${"won".padStart(5)} ${"lost".padStart(5)} ${"drew".padStart(5)}   win%   APM`);
   for (const s of [...seats].sort((x, y) => table.get(y)![0]! - table.get(x)![0]!)) {
-    const [won, lost, drew] = table.get(s)!;
-    console.log(`${s.padEnd(w)}  ${String(won).padStart(5)} ${String(lost).padStart(5)} ${String(drew).padStart(5)}   ${((100 * won!) / (won! + lost! + drew!)).toFixed(0).padStart(4)}`);
+    const [won, lost, drew, actions, ticks] = table.get(s)!;
+    const apm = Math.round(actions! / (ticks! / TICK_RATE / 60));
+    console.log(`${s.padEnd(w)}  ${String(won).padStart(5)} ${String(lost).padStart(5)} ${String(drew).padStart(5)}   ${((100 * won!) / (won! + lost! + drew!)).toFixed(0).padStart(4)}  ${String(apm).padStart(4)}`);
   }
   console.log(`\nhead to head (row's wins over column, of ${per}):`);
   console.log(`${"".padEnd(w + 5)}${seats.map((_, i) => `#${i + 1}`.padStart(4)).join("")}`);
@@ -253,6 +264,7 @@ function bots() {
   }
   console.log(`\nCommander bots also take a difficulty, bot:<id>:<${Object.keys(DIFFICULTY).join("|")}> (normal if left out):`);
   console.log("it changes how fast they react, how many harvesters they keep and when they attack, never their income.");
+  console.log(`Any bot takes an actions-per-minute cap, bot:<id>[:<difficulty>]@apm=<n>: it drops the commands it can't pay for.`);
 }
 
 /** Re-run a record, in a worktree at its commit when the sim has changed since. */
@@ -334,6 +346,53 @@ function stats() {
   if (tokens.size) {
     console.log("\ntokens per game (input / cached / output)");
     for (const [k, t] of tokens) console.log(`  ${k.padEnd(28)} ${Math.round(t.input / t.games)} / ${Math.round(t.cached / t.games)} / ${Math.round(t.output / t.games)}`);
+  }
+}
+
+/** A side's actions in a record (one per command): the total, per minute of play, and by command type. */
+function actionsOf(r: BattleRecord, side: Faction) {
+  const perMinute = Array.from({ length: Math.max(1, Math.ceil(r.tick / (60 * TICK_RATE))) }, () => 0);
+  const mix = new Map<string, number>();
+  let total = 0;
+  for (const [tick, s, cmds] of r.turns) {
+    if (s !== side) continue;
+    total += cmds.length;
+    perMinute[Math.min(perMinute.length - 1, Math.floor(tick / (60 * TICK_RATE)))]! += cmds.length;
+    for (const c of cmds) mix.set(c.type, (mix.get(c.type) ?? 0) + 1);
+  }
+  return { total, perMinute, mix };
+}
+
+/** Actions per minute by seat across records: the average, the busiest minute, and the command mix. */
+function apm() {
+  const files = positional();
+  if (!files.length) die("apm <record.json> [...]");
+  const by = new Map<string, { total: number; ticks: number; peak: number; games: number; mix: Map<string, number> }>();
+  for (const f of files) {
+    const r = readRecord(f);
+    if (!r.tick) continue;
+    const mins = r.tick / TICK_RATE / 60;
+    const line: string[] = [];
+    for (const s of SIDES) {
+      const a = actionsOf(r, s);
+      // (a part minute at the end would understate its peak: only whole minutes count, unless there are none)
+      const whole = a.perMinute.slice(0, Math.max(1, Math.floor(mins)));
+      const peak = Math.max(...whole);
+      line.push(`${s} ${who(r, s)} ${Math.round(a.total / mins)} APM (peak ${peak})`);
+      const t = by.get(who(r, s)) ?? { total: 0, ticks: 0, peak: 0, games: 0, mix: new Map() };
+      t.total += a.total;
+      t.ticks += r.tick;
+      t.peak = Math.max(t.peak, peak);
+      t.games++;
+      for (const [k, n] of a.mix) t.mix.set(k, (t.mix.get(k) ?? 0) + n);
+      by.set(who(r, s), t);
+    }
+    console.log(`${basename(f)}: ${clock(r.tick)}: ${line.join(", ")}`);
+  }
+  console.log("\nby seat: average APM, busiest minute, commands (share of all)");
+  for (const [k, t] of [...by].sort()) {
+    const mix = [...t.mix].sort((x, y) => y[1] - x[1]).map(([c, n]) => `${c} ${Math.round((100 * n) / t.total)}%`).join(", ");
+    console.log(`  ${k.padEnd(28)} ${String(Math.round(t.total / (t.ticks / TICK_RATE / 60))).padStart(4)}  ${String(t.peak).padStart(4)}  (${t.games} games)  ${mix}`);
   }
 }
 
@@ -450,7 +509,7 @@ function pin() {
   }
 }
 
-const commands: Record<string, () => unknown> = { run, serve, series, league, bots, replay: replayCmd, stats, watch, upgrade, pin };
+const commands: Record<string, () => unknown> = { run, serve, series, league, bots, replay: replayCmd, stats, apm, watch, upgrade, pin };
 const fn = cmd ? commands[cmd] : undefined;
 if (!fn) die(`usage: npx vite-node tools/arena.ts <${Object.keys(commands).join("|")}> [options]\nsee the header of tools/arena.ts and AGENT-BATTLES.md`);
 await fn();

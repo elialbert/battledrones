@@ -11,12 +11,14 @@
  *    loopback HTTP seats, a coding agent through MCP, a scripted seat in
  *    tests). Its turn is open until it calls endRound or wait.
  *  - "bot": one of the game's own AIs (sim/ai/bots.ts), `bot:<id>` or
- *    `bot:<id>:<difficulty>`; `ai:<personality>:<difficulty>` is the old
- *    name for a commander bot. No bot gets an income handicap.
+ *    `bot:<id>:<difficulty>`, with `@apm=<n>` to cap its actions a minute;
+ *    `ai:<personality>:<difficulty>` is the old name for a commander bot.
+ *    No bot gets an income handicap.
  *
  * Nothing here touches the network or the file system: tools/arena.ts
  * drives it, and tests drive it directly.
  */
+import { capApm } from "../sim/ai/apm";
 import { BOTS, BOT_IDS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import { TICK_RATE } from "../sim/balance";
@@ -47,14 +49,15 @@ export const SIDES: Faction[] = ["blue", "red"];
 
 export type SeatSpec =
   | { kind: "agent"; player?: string; settings?: Record<string, unknown> }
-  | { kind: "bot"; bot: string; difficulty: Difficulty };
+  | { kind: "bot"; bot: string; difficulty: Difficulty; apm?: number };
 
 /**
  * "bot:rush:hard" (or the old "ai:rush:hard") → a bot seat; anything else is
  * an agent seat named by it. A bare "ai" is the Balanced commander.
+ * "@apm=<n>" at the end caps the bot at n actions a minute (ai/apm.ts).
  */
 export function parseSeat(s: string): SeatSpec {
-  const m = /^(bot|ai)(?::([a-z]+))?(?::([a-z]+))?$/.exec(s.trim());
+  const m = /^(bot|ai)(?::([a-z]+))?(?::([a-z]+))?(?:@apm=([0-9]+))?$/.exec(s.trim());
   if (!m) return { kind: "agent", player: s };
   if (m[1] === "bot" && !m[2]) throw new Error(`a bot seat names its bot, bot:<id>: ${BOT_IDS.join(", ")}`);
   const bot = m[2] ?? "balanced";
@@ -63,10 +66,19 @@ export function parseSeat(s: string): SeatSpec {
     throw new Error(`unknown ${m[1] === "ai" ? "AI personality" : "bot"} "${bot}": ${BOT_IDS.filter((id) => m[1] === "bot" || BOTS[id]!.difficulties).join(", ")}`);
   if (!(difficulty in DIFFICULTY)) throw new Error(`unknown difficulty "${difficulty}": ${Object.keys(DIFFICULTY).join(", ")}`);
   if (m[3] && !BOTS[bot]!.difficulties) throw new Error(`bot "${bot}" has no difficulties: seat it as bot:${bot}`);
-  return { kind: "bot", bot, difficulty };
+  if (m[4] === undefined) return { kind: "bot", bot, difficulty };
+  const apm = Number(m[4]);
+  if (apm < 1) throw new Error(`an APM cap is 1 or more: ${s}`);
+  return { kind: "bot", bot, difficulty, apm };
 }
 
-export const seatName = (s: SeatSpec) => (s.kind === "bot" ? botSeat(s.bot, s.difficulty) : s.player ?? "agent");
+export const seatName = (s: SeatSpec) => (s.kind === "bot" ? botSeat(s.bot, s.difficulty, s.apm) : s.player ?? "agent");
+
+/** A bot seat's bot, capped if the seat says so. */
+function seatBot(spec: SeatSpec & { kind: "bot" }, side: Faction, seed: number): Bot {
+  const bot = BOTS[spec.bot]!.create(side, hash32(seed, side === "blue" ? 1 : 2), spec.difficulty);
+  return spec.apm ? capApm(bot, spec.apm) : bot;
+}
 
 export interface ArenaOptions {
   map: string;
@@ -129,7 +141,7 @@ export class Arena {
       const spec = opts.seats[side];
       return {
         side, spec,
-        bot: spec.kind === "bot" ? BOTS[spec.bot]!.create(side, hash32(opts.seed, side === "blue" ? 1 : 2), spec.difficulty) : null,
+        bot: spec.kind === "bot" ? seatBot(spec, side, opts.seed) : null,
         log: new SideLog(side),
         ended: spec.kind === "bot",
         waitUntil: 0,
