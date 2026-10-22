@@ -288,6 +288,23 @@ describe("fighting across water", () => {
   });
 });
 
+describe("a target boxed in by buildings", () => {
+  it("an attack order on a building no path reaches is dropped, not searched for every tick", () => {
+    // an Airpad in the corner, walled in by Radars a tile off: the same ground, and a pocket of
+    // it round the pad (where the search for a path ends up), but no way in
+    const w = createWorld(30, 30);
+    const pad = spawnBuilding(w, "airpad", "red", 0, 0);
+    for (let i = 0; i <= 3; i++) {
+      spawnBuilding(w, "radar", "red", 3, i);
+      if (i < 3) spawnBuilding(w, "radar", "red", i, 3);
+    }
+    const tank = spawnUnit(w, "stinger", "blue", 20.5, 20.5);
+    step(w, [{ type: "attack", faction: "blue", unitIds: [tank.id], targetId: pad.id }]);
+    runTicks(w, 2);
+    expect(w.units.get(tank.id)!.order.type).toBe("idle");
+  });
+});
+
 describe("re-planning when a building goes", () => {
   it("an army detouring round a building wall takes the breach once the building falls", () => {
     const w = createWorld(40, 40);

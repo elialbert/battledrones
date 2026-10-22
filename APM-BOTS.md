@@ -311,6 +311,31 @@ gets a few minutes' peace); Normal and Hard draw the other seven. With
 mutators on, the game draws only plans the rules allow (`strategyFits`);
 the Daily Op plays its personality as a plan.
 
+### Spending and mining (`MARSHAL_ECONOMY`)
+
+Under 14 APM Marshal banked scrap: 1800 on average against the stock
+commander's 430, and mined less (1960 a minute against 2240). Every unit is
+an action, and it managed about 7.5 produce orders a minute whatever else
+changed, so **spending more means buying more with each order**. Every plan
+now adds two commander options (`Strategy` in commander.ts; the stock
+personalities leave them off):
+
+- **`spendDown`**: past 600 scrap, queues a slot deeper per 400 banked (up
+  to 4), picks the dear unit of each choice (Mastodons and Lancers, Hornets),
+  and adds factories past 600 instead of 1000, up to five (`SPEND`).
+- **`depotReach: 5`**: a field 5 tiles from a drop-off (not 9) gets a depot
+  by it, and one more is wanted, early in the order, while there's a field
+  for it, up to four. The first depot goes by the main field (hauls of 2
+  tiles, not 10), and the next where the harvesters move once it runs dry.
+
+Against stock Balanced at Normal (60 games each): no change 67%, spending
+down 83%, both 85%, mining 2530 a minute. Banking was 1400 with spending
+down alone and 2800 with both: the extra income outruns 14 actions a minute.
+At Hard (30 APM) it banks 670, the same as stock Hard. Tried and dropped:
+always the dearest unit (no better), idle factories' orders before deeper
+queues and Rocket Squads from a rich Bay (no change), a Goliath every 60 s
+while rich (no change: games end before it matters).
+
 ### Difficulties: one slider
 
 `MARSHAL` in marshal.ts. Each difficulty sets how fast it thinks and acts,
@@ -329,9 +354,9 @@ drawn:
 
 | | Against stock, same difficulty | Notes |
 |---|---|---|
-| Easy | 72% | 8 APM: 92%; 6 APM, a plan every 5 s: 33%; 5 APM: 11% |
-| Normal | 61% | uncapped micro 58%, 5 or 8 for micro 69% |
-| Hard | 49% (plans forced, 252 games) | uncapped micro 53%, 15 for micro 36% |
+| Easy | 70% of 60 (72% of 36 before `MARSHAL_ECONOMY`) | 8 APM: 92%; 6 APM, a plan every 5 s: 33%; 5 APM: 11% |
+| Normal | 73% of 60 (61% of 36 before) | uncapped micro 58%, 5 or 8 for micro 69% |
+| Hard | 43% of 60 (49% of 252, plans forced, before) | uncapped micro 53%, 15 for micro 36% |
 
 Easy is a steep cliff between 5 and 8 APM. Neither Marshal Easy nor stock
 Easy wins against the scripted novice or beginner players (1 in 36, 5 in
@@ -350,6 +375,18 @@ drawn as above. It keeps the career ladder (stars, XP, tips) and the "vs
 Turtle AI (Normal)" line. The record names the seat `bot:marshal:<difficulty>`.
 Ops keep their scripted commanders, and Watch AI vs AI's 🎲 still plays
 stock Normal commanders.
+
+## Real time
+
+Marshal thinks for about 0.1% of real time (60–90 ms per game minute, at
+most 2 ms in one tick). One 16-minute Hard game took minutes to simulate:
+stock Hard's army had an attack order on Marshal's Airpad and Gantry in a
+corner, boxed in by buildings and the map's edge, and every attacker
+searched the whole map for a path, failed, and searched again the next
+tick (2 ms each, 13000 a minute). An attacker with no path now gives the
+target up (`tickMovement`, tests/movement.test.ts). Left alone: the stock
+commander looks for a field for each idle harvester on every think, up to
+19 ms in a tick late in a game when the near fields are mined out.
 
 ## Open questions
 

@@ -111,10 +111,18 @@ export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   hard: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"]
 };
 
+/**
+ * What every plan adds to its personality: an economy for a budget of
+ * actions. A bank is spent down (each order buys more once scrap piles up),
+ * and depots follow the mining (APM-BOTS.md: against stock Balanced, Normal
+ * went from 67% to 85% of 60 games, mining 2530 scrap a minute, not 1960).
+ */
+export const MARSHAL_ECONOMY: Partial<Strategy> = { spendDown: true, depotReach: 5 };
+
 /** A plan as the commander's personality it plays. */
 export const planStrategy = (name: PlanName): Strategy => {
   const p = MARSHAL_PLANS[name];
-  return { ...STRATEGIES[p.base], ...p.tweak, label: p.label };
+  return { ...STRATEGIES[p.base], ...MARSHAL_ECONOMY, ...p.tweak, label: p.label };
 };
 
 /** The plan a Marshal with this seed draws (from `pool`: the plans the match rules allow). */
@@ -127,8 +135,8 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
  * its base and how sharp it is in a fight. `microApm` is fight micro's share
  * of `apm`, at a human's pace for the level. Each plays about as well as the
  * stock commander at that difficulty does with its income handicap
- * (APM-BOTS.md): against it, Easy won 72% of 36 games, Normal 61%,
- * Hard 49% (each plan alone: 36–69%).
+ * (APM-BOTS.md): against it, Easy won 70% of 60 games, Normal 73%,
+ * Hard 43% (each plan alone, before MARSHAL_ECONOMY: 36–69%).
  */
 export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number; microApm: number }> = {
   easy: { think: 4, react: 3, apm: 7, microApm: 3 },

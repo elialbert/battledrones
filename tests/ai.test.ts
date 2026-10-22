@@ -163,6 +163,42 @@ describe("AI commander", () => {
   }, 120000);
 });
 
+describe("AI on an action budget (Strategy.spendDown, depotReach: ai/marshal.ts plans)", () => {
+  /** The red commander's Fab Plant queue after a few planning passes with a big bank. */
+  function fabQueue(spendDown: boolean) {
+    const w = createMapWorld("proving-grounds");
+    const hq = hqOf(w, "red")!;
+    const fab = spawnBuilding(w, "fab-plant", "red", hq.tx - 4, hq.ty);
+    spawnBuilding(w, "tech-lab", "red", hq.tx + 4, hq.ty);
+    const ai = createAiState("balanced", "normal", 1, spendDown ? { spendDown } : undefined);
+    for (let i = 0; i < 6; i++) {
+      w.factions.red.scrap = 3000;
+      ai.lastDecisionTick = -1000;
+      step(w, tickAi(w, "red", ai));
+    }
+    return fab.queue;
+  }
+
+  it("spends a bank down: deeper queues, and the dear units", () => {
+    expect(fabQueue(false).length).toBeLessThanOrEqual(2);
+    const q = fabQueue(true);
+    expect(q.length).toBeGreaterThanOrEqual(3);
+    // (each order buys more: a Lancer's worth or better on average)
+    expect(q.reduce((v, x) => v + UNITS[x.kind].cost, 0) / q.length).toBeGreaterThanOrEqual(UNITS.lancer.cost);
+  });
+
+  it("puts depots by the fields it mines, one after another", () => {
+    const depotsBy = (tweak?: { depotReach: number }) => {
+      const w = createMapWorld("riverlands");
+      runWithAi(w, 300, createAiState("balanced", "normal", 1, tweak));
+      return [...w.buildings.values()].filter((b) => b.faction === "red" && b.kind === "depot");
+    };
+    const stock = depotsBy();
+    const near = depotsBy({ depotReach: 5 });
+    expect(near.length).toBeGreaterThan(stock.length);
+  });
+});
+
 describe("AI and robot infantry", () => {
   const units = (w: World, f: "blue" | "red", kind?: string) =>
     [...w.units.values()].filter((u) => u.faction === f && (!kind || u.kind === kind));

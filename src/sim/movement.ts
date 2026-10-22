@@ -322,10 +322,13 @@ export function tickMovement(w: World, pausedIds: Set<number>, spots: Map<number
         moveUnitToward(w, u, p.x + (u.x - p.x) * k, p.y + (u.y - p.y) * k);
       } else if (moveUnitToward(w, u, p.x, p.y) && d > reachFor(w, u, o.targetId)) {
         // (combat pauses it once in range.) Got as close as the ground allows and still out of
-        // range of a target across the water: give it up, so the unit fights what it can reach
+        // range of a target across the water, or with no path at all (its near side boxed in by
+        // buildings and the map's edge): give it up, so the unit fights what it can reach — and
+        // doesn't search the whole map for a path every tick
         const mc = moveClassOf(u.kind);
         const here = regionAt(w, Math.floor(u.x), Math.floor(u.y), mc);
-        if (here && regionAt(w, Math.floor(p.x), Math.floor(p.y), mc) !== here) {
+        const noPath = !u.path && !!u.pathGoal;
+        if (noPath || (here && regionAt(w, Math.floor(p.x), Math.floor(p.y), mc) !== here)) {
           u.ignore = { id: o.targetId, until: w.tick + IGNORE_TICKS };
           u.order = { type: "idle" };
         }

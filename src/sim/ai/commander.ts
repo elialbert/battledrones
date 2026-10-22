@@ -97,6 +97,14 @@ export interface Strategy {
   escorts?: number;
   /** No Assembly Bay in its plans, but it builds one for Rocket Squads once it has seen heavy armour (Mastodons, Hornets). */
   bayVsArmour?: boolean;
+  /**
+   * Scrap piling up is spent, not banked: deeper queues, the dearer unit of
+   * each choice, more factories sooner. For a commander on an action budget
+   * (ai/marshal.ts), where each order is worth more when it buys more.
+   */
+  spendDown?: boolean;
+  /** A field this far from the nearest drop-off gets a depot by it (9 if unset): nearer means shorter hauls. */
+  depotReach?: number;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -186,6 +194,9 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
     escorts: 1
   }
 };
+
+/** Strategy.spendDown: scrap counts as piling up past `rich`; a queue slot per `perSlot` banked; more factories past `expandAt`, up to `maxExtra`. Strategy.depotReach: up to `maxDepots` depots. */
+export const SPEND = { rich: 600, perSlot: 400, expandAt: 600, maxExtra: 5, maxDepots: 4 };
 
 export const DIFFICULTY: Record<
   Difficulty,
@@ -408,7 +419,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     // an outpost goes up in its Goliath's ring (ai/goliath.ts)
     let spot: { tx: number; ty: number } | null = outpostSpot(w, faction, s, kind, enemyHqPos);
     if (!spot && kind === "depot" && hq) {
-      const site = depotSite(w, faction, hqC);
+      const site = depotSite(w, faction, hqC, s.strategy.depotReach);
       spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
     } else if (!spot) spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
     if (spot) cmds.push({ type: "placeBuilding", faction, tx: spot.tx, ty: spot.ty });
@@ -489,8 +500,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a ground army that is mostly robot infantry: splash and rapid fire answer it, not big guns
   const infantryHeavy = s.seenInfantry >= 3 && s.seenInfantry >= 0.4 * s.seenGround;
 
-  // floating scrap? keep queues two deep
-  const depth = f.scrap > 700 ? 2 : 1;
+  // floating scrap? keep queues two deep (spending down: deeper, and dearer units)
+  const rich = !!s.strategy.spendDown && f.scrap > SPEND.rich;
+  const depth = s.strategy.spendDown ? 1 + Math.min(3, Math.floor(f.scrap / SPEND.perSlot)) : f.scrap > 700 ? 2 : 1;
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
   // Rockets for armour (and Ironclad's Mastodon escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers. Under Infantry
@@ -558,8 +570,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
         kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
       else if (tech && s.seenHeavy >= 2 && r < 0.6) kind = "lancer"; // lasers burn through armour
-      else if (tech && (s.strategy.heavy ? r < 0.45 : r < 0.25)) kind = "mastodon";
-      else if (tech && r < (s.strategy.heavy ? 0.8 : 0.5)) kind = "lancer";
+      else if (tech && (s.strategy.heavy || rich ? r < 0.45 : r < 0.25)) kind = "mastodon"; // (rich: the most scrap an order buys)
+      else if (tech && (rich || r < (s.strategy.heavy ? 0.8 : 0.5))) kind = "lancer";
       produce(fab, kind);
     }
   };
@@ -597,7 +609,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         (have("mender") < 1 && army.some(isWoundedVeteran))
       )
         kind = "mender";
-      else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < 0.25 + s.seenHeavy * 0.08))
+      else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < (rich ? 0.6 : 0.25) + s.seenHeavy * 0.08))
         kind = "hornet";
       else if (s.strategy.heavy && !airlifts && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks (not with islands to clear)
       else kind = "wasp";
@@ -624,10 +636,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     infantryWar ? b.kind === "assembly-bay" : b.kind === "fab-plant" || b.kind === "airpad"
   );
   if (
-    f.scrap > 1000 &&
+    f.scrap > (s.strategy.spendDown ? SPEND.expandAt : 1000) &&
     !f.pending &&
     wanted === null &&
-    s.extraProduction < 3 &&
+    s.extraProduction < (s.strategy.spendDown ? SPEND.maxExtra : 3) &&
     producers.length > 0 &&
     producers.every((b) => b.queue.length > 0)
   )
@@ -1070,6 +1082,11 @@ function nextBuilding(
     for (const k of BUILDINGS.gantry.requiresAll ?? []) if (!order.includes(k)) order.push(k);
     order.push("gantry");
   }
+  // depots follow the mining (Strategy.depotReach): one more, early, while there's a field for it
+  if (s.strategy.depotReach !== undefined) {
+    const depots = Math.min(SPEND.maxDepots, Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
+    for (let i = order.filter((k) => k === "depot").length; i < depots; i++) order.splice(Math.min(order.length, 3), 0, "depot");
+  }
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
@@ -1085,7 +1102,7 @@ function nextBuilding(
     if (kind === "depot" && depotsSkipped < 3) {
       // only worth it if there's a distant field we can actually reach
       const hq = hqOf(w, faction);
-      if (!hq || !depotSite(w, faction, buildingCenter(hq))) {
+      if (!hq || !depotSite(w, faction, buildingCenter(hq), s.strategy.depotReach)) {
         depotsSkipped++;
         continue;
       }
@@ -1101,7 +1118,8 @@ function nextBuilding(
 function depotSite(
   w: World,
   faction: Faction,
-  hqC: { x: number; y: number }
+  hqC: { x: number; y: number },
+  reach = 9
 ): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   let best: { x: number; y: number; d: number } | null = null;
@@ -1112,7 +1130,7 @@ function depotSite(
       const drop = nearestDropOff(w, faction, tx + 0.5, ty + 0.5);
       if (!drop) continue;
       const dc = buildingCenter(drop);
-      if (dist(tx + 0.5, ty + 0.5, dc.x, dc.y) < 9) continue; // already served
+      if (dist(tx + 0.5, ty + 0.5, dc.x, dc.y) < reach) continue; // already served
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
       if (!best || d < best.d) best = { x: tx + 0.5, y: ty + 0.5, d };
     }
