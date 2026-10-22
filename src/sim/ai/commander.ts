@@ -275,9 +275,11 @@ export interface AiState {
    * How its Goliaths play (ai/goliath.ts): "expand" (ai/marshal.ts) never
    * walks one with a wave or to a forward post, only to fields on our half
    * of the map, falls back when it's outgunned on the way, has the Depot
-   * built as it arrives and moves on to the next field once the Depot stands.
+   * built as it arrives and moves on to the next field once the Depot stands,
+   * and covers our army's fights near it, dug in behind the line. "rush" (Marshal's Juggernaut plan) has the Gantry early and pushes for
+   * the enemy's HQ with its Goliath and a big escort.
    */
-  goliathStyle?: "expand";
+  goliathStyle?: "expand" | "rush";
 }
 
 /**

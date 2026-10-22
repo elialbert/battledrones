@@ -40,7 +40,7 @@ import { STRATEGIES, createAiState, tickAi, type Difficulty, type Strategy, type
 import { USELESS, effectivenessVs, seenEnemies } from "./intel";
 import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
-import { goliathsOf } from "../goliath";
+import { goliathsOf, isLifted } from "../goliath";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
 
@@ -67,14 +67,18 @@ export interface MarshalOptions {
   fight?: Partial<Fight>;
 }
 
-export type PlanName = StrategyName | "turtle" | "greed";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and two of its
- * own built on one of them (`base`: its opener and the tables keyed by
- * personality, ai/goliath.ts and ai/airlift.ts).
+ * The game plans Marshal picks from: the stock personalities, and three of
+ * its own built on one of them (`base`: its opener and the tables keyed by
+ * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
+ * play (AiState.goliathStyle), "expand" unless it says.
  */
-export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy> }> = {
+export const MARSHAL_PLANS: Record<
+  PlanName,
+  { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush" }
+> = {
   balanced: { base: "balanced", label: "Balanced", fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
   /** (no fast version: Rush is the plan that skips the economy; with a depot it beat the rest of the field more often) */
   rush: { base: "rush", label: "Rush" },
@@ -109,6 +113,24 @@ export const MARSHAL_PLANS: Record<PlanName, { base: StrategyName; label: string
       assaultValue: 2400,
       harassGroup: Infinity
     }
+  },
+  /**
+   * For fun, and weaker than the rest (APM-BOTS.md): straight to the
+   * Gantry's four prerequisites, the Gantry from 1:00, most of the income
+   * saved for the Goliath, and the Goliath pushes for their HQ with the army
+   * round it (ai/goliath.ts "RUSHERS"). No raids, and waves only once the
+   * army is big: the army is the Goliath's escort.
+   */
+  juggernaut: {
+    base: "ironclad",
+    label: "Juggernaut",
+    goliath: "rush",
+    tweak: {
+      buildOrder: ["fab-plant", "tech-lab", "airpad", "assembly-bay", "depot", "turret"],
+      harvesters: 6,
+      assaultValue: 5000,
+      harassGroup: Infinity
+    }
   }
 };
 
@@ -127,14 +149,15 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
  * "Retuning the levels"). Easy plays the slow plans, no Rush and no Greed (a
  * beginner gets a few minutes' peace, and Greed is the strongest plan);
  * Normal all of them but Skyforce (an all-air plan needs more hands, and it
- * won 27% of a round robin at 50 APM); Hard the four strongest.
+ * won 27% of a round robin at 50 APM); Hard the four strongest. Juggernaut,
+ * the fun one, comes up everywhere but Easy (Easy meets no Goliath).
  */
 export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   easy: ["balanced", "boom", "turtle"],
-  casual: ["balanced", "boom", "turtle", "airswarm"],
-  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed"],
-  hard: ["balanced", "airswarm", "ironclad", "greed"],
-  brutal: ["balanced", "airswarm", "ironclad", "greed"]
+  casual: ["balanced", "boom", "turtle", "airswarm", "juggernaut"],
+  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed", "juggernaut"],
+  hard: ["balanced", "airswarm", "ironclad", "greed", "juggernaut"],
+  brutal: ["balanced", "airswarm", "ironclad", "greed", "juggernaut"]
 };
 
 /**
@@ -237,6 +260,9 @@ const FINISH_MIN = 3000;
 const FINISH_EVERY = 10;
 /** An enemy unit unseen this long no longer counts toward its army (ticks). */
 const SIGHTING_TTL = 90 * TICK_RATE;
+/** A lost fight falls back to a Goliath of ours this close (tiles) to it and nearer home, one above this share of its HP. */
+const GOLIATH_COVER_REACH = 16;
+const GOLIATH_COVER_HP = 0.35;
 /** Seconds a fight it broke off keeps its units out of the plan's waves. */
 const RETREAT_HOLD = 8;
 
@@ -325,7 +351,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil, ...opts.tweak });
   s.fair = true;
   s.interval = opts.think;
-  s.goliathStyle = "expand"; // (a Goliath alone is a target: it expands the economy, it never leads an attack)
+  // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
+  s.goliathStyle = plan.goliath ?? "expand";
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
 
   /** The plan's orders not yet sent. */
@@ -495,6 +522,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const defences = [...w.buildings.values()].filter(
       (b) => b.faction !== side && BUILDINGS[b.kind].dps > 0 && isVisible(w, side, b.tx, b.ty)
     );
+    // our Goliaths that can fight: they count in a fight by them, and a lost fight falls back to one
+    const goliaths = goliathsOf(w, side).filter((g) => !isLifted(g) && g.hp > GOLIATH_COVER_HP * UNITS.goliath.hp);
     const inFight = army.filter((u) => enemies.some((e) => dist(u.x, u.y, e.x, e.y) <= UNITS[u.kind].range + 2.5));
     const fightIds = new Set(inFight.map((u) => u.id));
 
@@ -526,11 +555,16 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       });
       // --- a lost fight away from home: everyone in it falls back toward home
       if (!finishing && home && dist(cx, cy, home.x, home.y) > K.homeStand) {
-        const mine = strength(ours, theirs, towers.length > 0);
+        const by = goliaths.filter((g) => dist(g.x, g.y, cx, cy) <= FIGHT_RADIUS);
+        const mine = strength([...ours, ...by], theirs, towers.length > 0);
         const them =
           strength(theirs, ours, false) + towers.reduce((a, b) => a + BUILDINGS[b.kind].dps, 0) * towers.reduce((a, b) => a + b.hp, 0);
         if (mine < K.breakOff * them) {
-          const back = toward(cx, cy, home, 10);
+          // back under a Goliath of ours between the fight and home (its guns cover the retreat), else toward home
+          const cover = goliaths
+            .filter((g) => dist(g.x, g.y, cx, cy) <= GOLIATH_COVER_REACH && dist(g.x, g.y, home.x, home.y) < dist(cx, cy, home.x, home.y))
+            .sort((a, b) => dist(a.x, a.y, cx, cy) - dist(b.x, b.y, cx, cy) || a.id - b.id)[0];
+          const back = cover ? toward(cover.x, cover.y, home, 2) : toward(cx, cy, home, 10);
           const ids = ours.filter((u) => u.kind !== "mender").map((u) => u.id);
           for (const id of ids) {
             leaving.add(id);

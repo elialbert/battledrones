@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { STRATEGIES, createAiState, tickAi, type AiState, type Difficulty, type StrategyName } from "../src/sim/ai/commander";
 import { canPlaceBuilding } from "../src/sim/economy";
 import { GOLIATH_AI, goliathPhases, goliathSite, liftCondors } from "../src/sim/ai/goliath";
+import { MARSHAL, marshal } from "../src/sim/ai/marshal";
 import { planMenders } from "../src/sim/ai/menders";
 import { BUILDINGS, GOLIATH, TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
@@ -309,6 +310,103 @@ describe("an expander's Goliath (AiState.goliathStyle: Marshal's)", () => {
     expect([...kinds]).toEqual(["-"]);
     expect([...phases]).toEqual(["guard"]);
     expect(away).toBeLessThan(GOLIATH_AI.expandGuard);
+  }, 30000);
+});
+
+describe("an expander's Goliath backs the army up", () => {
+  /** Riverlands: red's Goliath on guard by home, `army` stingers of red's in a fight with blue's a few tiles out (both too tough to die). */
+  function fight(army: number) {
+    const w = createMapWorld("riverlands");
+    const ai = createAiState("boom", "normal", 1);
+    ai.goliathStyle = "expand";
+    w.scrap.fill(0); // (nothing to expand to: it guards)
+    const hqB = hqOf(w, "red")!;
+    spawnBuilding(w, "tech-lab", "red", hqB.tx - 3, hqB.ty); // (squads at the Goliath)
+    w.factions.red.scrap = 2500;
+    const hq = buildingCenter(hqB);
+    const g = spawnUnit(w, "goliath", "red", hq.x - 3, hq.y + 5);
+    const at = { x: hq.x - 10, y: hq.y + 12 };
+    for (let i = 0; i < army; i++) spawnUnit(w, "stinger", "red", at.x + (i % 3), at.y + Math.floor(i / 3)).hp = 1e6;
+    const foes = [0, 1, 2, 3].map((i) => spawnUnit(w, "stinger", "blue", at.x + 1 + (i % 2), at.y + 3 + Math.floor(i / 2)));
+    for (const f of foes) f.hp = 1e6;
+    return { w, ai, g, at, foes };
+  }
+
+  it("digs in behind a fight of ours near it, trains squads into it, and packs up once it's over", () => {
+    const { w, ai, g, at, foes } = fight(6);
+    const { cmds } = runRed(w, 40, ai);
+    expect(goliathSite(ai, g.id)?.kind).toBe("cover");
+    expect(isAnchored(g)).toBe(true);
+    // behind the line, toward home, its mortars in reach
+    expect(Math.hypot(g.x - at.x, g.y - at.y)).toBeLessThan(GOLIATH.weapons.mortars.range);
+    expect(cmds.some((c) => c.type === "produce" && c.buildingId === g.id)).toBe(true);
+    // the fight over: back to what it was doing
+    for (const f of foes) w.units.delete(f.id);
+    runRed(w, GOLIATH_AI.coverLinger + 15, ai);
+    expect(isAnchored(g)).toBe(false);
+    expect(goliathSite(ai, g.id)?.kind).not.toBe("cover");
+  }, 30000);
+
+  it("never a fight of its own: with no army of ours in it, it stays on guard", () => {
+    const { w, ai, g } = fight(0);
+    runRed(w, 30, ai);
+    expect(goliathSite(ai, g.id)).toBeNull();
+    expect(goliathPhases(ai).get(g.id)).toBe("guard");
+  });
+
+  it("Marshal's lost fight falls back to a Goliath of ours between it and home", () => {
+    const w = createMapWorld("riverlands");
+    const home = buildingCenter(hqOf(w, "red")!);
+    // a fight well out from home, lost: four stingers against six Mastodons; our Goliath on the way home
+    const at = { x: home.x - 20, y: home.y + 20 };
+    const ours = [0, 1, 2, 3].map((i) => spawnUnit(w, "stinger", "red", at.x + (i % 2), at.y + Math.floor(i / 2)));
+    for (let i = 0; i < 6; i++) spawnUnit(w, "mastodon", "blue", at.x - 2 + (i % 3), at.y + 3 + Math.floor(i / 3));
+    const g = spawnUnit(w, "goliath", "red", at.x + 7, at.y - 7);
+    hqOf(w, "blue")!.hp = 1e9;
+    const bot = marshal("red", 1, "hard", { ...MARSHAL.hard, strategy: "balanced" });
+    const back: { x: number; y: number }[] = [];
+    for (let i = 0; i < 5 * TICK_RATE; i++) {
+      tickFog(w);
+      const cmds = bot.tick(w);
+      // (how far from the Goliath as the order went out: it walks too)
+      for (const c of cmds) if (c.type === "move" && ours.some((u) => c.unitIds.includes(u.id))) back.push({ x: c.x - g.x, y: c.y - g.y });
+      step(w, cmds);
+    }
+    expect(back.length).toBeGreaterThan(0);
+    expect(Math.hypot(back[0]!.x, back[0]!.y)).toBeLessThanOrEqual(2.5);
+  });
+});
+
+describe("a rusher's Goliath (Marshal's Juggernaut)", () => {
+  it("has the Gantry up early, with no army to speak of", () => {
+    const gantry = (style?: "rush") => {
+      const { w, ai } = midGame("ironclad", "normal", GOLIATH_AI.rushFrom + 10, true);
+      ai.goliathStyle = style;
+      for (const u of units(w, "red", "stinger")) w.units.delete(u.id);
+      const { cmds } = runRed(w, 20, ai);
+      return cmds.some((c) => c.type === "startBuilding" && c.building === "gantry");
+    };
+    expect(gantry()).toBe(false);
+    expect(gantry("rush")).toBe(true);
+  }, 30000);
+
+  it("pushes for their HQ only with the army round it", () => {
+    const w = createMapWorld("riverlands");
+    const ai = createAiState("ironclad", "normal", 1);
+    ai.goliathStyle = "rush";
+    const hq = buildingCenter(hqOf(w, "red")!);
+    const enemy = buildingCenter(hqOf(w, "blue")!);
+    const g = spawnUnit(w, "goliath", "red", hq.x - 3, hq.y + 5);
+    const far = () => Math.hypot(g.x - enemy.x, g.y - enemy.y);
+    const start = far();
+    // alone: it waits
+    runRed(w, 20, ai);
+    expect(goliathPhases(ai).get(g.id)).toBe("push");
+    expect(start - far()).toBeLessThan(3);
+    // with an army by it: on toward their HQ
+    for (let i = 0; i < 6; i++) spawnUnit(w, "stinger", "red", g.x - 2 + (i % 3), g.y + 2 + Math.floor(i / 3));
+    runRed(w, 40, ai);
+    expect(start - far()).toBeGreaterThan(15);
   }, 30000);
 });
 

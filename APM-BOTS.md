@@ -631,6 +631,43 @@ Marshal, 30 games each on five maps: Hard 13–15 (2 draws), Normal 14–15
 (1 draw). That is level within the noise, since most games are decided
 before the Goliaths matter.
 
+### Backing the army up
+
+Planting a Depot and then walking off to join a battle would bring back
+what went wrong before. A Goliath walks at 1 tile a second, slower than the
+army, so it trails a wave. When the wave dies or pulls back, it is left
+behind in the middle with no support. Instead the fight has to come to it:
+
+- **Covering a fight** (`coverSpot`). A Goliath on guard, or walking out to
+  a field, takes on a fight within 18 tiles. The fight must be on our half
+  of the map and have our army in it, worth 450 or more, so it is never a
+  fight of its own. It digs in 5 tiles behind the line, toward home, where
+  its mortars (range 8) still reach. Dug in, it can't be shoved, it keeps
+  firing, and it trains up to 4 squads straight into the fight
+  (`coverGarrison`). It packs up 20 s after the last enemy in reach and goes
+  back to expanding.
+- **Covering retreats** (marshal.ts `fights`). A lost fight that Marshal's
+  micro breaks off falls back to a healthy Goliath of ours between the
+  fight and home, within 16 tiles, instead of 10 tiles toward home. A
+  Goliath by a fight also counts toward whether to break it off.
+
+Against the expand-only Marshal, 120 games on Hard: 57–52 with 11 draws,
+level within the noise. With covering Goliaths digging in even mid-fight
+and Juggernaut in the pools, 90 more games: 50–37 with 3 draws (57%).
+
+### Juggernaut: the Goliath rush
+
+A plan for fun (`juggernaut`, on Ironclad, `goliathStyle: "rush"`). It goes
+straight for the Gantry's four prerequisites, puts up the Gantry from 1:00
+whatever the army or income, and saves 80% of its income for the Goliath.
+The first Goliath walks out at about 3:30. It pushes for the enemy HQ 6
+tiles at a time with an escort worth 1.2× its price. It goes on only with
+700 of our army within 8 tiles, waits for them otherwise, and falls back to
+the staging point after 40 s alone. It retreats when what it sees outweighs
+¾ of it and its company. On Hard, playing blue: 7–12 (1 draw) against
+regular Marshal, 19–0 (1 draw) against stock Balanced. It is in every
+difficulty's pool but Easy's, since Easy meets no Goliath.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
