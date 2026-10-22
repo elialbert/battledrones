@@ -1,14 +1,26 @@
 /**
  * The battle viewer's panel (dev builds only, with src/game/replay.ts): the
  * clock and a seek bar, jumps of 30 s, whose eyes to look through (the whole
- * field, blue's fog or red's), a "thinking…" line while a live battle waits
+ * field, blue's fog or red's), each side's scrap, income a minute and ⚡
+ * meter, a "thinking…" line while a live battle waits
  * on its next round, the divergence warning, and each commander's orders and
  * notes for the round on screen.
  */
 import type { GameScene } from "../game/GameScene";
 import type { ReplayFeed } from "../game/replay";
 import { clock, pinnedLink } from "../game/replay";
-import type { Faction } from "../sim/types";
+import { TICK_RATE } from "../sim/balance";
+import type { Faction, World } from "../sim/types";
+
+/** Income a minute is measured over the last minute of game time. */
+const RATE_TICKS = 60 * TICK_RATE;
+
+/** Scrap a side has earned so far: mined, salvaged, from Uplinks and crates (not the HQ's trickle, nor refunds). */
+const earned = (w: World, side: Faction): number => {
+  const st = w.factions[side].stats;
+  const ob = w.objectives.stats[side];
+  return st.scrapHarvested + st.scrapSalvaged + ob.uplinkScrap + ob.crateScrap;
+};
 
 export interface ReplayPanel {
   update(): void;
@@ -27,6 +39,8 @@ const CSS = `
   border-radius: 6px; padding: 2px 8px; cursor: pointer; }
 #replay-panel button.on { background: rgba(126, 193, 255, 0.35); }
 #replay-panel .rp-time { font-variant-numeric: tabular-nums; }
+#replay-panel .rp-econ { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+#replay-panel .rp-econ > span { padding: 3px 10px; border-radius: 8px; background: rgba(12, 18, 26, 0.75); font-variant-numeric: tabular-nums; white-space: nowrap; }
 #replay-panel .rp-status, #replay-panel .rp-warn { margin-top: 4px; padding: 3px 10px; border-radius: 8px; background: rgba(12, 18, 26, 0.75); width: fit-content; }
 #replay-panel .rp-warn { background: rgba(140, 30, 20, 0.85); }
 #replay-panel .rp-warn a { pointer-events: auto; color: inherit; font-weight: 600; }
@@ -54,6 +68,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
       <button data-fog="off" title="The whole battlefield">All</button><button data-fog="blue" title="Through blue's eyes">Blue's eyes</button><button data-fog="red" title="Through red's eyes">Red's eyes</button>
       <button data-notes title="Orders and notes">Notes</button>
     </div>
+    <div class="rp-econ"><span data-side="blue"></span><span data-side="red"></span></div>
     <div class="rp-status" hidden></div>
     <div class="rp-warn" hidden></div>
     ${asPlayed(r) ? `<div class="rp-status rp-upgraded">${esc(asPlayed(r)!)}</div>` : ""}
@@ -84,6 +99,28 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     (e.currentTarget as HTMLElement).classList.toggle("on", !notes.hidden);
   });
 
+  const econ = { blue: $(".rp-econ [data-side=blue]"), red: $(".rp-econ [data-side=red]") };
+  /** Each side's scrap earned, sampled every second of game time (cleared on a seek back). */
+  let samples: { tick: number; earned: Record<Faction, number> }[] = [];
+  const updateEcon = (w: World) => {
+    const last = samples[samples.length - 1];
+    if (last && w.tick < last.tick) samples = [];
+    if (!last || w.tick - last.tick >= TICK_RATE || w.tick < last.tick)
+      samples.push({ tick: w.tick, earned: { blue: earned(w, "blue"), red: earned(w, "red") } });
+    while (samples.length > 1 && w.tick - samples[1]!.tick >= RATE_TICKS) samples.shift();
+    // over the last minute; just after a seek, over what's been seen since (or the whole game, until 10 s of it)
+    const from = samples[0]!;
+    const span = w.tick - from.tick;
+    for (const side of ["blue", "red"] as const) {
+      const now = earned(w, side);
+      const perMin = span >= 10 * TICK_RATE ? ((now - from.earned[side]) / span) * RATE_TICKS : w.tick ? (now / w.tick) * RATE_TICKS : 0;
+      const label = side === "blue" ? "Blue" : "Red";
+      econ[side].innerHTML =
+        `<span class="${side}">${label}</span> 💰 ${Math.floor(w.factions[side].scrap).toLocaleString()} · ` +
+        `+${Math.round(perMin).toLocaleString()}/min · ⚡ ${Math.floor(w.powers.meter[side])}`;
+    }
+  };
+
   let shownRound = -1;
   let shownDrift: number | null = null;
   const sideHtml = (side: Faction, round: number) => {
@@ -106,6 +143,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
       time.textContent = `${clock(t)} / ${clock(end)}${feed.record.end ? "" : " …"}`;
       seek.max = String(end);
       if (!dragging) seek.value = String(t);
+      updateEcon(feed.world);
       const fog = scene.fogShown();
       for (const b of fogButtons) b.classList.toggle("on", (b.dataset.fog === "off" && !fog) || b.dataset.fog === fog);
       // a live battle caught up with: the commanders are still on the next round
