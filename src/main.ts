@@ -107,14 +107,13 @@ const canDuel = (): boolean =>
   duelPractice || (window.isSecureContext && typeof AudioWorkletNode === "function" && typeof navigator.mediaDevices?.getUserMedia === "function");
 const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend's)";
 
-/** Watch AI vs AI's bot picker: 🎲 a random commander, then every bot (sim/ai/bots.ts), commanders first. */
+/** Watch AI vs AI's bot picker: 🎲 a random commander, then every bot (sim/ai/bots.ts) under its group, in BOTS order. */
 function watchOptions(): string {
   const opt = (id: string) => `<option value="${id}" title="${BOTS[id]!.about}">${BOTS[id]!.label}</option>`;
-  const group = (label: string, ids: string[]) => `<optgroup label="${label}">${ids.map(opt).join("")}</optgroup>`;
+  const groups = [...new Set(BOT_IDS.map((id) => BOTS[id]!.group))];
   return (
     '<option value="random">🎲 Random AI</option>' +
-    group("Commander", BOT_IDS.filter((id) => BOTS[id]!.difficulties)) +
-    group("Scripted player", BOT_IDS.filter((id) => !BOTS[id]!.difficulties))
+    groups.map((g) => `<optgroup label="${g}">${BOT_IDS.filter((id) => BOTS[id]!.group === g).map(opt).join("")}</optgroup>`).join("")
   );
 }
 

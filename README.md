@@ -283,7 +283,7 @@ llm install -e llm-tools-battledrones   # the LLM plugin (llm: uv tool install l
 llm battledrones run --blue gpt-6-luna --red gpt-6-luna --map riverlands --seed 42
 npm run arena run -- --blue scripted --red bot:rush:hard   # built-in seats, no model
 npm run arena bots                                         # the bots a seat can name
-npm run arena league -- --maps all --seeds 2 --no-records  # every bot against every other
+npm run arena league -- --maps all --seeds 2 --no-records  # every bot against every other (writing one: BOTS.md)
 npm run arena serve -- --blue seat --red bot:balanced:easy # seat URLs for any agent (HTTP or MCP)
 npm run arena replay battles/<file>.json                   # re-run a record, check its hash trail
 npm run arena upgrade battles/<file>.json                  # bring a record from older sim code up to this one

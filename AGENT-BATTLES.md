@@ -370,9 +370,10 @@ had the skirmish AI's Easy 0.75× and Hard 1.3× scrap. Old records keep that
 in `income`, so they still replay.) `ai:<personality>:<difficulty>` still
 works as the old name for a commander bot.
 
-A new bot is a module under `src/sim/ai/` and an entry in `BOTS`. It must be
-deterministic: no `Math.random` and no clocks (a seeded RNG from the `seed`
-it's given), and `src/sim/fmath` instead of `Math.hypot` and its friends.
+A new bot is a module under `src/sim/ai/` and an entry in the registry.
+**[BOTS.md](BOTS.md)** is the guide: the rules (fair, deterministic,
+cheap), the order vocabulary, the helpers, a worked example, and how to test
+and rank one.
 
 `tools/arena.ts league` plays a round robin: every pair of bots, or the
 seats you pass with `--bots`, plays every map and seed twice with the sides

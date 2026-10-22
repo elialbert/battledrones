@@ -7,10 +7,11 @@
  * world as its side could see it and returns ordinary commands. None gets an
  * income handicap. A difficulty changes only how a bot plays.
  *
- * A new bot is a module under src/sim/ai/ and an entry in BOTS. It must be
- * deterministic: no Math.random or clocks (a seeded RNG from `seed`), and
- * src/sim's fmath instead of Math.hypot and friends (tests/fmath.test.ts).
- * Records keep the commands, not the bot, so replays never re-run it.
+ * A new bot is a module under src/sim/ai/ and an entry in BOTS: BOTS.md
+ * says how. It must be deterministic: no Math.random or clocks (a seeded RNG
+ * from `seed`), and src/sim's fmath instead of Math.hypot and friends
+ * (tests/fmath.test.ts). Records keep the commands, not the bot, so replays
+ * never re-run it.
  */
 import { createAiState, tickAi, STRATEGIES, type Difficulty, type StrategyName } from "./commander";
 import { PROFILES, scriptedPlayer, type ProfileName } from "./player";
@@ -27,8 +28,10 @@ export interface BotDef {
   id: string;
   /** Short name for menus and logs. */
   label: string;
-  /** One line on how it plays. */
+  /** One line on how it plays (the menu picker's tooltip, `tools/arena.ts bots`). */
   about: string;
+  /** The heading it's listed under in the menu's picker ("Commander", "Scripted player"…). */
+  group: string;
   /** Does `difficulty` change how it plays? (Scripted players have one speed.) */
   difficulties: boolean;
   /** Its quick-start opener for a match with this seed. */
@@ -51,6 +54,7 @@ function commanderBot(name: StrategyName): BotDef {
     id: name,
     label: STRATEGIES[name].label,
     about: ABOUT[name],
+    group: "Commander",
     difficulties: true,
     opener: (seed, side) => pickAiOpener(name, seed, side),
     create(side, seed, difficulty) {
@@ -72,6 +76,7 @@ function playerBot(name: ProfileName): BotDef {
     id: name,
     label: `${name[0]!.toUpperCase()}${name.slice(1)} player`,
     about: PLAYER_ABOUT[name],
+    group: "Scripted player",
     difficulties: false,
     // any of the three, seeded (as the Balanced commander picks)
     opener: (seed, side) => pickAiOpener("balanced", seed, side),
@@ -81,12 +86,13 @@ function playerBot(name: ProfileName): BotDef {
   };
 }
 
-export const BOTS: Record<string, BotDef> = Object.fromEntries(
-  [
-    ...(Object.keys(STRATEGIES) as StrategyName[]).map(commanderBot),
-    ...(Object.keys(PROFILES) as ProfileName[]).map(playerBot)
-  ].map((b) => [b.id, b])
-);
+/** Every bot, in the order the menu's picker and `tools/arena.ts bots` list them. */
+const ALL: BotDef[] = [
+  ...(Object.keys(STRATEGIES) as StrategyName[]).map(commanderBot),
+  ...(Object.keys(PROFILES) as ProfileName[]).map(playerBot)
+];
+
+export const BOTS: Record<string, BotDef> = Object.fromEntries(ALL.map((b) => [b.id, b]));
 
 export const BOT_IDS: string[] = Object.keys(BOTS);
 

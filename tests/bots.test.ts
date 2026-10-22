@@ -6,9 +6,16 @@ import { STRATEGIES } from "../src/sim/ai/commander";
 import { PROFILES } from "../src/sim/ai/player";
 
 describe("bot seats", () => {
-  it("names every commander personality and scripted player", () => {
-    expect(BOT_IDS).toEqual([...Object.keys(STRATEGIES), ...Object.keys(PROFILES)]);
-    for (const id of BOT_IDS) expect(BOTS[id]!.about.length).toBeGreaterThan(10);
+  it("names every commander personality and scripted player, each bot once and described", () => {
+    expect(BOT_IDS).toEqual(expect.arrayContaining([...Object.keys(STRATEGIES), ...Object.keys(PROFILES)]));
+    for (const id of BOT_IDS) {
+      const b = BOTS[id]!;
+      expect(b.id).toBe(id);
+      expect(id).toMatch(/^[a-z]+$/); // (seat names: bot:<id>:<difficulty>)
+      expect(id).not.toBe("random"); // (the menu's 🎲 pick)
+      expect(b.about.length).toBeGreaterThan(10);
+      expect(b.group.length).toBeGreaterThan(0);
+    }
   });
 
   it("parses bot:<id>[:<difficulty>], and ai:… as the old name for a commander bot", () => {
