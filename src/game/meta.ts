@@ -2,7 +2,7 @@ import { capApm } from "../sim/ai/apm";
 import { BOTS, botSeat, isBotId, isOpponentId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
-import { MARSHAL, MARSHAL_POOL, marshal, marshalPlan, planStrategy } from "../sim/ai/marshal";
+import { MARSHAL, MARSHAL_POOL, marshal, marshalPlan, planStrategy, type PlanName } from "../sim/ai/marshal";
 import { opAiState } from "../sim/ops";
 import { MUTATORS, makeRules, rulesOf, strategyFits } from "../sim/rules";
 import type { Faction, World } from "../sim/types";
@@ -36,21 +36,24 @@ export function aiStrategy(difficulty: Difficulty): StrategyName | undefined {
  * drawing a plan the rules allow, or playing the Daily Op's personality.
  */
 export function difficultyBot(side: Faction): WatchedBot {
-  const difficulty = gameMode.difficulty;
+  const bot = marshalBot(side, gameMode.difficulty, gameMode.daily ? gameMode.daily.strategy : "random");
+  return { ...bot, versus: `vs ${bot.label} AI (${DIFFICULTY[gameMode.difficulty].label})`, ladder: true };
+}
+
+/** Marshal at `difficulty` on `side`, playing `plan`, or ("random", or a plan the rules don't allow) drawing one from the difficulty's pool that the rules allow. */
+function marshalBot(side: Faction, difficulty: Difficulty, plan: PlanName | "random"): WatchedBot {
   const s = aiSeed(side === "blue" ? 2 : 1);
   const rules = makeRules(activeMutators());
-  const plan = gameMode.daily
-    ? gameMode.daily.strategy
-    : marshalPlan(s, difficulty, MARSHAL_POOL[difficulty].filter((n) => strategyFits(planStrategy(n, MARSHAL[difficulty].fast), rules)));
-  const bot = marshal(side, s, difficulty, { ...MARSHAL[difficulty], strategy: plan });
-  const label = planStrategy(plan).label;
+  const fits = (n: PlanName) => strategyFits(planStrategy(n, MARSHAL[difficulty].fast), rules);
+  const strategy = plan !== "random" && fits(plan) ? plan : marshalPlan(s, difficulty, MARSHAL_POOL[difficulty].filter(fits));
+  const bot = marshal(side, s, difficulty, { ...MARSHAL[difficulty], strategy });
+  const label = planStrategy(strategy).label;
   return {
     bot: capApm(bot, MARSHAL[difficulty].apm, MARSHAL[difficulty].burst),
     label,
-    versus: `vs ${label} AI (${DIFFICULTY[difficulty].label})`,
+    versus: `vs Marshal · ${label} (${DIFFICULTY[difficulty].label})`,
     opener: bot.opener!,
-    seat: botSeat("marshal", difficulty),
-    ladder: true
+    seat: botSeat("marshal", difficulty)
   };
 }
 
@@ -95,13 +98,19 @@ export function opponentBot(side: Faction, seed: number): WatchedBot | null {
 }
 
 /**
- * The bot watching puts on `side`: the menu's pick in a skirmish, else (and
+ * The bot watching puts on `side`: the menu's pick in a skirmish (Marshal
+ * at its own picked difficulty and plan), else (and
  * for "random") a Normal commander whose plan the rules allow, as before.
  */
 export function watchBot(side: Faction, seed: number): WatchedBot {
   const pick = gameMode.watch[side];
   const picked = gameMode.mode === "skirmish" && !gameMode.daily && isBotId(pick);
   const pool = DIFFICULTY.normal.pool;
+  if (picked && pick === "marshal") {
+    const m = gameMode.watchMarshal[side];
+    const bot = marshalBot(side, m.difficulty, m.plan);
+    return { ...bot, label: `Marshal (${bot.label}, ${DIFFICULTY[m.difficulty].label})` };
+  }
   const id = picked ? pick : aiStrategy("normal") ?? pool[Math.floor(Math.random() * pool.length)]!;
   return seatBot(id, side, seed, "normal");
 }

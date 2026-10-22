@@ -1,5 +1,6 @@
 import { isBotId, isOpponentId } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
+import { MARSHAL_PLANS, type PlanName } from "../sim/ai/marshal";
 import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isRandomMapId } from "../sim/mapgen";
 import { isMutatorId, type MutatorId } from "../sim/rules";
@@ -17,6 +18,11 @@ export const gameMode = {
   spectator: false,
   /** Watch AI vs AI's bot for each side (saved): a sim/ai/bots.ts id, or "random" (a commander personality). */
   watch: { blue: "random", red: "random" } as Record<Faction, string>,
+  /** Watch AI vs AI's Marshal for each side (saved): its difficulty, and its plan or "random" (one from the difficulty's pool). */
+  watchMarshal: {
+    blue: { difficulty: "normal", plan: "random" },
+    red: { difficulty: "normal", plan: "random" }
+  } as Record<Faction, { difficulty: Difficulty; plan: PlanName | "random" }>,
   /** The skirmish opponent (saved): a sim/ai/bots.ts id, or "random" (Marshal at the difficulty, drawing a plan: meta.ts difficultyBot). */
   opponent: "random",
   mapId: "riverlands",
@@ -127,6 +133,9 @@ export function loadSettings(): void {
     for (const side of ["blue", "red"] as const) {
       const pick = s.watch?.[side];
       if (typeof pick === "string" && (pick === "random" || isBotId(pick))) gameMode.watch[side] = pick;
+      const m = s.watchMarshal?.[side];
+      if (typeof m?.difficulty === "string" && Object.hasOwn(DIFFICULTY, m.difficulty)) gameMode.watchMarshal[side].difficulty = m.difficulty;
+      if (typeof m?.plan === "string" && (m.plan === "random" || Object.hasOwn(MARSHAL_PLANS, m.plan))) gameMode.watchMarshal[side].plan = m.plan;
     }
   } catch {
     /* storage unavailable — defaults are fine */
@@ -136,7 +145,7 @@ export function loadSettings(): void {
 export function saveSettings(): void {
   if (gameMode.daily || gameMode.op) return; // the Daily Op's / an op's map and difficulty are not the player's picks
   try {
-    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted, watch: gameMode.watch, opponent: gameMode.opponent }));
+    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted, watch: gameMode.watch, watchMarshal: gameMode.watchMarshal, opponent: gameMode.opponent }));
   } catch {
     /* ignore */
   }

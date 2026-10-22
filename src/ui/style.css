@@ -1351,6 +1351,21 @@ button {
 .watchpick select optgroup {
   background: var(--panel-solid);
 }
+/* Marshal's difficulty and plan, under its pick */
+.watchpick:has(.watchopts:not([hidden])) {
+  flex-direction: column;
+}
+.watchopts {
+  display: flex;
+  border-top: 1px solid var(--line);
+}
+.watchopts[hidden] {
+  display: none;
+}
+.watchopts select {
+  min-height: 32px;
+  font-size: 13px;
+}
 .watchvs {
   color: var(--dim);
   font-size: 13px;
