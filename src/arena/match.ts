@@ -78,8 +78,9 @@ export const seatName = (s: SeatSpec) => (s.kind === "bot" ? botSeat(s.bot, s.di
 function seatBot(spec: SeatSpec & { kind: "bot" }, side: Faction, seed: number): Bot {
   const def = BOTS[spec.bot]!;
   const bot = def.create(side, hash32(seed, side === "blue" ? 1 : 2), spec.difficulty);
-  const apm = spec.apm ?? def.apm?.(spec.difficulty);
-  return apm ? capApm(bot, apm) : bot;
+  if (spec.apm) return capApm(bot, spec.apm);
+  const apm = def.apm?.(spec.difficulty);
+  return apm ? capApm(bot, apm, def.burst?.(spec.difficulty)) : bot;
 }
 
 export interface ArenaOptions {

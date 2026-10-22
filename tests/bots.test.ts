@@ -190,6 +190,20 @@ describe("Marshal, the bot built for a budget", () => {
     expect(planStrategy("greed").harvesters).toBeGreaterThan(STRATEGIES.boom.harvesters);
   });
 
+  it("never goes over 120 actions in any minute on Hard, its burst included", () => {
+    expect(MARSHAL.hard.apm + (MARSHAL.hard.burst ?? APM_BURST)).toBeLessThanOrEqual(120);
+    const a = new Arena({ map: "riverlands", seed: 4, seats: { blue: parseSeat("bot:marshal:hard"), red: parseSeat("bot:balanced:hard") }, maxTicks: 6 * 600 });
+    while (!a.over) a.advance();
+    const ts = a.record.turns.filter(([, s]) => s === "blue").flatMap(([t, , c]) => c.map(() => t));
+    let most = 0;
+    for (let i = 0, j = 0; i < ts.length; i++) {
+      while (ts[i]! - ts[j]! >= 600) j++;
+      most = Math.max(most, i - j + 1);
+    }
+    expect(most).toBeGreaterThan(60); // (it uses its budget)
+    expect(most).toBeLessThanOrEqual(120);
+  });
+
   it("plays fast-expanding plans on Normal and Hard: a depot after the first factory", () => {
     for (const n of ["balanced", "airswarm", "boom", "ironclad", "turtle"] as const) {
       const slow = planStrategy(n);

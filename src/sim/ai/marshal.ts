@@ -60,6 +60,10 @@ export interface MarshalOptions {
   fast?: boolean;
   /** Seconds of peace: no raids, waves or finishing push before this. */
   holdUntil?: number;
+  /** Changes to whichever plan it plays (MARSHAL: Hard's economy). */
+  tweak?: Partial<Strategy>;
+  /** Changes to how it fights (FIGHT). */
+  fight?: Partial<Fight>;
 }
 
 export type PlanName = StrategyName | "turtle" | "greed";
@@ -152,18 +156,33 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
 /**
  * Each difficulty: how fast it thinks and acts, fight micro's share of its
  * actions, whether it plays the fast-expanding plans, and its seconds of
- * peace. Fight micro never gives more than one order at a time (MICRO_BURST),
- * so even Hard's is at most 2 a second, a human's pace. APM-BOTS.md,
- * "Retuning the levels", has the numbers: Easy beats the scripted novice and
- * beginner players about 2 games in 5; Normal beats the stock Hard commander
- * 70%; Hard beats it 95%, and Normal 98%.
+ * peace. `burst` is how many actions its cap banks (ai/apm.ts; APM_BURST if
+ * left out): Hard's `apm` plus `burst` is 120, so no minute of a game sees
+ * more than 120 actions. Fight micro never gives more than one order at a
+ * time (MICRO_BURST), so even Hard's is at most 2 a second, a human's pace.
+ * Hard also plays every plan with a bigger economy and army (`tweak`) and
+ * fights its own way (`fight`). APM-BOTS.md, "Retuning the levels" and
+ * "Hard, harder", has the numbers.
  */
-export const MARSHAL: Record<Difficulty, { think: number; react: number; apm: number; microApm: number; fast: boolean; holdUntil: number }> = {
+export const MARSHAL: Record<
+  Difficulty,
+  {
+    think: number; react: number; apm: number; burst?: number; microApm: number; fast: boolean; holdUntil: number;
+    tweak?: Partial<Strategy>; fight?: Partial<Fight>;
+  }
+> = {
   easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300 },
   normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
   // (a plan every 1.5 s beat a plan every second 69% of 40 games, and every half second lost 79%: replanning
   // too often re-sends orders that spend its actions)
-  hard: { think: 1.5, react: 0.5, apm: 120, microApm: 120, fast: true, holdUntil: 0 }
+  hard: {
+    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 115, fast: true, holdUntil: 0,
+    // twelve harvesters (and one per depot), waves at 2500, factories as soon as scrap piles up
+    tweak: { harvesters: 12, assaultValue: 2500, expandEarly: true },
+    // a lost fight broken off sooner, and stayed out of longer; the finishing push at 1.5× the enemy army
+    // seen; a shooter switches to a target twice as good (not 3×)
+    fight: { breakOff: 0.5, retreatHold: 20, finish: 1.5, switch: 2 }
+  }
 };
 
 /** Orders by rank: the cap spends from the top. */
@@ -211,6 +230,24 @@ const FINISH_MIN = 3000;
 const FINISH_EVERY = 10;
 /** An enemy unit unseen this long no longer counts toward its army (ticks). */
 const SIGHTING_TTL = 90 * TICK_RATE;
+/** Seconds a fight it broke off keeps its units out of the plan's waves. */
+const RETREAT_HOLD = 8;
+
+/** How it fights, by default (MarshalOptions.fight changes it: Hard's). */
+const FIGHT = {
+  breakOff: BREAK_OFF,
+  homeStand: HOME_STAND,
+  retreatHold: RETREAT_HOLD,
+  precious: PRECIOUS,
+  hurt: HURT,
+  overkill: OVERKILL_SECS,
+  switch: SWITCH,
+  finish: FINISH,
+  finishMin: FINISH_MIN,
+  finishEvery: FINISH_EVERY
+};
+export type Fight = typeof FIGHT;
+
 /** The fight micro's budget: how many actions it can bank (one: a fight order at most every 60 / microApm seconds). */
 const MICRO_BURST = 1;
 const PER_ACTION = 60 * TICK_RATE;
@@ -273,7 +310,8 @@ function alreadyDoing(u: Unit, c: Command): boolean {
 
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
   const plan = MARSHAL_PLANS[opts.strategy];
-  const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil });
+  const K: Fight = { ...FIGHT, ...opts.fight };
+  const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil, ...opts.tweak });
   s.fair = true;
   s.interval = opts.think;
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
@@ -409,9 +447,9 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
     );
     const ours = army.reduce((v, u) => v + UNITS[u.kind].cost, 0);
-    if (!finishing && ours >= Math.max(FINISH_MIN, FINISH * enemy)) finishing = true;
-    else if (finishing && ours < Math.max(FINISH_MIN * 0.6, 1.5 * enemy)) finishing = false;
-    if (!finishing || w.tick < (s.strategy.holdUntil ?? 0) * TICK_RATE || w.tick - lastPush < FINISH_EVERY * TICK_RATE || !army.length) return null;
+    if (!finishing && ours >= Math.max(K.finishMin, K.finish * enemy)) finishing = true;
+    else if (finishing && ours < Math.max(K.finishMin * 0.6, 1.5 * enemy)) finishing = false;
+    if (!finishing || w.tick < (s.strategy.holdUntil ?? 0) * TICK_RATE || w.tick - lastPush < K.finishEvery * TICK_RATE || !army.length) return null;
     const cx = army.reduce((a, u) => a + u.x, 0) / army.length;
     const cy = army.reduce((a, u) => a + u.y, 0) / army.length;
     const known = knownBuildings(w, side).filter((b) => b.faction !== side);
@@ -422,7 +460,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const home = hq ? buildingCenter(hq) : { x: cx, y: cy };
     const at = known[0] ? centre(known[0]) : { x: w.width - home.x, y: w.height - home.y };
     const ids = army.map((u) => u.id);
-    for (const id of ids) held.set(id, w.tick + (FINISH_EVERY + 2) * TICK_RATE);
+    for (const id of ids) held.set(id, w.tick + (K.finishEvery + 2) * TICK_RATE);
     return { rank: Rank.Push, cmd: { type: "attackMove", faction: side, unitIds: ids, x: at.x, y: at.y }, planned: false, push: true };
   }
 
@@ -470,16 +508,16 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         return dist(bc.x, bc.y, cx, cy) <= FIGHT_RADIUS + 2;
       });
       // --- a lost fight away from home: everyone in it falls back toward home
-      if (!finishing && home && dist(cx, cy, home.x, home.y) > HOME_STAND) {
+      if (!finishing && home && dist(cx, cy, home.x, home.y) > K.homeStand) {
         const mine = strength(ours, theirs, towers.length > 0);
         const them =
           strength(theirs, ours, false) + towers.reduce((a, b) => a + BUILDINGS[b.kind].dps, 0) * towers.reduce((a, b) => a + b.hp, 0);
-        if (mine < BREAK_OFF * them) {
+        if (mine < K.breakOff * them) {
           const back = toward(cx, cy, home, 10);
           const ids = ours.filter((u) => u.kind !== "mender").map((u) => u.id);
           for (const id of ids) {
             leaving.add(id);
-            held.set(id, w.tick + 8 * TICK_RATE);
+            held.set(id, w.tick + K.retreatHold * TICK_RATE);
           }
           if (ids.length) res.push({ rank: Rank.Retreat, cmd: { type: "move", faction: side, unitIds: ids, x: back.x, y: back.y }, planned: false });
           continue;
@@ -488,7 +526,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       // --- hurt, expensive units step back out of it
       if (home)
         for (const u of c) {
-          if (UNITS[u.kind].cost < PRECIOUS || u.hp > HURT * UNITS[u.kind].hp || leaving.has(u.id)) continue;
+          if (UNITS[u.kind].cost < K.precious || u.hp > K.hurt * UNITS[u.kind].hp || leaving.has(u.id)) continue;
           const back = toward(u.x, u.y, home, 7);
           leaving.add(u.id);
           held.set(u.id, w.tick + 6 * TICK_RATE);
@@ -516,13 +554,13 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         if (!can.length) continue;
         const dps = (e: Unit) => UNITS[u.kind].dps * effectivenessVs(u.kind, UNITS[e.kind].armor, domainOf(e));
         const score = (e: Unit) => (harm(e) * dps(e)) / Math.max(1, e.hp);
-        const open = (e: Unit) => (aimed.get(e.id) ?? 0) * OVERKILL_SECS < e.hp;
+        const open = (e: Unit) => (aimed.get(e.id) ?? 0) * K.overkill < e.hp;
         let best: Unit | null = null;
         for (const e of can) if (open(e) && (!best || score(e) > score(best) || (score(e) === score(best) && e.id < best.id))) best = e;
         best ??= can.reduce((a, e) => (score(e) > score(a) ? e : a));
         const curId = u.order.type === "attack" ? u.order.targetId : u.autoTargetId;
         const cur = curId === null ? undefined : can.find((e) => e.id === curId);
-        const pick = cur && open(cur) && score(best) < SWITCH * score(cur) ? cur : best;
+        const pick = cur && open(cur) && score(best) < K.switch * score(cur) ? cur : best;
         aimed.set(pick.id, (aimed.get(pick.id) ?? 0) + dps(pick));
         if (pick.id === curId) continue;
         held.set(u.id, w.tick + 3 * TICK_RATE);

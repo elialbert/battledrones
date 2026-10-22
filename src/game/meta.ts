@@ -45,7 +45,7 @@ export function difficultyBot(side: Faction): WatchedBot {
   const bot = marshal(side, s, difficulty, { ...MARSHAL[difficulty], strategy: plan });
   const label = planStrategy(plan).label;
   return {
-    bot: capApm(bot, MARSHAL[difficulty].apm),
+    bot: capApm(bot, MARSHAL[difficulty].apm, MARSHAL[difficulty].burst),
     label,
     versus: `vs ${label} AI (${DIFFICULTY[difficulty].label})`,
     opener: bot.opener!,
@@ -72,7 +72,7 @@ function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty
   const bot = def.create(side, aiSeed(side === "blue" ? 2 : 1), difficulty);
   const apm = def.apm?.(difficulty); // (a bot built for a budget plays under it, as in the arena)
   return {
-    bot: apm ? capApm(bot, apm) : bot,
+    bot: apm ? capApm(bot, apm, def.burst?.(difficulty)) : bot,
     label: def.label,
     versus: `vs ${def.label} bot${def.difficulties ? ` · ${DIFFICULTY[difficulty].label}` : ""}`,
     opener: bot.opener ?? def.opener(seed, side),

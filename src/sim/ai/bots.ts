@@ -52,6 +52,8 @@ export interface BotDef {
   create(side: Faction, seed: number, difficulty: Difficulty): Bot;
   /** Its APM cap when the seat names none (ai/apm.ts): a bot built for a budget. Uncapped if left out. */
   apm?(difficulty: Difficulty): number;
+  /** How many actions that cap banks (ai/apm.ts APM_BURST if left out). */
+  burst?(difficulty: Difficulty): number | undefined;
 }
 
 const ABOUT: Record<StrategyName, string> = {
@@ -107,12 +109,13 @@ const ALL: BotDef[] = [
   {
     id: "marshal",
     label: "Marshal",
-    about: "The commander's plans on a human's budget (10/30/120 actions a minute, fight orders at most 2 a second), Turtle and Greed among them: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
+    about: "The commander's plans on a human's budget (at most 10/30/120 actions a minute, fight orders at most 2 a second), Turtle and Greed among them: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
     group: "Commander",
     difficulties: true,
     opener: (seed, side) => pickAiOpener("balanced", seed, side), // (each bot's own: its plan's)
     create: (side, seed, difficulty) => marshal(side, seed, difficulty, { ...MARSHAL[difficulty], strategy: marshalPlan(seed, difficulty) }),
-    apm: (difficulty) => MARSHAL[difficulty].apm
+    apm: (difficulty) => MARSHAL[difficulty].apm,
+    burst: (difficulty) => MARSHAL[difficulty].burst
   }
 ];
 

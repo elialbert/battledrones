@@ -107,6 +107,10 @@ export interface Strategy {
   depotReach?: number;
   /** Seconds of peace: no raids or assaults before this (it still defends). */
   holdUntil?: number;
+  /** Changes to SPEND for this personality. */
+  spend?: Partial<typeof SPEND>;
+  /** Scrap piling up adds factories even before the build order is through, and they come next, not last. */
+  expandEarly?: boolean;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -510,8 +514,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const infantryHeavy = s.seenInfantry >= 3 && s.seenInfantry >= 0.4 * s.seenGround;
 
   // floating scrap? keep queues two deep (spending down: deeper, and dearer units)
-  const rich = !!s.strategy.spendDown && f.scrap > SPEND.rich;
-  const depth = s.strategy.spendDown ? 1 + Math.min(3, Math.floor(f.scrap / SPEND.perSlot)) : f.scrap > 700 ? 2 : 1;
+  const sp = { ...SPEND, ...s.strategy.spend };
+  const rich = !!s.strategy.spendDown && f.scrap > sp.rich;
+  const depth = s.strategy.spendDown ? 1 + Math.min(3, Math.floor(f.scrap / sp.perSlot)) : f.scrap > 700 ? 2 : 1;
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
   // Rockets for armour (and Ironclad's Mastodon escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers. Under Infantry
@@ -645,10 +650,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     infantryWar ? b.kind === "assembly-bay" : b.kind === "fab-plant" || b.kind === "airpad"
   );
   if (
-    f.scrap > (s.strategy.spendDown ? SPEND.expandAt : 1000) &&
+    f.scrap > (s.strategy.spendDown ? sp.expandAt : 1000) &&
     !f.pending &&
-    wanted === null &&
-    s.extraProduction < (s.strategy.spendDown ? SPEND.maxExtra : 3) &&
+    (wanted === null || s.strategy.expandEarly) &&
+    s.extraProduction < (s.strategy.spendDown ? sp.maxExtra : 3) &&
     producers.length > 0 &&
     producers.every((b) => b.queue.length > 0)
   )
@@ -1093,7 +1098,7 @@ function nextBuilding(
   }
   // depots follow the mining (Strategy.depotReach): one more, early, while there's a field for it
   if (s.strategy.depotReach !== undefined) {
-    const depots = Math.min(SPEND.maxDepots, Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
+    const depots = Math.min(s.strategy.spend?.maxDepots ?? SPEND.maxDepots, Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
     for (let i = order.filter((k) => k === "depot").length; i < depots; i++) order.splice(Math.min(order.length, 3), 0, "depot");
   }
   const fabs = order.filter((k) => k === "fab-plant").length;
@@ -1101,7 +1106,9 @@ function nextBuilding(
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   for (let i = 0; i < s.extraProduction; i++) {
     const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
-    order.push(infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant");
+    const k = infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant";
+    if (s.strategy.expandEarly) order.splice(Math.min(order.length, 2 + i), 0, k);
+    else order.push(k);
   }
   const wanted = new Map<BuildingKind, number>();
   let depotsSkipped = 0;

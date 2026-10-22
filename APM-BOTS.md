@@ -532,6 +532,41 @@ The step from Easy to Normal is steep: Normal won all 60 games against
 Easy. Normal at 50 APM beat Normal at 30 72% (Hard beat it 98%), so APM is
 still the knob for anything between.
 
+## Hard, harder
+
+A player beat Hard in 5:24, mining 26,556 scrap to its 15,000, with an army
+that peaked far higher. Asked for: Hard much harder, never over 120 actions
+in any minute, and a little better at fighting. Each change below was tested
+head to head against Hard as it stood (40 games, all five maps), and kept
+if it won.
+
+| Change | Won |
+|---|---|
+| 12 harvesters, not 5 (plus one per depot): mines 15–30% more on the open maps | 72% |
+| The cap at 115 a minute with a burst of 5, so no minute exceeds 120 (was 120 + 10: busiest minute 129) | 36% (the cost) |
+| Breaking off a lost fight at under half the enemy's strength, not under 0.3 | 60% |
+| Waves at 2500 scrap of army | 59% |
+| Factories as soon as scrap piles up, ahead of the rest of the build order (`Strategy.expandEarly`, new) | 66% |
+| A broken-off fight stays out of the waves 20 s, not 8 | 60% |
+| A plan every 2 s, not 1.5 (fewer replans, more actions for the rest) | 71% |
+| Focus fire switches to a target twice as good, not 3× | 58% of 100 |
+
+Tried, no better: 15 or 18 harvesters (16–18 harvesters is where it tops out
+anyway); more factories or deeper queues (`Strategy.spend`, new); holding
+waves while the enemy army seen is bigger; a plan every 1.2, 2.5 or 3 s;
+looks at the fights every 0.3 s or 1 s (both lost 71%); less fight micro (90
+or 60 a minute: lost); stepping back hurt units more or less readily.
+
+Together (`MARSHAL.hard`'s `tweak` and `fight`), 60 games each: against the
+old Hard 63% (37-21-2), stock Hard 90%, Normal 100%. By map against the old
+Hard: Ashlands 11 of 12, Dune Sea 9, Frostbite 8, Riverlands 7,
+**Archipelago 2**. Archipelago needs actions more than anything (the island
+airlift): there the old Hard sent 100 a minute, and with the cap at 120 + 10
+the new one won 12 of 20; under the strict 120 it wins about a third.
+
+Its busiest minute is now 119 actions; fight orders are at most one every
+0.52 s.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
