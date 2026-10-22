@@ -1,4 +1,4 @@
-import { isBotId } from "../sim/ai/bots";
+import { isBotId, isOpponentId } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isRandomMapId } from "../sim/mapgen";
@@ -122,7 +122,8 @@ export function loadSettings(): void {
     if (typeof s.opId === "string" && opById(s.opId)) gameMode.opId = s.opId;
     if (Array.isArray(s.mutators)) gameMode.mutators = s.mutators.filter(isMutatorId);
     gameMode.uncharted = s.uncharted === true;
-    if (typeof s.opponent === "string" && isBotId(s.opponent)) gameMode.opponent = s.opponent;
+    // (a bot the Opponent picker no longer lists, like the stock commanders: back to 🎲)
+    if (typeof s.opponent === "string" && isOpponentId(s.opponent)) gameMode.opponent = s.opponent;
     for (const side of ["blue", "red"] as const) {
       const pick = s.watch?.[side];
       if (typeof pick === "string" && (pick === "random" || isBotId(pick))) gameMode.watch[side] = pick;

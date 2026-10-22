@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Arena, SIDES, parseSeat, seatName } from "../src/arena/match";
 import { replay, type BattleRecord } from "../src/arena/record";
 import { APM_BURST, capApm } from "../src/sim/ai/apm";
-import { BOTS, BOT_IDS, type Bot } from "../src/sim/ai/bots";
+import { BOTS, BOT_IDS, OPPONENT_IDS, isOpponentId, type Bot } from "../src/sim/ai/bots";
 import { MARSHAL, MARSHAL_PLANS, MARSHAL_POOL, marshalPlan, planStrategy, type PlanName } from "../src/sim/ai/marshal";
 import { pickAiOpener } from "../src/sim/openers";
 import { makeRules, strategyFits } from "../src/sim/rules";
@@ -135,6 +135,15 @@ describe("an APM cap", () => {
     expect(n).toBeGreaterThan(30); // it plays, up to the cap
     withinBudget(r, "blue", 30);
     expect(play().turns).toEqual(r.turns);
+  });
+});
+
+describe("the menu's Opponent picker", () => {
+  it("lists only the bots built for you to play (Marshal), not the stock commanders or scripted players", () => {
+    expect(OPPONENT_IDS).toEqual(["marshal"]);
+    expect(isOpponentId("balanced")).toBe(false);
+    expect(isOpponentId("novice")).toBe(false);
+    for (const id of OPPONENT_IDS) expect(BOTS[id]!.difficulties).toBe(true);
   });
 });
 

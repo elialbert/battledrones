@@ -1,5 +1,5 @@
 import { capApm } from "../sim/ai/apm";
-import { BOTS, botSeat, isBotId, type Bot } from "../sim/ai/bots";
+import { BOTS, botSeat, isBotId, isOpponentId, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, STRATEGIES, type AiState, type Difficulty, type StrategyName } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
 import { MARSHAL, MARSHAL_POOL, marshal, marshalPlan, planStrategy } from "../sim/ai/marshal";
@@ -82,7 +82,7 @@ function seatBot(id: string, side: Faction, seed: number, difficulty: Difficulty
 
 /** Is the coming skirmish against a bot picked on the menu (not 🎲 the classic commander)? */
 export const opponentPicked = (): boolean =>
-  gameMode.mode === "skirmish" && !gameMode.spectator && !gameMode.daily && !gameMode.op && isBotId(gameMode.opponent);
+  gameMode.mode === "skirmish" && !gameMode.spectator && !gameMode.daily && !gameMode.op && isOpponentId(gameMode.opponent);
 
 /**
  * The menu's picked opponent for `side`, at the menu's difficulty if it takes

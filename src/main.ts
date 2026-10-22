@@ -1,4 +1,4 @@
-import { BOTS, BOT_IDS } from "./sim/ai/bots";
+import { BOTS, BOT_IDS, OPPONENT_IDS } from "./sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
 import { MAPS, isKnownMapId, mapById } from "./sim/maps";
 import { BIOMES, RANDOM_MAP_SIZE, RANDOM_PREFIX, isRandomMapId, parseRandomMapId, randomMapId, rollRandomMapId, seedCode, seedFromText } from "./sim/mapgen";
@@ -108,12 +108,13 @@ const canDuel = (): boolean =>
 const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend's)";
 
 /** Watch AI vs AI's bot picker: 🎲 a random commander, then every bot (sim/ai/bots.ts) under its group, in BOTS order. */
-function watchOptions(): string {
+/** A bot picker's options: 🎲 Random AI, then `ids` under their groups (every bot for Watch AI vs AI, the Opponent picker's own). */
+function watchOptions(ids: string[] = BOT_IDS): string {
   const opt = (id: string) => `<option value="${id}" title="${BOTS[id]!.about}">${BOTS[id]!.label}</option>`;
-  const groups = [...new Set(BOT_IDS.map((id) => BOTS[id]!.group))];
+  const groups = [...new Set(ids.map((id) => BOTS[id]!.group))];
   return (
     '<option value="random">🎲 Random AI</option>' +
-    groups.map((g) => `<optgroup label="${g}">${BOT_IDS.filter((id) => BOTS[id]!.group === g).map(opt).join("")}</optgroup>`).join("")
+    groups.map((g) => `<optgroup label="${g}">${ids.filter((id) => BOTS[id]!.group === g).map(opt).join("")}</optgroup>`).join("")
   );
 }
 
@@ -348,7 +349,7 @@ function showMenu(linkedMap?: string | null): void {
       <div class="seg" id="diff">
         ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
       </div>
-      <label class="watchpick opppick" id="opprow"><span class="opplabel">Opponent</span><select id="opponent" aria-label="Opponent">${watchOptions()}</select></label>
+      <label class="watchpick opppick" id="opprow"><span class="opplabel">Opponent</span><select id="opponent" aria-label="Opponent">${watchOptions(OPPONENT_IDS)}</select></label>
       <p class="opphint" id="opphint" hidden></p>
       <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
