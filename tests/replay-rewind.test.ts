@@ -4,11 +4,14 @@
  * battle did, a free-for-all's knockouts included.
  */
 import { describe, expect, it } from "vitest";
+import { Chronicle } from "../src/game/chronicle";
 import { restoreWorld } from "../src/game/restore";
+import { createAiState, tickAi } from "../src/sim/ai/commander";
+import { sidesOf } from "../src/sim/sides";
 import { worldHash } from "../src/sim/checksum";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
-import type { World } from "../src/sim/types";
+import type { Command, World } from "../src/sim/types";
 
 const run = (w: World, ticks: number) => {
   for (let i = 0; i < ticks; i++) step(w, []);
@@ -50,4 +53,38 @@ describe("a replay rewound past a knockout", () => {
     expect(w).toBe(same);
     expect(worldHash(w)).toBe(worldHash(saved));
   });
+});
+
+describe("the report's chronicle, rewound with a replay", () => {
+  it("ends as it would have with no rewind: nothing played twice is counted twice", () => {
+    const w = createMapWorld("compass-rose", { seed: 5, objectives: true });
+    const ais = Object.fromEntries(sidesOf(w).map((f, i) => [f, createAiState("rush", "normal", 40 + i)]));
+    const c = new Chronicle(w);
+    const turns = new Map<number, Command[]>();
+    // (a tick as GameScene plays it: the step, its events to the chronicle, the chronicle's sample)
+    const tick = (cmds: Command[]) => {
+      step(w, cmds);
+      for (const ev of w.fx) c.onFx(ev);
+      c.tick();
+    };
+    let saved: World | null = null;
+    let kept = c.snapshot();
+    for (let t = 0; t < 4000; t++) {
+      const cmds = sidesOf(w).flatMap((f) => tickAi(w, f, ais[f]!));
+      turns.set(w.tick, cmds);
+      tick(cmds);
+      if (w.tick === 2400) {
+        saved = structuredClone(w);
+        kept = c.snapshot();
+      }
+    }
+    const straight = c.snapshot();
+    expect(straight.deaths.length).toBeGreaterThan(20);
+
+    restoreWorld(w, saved!);
+    c.restore(kept);
+    expect(c.samples.at(-1)!.t).toBe(240);
+    while (w.tick < 4000) tick(turns.get(w.tick)!);
+    expect(c.snapshot()).toEqual(straight);
+  }, 60_000);
 });

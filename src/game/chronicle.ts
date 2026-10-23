@@ -105,6 +105,20 @@ export interface MapRefs {
 
 // ------------------------------------------------------------- recorder ---
 
+/** A chronicle's record at one moment (Chronicle.snapshot), to put back when a replay's seek rewinds the world. */
+export interface ChronicleSnapshot {
+  samples: Sample[];
+  deaths: DeathRec[];
+  strikes: StrikeRec[];
+  built: Record<Faction, Record<string, number>>;
+  firstBuilt: Record<Faction, Record<string, number>>;
+  factories: Record<Faction, { total: number; idleRich: number }>;
+  out: { faction: Faction; t: number; by: Faction | null }[];
+  love: { t: number; x: number; y: number } | null;
+  fallen: Record<Faction, HeroRec | null>;
+  finished: boolean;
+}
+
 export class Chronicle {
   readonly samples: Sample[] = [];
   readonly deaths: DeathRec[] = [];
@@ -235,6 +249,39 @@ export class Chronicle {
     if (this.finished) return;
     this.sample();
     this.finished = true;
+  }
+
+  /** The record so far (a copy), to put back with restore() when a replay rewinds the world to this tick. */
+  snapshot(): ChronicleSnapshot {
+    return structuredClone({
+      samples: this.samples, deaths: this.deaths, strikes: this.strikes, built: this.built, firstBuilt: this.firstBuilt,
+      factories: this.factories, out: this.out, love: this.love, fallen: this.fallen, finished: this.finished
+    });
+  }
+
+  /**
+   * Back to a snapshot, in place (the report and the scene hold this
+   * chronicle): a replay's seek put the world back to that tick, and what
+   * was recorded after it is played, and recorded, again.
+   */
+  restore(snap: ChronicleSnapshot): void {
+    const s = structuredClone(snap);
+    const refill = <T>(a: T[], from: T[]) => {
+      a.length = 0;
+      for (const x of from) a.push(x);
+    };
+    refill(this.samples, s.samples);
+    refill(this.deaths, s.deaths);
+    refill(this.strikes, s.strikes);
+    refill(this.out, s.out);
+    for (const f of FACTIONS) {
+      this.built[f] = s.built[f];
+      this.firstBuilt[f] = s.firstBuilt[f];
+      this.factories[f] = s.factories[f];
+    }
+    this.love = s.love;
+    this.fallen = s.fallen;
+    this.finished = s.finished;
   }
 
   /** The best unit per side by kills, fallen or alive. */

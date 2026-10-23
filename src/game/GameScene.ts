@@ -24,7 +24,7 @@ import { Awareness } from "./awareness-view";
 import { baseGoliath, calldownThreatens, planTicks } from "./awareness";
 import { HINTS } from "./hints";
 import { SurvivalPresenter, finishRun } from "./survival";
-import { chronicleOf, type Chronicle } from "./chronicle";
+import { chronicleOf, type Chronicle, type ChronicleSnapshot } from "./chronicle";
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
@@ -59,6 +59,8 @@ import { SIDE_NAME } from "./side-style";
 const listNames = (xs: readonly string[]): string => (xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
 const TICK_MS = 1000 / TICK_RATE;
+/** A watched match keeps its chronicle every this many ticks, as the replay viewer keeps the world (game/replay.ts KEYFRAME_TICKS). */
+const CHRONICLE_EVERY = 30 * TICK_RATE;
 /** Zoom range in CSS px per tile at the look-at point. */
 const MIN_ZOOM = 18;
 const MAX_ZOOM = 110;
@@ -156,6 +158,13 @@ export class GameScene {
   /** Veteran promotions/deaths, the match record, and the HQ-kill cinematic. */
   private heroes!: HeroPresenter;
   private chronicle!: Chronicle;
+  /**
+   * A watched match's chronicle as it stood at every CHRONICLE_EVERY ticks
+   * (the replay viewer's keyframe ticks, game/replay.ts KEYFRAME_TICKS): a
+   * seek back puts it back with the world, or the report counts what was
+   * played twice.
+   */
+  private readonly chronicleAt = new Map<number, ChronicleSnapshot>();
   private finale: Finale | null = null;
   /** Where the match was decided (the deciding HQ or last Goliath's death), sized for what died. */
   private finaleAt: { x: number; y: number; size: number; cause: FinaleCause } | null = null;
@@ -406,6 +415,7 @@ export class GameScene {
       handoff: (p) => this.gest.down(p, performance.now())
     });
     this.chronicle = chronicleOf(this.world);
+    this.keepChronicle();
     this.heroes = new HeroPresenter(v, this.world, {
       player: PLAYER,
       spectator: gameMode.spectator,
@@ -612,9 +622,12 @@ export class GameScene {
     if (!feed || this.interactive) return; // (a duel can't be rewound or skipped)
     const target = Math.max(0, Math.floor(tick));
     if (target < this.world.tick) {
-      const kf = feed.keyframe(target);
+      // the latest keyframe before it whose chronicle was kept too (always the start's at least)
+      let kf = feed.keyframe(target);
+      while (kf && !this.chronicleAt.has(kf.tick)) kf = kf.tick > 0 ? feed.keyframe(kf.tick - 1) : null;
       if (!kf) return;
       restoreWorld(this.world, kf);
+      this.chronicle.restore(this.chronicleAt.get(kf.tick)!);
       this.finale = null;
       this.finaleAt = null;
       this.ended = false;
@@ -629,6 +642,7 @@ export class GameScene {
         this.noteDecider(ev);
       }
       this.chronicle.tick();
+      this.keepChronicle();
       feed.afterTick(this.world, true);
     }
     this.world.fx = [];
@@ -636,6 +650,13 @@ export class GameScene {
     this.snapshotPrev();
     // (the Uplinks and crates are new objects after a rewind, and a seek's steps ran with their events unseen)
     this.objFx.resync();
+  }
+
+  /** A watched match: the chronicle at a keyframe tick, for a seek back (once per tick: a seek forward plays it again). */
+  private keepChronicle(): void {
+    const feed = this.feed;
+    if (!feed || this.interactive || this.world.tick % CHRONICLE_EVERY !== 0 || this.chronicleAt.has(this.world.tick)) return;
+    this.chronicleAt.set(this.world.tick, this.chronicle.snapshot());
   }
 
   /** A commander's radio line: in the ticker, read out by the announcer. */
@@ -825,6 +846,7 @@ export class GameScene {
         if (!fed) this.recorder?.stepped(this.world, cmds);
         this.simSeconds += 1 / TICK_RATE;
         this.afterTick();
+        this.keepChronicle();
         this.feed?.afterTick(this.world, false);
       }
     }
