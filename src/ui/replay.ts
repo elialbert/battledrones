@@ -4,7 +4,7 @@
  * field, or any side's fog: blue's and red's, and a four-player map's green
  * and purple), a "thinking…" line while a live battle waits on its next
  * round, the divergence warning, and each commander's orders and notes for
- * the round on screen.
+ * the round on screen. It steps aside while the report is up at the end.
  */
 import type { GameScene } from "../game/GameScene";
 import type { ReplayFeed } from "../game/replay";
@@ -19,6 +19,7 @@ export interface ReplayPanel {
 }
 
 const CSS = `
+#replay-panel[hidden] { display: none; }
 #replay-panel { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 40; width: min(760px, calc(100vw - 32px));
   font: 13px/1.35 system-ui, sans-serif; color: #e8eef5; pointer-events: none; }
 #replay-panel .rp-bar { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 6px 10px;
@@ -108,8 +109,12 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     );
   };
 
+  // (the report, at the end: it is the screen now, the panel would sit on its head)
+  const endEl = document.getElementById("endscreen");
   return {
     update() {
+      root.hidden = !!endEl && !endEl.hidden;
+      if (root.hidden) return;
       const t = scene.tick;
       const end = feed.playedTo;
       time.textContent = `${clock(t)} / ${clock(end)}${feed.record.end ? "" : " …"}`;
