@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EntityRenderer } from "../src/game/render/entities";
+import { ObjectiveRenderer } from "../src/game/render/objectives";
+import { createMapWorld } from "../src/sim/maps";
 import { Canopy } from "../src/game/three/canopy";
 import type { SquadRig } from "../src/game/three/infantry";
 import { UNITS } from "../src/sim/balance";
@@ -264,5 +266,50 @@ describe("woods thinned over squads (Q2)", () => {
     for (let i = 0; i < 120; i++) canopy.thin([], 0, cot, FRAME);
     expect(Array.from(canopy.fade)).toEqual([0, 0, 0, 0]);
     expect((canopy as unknown as { active: number[] }).active).toEqual([]);
+  });
+});
+
+describe("an Uplink's capture bar", () => {
+  /** Each Uplink's capture bar colour this frame, in order (null: no bar), headless as above. */
+  function barColours(w: World): (number | null)[] {
+    let width = 0;
+    let colour = 0;
+    const out: (number | null)[] = [];
+    // (each Uplink's bar starts with its dark track, 8 wide; the bar itself is a 5-wide arc on it)
+    const over: unknown = new Proxy(function () {}, {
+      get: (_t, k) =>
+        k === "lineStyle"
+          ? (wd: number, c: number) => ((width = wd), (colour = c), width === 8 && out.push(null), over)
+          : k === "arc"
+            ? () => (width === 5 && (out[out.length - 1] = colour), over)
+            : () => over
+    });
+    const view = { scene: new THREE.Scene(), terrain: { surfaceAt: () => 0 }, tweens: { add: () => {} }, rig: { worldPerPx: () => 0.03 }, over };
+    const r = new ObjectiveRenderer(view as never, w, new Proxy({}, { get: () => () => undefined }) as never, {
+      player: "blue", spectator: true, visibleAt: () => true, seesUnit: () => true, earshot: () => 1,
+      alert: () => {}, notify: () => {}, ping: () => {}, hint: () => {}
+    });
+    r.sync(16, 1);
+    return out;
+  }
+  const TEAM = { blue: 0x4fa3ff, red: 0xff5a4a, green: 0x4fd86a, purple: 0xb070ff };
+
+  it("is the colour of the side whose bar it is on a four-player map, held or being taken", () => {
+    const w = createMapWorld("compass-rose", { seed: 1, objectives: true });
+    const [a, b, c, d] = w.objectives.uplinks;
+    Object.assign(a!, { owner: "purple", bar: "purple", progress: 100 });
+    Object.assign(b!, { owner: null, bar: "green", progress: 40, pushing: "green" });
+    Object.assign(c!, { owner: "red", bar: "red", progress: 70, pushing: "blue" });
+    Object.assign(d!, { owner: null, bar: null, progress: 0 });
+    expect(barColours(w).slice(0, 4)).toEqual([TEAM.purple, TEAM.green, TEAM.red, null]);
+  });
+
+  it("is blue's above zero and red's below on a two-player map, as before", () => {
+    const w = createMapWorld("riverlands", { seed: 1, objectives: true });
+    const [a, b, c] = w.objectives.uplinks;
+    Object.assign(a!, { owner: "blue", progress: 100 });
+    Object.assign(b!, { owner: null, progress: -35, pushing: "red" });
+    Object.assign(c!, { owner: null, progress: 0 });
+    expect(barColours(w).slice(0, 3)).toEqual([TEAM.blue, TEAM.red, null]);
   });
 });

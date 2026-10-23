@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
-import { CRATE_NAMES, uplinkPay } from "../../sim/objectives";
+import { CRATE_NAMES, uplinkBar, uplinkPay } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, Uplink, World } from "../../sim/types";
 import { buildingCenter, hqOf } from "../../sim/world";
 import { announce } from "../announce";
@@ -466,15 +466,17 @@ export class ObjectiveRenderer {
     if (owner && seen && !idle) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
     // a loaded Condor selected: gold chevrons close in on every island relay its troops could take
     if (l.infantryOnly && !(owner === this.opts.player && l.crewed) && this.opts.dropReady?.()) this.dropMarks(x, y, R);
-    // the capture bar: a ring around the platform, filled toward whoever is winning it,
-    // on a dark track notched into quarters like the health bars' segments
+    // the capture bar: a ring around the platform in the colour of whoever's bar it is (a duel's
+    // signed progress, a free-for-all's `bar`: uplinkBar), on a dark track notched into quarters
+    // like the health bars' segments
     const ar = 1.38;
-    const p = l.progress / 100;
+    const bar = uplinkBar(l);
+    const p = bar.fill / 100;
     const bh = v.h + 0.2;
     g.lineStyle(8, TRACK, 0.62 * k, 0).strokeCircle(x, y, ar, bh);
     const a0 = -Math.PI / 2;
-    const a1 = a0 + Math.PI * 2 * Math.abs(p);
-    if (Math.abs(p) > 0.001) g.lineStyle(5, p > 0 ? TEAM.blue : TEAM.red, 0.95 * k, 0).arc(x, y, ar, a0, a1, bh + 0.005);
+    const a1 = a0 + Math.PI * 2 * p;
+    if (bar.side && p > 0.001) g.lineStyle(5, TEAM[bar.side], 0.95 * k, 0).arc(x, y, ar, a0, a1, bh + 0.005);
     const notch = this.px(x, y, 4.5);
     g.lineStyle(1.5, TRACK, 0.8 * k, 0);
     for (let i = 0; i < 4; i++) {
@@ -483,7 +485,7 @@ export class ObjectiveRenderer {
       const cy = Math.sin(a);
       g.lineBetween(x + cx * (ar - notch), y + cy * (ar - notch), x + cx * (ar + notch), y + cy * (ar + notch), bh + 0.01);
     }
-    if (Math.abs(p) > 0.001 && Math.abs(p) < 0.999) {
+    if (bar.side && p > 0.001 && p < 0.999) {
       // a bright tip on the leading edge, pulsing while it moves
       const tip = l.pushing ? 4.5 + 1.5 * Math.sin(this.time * 0.02) : 3.5;
       g.fillStyle(0xffffff, (l.pushing ? 0.95 : 0.7) * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(x, y, tip), bh + 0.015);
