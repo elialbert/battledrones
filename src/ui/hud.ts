@@ -1088,7 +1088,8 @@ export function createHud(api: HudApi): Hud {
     layout.refresh();
     if ((api.ctrl.spectator || roster) && (w.out?.length ?? 0) !== outShown) {
       outShown = w.out?.length ?? 0;
-      for (const o of w.out ?? []) root.querySelector(`#versus .vs-${o.faction}`)?.classList.add("out");
+      // (a replay rewound past a knockout: that side is back in)
+      for (const f of sidesOf(w)) root.querySelector(`#versus .vs-${f}`)?.classList.toggle("out", !!w.out?.some((o) => o.faction === f));
     }
     // one-time hints: one at a time, never over a banner or the opener cards, paused time doesn't count
     const busy = api.busy?.() ?? false;

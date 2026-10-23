@@ -40,13 +40,16 @@ export function createObjectivePill(world: World, player: Faction, spectator: bo
   const side = spectator ? "blue" : player;
   const hq = hqOf(world, side);
   const home = hq ? buildingCenter(hq) : side === "red" ? { x: world.width, y: 0 } : { x: 0, y: world.height };
-  const order = [...o.uplinks].sort(
-    (a, b) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b.x - home.x, b.y - home.y)
-  );
+  // (by id: a replay's seek puts the world back to a saved copy, whose Uplinks are new objects)
+  const orderIds = [...o.uplinks]
+    .sort((a, b) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b.x - home.x, b.y - home.y))
+    .map((l) => l.id);
   let lastPips = "";
   let lastDrop = "";
 
   function update(): void {
+    const o = world.objectives;
+    const order = orderIds.map((id) => o.uplinks.find((l) => l.id === id)!);
     // (an island relay held with no troops on it pays nothing: a hollow pip — for the enemy's,
     // only while we can see it: whether they've left one empty is theirs to hide)
     const idle = (l: (typeof order)[number]) =>

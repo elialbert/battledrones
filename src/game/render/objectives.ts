@@ -283,24 +283,7 @@ export class ObjectiveRenderer {
   private incoming(ev: Extract<FxEvent, { type: "crateIncoming" }>): void {
     const c = this.world.objectives.crates.find((k) => k.id === ev.id);
     if (!c) return;
-    const h = this.v.terrain.surfaceAt(ev.x, ev.y);
-    const crate = instance(crateDef());
-    crate.root.visible = false;
-    const chute = modelMesh(chuteGeometry(), false);
-    chute.visible = false;
-    const gm = discMat(GOLD, 0);
-    const glow = new THREE.Mesh(discGeo, gm);
-    glow.position.set(ev.x, h + 0.08, ev.y);
-    glow.scale.setScalar(1.6);
-    glow.renderOrder = 3;
-    const pm = glowMat(0xffffff, 0.3);
-    pm.map = beamTexture();
-    const pillar = new THREE.Mesh(pillarGeo, pm);
-    pillar.position.set(ev.x, h, ev.y);
-    pillar.scale.set(0.9, 14, 1);
-    pillar.renderOrder = 8;
-    this.group.add(crate.root, chute, glow, pillar);
-    this.crates.set(ev.id, { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false });
+    this.addCrate(c);
     if (this.announced.has(ev.drop)) return;
     this.announced.add(ev.drop);
     // one banner per drop, pointing at the crate on our side
@@ -320,6 +303,55 @@ export class ObjectiveRenderer {
       y: at.y
     });
     this.opts.ping(at.x, at.y);
+  }
+
+  /** A crate's models: in the air (hidden) under its pillar of light, until it lands. */
+  private addCrate(c: Crate): CrateView {
+    const h = this.v.terrain.surfaceAt(c.x, c.y);
+    const crate = instance(crateDef());
+    crate.root.visible = false;
+    const chute = modelMesh(chuteGeometry(), false);
+    chute.visible = false;
+    const gm = discMat(GOLD, 0);
+    const glow = new THREE.Mesh(discGeo, gm);
+    glow.position.set(c.x, h + 0.08, c.y);
+    glow.scale.setScalar(1.6);
+    glow.renderOrder = 3;
+    const pm = glowMat(0xffffff, 0.3);
+    pm.map = beamTexture();
+    const pillar = new THREE.Mesh(pillarGeo, pm);
+    pillar.position.set(c.x, h, c.y);
+    pillar.scale.set(0.9, 14, 1);
+    pillar.renderOrder = 8;
+    this.group.add(crate.root, chute, glow, pillar);
+    const v: CrateView = { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false };
+    this.crates.set(c.id, v);
+    return v;
+  }
+
+  /**
+   * The world was put back to a saved copy, or stepped ahead unseen (a
+   * replay's seek): its Uplinks and crates are new objects, and crates came
+   * and went with nobody watching. The Uplinks follow the new ones; the
+   * crates are drawn again as they now are, quietly (no dust, no banner).
+   */
+  resync(): void {
+    for (const v of this.uplinks) {
+      const l = this.world.objectives.uplinks.find((u) => u.id === v.l.id);
+      if (l) v.l = l;
+      v.flash = 0;
+    }
+    for (const v of this.crates.values()) this.destroyCrate(v);
+    this.crates.clear();
+    for (const c of this.world.objectives.crates) {
+      const v = this.addCrate(c);
+      if (this.world.tick < c.landTick) continue;
+      v.landed = true;
+      v.crate.root.visible = true;
+      v.crate.root.position.set(c.x, v.h, c.y);
+      v.crate.root.rotation.set(0, c.id * 0.7, 0);
+      this.group.remove(v.pillar);
+    }
   }
 
   private land(v: CrateView): void {

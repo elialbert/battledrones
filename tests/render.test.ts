@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { EntityRenderer } from "../src/game/render/entities";
 import { ObjectiveRenderer } from "../src/game/render/objectives";
 import { createMapWorld } from "../src/sim/maps";
+import { restoreWorld } from "../src/game/restore";
 import { Canopy } from "../src/game/three/canopy";
 import type { SquadRig } from "../src/game/three/infantry";
 import { UNITS } from "../src/sim/balance";
@@ -270,11 +271,11 @@ describe("woods thinned over squads (Q2)", () => {
 });
 
 describe("an Uplink's capture bar", () => {
-  /** Each Uplink's capture bar colour this frame, in order (null: no bar), headless as above. */
-  function barColours(w: World): (number | null)[] {
+  /** An objective renderer, headless as above, and each Uplink's capture bar colour a frame draws, in order (null: no bar). */
+  function headless(w: World) {
     let width = 0;
     let colour = 0;
-    const out: (number | null)[] = [];
+    let out: (number | null)[] = [];
     // (each Uplink's bar starts with its dark track, 8 wide; the bar itself is a 5-wide arc on it)
     const over: unknown = new Proxy(function () {}, {
       get: (_t, k) =>
@@ -289,9 +290,14 @@ describe("an Uplink's capture bar", () => {
       player: "blue", spectator: true, visibleAt: () => true, seesUnit: () => true, earshot: () => 1,
       alert: () => {}, notify: () => {}, ping: () => {}, hint: () => {}
     });
-    r.sync(16, 1);
-    return out;
+    const frame = () => {
+      out = [];
+      r.sync(16, 1);
+      return out;
+    };
+    return { r, frame };
   }
+  const barColours = (w: World) => headless(w).frame();
   const TEAM = { blue: 0x4fa3ff, red: 0xff5a4a, green: 0x4fd86a, purple: 0xb070ff };
 
   it("is the colour of the side whose bar it is on a four-player map, held or being taken", () => {
@@ -311,5 +317,25 @@ describe("an Uplink's capture bar", () => {
     Object.assign(b!, { owner: null, progress: -35, pushing: "red" });
     Object.assign(c!, { owner: null, progress: 0 });
     expect(barColours(w).slice(0, 3)).toEqual([TEAM.blue, TEAM.red, null]);
+  });
+
+  it("follows the world after a replay's seek puts it back to a saved copy (new Uplink and crate objects)", () => {
+    const w = createMapWorld("compass-rose", { seed: 1, objectives: true });
+    const saved = structuredClone(w);
+    Object.assign(saved.objectives.uplinks[0]!, { owner: "green", bar: "green", progress: 100 });
+    saved.objectives.crates.push({ id: 900, x: 30, y: 30, reward: "scrap", drop: 0, announcedTick: 0, landTick: 0, expireTick: 9999 });
+    const { r, frame } = headless(w);
+    expect(frame()[0]).toBeNull();
+    restoreWorld(w, saved);
+    r.resync();
+    expect(frame()[0]).toBe(TEAM.green);
+    const crates = (r as unknown as { crates: Map<number, { landed: boolean }> }).crates;
+    expect([...crates.keys()]).toEqual([900]);
+    expect(crates.get(900)!.landed).toBe(true);
+    // (and back again: the crate goes, the Uplink is neutral)
+    restoreWorld(w, structuredClone(createMapWorld("compass-rose", { seed: 1, objectives: true })));
+    r.resync();
+    expect(frame()[0]).toBeNull();
+    expect(crates.size).toBe(0);
   });
 });

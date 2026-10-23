@@ -634,6 +634,8 @@ export class GameScene {
     this.world.fx = [];
     this.simSeconds = this.world.tick / TICK_RATE;
     this.snapshotPrev();
+    // (the Uplinks and crates are new objects after a rewind, and a seek's steps ran with their events unseen)
+    this.objFx.resync();
   }
 
   /** A commander's radio line: in the ticker, read out by the announcer. */
