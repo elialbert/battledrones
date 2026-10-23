@@ -177,7 +177,11 @@ orders on every tick, and their worlds stay the same.
 
 The record (**📋 Copy replay JSON**) holds every side's orders as stepped,
 commanders' too, the AI seats' income handicap and the hash trail, so it
-replays in the viewer without the commanders.
+replays in the viewer without the commanders. Every four-player match has
+one, local ones too. Both viewers show all four sides: the game's replay
+panel (each side's eyes, its notes) and `record-viewer.html` (the map, the
+round cards, the totals, and a commands strip stacked by side). A record
+with no agent log, as the game's own are, is read there in 5-second rounds.
 
 ## The host
 

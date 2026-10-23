@@ -16,6 +16,7 @@
   --bg: #ECEAE4; --panel: #F8F7F3; --ink: #1D2025; --muted: #666864; --line: #D5D1C5;
   --sand: #E4D0A3; --dune: #CFB57E; --sand-ink: #6E5730;
   --blue: #1F55C8; --blue-soft: #DCE5F8; --red: #C63C21; --red-soft: #F6DED6;
+  --green: #2D7A33; --green-soft: #DCEFD8; --purple: #7A3FC2; --purple-soft: #EBDFF8;
   --ok: #3B7536; --bad: #B0301D; --hit: #FFF0BF; --hit-line: #D99A12; --lit: #FFE08A;
   --j-key: #44536C; --j-str: #4C6A1B; --j-num: #985710; --j-lit: #7A49A6; --j-punc: #8B8D88;
   --f-display: "Saira Stencil One", "Arial Narrow", Impact, sans-serif;
@@ -26,6 +27,7 @@
   --bg: #131518; --panel: #1B1E22; --ink: #E7E4DC; --muted: #9C998F; --line: #2E3237;
   --sand: #3A3225; --dune: #4D4231; --sand-ink: #C2A673;
   --blue: #7BA3FF; --blue-soft: #1D2B48; --red: #FF8166; --red-soft: #48241C;
+  --green: #7FD68A; --green-soft: #1C3A22; --purple: #C49CFF; --purple-soft: #33244B;
   --ok: #8BC783; --bad: #FF8D76; --hit: #352C12; --hit-line: #E3AE37; --lit: #5A4712;
   --j-key: #A3B3CF; --j-str: #B9D483; --j-num: #F0B46C; --j-lit: #CBA4F1; --j-punc: #6F726F;
   color-scheme: dark; } }
@@ -33,6 +35,7 @@
   --bg: #131518; --panel: #1B1E22; --ink: #E7E4DC; --muted: #9C998F; --line: #2E3237;
   --sand: #3A3225; --dune: #4D4231; --sand-ink: #C2A673;
   --blue: #7BA3FF; --blue-soft: #1D2B48; --red: #FF8166; --red-soft: #48241C;
+  --green: #7FD68A; --green-soft: #1C3A22; --purple: #C49CFF; --purple-soft: #33244B;
   --ok: #8BC783; --bad: #FF8D76; --hit: #352C12; --hit-line: #E3AE37; --lit: #5A4712;
   --j-key: #A3B3CF; --j-str: #B9D483; --j-num: #F0B46C; --j-lit: #CBA4F1; --j-punc: #6F726F;
   color-scheme: dark; }
@@ -55,13 +58,15 @@ button, select, input { font: inherit; color: inherit; }
 .matchup { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 14.5px; }
 .fac { display: inline-flex; gap: 6px; align-items: baseline; }
 .fac b { font-weight: 600; }
-.fac.blue b { color: var(--blue); } .fac.red b { color: var(--red); }
+/* each side's colour (blue and red; a four-player map's green and purple too): the rules below read --fc and --fs */
+.blue { --fc: var(--blue); --fs: var(--blue-soft); } .red { --fc: var(--red); --fs: var(--red-soft); }
+.green { --fc: var(--green); --fs: var(--green-soft); } .purple { --fc: var(--purple); --fs: var(--purple-soft); }
+.fac b { color: var(--fc); }
 .fac .op { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 .vs { color: var(--muted); font-size: 12px; }
 .top-right { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .result { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 4px; font-weight: 600; font-size: 14px; border: 1px solid currentColor; }
-.result.blue { color: var(--blue); background: var(--blue-soft); }
-.result.red { color: var(--red); background: var(--red-soft); }
+.result:not(.none) { color: var(--fc); background: var(--fs); }
 .result.none { color: var(--muted); }
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 13.5px; }
 .btn:hover { border-color: var(--muted); }
@@ -111,28 +116,28 @@ button, select, input { font: inherit; color: inherit; }
 .grid { stroke: var(--sand-ink); stroke-opacity: .18; stroke-width: .06; }
 .gridlab { fill: var(--sand-ink); font-family: var(--f-mono); font-size: 1.05px; opacity: .8; }
 .u { stroke: var(--sand); stroke-width: .14; }
-.u.blue, .seg.blue .head { fill: var(--blue); } .u.red, .seg.red .head { fill: var(--red); }
+.u, .seg .head { fill: var(--fc); }
 .seg line { stroke-width: .2; stroke-linecap: round; }
-.seg.blue line { stroke: var(--blue); } .seg.red line { stroke: var(--red); }
+.seg line { stroke: var(--fc); }
 .seg.am line { stroke-dasharray: .55 .4; }
 .atk { fill: none; stroke-width: .16; }
-.atk.blue { stroke: var(--blue); } .atk.red { stroke: var(--red); }
+.atk { stroke: var(--fc); }
 .bld rect { stroke-width: .16; }
-.bld.blue rect { fill: var(--blue-soft); stroke: var(--blue); } .bld.red rect { fill: var(--red-soft); stroke: var(--red); }
+.bld rect { fill: var(--fs); stroke: var(--fc); }
 .bld.new rect { stroke-width: .32; }
 .bld text { font-family: var(--f-mono); font-size: 1.05px; font-weight: 500; text-anchor: middle; dominant-baseline: central; }
-.bld.blue text { fill: var(--blue); } .bld.red text { fill: var(--red); }
+.bld text { fill: var(--fc); }
 .rally path { stroke-width: .12; }
-.rally.blue path { fill: var(--blue); stroke: var(--blue); } .rally.red path { fill: var(--red); stroke: var(--red); }
+.rally path { fill: var(--fc); stroke: var(--fc); }
 .hv { fill: none; stroke: var(--sand-ink); stroke-width: .14; }
 .cd circle { stroke-width: .22; stroke-dasharray: .5 .35; }
-.cd.blue circle { fill: var(--blue); fill-opacity: .12; stroke: var(--blue); } .cd.red circle { fill: var(--red); fill-opacity: .12; stroke: var(--red); }
+.cd circle { fill: var(--fc); fill-opacity: .12; stroke: var(--fc); }
 .cd text { font-family: var(--f-display); font-size: 1.5px; text-anchor: middle; letter-spacing: .08px; }
-.cd.blue text { fill: var(--blue); } .cd.red text { fill: var(--red); }
+.cd text { fill: var(--fc); }
 .lm path { stroke: var(--sand); stroke-width: .15; }
-.lm.blue path { fill: var(--blue); } .lm.red path { fill: var(--red); }
+.lm path { fill: var(--fc); }
 .lm text { font-family: var(--f-ui); font-weight: 600; font-size: 1.3px; paint-order: stroke; stroke: var(--sand); stroke-width: .35px; }
-.lm.blue text { fill: var(--blue); } .lm.red text { fill: var(--red); }
+.lm text { fill: var(--fc); }
 .ping { fill: none; stroke: var(--ink); stroke-width: .22; }
 .ping-dot { fill: var(--ink); }
 .uhi { fill: none; stroke: var(--ink); stroke-width: .22; }
@@ -152,7 +157,7 @@ button, select, input { font: inherit; color: inherit; }
 .timeline { display: grid; gap: 8px; }
 .strip { position: relative; height: 64px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); cursor: pointer; touch-action: none; }
 .strip svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.sb.blue { fill: var(--blue); } .sb.red { fill: var(--red); }
+.sb { fill: var(--fc); }
 .sb { opacity: .75; }
 .smid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .scur { fill: var(--hit-line); fill-opacity: .28; stroke: var(--hit-line); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -173,7 +178,12 @@ button, select, input { font: inherit; color: inherit; }
 .totals th, .totals td { text-align: left; vertical-align: top; padding: 6px 6px; border-top: 1px solid var(--line); }
 .totals th { font-weight: 500; color: var(--muted); width: 26%; }
 .totals thead th { border-top: 0; font-weight: 600; }
-.totals thead th.blue { color: var(--blue); } .totals thead th.red { color: var(--red); }
+.totals thead th { color: var(--fc, inherit); }
+/* (a four-player record's four columns: smaller, chips that wrap, and sideways scrolling rather than spilling if still too wide) */
+.totwrap { overflow-x: auto; }
+.totals.multi { font-size: 12.5px; }
+.totals.multi th { width: auto; }
+.totals.multi .chip { white-space: normal; font-size: 11px; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; white-space: nowrap; background: var(--panel); }
 .chip i { font-style: normal; color: var(--muted); }
@@ -183,9 +193,8 @@ button, select, input { font: inherit; color: inherit; }
 .roundhead h2 { margin: 0; font-family: var(--f-display); font-weight: 400; font-size: 30px; line-height: 1; }
 .roundhead .sub { color: var(--muted); font-size: 13px; }
 .final { border: 1px solid currentColor; border-radius: 4px; padding: 8px 12px; font-weight: 600; }
-.final.blue { color: var(--blue); background: var(--blue-soft); } .final.red { color: var(--red); background: var(--red-soft); } .final.none { color: var(--muted); }
+.final:not(.none) { color: var(--fc); background: var(--fs); } .final.none { color: var(--muted); }
 .side { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--fc); border-radius: 4px; padding: 12px 14px; display: grid; gap: 9px; min-width: 0; }
-.side.blue { --fc: var(--blue); } .side.red { --fc: var(--red); }
 .side header { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; }
 .side header b { color: var(--fc); font-size: 16px; }
 .side header .who { font-family: var(--f-mono); font-size: 12.5px; }
@@ -219,7 +228,6 @@ button, select, input { font: inherit; color: inherit; }
 .jblock .path { position: sticky; top: 0; background: var(--panel); padding: 6px 12px 2px; font-size: 11.5px; color: var(--muted); display: flex; gap: 8px; }
 .jblock .path b { color: var(--ink); font-weight: 500; }
 .jblock .path .tag { color: var(--fc, var(--muted)); }
-.jblock.blue { --fc: var(--blue); } .jblock.red { --fc: var(--red); }
 .jblock pre { margin: 0; padding: 2px 12px 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; border-left: 3px solid var(--fc, transparent); }
 .k { color: var(--j-key); } .s { color: var(--j-str); } .nm { color: var(--j-num); } .l { color: var(--j-lit); } .p { color: var(--j-punc); }
 .jnote { font-size: 12.5px; color: var(--muted); margin: 0; }
@@ -293,7 +301,7 @@ button, select, input { font: inherit; color: inherit; }
     </div>
     <div>
       <div class="colhead"><span class="label" id="totlabel">So far</span></div>
-      <table class="totals" id="totals"></table>
+      <div class="totwrap"><table class="totals" id="totals"></table></div>
     </div>
   </section>
 
@@ -322,7 +330,8 @@ button, select, input { font: inherit; color: inherit; }
 "use strict";
 const $ = (s) => document.querySelector(s);
 const NS = "http://www.w3.org/2000/svg";
-const SIDES = ["blue", "red"];
+// every side a record may have (an agent battle's two; a four-player map's four, in the game's canonical order)
+const ALL_SIDES = ["blue", "red", "green", "purple"];
 const TPS = 10; // ticks per second (matches the clock times the players write in their notes)
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -331,7 +340,8 @@ const k = (n) => { n = num(n); return n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n 
 const other = (s) => (s === "blue" ? "red" : "blue");
 // A record can come from any link (?replay=): what reaches the page as markup is a number, a side or escaped text.
 const num = (v) => (Number.isFinite(+v) ? +v : 0);
-const sideOf = (s) => (SIDES.includes(s) ? s : null);
+const sideOf = (s) => (ALL_SIDES.includes(s) ? s : null);
+const bySide = (sides, make) => Object.fromEntries(sides.map((s) => [s, make(s)]));
 
 let RAW = "", D = null, M = null, cur = 0, jsonMode = "round", timer = null, pinned = null;
 
@@ -345,36 +355,42 @@ function build(d) {
   const sided = log.filter((e) => sideOf(e.side));
   const radio = (Array.isArray(d.radio) ? d.radio : []).map((x) => (Array.isArray(x) ? [num(x[0]), sideOf(x[1]), String(x[2] ?? "")] : [0, null, ""]));
   const end = d.end && typeof d.end === "object" ? { tick: num(d.end.tick), winner: sideOf(d.end.winner), reason: String(d.end.reason ?? "") } : null;
-  const per = num(d.round) || 50;
+  // the sides that played: its seats, and any its turns or log name
+  const named = new Set([...Object.keys(d.seats && typeof d.seats === "object" ? d.seats : {}), ...turns.map((t) => t[1]), ...sided.map((e) => e.side)]);
+  const sides = ALL_SIDES.filter((s) => named.has(s));
+  if (sides.length < 2) for (const s of ["blue", "red"]) if (!sides.includes(s)) sides.push(s);
+  sides.sort((a, b) => ALL_SIDES.indexOf(a) - ALL_SIDES.indexOf(b));
+  // (a game's own record has no log, and a turn on every tick that had orders, round 1: its rounds are 5-second spans)
+  const per = log.length ? num(d.round) || 50 : Math.max(num(d.round), 50);
   // Rounds come from the log; a record without one falls back to tick buckets.
   let rounds = [];
   const seen = new Map();
   log.forEach((e, i) => {
     if (!sideOf(e.side)) return;
     let r = seen.get(num(e.round));
-    if (!r) { r = { round: num(e.round), tick: num(e.tick), entries: { blue: [], red: [] } }; seen.set(r.round, r); rounds.push(r); }
+    if (!r) { r = { round: num(e.round), tick: num(e.tick), entries: bySide(sides, () => []) }; seen.set(r.round, r); rounds.push(r); }
     r.entries[e.side].push(i);
   });
   if (!rounds.length) {
     const ticks = [...new Set(turns.map((t) => Math.floor(t[0] / per) * per))].sort((a, b) => a - b);
-    rounds = ticks.map((t, i) => ({ round: i + 1, tick: t, entries: { blue: [], red: [] } }));
-    if (!rounds.length) rounds = [{ round: 0, tick: 0, entries: { blue: [], red: [] } }];
+    rounds = ticks.map((t, i) => ({ round: i + 1, tick: t, entries: bySide(sides, () => []) }));
+    if (!rounds.length) rounds = [{ round: 0, tick: 0, entries: bySide(sides, () => []) }];
   }
   rounds.sort((a, b) => a.tick - b.tick || a.round - b.round);
   const roundOf = (t) => { let lo = 0; for (let i = 0; i < rounds.length; i++) if (rounds[i].tick <= t) lo = i; return lo; };
-  rounds.forEach((r) => { r.turns = []; r.radio = []; r.hashes = []; r.cmds = { blue: 0, red: 0 }; r.calldowns = 0; r.refused = { blue: 0, red: 0 }; });
+  rounds.forEach((r) => { r.turns = []; r.radio = []; r.hashes = []; r.cmds = bySide(sides, () => 0); r.calldowns = 0; r.refused = bySide(sides, () => 0); });
   const turnRound = turns.map((t, i) => { const ri = roundOf(t[0]); rounds[ri].turns.push(i); rounds[ri].cmds[t[1]] = (rounds[ri].cmds[t[1]] || 0) + (t[2] || []).length; rounds[ri].calldowns += (t[2] || []).filter((c) => c.type === "calldown").length; return ri; });
   radio.forEach((r, i) => rounds[roundOf(r[0])].radio.push(i));
   // A hash at tick t is the world after the step that reached t, so it belongs with the round that played tick t-1.
   (Array.isArray(d.hashes) ? d.hashes : []).forEach((h, i) => rounds[roundOf(Math.max(0, num(h?.[0]) - 1))].hashes.push(i));
-  rounds.forEach((r) => SIDES.forEach((s) => (r.entries[s] || []).forEach((i) => (log[i].results || []).forEach((x) => { if (/^\d+\.\s*refused/.test(x)) r.refused[s]++; }))));
+  rounds.forEach((r) => sides.forEach((s) => (r.entries[s] || []).forEach((i) => (log[i].results || []).forEach((x) => { if (/^\d+\.\s*refused/.test(x)) r.refused[s]++; }))));
   const endRound = end ? roundOf(end.tick) : -1;
 
   // Frame: each side's log uses its own frame; turns use the true map. Work out the mirror from paired coordinates.
-  const frame = inferFrame(d, turns, sided);
+  const frame = inferFrame(d, turns, sided, sides);
   const kinds = inferKinds(turns, sided);
-  const landmarks = inferLandmarks(d, turns, sided, frame);
-  return { d, turns, log, radio, end, rounds, turnRound, endRound, frame, kinds, landmarks, per };
+  const landmarks = inferLandmarks(d, turns, sided, frame, sides);
+  return { d, sides, turns, log, radio, end, rounds, turnRound, endRound, frame, kinds, landmarks, per };
 }
 
 function coordsOf(o) {
@@ -382,7 +398,7 @@ function coordsOf(o) {
   for (const key of ["to", "at"]) { const v = o[key]; if (Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number")) out.push(v); }
   return out;
 }
-function inferFrame(d, turns, log) {
+function inferFrame(d, turns, log, sides) {
   const byKey = new Map();
   turns.forEach(([t, s, cmds]) => (cmds || []).forEach((c) => {
     const p = "x" in c ? [c.x, c.y] : "tx" in c ? [c.tx + .5, c.ty + .5] : null;
@@ -392,7 +408,7 @@ function inferFrame(d, turns, log) {
   let maxX = 0, maxY = 0;
   byKey.forEach((ps) => ps.forEach(([x, y]) => { maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }));
   const mirrored = {};
-  const hitsId = { blue: 0, red: 0 }, pairs = { blue: [], red: [] };
+  const hitsId = bySide(sides, () => 0), pairs = bySide(sides, () => []);
   log.forEach((e) => {
     const ps = byKey.get(e.tick + "|" + e.side); if (!ps) return;
     (e.orders || []).forEach((o) => coordsOf(o).forEach(([ox, oy]) => ps.forEach(([tx, ty]) => {
@@ -400,13 +416,15 @@ function inferFrame(d, turns, log) {
       pairs[e.side].push([ox, oy, tx, ty]);
     })));
   });
-  SIDES.forEach((s) => pairs[s].forEach(([ox, oy, tx, ty]) => {
+  sides.forEach((s) => pairs[s].forEach(([ox, oy, tx, ty]) => {
     const W = Math.round(tx - .5 + ox + 1), H = Math.round(ty - .5 + oy + 1);
     tallyW.set(W, (tallyW.get(W) || 0) + 1); tallyH.set(H, (tallyH.get(H) || 0) + 1);
   }));
   const best = (m, fb) => { let bk = fb, bv = 0; m.forEach((v, key) => { if (v > bv) { bv = v; bk = key; } }); return Math.max(bk, fb); };
-  const W = best(tallyW, Math.ceil(maxX)), H = best(tallyH, Math.ceil(maxY));
-  SIDES.forEach((s) => {
+  let W = best(tallyW, Math.ceil(maxX)), H = best(tallyH, Math.ceil(maxY));
+  // (no log to pair coordinates from, only where orders went: every map is square, so the larger guess is nearer)
+  if (!tallyW.size) W = H = Math.max(W, H);
+  sides.forEach((s) => {
     let mir = 0;
     pairs[s].forEach(([ox, oy, tx, ty]) => { if (Math.abs(tx - (W - 1 - ox + .5)) < .01 && Math.abs(ty - (H - 1 - oy + .5)) < .01) mir++; });
     mirrored[s] = mir > hitsId[s];
@@ -436,7 +454,7 @@ function inferKinds(turns, log) {
   });
   return kinds;
 }
-function inferLandmarks(d, turns, log, frame) {
+function inferLandmarks(d, turns, log, frame, sides) {
   const verbMap = { rally: "rally", attack_move: "attackMove", move: "move" };
   const tally = new Map();
   const tmap = new Map(turns.map((t) => [t[0] + "|" + t[1], t[2] || []]));
@@ -453,8 +471,10 @@ function inferLandmarks(d, turns, log, frame) {
   const bestBy = new Map();
   tally.forEach((n, key) => { const [s, name, x, y] = key.split("|"); const id = s + "|" + name; if (!bestBy.has(id) || bestBy.get(id).n < n) bestBy.set(id, { side: s, name, x: +x, y: +y, n }); });
   return [...bestBy.values()].map((l) => {
-    const owner = l.name === "enemy-hq" ? other(l.side) : l.name === "hq" || l.name === "own-hq" ? l.side : l.side;
-    const label = /hq/.test(l.name) ? cap(owner) + " HQ" : l.name;
+    // (an enemy HQ is the other side's in a duel; with three rivals, "the enemy" doesn't say whose)
+    const rivalHq = l.name === "enemy-hq" && sides.length > 2;
+    const owner = l.name === "enemy-hq" && !rivalHq ? other(l.side) : l.side;
+    const label = rivalHq ? "enemy HQ" : /hq/.test(l.name) ? cap(owner) + " HQ" : l.name;
     return { ...l, owner, label };
   });
 }
@@ -471,8 +491,8 @@ function asPlayed() {
 // What the orders say up to and including round ri.
 function stateAt(ri) {
   const units = new Map(), rallies = new Map(), buildings = [], harvest = new Map(), calldowns = [], segs = [];
-  const pending = { blue: [], red: [] };
-  const stats = { blue: blankStats(), red: blankStats() };
+  const pending = bySide(M.sides, () => []);
+  const stats = bySide(M.sides, () => blankStats());
   M.turns.forEach((t, i) => {
     const r = M.turnRound[i]; if (r > ri) return;
     const [tick, side, cmds] = t;
@@ -505,7 +525,7 @@ function stateAt(ri) {
       }
     });
   });
-  for (let i = 0; i <= ri; i++) SIDES.forEach((s) => (stats[s].refused += M.rounds[i].refused[s] || 0));
+  for (let i = 0; i <= ri; i++) M.sides.forEach((s) => (stats[s].refused += M.rounds[i].refused[s] || 0));
   return { units, rallies, buildings, harvest, calldowns, segs, stats };
 }
 function blankStats() { return { cmds: 0, refused: 0, units: {}, buildings: {}, calldowns: {}, sold: 0 }; }
@@ -533,7 +553,7 @@ function drawBase() {
   for (let y = 0; y <= H; y += step) { svg("line", { class: "grid", x1: 0, y1: y, x2: W, y2: y }, g); svg("text", { class: "gridlab", x: -0.6, y: y + .35, "text-anchor": "end" }, g).textContent = y; }
   svg("rect", { x: 0, y: 0, width: W, height: H, fill: "none", class: "grid", "stroke-opacity": .45 }, g);
   const defs = svg("defs", {}, map);
-  SIDES.forEach((s) => { const m = svg("marker", { id: "arr-" + s, viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 3.2, markerHeight: 3.2, orient: "auto-start-reverse" }, defs); svg("path", { d: "M0 0L10 5L0 10z", class: "head" }, svg("g", { class: "seg " + s }, m)); });
+  M.sides.forEach((s) => { const m = svg("marker", { id: "arr-" + s, viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 3.2, markerHeight: 3.2, orient: "auto-start-reverse" }, defs); svg("path", { d: "M0 0L10 5L0 10z", class: "head" }, svg("g", { class: "seg " + s }, m)); });
   svg("g", { id: "layer" }, map);
   svg("g", { id: "fx" }, map);
 }
@@ -599,17 +619,30 @@ function showUnit(id) {
 function drawStrip() {
   const s = $("#stripsvg"), n = M.rounds.length;
   s.setAttribute("viewBox", `0 0 ${n} 100`); s.innerHTML = "";
-  let max = 1; M.rounds.forEach((r) => SIDES.forEach((sd) => (max = Math.max(max, r.cmds[sd] || 0))));
+  // a duel's two sides: one above the line, one below; more: stacked up from the bottom, in side order
+  const duo = M.sides.length === 2;
+  const total = (r) => M.sides.reduce((v, sd) => v + (r.cmds[sd] || 0), 0);
+  let max = 1; M.rounds.forEach((r) => (max = Math.max(max, duo ? Math.max(...M.sides.map((sd) => r.cmds[sd] || 0)) : total(r))));
   svg("rect", { id: "scur", class: "scur", x: 0, y: 0, width: 1, height: 100 }, s);
   M.rounds.forEach((r, i) => {
-    const hb = (r.cmds.blue || 0) / max * 44, hr = (r.cmds.red || 0) / max * 44;
-    if (hb) svg("rect", { class: "sb blue", x: i + .14, y: 50 - hb, width: .72, height: hb }, s);
-    if (hr) svg("rect", { class: "sb red", x: i + .14, y: 50, width: .72, height: hr }, s);
+    if (duo) {
+      const [a, b] = M.sides;
+      const ha = (r.cmds[a] || 0) / max * 44, hb = (r.cmds[b] || 0) / max * 44;
+      if (ha) svg("rect", { class: "sb " + a, x: i + .14, y: 50 - ha, width: .72, height: ha }, s);
+      if (hb) svg("rect", { class: "sb " + b, x: i + .14, y: 50, width: .72, height: hb }, s);
+    } else {
+      let y = 98;
+      M.sides.forEach((sd) => {
+        const h = (r.cmds[sd] || 0) / max * 88;
+        if (h) svg("rect", { class: "sb " + sd, x: i + .14, y: (y -= h), width: .72, height: h }, s);
+      });
+    }
     if (r.calldowns) svg("rect", { class: "scd", x: i + .3, y: 1.5, width: .4, height: 4 }, s);
   });
-  svg("line", { class: "smid", x1: 0, y1: 50, x2: n, y2: 50 }, s);
+  if (duo) svg("line", { class: "smid", x1: 0, y1: 50, x2: n, y2: 50 }, s);
   const last = M.rounds[n - 1], endT = M.end ? M.end.tick : last.tick;
-  $("#ruler").innerHTML = `<span>${fmtT(M.rounds[0].tick)}</span><span>commands per round, blue above red · peak ${max} · ▮ calldown</span><span>${fmtT(endT)}</span>`;
+  const how = duo ? `${M.sides[0]} above ${M.sides[1]}` : `stacked by side`;
+  $("#ruler").innerHTML = `<span>${fmtT(M.rounds[0].tick)}</span><span>commands per round, ${how} · peak ${max} · ▮ calldown</span><span>${fmtT(endT)}</span>`;
   $("#strip").setAttribute("aria-valuemax", n - 1);
 }
 
@@ -618,10 +651,10 @@ function renderHeader() {
   const d = M.d, end = M.end;
   const mapName = String(d.map || "unknown map").replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   const player = (s) => String(((d.seats || {})[s] || {}).player || "?").replace(/^(openai|anthropic|llm):/, "");
-  document.title = `${player("blue")} vs ${player("red")} · ${mapName} · Battle Drones Record Viewer`;
+  document.title = `${M.sides.map(player).join(" vs ")} · ${mapName} · Battle Drones Record Viewer`;
   $("#eyebrow").innerHTML = `<a href="?">Battle records</a> · v${esc(d.v ?? "?")}${Array.isArray(d.mutators) && d.mutators.length ? " · " + esc(d.mutators.join(", ")) : ""}`;
   $("#title").innerHTML = `${esc(mapName)}<small>seed ${esc(d.seed ?? "?")}</small>`;
-  $("#matchup").innerHTML = SIDES.map((s) => {
+  $("#matchup").innerHTML = M.sides.map((s) => {
     const seat = (d.seats || {})[s] || {};
     return `<span class="fac ${s}"><b>${cap(s)}</b><span class="mono">${esc(seat.player || "?")}</span>${d.openers && d.openers[s] ? `<span class="op">${esc(d.openers[s])}</span>` : ""}</span>`;
   }).join('<span class="vs">vs</span>');
@@ -642,7 +675,7 @@ function renderHeader() {
   parts.push(`<span>map <b class="mono">${M.frame.W}×${M.frame.H}</b></span>`);
   const played = asPlayed();
   if (played) parts.push(`<span>as played: <b>${esc(played)}</b> (re-simulated on newer game code)</span>`);
-  SIDES.forEach((s) => { if (u[s]) parts.push(`<span>${cap(s)} tokens <b class="mono">${k(u[s].input)}</b> in (${k(u[s].cached)} cached) · <b class="mono">${k(u[s].output)}</b> out · ${esc(u[s].toolCalls ?? "?")} tool calls</span>`); });
+  M.sides.forEach((s) => { if (u[s]) parts.push(`<span>${cap(s)} tokens <b class="mono">${k(u[s].input)}</b> in (${k(u[s].cached)} cached) · <b class="mono">${k(u[s].output)}</b> out · ${esc(u[s].toolCalls ?? "?")} tool calls</span>`); });
   $("#meta").innerHTML = parts.join("");
 }
 
@@ -665,11 +698,12 @@ function renderDetail() {
   let h = `<div class="colhead"><span class="label">Round dispatches</span></div>
   <div class="roundhead"><h2>Round ${r.round}</h2><span class="sub mono">tick ${r.tick}${tEnd > r.tick ? "–" + tEnd : ""} · ${fmtT(r.tick)}</span></div>`;
   if (cur === M.endRound && end) {
-    const why = { hq: "destroyed the enemy HQ", time: "won on time", aborted: "battle aborted" }[end.reason] || end.reason;
+    // (a free-for-all's winner knocked out every rival)
+    const why = { hq: M.sides.length > 2 ? "is the last side standing" : "destroyed the enemy HQ", time: "won on time", aborted: "battle aborted" }[end.reason] || end.reason;
     const played = asPlayed();
     h += `<div class="final ${end.winner || "none"}">${end.winner ? cap(end.winner) + " " + esc(why) : "No winner"} at tick ${end.tick} (${fmtT(end.tick)}).${played ? ` As played, ${esc(played.charAt(0).toLowerCase() + played.slice(1))}: this record was re-simulated on newer game code, and its last orders played on.` : ""}</div>`;
   }
-  SIDES.forEach((s) => {
+  M.sides.forEach((s) => {
     const idxs = r.entries[s] || [];
     const seat = (d.seats || {})[s] || {};
     const turnsHere = r.turns.filter((i) => M.turns[i][1] === s).map((i) => M.turns[i]);
@@ -713,8 +747,9 @@ function renderTotals(st) {
   const r = M.rounds[cur];
   $("#totlabel").textContent = `So far · through round ${r.round}`;
   const chips = (o) => { const e = Object.entries(o).sort((a, b) => b[1] - a[1]); return e.length ? `<div class="chips">${e.map(([a, b]) => `<span class="chip">${esc(a)} <i>×${b}</i></span>`).join("")}</div>` : `<span class="empty">none</span>`; };
-  const row = (label, f) => `<tr><th scope="row">${label}</th>${SIDES.map((s) => `<td>${f(st.stats[s] || blankStats(), s)}</td>`).join("")}</tr>`;
-  $("#totals").innerHTML = `<thead><tr><th></th><th class="blue">Blue</th><th class="red">Red</th></tr></thead><tbody>
+  const row = (label, f) => `<tr><th scope="row">${label}</th>${M.sides.map((s) => `<td>${f(st.stats[s] || blankStats(), s)}</td>`).join("")}</tr>`;
+  $("#totals").classList.toggle("multi", M.sides.length > 2);
+  $("#totals").innerHTML = `<thead><tr><th></th>${M.sides.map((s) => `<th class="${s}">${cap(s)}</th>`).join("")}</tr></thead><tbody>
     ${row("Commands", (x) => `<span class="mono">${x.cmds}</span>`)}
     ${row("Orders refused", (x) => `<span class="mono">${x.refused}</span>`)}
     ${row("Units queued", (x) => chips(x.units))}
@@ -773,7 +808,7 @@ function renderJson(scroll) {
   $("#jmFile").setAttribute("aria-pressed", jsonMode === "file");
   if (jsonMode === "round") {
     const blocks = [];
-    SIDES.forEach((s) => (r.entries[s] || []).forEach((i) => blocks.push({ path: `log[${i}]`, tag: `${s} · round ${M.log[i].round}`, side: s, v: M.log[i] })));
+    M.sides.forEach((s) => (r.entries[s] || []).forEach((i) => blocks.push({ path: `log[${i}]`, tag: `${s} · round ${M.log[i].round}`, side: s, v: M.log[i] })));
     r.turns.forEach((i) => blocks.push({ path: `turns[${i}]`, tag: `${M.turns[i][1]} · tick ${M.turns[i][0]}`, side: M.turns[i][1], v: M.turns[i] }));
     r.radio.forEach((i) => blocks.push({ path: `radio[${i}]`, tag: M.radio[i][1] || "radio", side: M.radio[i][1], v: d.radio[i] }));
     r.hashes.forEach((i) => blocks.push({ path: `hashes[${i}]`, tag: "world hash", v: d.hashes[i] }));
