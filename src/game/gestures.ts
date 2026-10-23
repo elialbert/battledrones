@@ -16,7 +16,7 @@ export interface GesturePointer {
 
 export interface GestureCallbacks {
   onTap(x: number, y: number, pointerType: "touch" | "mouse" | "pen"): void;
-  onDoubleTap(x: number, y: number): void;
+  onDoubleTap(x: number, y: number, pointerType: "touch" | "mouse" | "pen"): void;
   onBoxStart(x: number, y: number): void;
   onBoxMove(x: number, y: number): void;
   /**
@@ -212,7 +212,7 @@ export class GestureRecognizer {
           Math.hypot(p.x - this.lastTapX, p.y - this.lastTapY) <= DOUBLE_TAP_SLOP_PX
         ) {
           this.lastTapTime = -Infinity;
-          this.cb.onDoubleTap(p.x, p.y);
+          this.cb.onDoubleTap(p.x, p.y, this.downType);
         } else {
           this.lastTapTime = now;
           this.lastTapX = p.x;

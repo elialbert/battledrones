@@ -663,6 +663,21 @@ export class Controller {
     return true;
   }
 
+  /** Mouse commands: left-click ground moves only; right-click commands without selecting or boarding. */
+  clickWorld(wx: number, wy: number, hit: TapHit, button: "left" | "right", toggle = false): void {
+    if (button === "right") {
+      if (hit.kind === "ownUnit") {
+        const u = this.world.units.get(hit.id);
+        if (u) { wx = u.x; wy = u.y; }
+      }
+      if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
+      this.forceMove = false;
+    } else if (hit.kind === "ground" && this.selectedUnits.size > 0 && !this.placing) {
+      this.forceMove = true;
+    }
+    this.tapWorld(wx, wy, hit, toggle);
+  }
+
   /** Player tapped world position (wx, wy in tile units); `toggle` (Shift) adds or removes a tapped unit. */
   tapWorld(wx: number, wy: number, hit: TapHit, toggle = false): void {
     const w = this.world;
@@ -1070,8 +1085,7 @@ export class Controller {
    * tapping a squad sends it aboard the nearest selected Condor with a seat,
    * and tapping a Goliath has two empty ones lift it (liftTap). A Condor
    * that is flying somewhere stops to come and meet them. Returns false when
-   * the tap is an ordinary selection. (A right-click on our own unit loads
-   * the same way.)
+   * the tap is an ordinary selection.
    */
   boardTap(id: number): boolean {
     if (this.spectator || this.placing) return false;

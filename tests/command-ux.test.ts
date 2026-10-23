@@ -267,6 +267,107 @@ describe("controller: touch placement", () => {
   });
 });
 
+describe("mouse orders", () => {
+  it("left-clicking terrain force-moves the selection; right-clicking attack-moves", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const squad = spawnUnit(w, "trooper", "blue", 11, 10);
+    c.selectUnits([tank.id, squad.id]);
+    c.clickWorld(20.5, 21.5, { kind: "ground" }, "left");
+    expect(c.forceMove).toBe(false);
+    // Right-click always attacks along the route, even with Move only armed.
+    c.forceMove = true;
+    c.clickWorld(22.5, 23.5, { kind: "ground" }, "right");
+    expect(c.drainCommands()).toEqual([
+      { type: "move", faction: "blue", unitIds: [tank.id, squad.id], x: 20.5, y: 21.5 },
+      { type: "attackMove", faction: "blue", unitIds: [tank.id, squad.id], x: 22.5, y: 23.5 }
+    ]);
+    expect([...c.selectedUnits]).toEqual([tank.id, squad.id]);
+    expect(c.forceMove).toBe(false);
+    // Touch still defaults to attack-move after a mouse move.
+    c.tapWorld(24.5, 25.5, { kind: "ground" });
+    expect(c.drainCommands()[0]?.type).toBe("attackMove");
+  });
+
+  it("right-clicking an enemy focuses that target", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    spawnUnit(w, "stinger", "red", 12, 10);
+    const target = spawnUnit(w, "stinger", "red", 20, 20);
+    c.selectUnits([tank.id]);
+    c.clickWorld(target.x, target.y, { kind: "enemy", id: target.id, targetsAir: false }, "right");
+    expect(c.drainCommands()).toEqual([
+      { type: "attack", faction: "blue", unitIds: [tank.id], targetId: target.id }
+    ]);
+    expect([...c.selectedUnits]).toEqual([tank.id]);
+  });
+
+  it("right-clicking a friendly unit attack-moves to its position without selecting it", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const friend = spawnUnit(w, "wasp", "blue", 20, 20);
+    c.selectUnits([tank.id]);
+    // Aircraft can be clicked above their ground position.
+    c.clickWorld(20.2, 19.5, { kind: "ownUnit", id: friend.id }, "right");
+    expect(c.drainCommands()).toEqual([
+      { type: "attackMove", faction: "blue", unitIds: [tank.id], x: friend.x, y: friend.y }
+    ]);
+    expect([...c.selectedUnits]).toEqual([tank.id]);
+  });
+
+  it("right-clicking friendly transports or passengers moves instead of boarding", () => {
+    const w = field();
+    const c = new Controller(w);
+    const squad = spawnUnit(w, "trooper", "blue", 10, 10);
+    const condor = spawnUnit(w, "condor", "blue", 20, 20);
+    c.selectUnits([squad.id]);
+    c.clickWorld(20, 20, { kind: "ownUnit", id: condor.id }, "right");
+    c.selectUnits([condor.id]);
+    c.clickWorld(10, 10, { kind: "ownUnit", id: squad.id }, "right");
+    expect(c.drainCommands()).toEqual([
+      { type: "attackMove", faction: "blue", unitIds: [squad.id], x: 20, y: 20 },
+      { type: "attackMove", faction: "blue", unitIds: [condor.id], x: 10, y: 10 }
+    ]);
+    // Left-clicking still provides the boarding action.
+    c.clickWorld(10, 10, { kind: "ownUnit", id: squad.id }, "left");
+    expect(c.drainCommands()).toEqual([
+      { type: "board", faction: "blue", unitIds: [squad.id], carrierId: condor.id }
+    ]);
+  });
+
+  it("right-clicking a friendly Goliath moves Condors there instead of lifting it", () => {
+    const w = field();
+    const c = new Controller(w);
+    const condors = [spawnUnit(w, "condor", "blue", 10, 10), spawnUnit(w, "condor", "blue", 11, 10)];
+    const goliath = spawnUnit(w, "goliath", "blue", 20, 20);
+    const ids = condors.map((u) => u.id);
+    c.selectUnits(ids);
+    c.clickWorld(20, 20, { kind: "ownUnit", id: goliath.id }, "right");
+    expect(c.drainCommands()).toEqual([
+      { type: "attackMove", faction: "blue", unitIds: ids, x: 20, y: 20 }
+    ]);
+    expect([...c.selectedUnits]).toEqual(ids);
+  });
+
+  it("left-click and Shift+click still select friendly units; empty terrain clicks need a selection", () => {
+    const w = field();
+    const c = new Controller(w);
+    const a = spawnUnit(w, "stinger", "blue", 10, 10);
+    const b = spawnUnit(w, "stinger", "blue", 12, 10);
+    c.clickWorld(20, 20, { kind: "ground" }, "left");
+    c.clickWorld(20, 20, { kind: "ground" }, "right");
+    c.clickWorld(a.x, a.y, { kind: "ownUnit", id: a.id }, "left");
+    c.clickWorld(b.x, b.y, { kind: "ownUnit", id: b.id }, "left", true);
+    expect([...c.selectedUnits]).toEqual([a.id, b.id]);
+    expect(c.drainCommands()).toEqual([]);
+    c.clickWorld(a.x, a.y, { kind: "ownUnit", id: a.id }, "left", true);
+    expect([...c.selectedUnits]).toEqual([b.id]);
+  });
+});
+
 describe("squads", () => {
   it("saves a selection; a unit lives in one squad at a time", () => {
     const w = field();

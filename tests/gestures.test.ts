@@ -40,6 +40,7 @@ describe("touch gestures", () => {
     g.down(touch(1, 105, 103), 250);
     g.up(touch(1, 105, 103), 340);
     expect(cb.onDoubleTap).toHaveBeenCalledTimes(1);
+    expect(cb.onDoubleTap).toHaveBeenCalledWith(105, 103, "touch");
     expect(cb.onTap).toHaveBeenCalledTimes(1); // first tap fired; second became double
   });
 
@@ -257,6 +258,15 @@ describe("mouse gestures", () => {
     g.up(mouse(120, 130), 100);
     expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130, true);
     expect(cb.onPan).not.toHaveBeenCalled();
+  });
+
+  it("identifies mouse double-clicks so repeated terrain clicks can issue moves", () => {
+    g.down(mouse(60, 60), 0);
+    g.up(mouse(60, 60), 50);
+    g.down(mouse(65, 63), 100);
+    g.up(mouse(65, 63), 150);
+    expect(cb.onTap).toHaveBeenCalledWith(60, 60, "mouse");
+    expect(cb.onDoubleTap).toHaveBeenCalledWith(65, 63, "mouse");
   });
 
   it("right click commands, does not tap", () => {

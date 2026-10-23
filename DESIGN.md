@@ -547,7 +547,7 @@ hits both) only sums them up for tooltips and estimates.
 
 **The two-Condor lift** (`src/sim/lift.ts`). Two empty Condors of its side
 can carry a walking Goliath ("Pack up first" otherwise). Select them (of
-several, the two nearest go) and tap the Goliath, or right-click it: they
+several, the two nearest go) and tap or left-click the Goliath: they
 fly in, hook on 1.1 tiles to either side of it (`lift.span`) and lift it
 once both are on, and the selection becomes the lift. A tap then flies it
 there to hover, a long-press flies it there and sets it down, **⇣ Set
@@ -1033,7 +1033,7 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   between them by design (and the report's idle-factory tip leaves it out
   too).
 - **Loading and dropping** (`src/game/controller.ts`): with infantry squads
-  selected, tapping (or right-clicking) your own Condor sends them aboard,
+  selected, tapping or left-clicking your own Condor sends them aboard,
   as many as it has seats not already promised, nearest first ("Room for 1
   squad only", "Condor full: unload it first"); with Condors selected,
   tapping one of your squads sends it to the nearest selected Condor with a
@@ -1063,7 +1063,7 @@ widgets in `src/ui/command.ts` and `src/game/placement-view.ts`.
   pack up first (G) to go after it", and the rest go). ⚔ Select
   army and 💤 Idle leave anchored Goliaths out (they are neither the army
   nor idle). The **lift**: with Condors selected, a tap
-  (or right-click) on your own walking Goliath has the two nearest empty
+  or left-click on your own walking Goliath has the two nearest empty
   ones hook on, and the selection becomes the lift (see *The two-Condor
   lift*); a tap flies it and hovers, a long-press sets it down there,
   **⇣ Set down** (U) where it is. One-time hints teach anchoring the first
@@ -2328,9 +2328,11 @@ labels shorten ("Move", "Army") so everything stays on one row down to
 
 ### Mouse & keyboard
 
-Left-click select (Shift+click adds or removes a unit), left-drag
-box-select (Shift+drag adds the box to the selection), right-click
-command, wheel zoom,
+Left-click a unit to select (Shift+click adds or removes it), left-drag
+box-select (Shift+drag adds the box to the selection). With units selected,
+left-click open terrain to force-move without stopping to fight; right-click
+terrain to attack-move, an enemy to focus attack, or a friendly unit to
+attack-move to its position without selecting, boarding or lifting it. Wheel zoom,
 middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
 Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action,
 C cinematic camera (AI vs AI),
@@ -2338,10 +2340,10 @@ C cinematic camera (AI vs AI),
 one (Shift for browsers that keep Ctrl+digit for tabs). While placing, the
 ghost follows the mouse, a click builds and a right-click cancels. Hold
 the clock to fast-forward. Right-click a build button for its card, or a
-squad chip to save into it. Right-click your own Condor with infantry
+squad chip to save into it. Left-click your own Condor with infantry
 selected (or one of your squads with Condors selected) to load them; U
 unloads the selected Condors where they are. G anchors the selected
-Goliaths, or packs them up; right-click your own walking Goliath with
+Goliaths, or packs them up; left-click your own walking Goliath with
 two empty Condors selected to lift it, and U sets a lift down where it
 hovers.
 

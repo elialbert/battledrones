@@ -1480,11 +1480,19 @@ export class GameScene {
         if (this.place.tap(sx, sy, type)) return; // placing: move the ghost / build
         const p = this.worldAt(sx, sy);
         if (this.powerUi?.tapWorld(p.x, p.y)) return; // an armed calldown fires here
-        this.ctrl.tapWorld(p.x, p.y, this.pick(sx, sy), shift);
-      },
-      onDoubleTap: (sx, sy) => {
-        if (this.place.tap(sx, sy)) return; // 2nd tap lands on the ghost it just moved: build
         const hit = this.pick(sx, sy);
+        if (type === "mouse") this.ctrl.clickWorld(p.x, p.y, hit, "left", shift);
+        else this.ctrl.tapWorld(p.x, p.y, hit, shift);
+      },
+      onDoubleTap: (sx, sy, type) => {
+        if (this.place.tap(sx, sy, type)) return; // 2nd tap lands on the ghost it just moved: build
+        const hit = this.pick(sx, sy);
+        if (type === "mouse" && hit.kind !== "ownUnit") {
+          const p = this.worldAt(sx, sy);
+          if (this.powerUi?.tapWorld(p.x, p.y)) return;
+          this.ctrl.clickWorld(p.x, p.y, hit, "left", shift);
+          return;
+        }
         if (hit.kind !== "ownUnit") return;
         if (shift) return this.ctrl.toggleUnit(hit.id); // quick Shift+clicks each toggle a unit
         const kind = this.world.units.get(hit.id)?.kind;
@@ -1557,13 +1565,7 @@ export class GameScene {
           return;
         }
         const p = this.worldAt(sx, sy);
-        let hit = this.pick(sx, sy);
-        // right-click on our own Condor with squads selected (or a squad with Condors selected) loads it,
-        // and on our own Goliath with two empty Condors selected lifts it
-        if (hit.kind === "ownUnit" && this.ctrl.boardTap(hit.id)) return;
-        // right-click never re-selects; own entities count as ground
-        if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
-        this.ctrl.tapWorld(p.x, p.y, hit);
+        this.ctrl.clickWorld(p.x, p.y, this.pick(sx, sy), "right");
       },
       onWheel: (deltaY, sx, sy) => this.zoomBy(deltaY > 0 ? 0.85 : 1.18, sx, sy)
     });
