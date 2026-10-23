@@ -6,6 +6,7 @@ import { Ease } from "./three/tween";
 import type { View } from "./three/view";
 import { CalldownCredit, powerName } from "./calldown-credit";
 import { NAMED_RANK, RANK_TITLES, callsignOf, heroShort, killsLabel, stars } from "./heroes";
+import { SIDE_NAME } from "./side-style";
 
 /**
  * Veteran-hero presentation: floating promotion titles over the unit, and
@@ -76,7 +77,7 @@ export class HeroPresenter {
       };
       if (this.opts.spectator) {
         // both sides' real heroes, not every rank-2 grunt
-        if (ev.rank >= 3 || ev.kills >= 6) this.lost.push({ ...rec, line: `${ev.faction === "blue" ? "Blue" : "Red"}'s ${rec.line}` });
+        if (ev.rank >= 3 || ev.kills >= 6) this.lost.push({ ...rec, line: `${SIDE_NAME[ev.faction]}'s ${rec.line}` });
       } else if (ev.faction === this.opts.player) this.lost.push(rec);
       // an enemy veteran that actually hurt you, seen going down (a Goliath is seen anywhere: it can't hide)
       else if ((ev.rank >= 3 || ev.kills >= 3) && (UNITS[ev.unitKind].alwaysVisible || this.opts.seesPoint(ev.x, ev.y))) this.aces.push(rec);
@@ -88,7 +89,7 @@ export class HeroPresenter {
     const s = list[0]!.strike;
     if (!s || list.some((x) => x.strike?.power !== s.power || x.strike.by !== s.by)) return "";
     const whose = this.opts.spectator
-      ? `${s.by === "blue" ? "Blue" : "Red"}'s`
+      ? `${SIDE_NAME[s.by]}'s`
       : s.by === this.opts.player
         ? "your"
         : s.power === "hammer"

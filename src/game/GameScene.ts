@@ -7,7 +7,7 @@ import { unitSeenBy } from "../sim/infantry";
 import { createMapWorld, mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
-import type { Building, Command, Faction, FxEvent, Unit, World } from "../sim/types";
+import type { Building, Command, Faction, FxEvent, PerSide, Unit, World } from "../sim/types";
 import { buildingCenter, domainOf, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, ENEMY, PLAYER, type TapHit } from "./controller";
@@ -51,6 +51,11 @@ import { Particles } from "./three/particles";
 import { GroundGfx } from "./three/ground-gfx";
 import { Tweens } from "./three/tween";
 import { AIR_H, type P3, type View } from "./three/view";
+import { isMulti, sidesOf } from "../sim/sides";
+import { SIDE_NAME } from "./side-style";
+
+/** "Rush", "Rush and Boom", "Rush, Boom and Skyforce". */
+const listNames = (xs: readonly string[]): string => (xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
 const TICK_MS = 1000 / TICK_RATE;
 /** Zoom range in CSS px per tile at the look-at point. */
@@ -62,7 +67,7 @@ const EDGE_PAD = 2;
 /** Radius of an order's waypoint ring (CSS px). */
 const WAYPOINT_PX = 7;
 /** Production meters in the producer's side colour (blue is blue on both phones of a sound duel). */
-const METER: Record<Faction, string> = { blue: "#6eb0ff", red: "#ff7a6a" };
+const METER: Record<Faction, string> = { blue: "#6eb0ff", red: "#ff7a6a", green: "#5fe07f", purple: "#b98cff" };
 /** Box-select dashes (CSS px), their dark rims (each 1 px longer at both ends), and none. */
 const DASH = [6, 4];
 const DASH_RIM = [8, 2];
@@ -81,7 +86,7 @@ export interface MatchFeed {
   /** The world, set up as the fed match was. */
   readonly world: World;
   /** Who plays each side, for the spectator HUD. */
-  readonly labels: Record<Faction, string>;
+  readonly labels: PerSide<string>;
   /** This tick's commands, or null to hold here (a live battle not played this far yet). */
   commands(tick: number): Command[] | null;
   /** The scene is up: its controls, for the feed's own panel. */
@@ -100,18 +105,27 @@ export interface MatchFeed {
   readonly opponent?: string;
   /** A duel's pause menu and report buttons (ui/hud.ts DuelHud). */
   readonly duel?: DuelHud;
+  /** Other people play on through this page's pause menu (a four-player online battle): it opens, the clock runs. */
+  readonly live?: boolean;
+  /** What the knock-out toast says instead of the usual (a four-player battle's host: keep the page open). */
+  readonly outNote?: string;
   /** The match as a battle record, for the end screen's Copy replay JSON (a duel's, or the replay's own). */
   battleRecord?(): BattleRecord;
 }
 
 /** Why a duel ended with no result (GameScene.abort): the worlds drifted apart, the friend left, or this phone left. */
-export type AbortReason = "desync" | "left" | "lost";
+export type DuelAbortReason = "desync" | "left" | "lost";
+/** Why an online battle ended with no result: a duel's reasons, or a four-player battle's host left or the pages drifted apart. */
+export type AbortReason = DuelAbortReason | "host" | "split";
 
 /** The end screen's head for each abort (SOUND-DUEL.md "Hash trail", "Leaving"). */
 const ABORT_HEAD: Record<AbortReason, { title: string; cls: "lose"; sub: string }> = {
   desync: { title: "OUT OF SYNC", cls: "lose", sub: "No contest: the two phones' games drifted apart" },
   left: { title: "FRIEND LEFT", cls: "lose", sub: "No result" },
-  lost: { title: "SIGNAL LOST", cls: "lose", sub: "You left · No result" }
+  lost: { title: "SIGNAL LOST", cls: "lose", sub: "You left · No result" },
+  // a four-player online battle (src/ffa): the host's page went, or the pages' worlds drifted apart
+  host: { title: "HOST LEFT", cls: "lose", sub: "The battle ended with the host's page · No result" },
+  split: { title: "OUT OF SYNC", cls: "lose", sub: "No contest: the players' games drifted apart" }
 };
 
 /**
@@ -126,6 +140,14 @@ export class GameScene {
   /** The enemy commander, playing ENEMY (null in Last Stand and survival ops: the waves have none). */
   private ai: AiState | null = null;
   private blueAi: AiState | null = null;
+  /**
+   * Every side a commander plays, keyed by side: a duel's ENEMY (and blue's
+   * when spectating); on a four-player map every side but the player's (all
+   * four, spectating). Each tick's orders are stepped in canonical side order.
+   */
+  private ais = new Map<Faction, AiState>();
+  /** A free-for-all: the player's side was knocked out and the match goes on (watching now). */
+  private knockedOut = false;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
   private fogSide: Faction = PLAYER;
   /** Last Stand banners and spawn marker (null in skirmish). */
@@ -239,25 +261,54 @@ export class GameScene {
     // spectating pits two Normal commanders against each other
     // mutators / the Daily Op decide which personalities can play (meta.ts)
     const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
-    this.ai = this.world.survival || feed ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+    const multi = isMulti(this.world);
+    if (multi) {
+      // a four-player map: a commander for every side the player doesn't play (all four, watching)
+      if (!feed)
+        sidesOf(this.world).forEach((f, i) => {
+          if (f !== PLAYER || gameMode.spectator) this.ais.set(f, createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1 + i)));
+        });
+    } else {
+      this.ai = this.world.survival || feed ? null : opEnemyAi() ?? createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1));
+      if (this.ai) this.ais.set(ENEMY, this.ai);
+    }
     if (gameMode.spectator) {
-      this.blueAi = feed ? null : createAiState(aiStrategy("normal"), "normal", aiSeed(2));
+      if (!multi) {
+        this.blueAi = feed ? null : createAiState(aiStrategy("normal"), "normal", aiSeed(2));
+        if (this.blueAi) this.ais.set("blue", this.blueAi);
+      }
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
     if (opts) {
       const commander = (s: AiState) => `ai:${s.strategy.name}:${s.difficulty}`;
-      const enemy = this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none";
-      this.recorder = new MatchRecorder(this.world.mapId, opts, {
-        [PLAYER]: { player: this.blueAi ? commander(this.blueAi) : "player" },
-        [ENEMY]: { player: enemy }
-      } as Record<Faction, { player: string }>);
+      if (multi)
+        this.recorder = new MatchRecorder(
+          this.world.mapId,
+          opts,
+          Object.fromEntries(sidesOf(this.world).map((f) => [f, { player: this.ais.has(f) ? commander(this.ais.get(f)!) : "player" }]))
+        );
+      else {
+        const enemy = this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none";
+        this.recorder = new MatchRecorder(this.world.mapId, opts, {
+          [PLAYER]: { player: this.blueAi ? commander(this.blueAi) : "player" },
+          [ENEMY]: { player: enemy }
+        });
+      }
     }
     // quick-start openers: spectated AIs take theirs at once; the player picks first
     // (skirmish and the Daily Op only: Last Stand and Ops set up their own starts)
-    const openers: Partial<Record<"blue" | "red", OpenerId>> = {};
+    const openers: Partial<Record<Faction, OpenerId>> = {};
     if (this.world.survival || this.world.ops || feed) {
       /* no opener cards (a fed match was dealt its own) */
+    } else if (multi && gameMode.spectator) {
+      // four commanders: each picks its own, in canonical side order (they take ids from the shared counter)
+      for (const [f, ai] of this.ais) {
+        const o = allowedOpener(this.world, f, pickAiOpener(ai.strategy.name, this.world.seed, f));
+        if (o) openers[f] = o;
+      }
+      applyOpenersCanonical(this.world, openers);
+      this.recorder?.setOpeners(openers);
     } else if (this.blueAi && this.ai) {
       // (match rules may ban a pick, e.g. no Fab Plants under Air War: take an allowed one)
       openers.blue = allowedOpener(this.world, "blue", pickAiOpener(this.blueAi.strategy.name, this.world.seed, "blue")) ?? undefined;
@@ -400,13 +451,21 @@ export class GameScene {
         ? null
         : feed
         ? feed.labels
+        : multi && gameMode.spectator
+        ? (Object.fromEntries(
+            [...this.ais].map(([f, ai]) => [f, `${ai.strategy.label}${openers[f] ? ` · ${OPENERS[openers[f]!].name}` : ""}`])
+          ) as PerSide<string>)
         : this.blueAi
         ? {
             blue: `${this.blueAi.strategy.label}${openers.blue ? ` · ${OPENERS[openers.blue].name}` : ""}`,
             red: !this.ai ? "the waves" : `${this.ai.strategy.label}${openers.red ? ` · ${OPENERS[openers.red].name}` : ""}`
           }
         : null,
-      enemy: { strategy: this.ai?.strategy.label ?? "Last Stand", difficulty: gameMode.difficulty },
+      // (a free-for-all's rivals: their personalities, "Rush, Boom and Skyforce")
+      enemy: {
+        strategy: multi ? listNames([...this.ais.values()].map((a) => a.strategy.label)) : this.ai?.strategy.label ?? "Last Stand",
+        difficulty: gameMode.difficulty
+      },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
       battleRecord: () => this.battleRecord(),
@@ -470,8 +529,9 @@ export class GameScene {
     if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
+      const rivals = multi ? `${this.ais.size} AIs` : this.ai ? `${this.ai.strategy.label} AI` : "the waves";
       const picker = showOpenerPicker({
-        context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · vs ${this.ai ? `${this.ai.strategy.label} AI` : "the waves"} (${DIFFICULTY[gameMode.difficulty].label})`,
+        context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · vs ${rivals} (${DIFFICULTY[gameMode.difficulty].label})`,
         onPick: (id) => this.startWithOpener(id),
         blocked: (id) => openerBlocked(this.world, PLAYER, id),
         // islands are taken by troops and defended from the air: the Airpad matters most there
@@ -577,7 +637,7 @@ export class GameScene {
 
   /** A commander's radio line: in the ticker, read out by the announcer. */
   commanderRadio(side: Faction, text: string): void {
-    this.radio.push({ key: `commander-${side}`, text: `${side === "blue" ? "Blue" : "Red"}: ${text}`, priority: 1, tone: "info", caption: true });
+    this.radio.push({ key: `commander-${side}`, text: `${SIDE_NAME[side]}: ${text}`, priority: 1, tone: "info", caption: true });
   }
 
   /** A line in the alert ticker. */
@@ -609,13 +669,15 @@ export class GameScene {
     rig.placeAt((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, sx, sy);
   }
 
-  /** The player picked an opener: both sides get theirs (blue's first, as in a duel) and the clock starts. */
+  /** The player picked an opener: every side gets theirs (in canonical order, blue's first, as in a duel) and the clock starts. */
   private startWithOpener(id: OpenerId): void {
     if (!this.holdStart) return;
     const picks: Partial<Record<Faction, OpenerId>> = { [PLAYER]: id };
     // (the rules alone decide what's allowed, so the AI's pick is the same before or after ours lands)
-    const theirs = this.ai && allowedOpener(this.world, ENEMY, pickAiOpener(this.ai.strategy.name, this.world.seed, ENEMY));
-    if (theirs) picks[ENEMY] = theirs;
+    for (const [f, ai] of this.ais) {
+      const theirs = allowedOpener(this.world, f, pickAiOpener(ai.strategy.name, this.world.seed, f));
+      if (theirs) picks[f] = theirs;
+    }
     const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
     this.recorder?.setOpeners(picks);
     this.holdStart = false;
@@ -737,7 +799,9 @@ export class GameScene {
     this.gest.tick(performance.now());
     this.updateCamera(delta);
 
-    if (!this.ctrl.paused && !this.ended && !this.holdStart) {
+    // (a four-player online battle runs on under the pause menu: the others are still playing)
+    const frozen = this.ctrl.paused && !this.feed?.live;
+    if (!frozen && !this.ended && !this.holdStart) {
       // game speed (1–4×; a duel's slack trim), at most AWARE.maxTicksPerFrame ticks per frame
       const plan = planTicks(this.acc, delta, this.interactive ? this.feed?.speed?.() ?? 1 : this.aware.value);
       this.acc = plan.acc;
@@ -752,9 +816,8 @@ export class GameScene {
         }
         this.snapshotPrev();
         // our orders (a spectator's: blue's commander; a duel's: drained by its feed) and the enemy commander's, stepped blue's first
-        const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
-        const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
-        const cmds = fed ?? composeTick(PLAYER, mine, theirs);
+        // (a four-player map: every side's in canonical order, each from its commander or the player)
+        const cmds = fed ?? (isMulti(this.world) ? this.multiTick() : this.duelTick());
         step(this.world, cmds);
         if (!fed) this.recorder?.stepped(this.world, cmds);
         this.simSeconds += 1 / TICK_RATE;
@@ -764,7 +827,7 @@ export class GameScene {
     }
     this.ctrl.prune();
     this.feed?.frame(delta);
-    const alpha = this.ctrl.paused ? 1 : this.acc / TICK_MS;
+    const alpha = frozen ? 1 : this.acc / TICK_MS;
     this.finale?.update(delta);
     const slow = this.finale?.timeScale ?? 1;
     const rig = this.stage.rig;
@@ -774,7 +837,7 @@ export class GameScene {
     v.ground.clear();
     v.over.clear();
     v.top.clear();
-    const fxDt = this.ctrl.paused ? 0 : delta * slow;
+    const fxDt = frozen ? 0 : delta * slow;
     this.view.tweens.update(delta * slow);
     this.terrain.update(delta * slow, this.ctrl.showFog);
     this.entities.sync(alpha, this.prev, fxDt);
@@ -801,13 +864,13 @@ export class GameScene {
       this.ctrl.tip = null;
     }
     this.command.update();
-    this.aware.update(delta, this.ctrl.paused);
+    this.aware.update(delta, frozen);
     voices.watchSelection(this.ctrl.selectedUnits, this.world);
-    this.radio.update(delta, this.ctrl.paused);
+    this.radio.update(delta, frozen);
     music.update({
       intensity: this.mood.update(delta / 1000, this.simSeconds),
       alarm: this.mood.alarm(this.simSeconds),
-      paused: this.ctrl.paused
+      paused: frozen
     });
     this.powerUi?.update();
     this.objPill?.update();
@@ -937,7 +1000,10 @@ export class GameScene {
             ? this.ops.endAnnouncement()
             : this.survival && !love
             ? { key: "base-overrun", text: "Base overrun", sub: "The HQ has fallen", tone: "bad", priority: 0, x: at.x, y: at.y }
-            : finaleBanner({ cause: at.cause, winner, player: PLAYER, spectator: spec, x: at.x, y: at.y })
+            : finaleBanner({
+                cause: at.cause, winner, player: PLAYER, spectator: spec, x: at.x, y: at.y,
+                ...(isMulti(this.world) ? { lastOut: this.world.out?.at(-1)?.faction ?? null } : {})
+              })
         );
       },
       onDone: () => {
@@ -961,6 +1027,43 @@ export class GameScene {
   }
 
   // ------------------------------------------------------------- sim glue --
+
+  /** A duel's (or Last Stand's, or an op's) tick: the player's orders and the enemy commander's, blue's first. */
+  private duelTick(): Command[] {
+    const mine = this.blueAi ? tickAi(this.world, "blue", this.blueAi) : this.interactive ? [] : this.ctrl.drainCommands();
+    const theirs = this.ai ? tickAi(this.world, ENEMY, this.ai) : []; // (Last Stand: the waves have no commander)
+    return composeTick(PLAYER, mine, theirs);
+  }
+
+  /** A four-player map's tick: each side's orders, in canonical side order, from its commander or (ours) the player. */
+  private multiTick(): Command[] {
+    const cmds: Command[] = [];
+    for (const f of sidesOf(this.world)) {
+      const ai = this.ais.get(f);
+      if (ai) cmds.push(...tickAi(this.world, f, ai));
+      else if (f === PLAYER && !this.interactive) cmds.push(...this.ctrl.drainCommands());
+    }
+    return cmds;
+  }
+
+  /**
+   * A free-for-all: our side was knocked out with the match still going.
+   * No more orders: the fog lifts and the player watches the rest (the
+   * report comes when the last side stands; the menu leaves any time).
+   */
+  private onKnockedOut(): void {
+    if (this.knockedOut || this.world.winner) return;
+    this.knockedOut = true;
+    this.gest.reset();
+    this.boxRect = null;
+    this.ctrl.clearSelection();
+    this.ctrl.placing = null;
+    this.powerUi?.cancel();
+    this.ctrl.locked = true;
+    this.setFog(null);
+    this.hud.watchOnly();
+    this.hud.notify(this.feed?.outNote ?? "You're out. The fog lifts: watch the rest, or leave from the menu", "bad");
+  }
 
   private snapshotPrev(): void {
     this.prev.clear();
@@ -1031,6 +1134,9 @@ export class GameScene {
     if (this.survival?.handleFx(ev)) return;
     const w = this.world;
     switch (ev.type) {
+      case "eliminated":
+        if (ev.faction === PLAYER && !gameMode.spectator) this.onKnockedOut();
+        break;
       case "resign": {
         // (a sound duel) the finale looks at the side that gave up: its HQ, else the middle of its home box
         if (this.finaleAt?.cause === "resign") break; // (both at once: the first one's)

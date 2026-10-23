@@ -1,7 +1,7 @@
 import { UNITS } from "../sim/balance";
 import { mapById } from "../sim/maps";
 import { POWER_KINDS, POWER_NAMES } from "../sim/powers";
-import type { Faction, FactionStats, World } from "../sim/types";
+import type { Faction, FactionStats, PerSide, World } from "../sim/types";
 import {
   chronicleOf,
   commanderStory,
@@ -15,6 +15,8 @@ import {
   type Sample
 } from "../game/chronicle";
 import { callsignOf, killsLabel, stars } from "../game/heroes";
+import { SIDE_NAME, iconUrl } from "../game/side-style";
+import { DUO, isMulti, perSide, rivalsOf, sidesOf } from "../sim/sides";
 
 /**
  * The after-action report: the end screen of a skirmish. It tells the
@@ -41,8 +43,8 @@ export interface ReportOpts {
   spectator: boolean;
   /** Match length in seconds. */
   secs: number;
-  /** Spectator: both strategy names. */
-  strategies: { blue: string; red: string } | null;
+  /** Spectator: every side's strategy name. */
+  strategies: Partial<Record<Faction, string>> | null;
   enemy: { strategy: string; difficulty: string };
   onRematch(): void;
   onMenu(): void;
@@ -56,6 +58,8 @@ export interface ReportOpts {
   /** A sound duel: who the other side is ("your friend"), and how the phones were linked ("over sound"). */
   opponent?: string;
   via?: string;
+  /** A four-player online battle: who played each side (a person's name, or the commander). */
+  names?: Partial<Record<Faction, string>>;
 }
 
 export interface ReportContext extends ReportOpts {
@@ -88,11 +92,30 @@ export function addReportSection(s: ReportSection): () => void {
   };
 }
 
-/** A portrait in its side's paint (the red ones are shot from the red models). */
-const icon = (kind: string, f: Faction) => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
+/** A portrait in its side's paint (the red, green and purple ones are shot from those models). */
+const icon = iconUrl;
 const short = (n: number) => (n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
 const sideName = (f: Faction, ctx: ReportOpts) =>
-  ctx.spectator ? (f === "blue" ? "Blue" : "Red") : f === ctx.pov ? "You" : ctx.opponent ? "Friend" : "Enemy";
+  ctx.spectator ? SIDE_NAME[f] : f === ctx.pov ? "You" : isMulti(ctx.world) ? SIDE_NAME[f] : ctx.opponent ? "Friend" : "Enemy";
+
+/**
+ * A free-for-all's finishing order: the winner first, then the sides knocked
+ * out, last out first (World.out); sides still in at an undecided end share
+ * the places after the winner's.
+ */
+export function placings(w: World): { faction: Faction; place: number }[] {
+  const out = [...(w.out ?? [])].reverse().map((o) => o.faction);
+  const left = sidesOf(w).filter((f) => !out.includes(f));
+  const won = w.winner && w.winner !== "draw" ? [w.winner] : [];
+  const rest = left.filter((f) => !won.includes(f));
+  const rows: { faction: Faction; place: number }[] = [];
+  for (const f of won) rows.push({ faction: f, place: 1 });
+  for (const f of rest) rows.push({ faction: f, place: won.length + 1 });
+  out.forEach((f, i) => rows.push({ faction: f, place: won.length + rest.length + i + 1 }));
+  return rows;
+}
+
+const ordinal = (n: number) => `${n}${n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th"}`;
 
 // ---------------------------------------------------------------- chart ---
 
@@ -103,24 +126,27 @@ const PLOT = { x0: 6, x1: 314, y0: 10, y1: 94 };
 function valueAt(samples: Sample[], t: number, f: Faction): number {
   let best = samples[0]!;
   for (const s of samples) if (Math.abs(s.t - t) < Math.abs(best.t - t)) best = s;
-  return best.army[f];
+  return best.army[f] ?? 0;
 }
 
 function chartHtml(ctx: ReportContext): string | null {
   const samples = ctx.chronicle.samples;
   if (samples.length < 3) return null;
   const T = Math.max(1, samples[samples.length - 1]!.t);
-  const maxV = Math.max(1, ...samples.map((s) => Math.max(s.army.blue, s.army.red)));
+  const sides = sidesOf(ctx.world);
+  const maxV = Math.max(1, ...samples.map((s) => Math.max(...sides.map((f) => s.army[f] ?? 0))));
   const x = (t: number) => PLOT.x0 + (t / T) * (PLOT.x1 - PLOT.x0);
   const y = (v: number) => PLOT.y1 - (v / maxV) * (PLOT.y1 - PLOT.y0);
-  const pts = (f: Faction) => samples.map((s) => `${x(s.t).toFixed(1)},${y(s.army[f]).toFixed(1)}`).join(" ");
+  const pts = (f: Faction) => samples.map((s) => `${x(s.t).toFixed(1)},${y(s.army[f] ?? 0).toFixed(1)}`).join(" ");
   const area = (f: Faction) => `M${x(0).toFixed(1)},${PLOT.y1} L${pts(f).replace(/ /g, " L")} L${x(T).toFixed(1)},${PLOT.y1} Z`;
   // the reader's side draws on top
-  const order: Faction[] = !ctx.spectator && ctx.pov === "red" ? ["blue", "red"] : ["red", "blue"];
+  const order: Faction[] = isMulti(ctx.world)
+    ? [...sides.filter((f) => ctx.spectator || f !== ctx.pov), ...(ctx.spectator ? [] : [ctx.pov])]
+    : !ctx.spectator && ctx.pov === "red" ? ["blue", "red"] : ["red", "blue"];
   const marks = ctx.moments
     .map((m, i) => {
       const mx = x(m.t);
-      const top = Math.max(valueAt(samples, m.t, "blue"), valueAt(samples, m.t, "red"));
+      const top = Math.max(...sides.map((f) => valueAt(samples, m.t, f)));
       const my = Math.max(PLOT.y0 + 2, y(top) - 9);
       return `<g class="mk ${m.tone}" data-i="${i}">
         <line x1="${mx.toFixed(1)}" y1="${(my + 7).toFixed(1)}" x2="${mx.toFixed(1)}" y2="${PLOT.y1}" class="mk-stem"/>
@@ -132,24 +158,25 @@ function chartHtml(ctx: ReportContext): string | null {
   const mid = fmtTime(T / 2);
   // (a replay's labels are its players' names, from a record that may have come from anywhere: escaped)
   const label = (f: Faction) => (ctx.spectator ? `${sideName(f, ctx)} · ${escapeHtml(ctx.strategies?.[f] ?? "")}` : sideName(f, ctx));
+  // (four sides' areas would muddy each other: a free-for-all draws lines only)
+  const areas = isMulti(ctx.world) ? "" : order.map((f) => `<path d="${area(f)}" fill="url(#aar-g${f === "blue" ? "b" : "r"})" class="area"/>`).join("");
   return `
     <div class="aar-legend">
-      <span class="lk blue"><i></i>${label("blue")}</span>
-      <span class="lk red"><i></i>${label("red")}</span>
+      ${sides.map((f) => `<span class="lk ${f}"><i></i>${label(f)}</span>`).join("\n      ")}
       <span class="cap">Army strength</span>
     </div>
     <svg class="aar-svg" viewBox="0 0 ${VB_W} ${VB_H}" role="img"
-      aria-label="Army strength over time for both sides, with ${ctx.moments.length} key moments marked">
+      aria-label="Army strength over time for ${sides.length === 2 ? "both" : "every"} side${sides.length === 2 ? "s" : ""}, with ${ctx.moments.length} key moments marked">
       <defs>
         <linearGradient id="aar-gb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4c9dff" stop-opacity="0.32"/><stop offset="1" stop-color="#4c9dff" stop-opacity="0"/></linearGradient>
         <linearGradient id="aar-gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a6a" stop-opacity="0.28"/><stop offset="1" stop-color="#ff7a6a" stop-opacity="0"/></linearGradient>
       </defs>
       <line x1="${PLOT.x0}" y1="${PLOT.y1}" x2="${PLOT.x1}" y2="${PLOT.y1}" class="base"/>
       <line x1="${x(T / 2).toFixed(1)}" y1="${PLOT.y0}" x2="${x(T / 2).toFixed(1)}" y2="${PLOT.y1}" class="grid"/>
-      ${order.map((f) => `<path d="${area(f)}" fill="url(#aar-g${f === "blue" ? "b" : "r"})" class="area"/>`).join("")}
+      ${areas}
       ${order.map((f) => `<polyline points="${pts(f)}" class="ln ${f}" pathLength="1"/>`).join("")}
       <line class="xh" x1="0" y1="${PLOT.y0 - 4}" x2="0" y2="${PLOT.y1}" visibility="hidden"/>
-      <circle class="xd blue" r="3.5" visibility="hidden"/><circle class="xd red" r="3.5" visibility="hidden"/>
+      ${sides.map((f) => `<circle class="xd ${f}" r="3.5" visibility="hidden"/>`).join("")}
       ${marks}
     </svg>
     <div class="aar-axis"><span>0:00</span><span>${mid}</span><span>${fmtTime(T)}</span></div>
@@ -162,9 +189,10 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
   if (!svg || !readout) return;
   const samples = ctx.chronicle.samples;
   const T = Math.max(1, samples[samples.length - 1]!.t);
-  const maxV = Math.max(1, ...samples.map((s) => Math.max(s.army.blue, s.army.red)));
+  const sides = sidesOf(ctx.world);
+  const maxV = Math.max(1, ...samples.map((s) => Math.max(...sides.map((f) => s.army[f] ?? 0))));
   const xh = svg.querySelector<SVGLineElement>(".xh")!;
-  const dots = { blue: svg.querySelector<SVGCircleElement>(".xd.blue")!, red: svg.querySelector<SVGCircleElement>(".xd.red")! };
+  const dots = new Map(sides.map((f) => [f, svg.querySelector<SVGCircleElement>(`.xd.${f}`)!]));
   const toVb = (clientX: number) => {
     const r = svg.getBoundingClientRect();
     return ((clientX - r.left) / Math.max(1, r.width)) * VB_W;
@@ -177,13 +205,14 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
     xh.setAttribute("x1", String(sx));
     xh.setAttribute("x2", String(sx));
     xh.setAttribute("visibility", "visible");
-    for (const f of ["blue", "red"] as Faction[]) {
-      dots[f].setAttribute("cx", String(sx));
-      dots[f].setAttribute("cy", String(PLOT.y1 - (s.army[f] / maxV) * (PLOT.y1 - PLOT.y0)));
-      dots[f].setAttribute("visibility", "visible");
+    for (const f of sides) {
+      const dot = dots.get(f)!;
+      dot.setAttribute("cx", String(sx));
+      dot.setAttribute("cy", String(PLOT.y1 - ((s.army[f] ?? 0) / maxV) * (PLOT.y1 - PLOT.y0)));
+      dot.setAttribute("visibility", "visible");
     }
-    readout.innerHTML = `<b>${fmtTime(s.t)}</b>${(["blue", "red"] as Faction[])
-      .map((f) => `<span class="rk ${f}"><i></i><em>${short(s.army[f])}</em> ${sideName(f, ctx)}</span>`)
+    readout.innerHTML = `<b>${fmtTime(s.t)}</b>${sides
+      .map((f) => `<span class="rk ${f}"><i></i><em>${short(s.army[f] ?? 0)}</em> ${sideName(f, ctx)}</span>`)
       .join("")}`;
     select(null);
   };
@@ -201,8 +230,7 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
     });
     if (hit !== null && e.type === "pointerdown") {
       xh.setAttribute("visibility", "hidden");
-      dots.blue.setAttribute("visibility", "hidden");
-      dots.red.setAttribute("visibility", "hidden");
+      for (const dot of dots.values()) dot.setAttribute("visibility", "hidden");
       const m = ctx.moments[hit]!;
       readout.innerHTML = `<b>${fmtTime(m.t)}</b> `;
       readout.append(`${m.title}: ${m.text}`);
@@ -239,7 +267,7 @@ export function headline(o: { winner: Faction | "draw" | null; pov: Faction; spe
 } {
   if (o.winner === null) return { title: "NO RESULT", cls: "draw", note: null };
   if (o.winner === "draw") return { title: "DRAW", cls: "draw", note: o.love ? "💘 They fell in love" : null };
-  if (o.spectator) return { title: `${o.winner.toUpperCase()} WINS`, cls: o.winner === "blue" ? "win" : "lose", note: null };
+  if (o.spectator) return { title: `${SIDE_NAME[o.winner].toUpperCase()} WINS`, cls: o.winner === "blue" ? "win" : "lose", note: null };
   const won = o.winner === o.pov;
   return { title: won ? "VICTORY" : "DEFEAT", cls: won ? "win" : "lose", note: null };
 }
@@ -248,6 +276,8 @@ function headHtml(ctx: ReportContext): string {
   if (ctx.head) return `<h1 class="${ctx.head.cls}">${escapeHtml(ctx.head.title)}</h1><p class="time">${escapeHtml(ctx.head.sub)}</p>`;
   const spec = ctx.spectator;
   const h = headline({ winner: ctx.winner, pov: ctx.pov, spectator: spec, love: !!ctx.world.love });
+  // (a free-for-all first: an online one has an opponent too, its head is the placings)
+  if (isMulti(ctx.world)) return headMultiHtml(ctx, h);
   if (ctx.opponent && !spec) {
     // (a sound duel: "vs your friend · Riverlands · 7:42 · over sound")
     const line = `vs ${ctx.opponent} · ${mapById(ctx.world.mapId).name} · ${fmtTime(ctx.secs)} · ${ctx.via ?? "over sound"}`;
@@ -257,6 +287,23 @@ function headHtml(ctx: ReportContext): string {
     ? escapeHtml(`${ctx.strategies?.blue ?? "Blue"} vs ${ctx.strategies?.red ?? "Red"}`)
     : `vs ${ctx.enemy.strategy} AI (${ctx.enemy.difficulty})`;
   return `<h1 class="${h.cls}">${h.title}</h1><p class="time">${h.note ? `${h.note} · ` : ""}${vs} · ${fmtTime(ctx.secs)}</p>`;
+}
+
+/** A free-for-all's head: the result, where you finished, the map and time, and every side's place. */
+function headMultiHtml(ctx: ReportContext, h: { title: string; cls: string; note: string | null }): string {
+  const rows = placings(ctx.world);
+  const mine = rows.find((r) => r.faction === ctx.pov);
+  const place = !ctx.spectator && mine && ctx.winner !== null ? `${ordinal(mine.place)} of ${rows.length}` : null;
+  const line = [h.note, place, `${mapById(ctx.world.mapId).name} free-for-all`, fmtTime(ctx.secs), ctx.via].filter(Boolean).join(" · ");
+  const named = (f: Faction) => (f !== ctx.pov || ctx.spectator ? ctx.names?.[f] : undefined);
+  const who = (f: Faction) =>
+    escapeHtml(
+      ctx.spectator && ctx.strategies?.[f] ? `${SIDE_NAME[f]} · ${ctx.strategies[f]}` : named(f) ? `${SIDE_NAME[f]} · ${named(f)}` : sideName(f, ctx)
+    );
+  const list = rows
+    .map((r) => `<li class="${r.faction === ctx.pov && !ctx.spectator ? "me" : ""}"><i class="${r.faction}"></i>${ordinal(r.place)} ${who(r.faction)}</li>`)
+    .join("");
+  return `<h1 class="${h.cls}">${h.title}</h1><p class="time">${escapeHtml(line)}</p><ol class="aar-placings">${list}</ol>`;
 }
 
 function momentsHtml(ctx: ReportContext): string | null {
@@ -282,6 +329,19 @@ export function mvpCard(w: World, h: HeroRec, tag: string, cls: string): string 
 
 /** The MVP row (also used by the Last Stand end screen). */
 export function mvpRowHtml(w: World, mvp: Record<Faction, HeroRec | null>, pov: Faction, spectator: boolean): string | null {
+  if (isMulti(w)) {
+    // a free-for-all: yours (a spectator: the winner's) and the best of everyone else's
+    const me: Faction = spectator ? (w.winner && w.winner !== "draw" ? w.winner : "blue") : pov;
+    const best = rivalsOf(w, me)
+      .map((f) => mvp[f])
+      .filter((h): h is HeroRec => !!h)
+      .sort((a, b) => b.kills - a.kills || b.rank - a.rank)[0];
+    const cards: string[] = [];
+    const mine = mvp[me];
+    if (mine) cards.push(mvpCard(w, mine, spectator ? `${SIDE_NAME[me]} MVP` : "Your MVP", "main"));
+    if (best) cards.push(mvpCard(w, best, `${SIDE_NAME[best.faction]}'s ace`, spectator ? "main" : "minor"));
+    return cards.length ? `<div class="aar-mvps">${cards.join("")}</div>` : null;
+  }
   const me = spectator ? "blue" : pov;
   const them: Faction = me === "blue" ? "red" : "blue";
   const cards: string[] = [];
@@ -341,6 +401,7 @@ export function extraStatRows(blue: FactionStats, red: FactionStats, max = 4): {
 }
 
 function statsHtml(ctx: ReportContext): string {
+  if (isMulti(ctx.world)) return statsMultiHtml(ctx);
   const st = (f: Faction) => ctx.world.factions[f].stats;
   const p: Faction = ctx.spectator ? "blue" : ctx.pov;
   const q: Faction = p === "blue" ? "red" : "blue";
@@ -358,7 +419,7 @@ function statsHtml(ctx: ReportContext): string {
   ];
   // Goliaths (only when someone fielded one: most matches never get that far)
   const gol = goliathsFielded(ctx.chronicle);
-  if (gol.blue + gol.red > 0) rows.splice(3, 0, row("Goliaths fielded", gol[p], gol[q]));
+  if (gol.blue + gol.red > 0) rows.splice(3, 0, row("Goliaths fielded", gol[p] ?? 0, gol[q] ?? 0));
   // battlefield salvage and calldowns (not every mode has them: rows only when something happened)
   const salv = (f: Faction) => st(f).scrapSalvaged ?? 0;
   if (salv(p) + salv(q) > 0) rows.push(row("Scrap salvaged", salv(p), salv(q)));
@@ -383,10 +444,38 @@ function statsHtml(ctx: ReportContext): string {
     ${rows.join("")}</table>`;
 }
 
-/** Goliaths each side fielded this match: those it started with (Nomads) and those that walked off a Gantry. */
-export function goliathsFielded(c: Pick<Chronicle, "built"> & Partial<Pick<Chronicle, "startGoliaths">>): Record<Faction, number> {
-  const start = c.startGoliaths ?? { blue: 0, red: 0 };
-  return { blue: start.blue + (c.built.blue["goliath"] ?? 0), red: start.red + (c.built.red["goliath"] ?? 0) };
+/** A free-for-all's stats: a column per side, yours first (a spectator's in side order). */
+function statsMultiHtml(ctx: ReportContext): string {
+  const w = ctx.world;
+  const sides = ctx.spectator ? [...sidesOf(w)] : [ctx.pov, ...rivalsOf(w, ctx.pov)];
+  const st = (f: Faction) => w.factions[f].stats;
+  const row = (label: string, v: (f: Faction) => number) => `<tr><td>${label}</td>${sides.map((f) => `<td>${Math.floor(v(f))}</td>`).join("")}</tr>`;
+  const rows = [
+    row("Units destroyed", (f) => st(f).unitsKilled),
+    row("Buildings destroyed", (f) => st(f).buildingsKilled ?? 0),
+    row("Units built", (f) => st(f).unitsBuilt),
+    row("Units lost", (f) => st(f).unitsLost),
+    row("Scrap harvested", (f) => st(f).scrapHarvested)
+  ];
+  const gol = goliathsFielded(ctx.chronicle);
+  if (sides.some((f) => (gol[f] ?? 0) > 0)) rows.splice(3, 0, row("Goliaths fielded", (f) => gol[f] ?? 0));
+  if (sides.some((f) => (st(f).scrapSalvaged ?? 0) > 0)) rows.push(row("Scrap salvaged", (f) => st(f).scrapSalvaged ?? 0));
+  const calls = calldownCounts(w);
+  if (sides.some((f) => calls[f].total > 0)) rows.push(row("Calldowns", (f) => calls[f].total));
+  if (w.objectives?.uplinks.length) {
+    const os = (f: Faction) => w.objectives.stats[f];
+    rows.push(row("Uplinks captured", (f) => os(f).captures));
+    rows.push(row("Crates claimed", (f) => os(f).crates));
+  }
+  rows.push(row("Peak army", (f) => peakArmy(ctx.chronicle.samples, f)));
+  const head = sides.map((f) => `<th class="hb"><i class="${f}"></i>${sideName(f, ctx)}</th>`).join("");
+  return `<table class="aar-stats multi"><tr><th></th>${head}</tr>${rows.join("")}</table>`;
+}
+
+/** Goliaths each side playing fielded this match: those it started with (Nomads) and those that walked off a Gantry. */
+export function goliathsFielded(c: Pick<Chronicle, "built"> & Partial<Pick<Chronicle, "startGoliaths" | "sides">>): PerSide<number> {
+  const start = c.startGoliaths;
+  return Object.fromEntries((c.sides ?? DUO).map((f) => [f, (start?.[f] ?? 0) + (c.built[f]?.["goliath"] ?? 0)])) as PerSide<number>;
 }
 
 /** Calldowns fired per side (World.powers.fired), with the per-power counts. */
@@ -396,7 +485,7 @@ export function calldownCounts(w: World): Record<Faction, { total: number; by: [
     const by = POWER_KINDS.map((k) => [POWER_NAMES[k], fired?.[k] ?? 0] as [string, number]).filter(([, n]) => n > 0);
     return { total: by.reduce((s, [, n]) => s + n, 0), by };
   };
-  return { blue: one("blue"), red: one("red") };
+  return perSide(one);
 }
 
 const calldownBreakdown = (by: [string, number][]) => (by.length ? by.map(([k, n]) => `${n} ${k}`).join(", ") : "none");
@@ -406,9 +495,9 @@ function tipHtml(ctx: ReportContext): string | null {
     // both commanders' story instead of a tip
     const line = (f: Faction) =>
       `<p><i class="${f}"></i><span>${escapeHtml(
-        commanderStory(ctx.chronicle, ctx.world, f, `${f === "blue" ? "Blue" : "Red"} · ${ctx.strategies?.[f] ?? ""}`)
+        commanderStory(ctx.chronicle, ctx.world, f, `${SIDE_NAME[f]} · ${ctx.strategies?.[f] ?? ""}`)
       )}</span></p>`;
-    return `<div class="aar-story">${line("blue")}${line("red")}</div>`;
+    return `<div class="aar-story">${sidesOf(ctx.world).map(line).join("")}</div>`;
   }
   if (ctx.world.ops) return null; // an op's section shows its own tip and the stars still to earn
   if (ctx.winner === null) return null; // (no result: nothing was decided to learn from)
@@ -417,7 +506,7 @@ function tipHtml(ctx: ReportContext): string | null {
   let tip = pickTip({
     pov: ctx.pov, won: ctx.won, duration: ctx.secs, difficulty: duel ? "" : ctx.enemy.difficulty.toLowerCase(),
     built: c.built, firstBuilt: c.firstBuilt, deaths: c.deaths, samples: c.samples, factories: c.factories,
-    startGoliaths: c.startGoliaths
+    startGoliaths: c.startGoliaths, rivals: rivalsOf(ctx.world, ctx.pov)
   });
   // (a duel's congratulations: there is no harder AI to try)
   if (duel && /\bAI\b/.test(tip))

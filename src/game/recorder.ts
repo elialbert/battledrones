@@ -30,12 +30,12 @@ import { worldHash } from "../sim/checksum";
 import type { MatchOptions } from "../sim/maps";
 import type { OpenerId } from "../sim/openers";
 import type { Command, Faction, World } from "../sim/types";
+import { sidesOf } from "../sim/sides";
 
 declare const __SIM_HASH__: string | undefined;
 /** The sim this build plays (vite.config.ts), or null outside a Vite build (tests). */
 const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
 
-const SIDES = ["blue", "red"] as const;
 
 /** A world hash goes into the record every this many ticks: the arena's rate (arena/record.ts HASH_EVERY), which the viewer checks. */
 export const HASH_EVERY = 100;
@@ -58,7 +58,7 @@ export class MatchRecorder {
   constructor(
     private readonly map: string,
     private readonly opts: MatchOptions,
-    private readonly seats: Record<Faction, SeatInfo>
+    private readonly seats: Partial<Record<Faction, SeatInfo>>
   ) {}
 
   /** The openers each side was dealt (before tick 0). */
@@ -69,7 +69,7 @@ export class MatchRecorder {
   /** Tick `w.tick - 1` was just stepped with `cmds`. */
   stepped(w: World, cmds: readonly Command[]): void {
     const t = w.tick - 1;
-    for (const side of SIDES) {
+    for (const side of sidesOf(w)) {
       const theirs = cmds.filter((c) => c.faction === side);
       if (theirs.length) this.turns.push([t, side, structuredClone(theirs)]);
     }
@@ -79,7 +79,7 @@ export class MatchRecorder {
   /** The record of the match so far. */
   record(w: World): BattleRecord {
     const income: Partial<Record<Faction, number>> = {};
-    for (const f of SIDES) if (w.factions[f].incomeMult !== 1) income[f] = w.factions[f].incomeMult;
+    for (const f of sidesOf(w)) if (w.factions[f].incomeMult !== 1) income[f] = w.factions[f].incomeMult;
     const end = w.winner ? recordEnd(w.tick, w.winner, w.resigned) : null;
     const o = this.opts;
     return {
@@ -96,7 +96,7 @@ export class MatchRecorder {
       ...(Object.keys(income).length ? { income } : {}),
       ...(o.survival ? { survival: { ...o.survival } } : {}),
       ...(o.op ? { op: o.op } : {}),
-      seats: { blue: { ...this.seats.blue }, red: { ...this.seats.red } },
+      seats: Object.fromEntries(sidesOf(w).map((f) => [f, { ...this.seats[f] }])) as BattleRecord["seats"],
       frames: "own",
       turns: this.turns.map(([t, f, c]) => [t, f, c]),
       radio: [],

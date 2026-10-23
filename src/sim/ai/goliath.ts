@@ -565,7 +565,7 @@ function fieldClusters(w: World, faction: Faction, m: Memo): Cluster[] {
       }
       if (v <= 0) continue;
       const key = { x: sx / v, y: sy / v };
-      list.push({ tiles, value: v, c: fr.pt(key), key });
+      list.push({ tiles, value: v, c: fr.toWorld(key), key });
     }
   m.clusters = { tick: w.tick, list };
   return list;
@@ -590,7 +590,7 @@ function fieldLeft(w: World, p: P, r: number): number {
 /** The field tile nearest a point (a harvest order's target), or null. */
 function nearestFieldTile(w: World, faction: Faction, p: P, r: number): P | null {
   const fr = sideFrame(w, faction);
-  const q = fr.pt(p);
+  const q = fr.toFrame(p);
   let best: P | null = null;
   let bestD = Infinity;
   const R = Math.ceil(r);
@@ -637,7 +637,7 @@ function spotNear(
   region = 0
 ): P | null {
   const fr = sideFrame(w, faction);
-  const a = fr.pt(around);
+  const a = fr.toFrame(around);
   const R = Math.ceil(max);
   let best: P | null = null;
   let bestS = Infinity;
@@ -778,7 +778,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
       const v = uplinkPay(l) * GOLIATH_AI.relayWorth * enemyOwned;
       const d = dist(g.x, g.y, at.x, at.y);
       const score = (v / (d + 30)) * (1 - 0.5 * caution * Math.max(0, exposure(at))) * 0.7 - enemyNear(ctx.seen, at, 8) / 40;
-      cands.push({ kind: "relay", at, field: null, value: v, score, lift: true, relayId: l.id, key: fr.pt(l) });
+      cands.push({ kind: "relay", at, field: null, value: v, score, lift: true, relayId: l.id, key: fr.toFrame(l) });
     }
 
   cands.sort((a, b) => b.score - a.score || a.key.y - b.key.y || a.key.x - b.key.x);
@@ -1027,12 +1027,12 @@ export function outpostSpot(w: World, faction: Faction, s: AiState, kind: Buildi
 function outpostSpotFor(w: World, faction: Faction, g: Unit, site: Site, kind: BuildingKind, enemyHq?: P): { tx: number; ty: number } | null {
   const size = BUILDINGS[kind].size;
   const fr = sideFrame(w, faction);
-  const G = fr.pt(g);
+  const G = fr.toFrame(g);
   // the Depot by the field; defences a few tiles out toward the enemy
   const toward = enemyHq ?? { x: w.width - g.x, y: w.height - g.y };
   const k = 3 / Math.max(3, dist(g.x, g.y, toward.x, toward.y));
   const aim: P = kind === "depot" && site.field ? site.field : { x: g.x + (toward.x - g.x) * k, y: g.y + (toward.y - g.y) * k };
-  const A = fr.pt(aim);
+  const A = fr.toFrame(aim);
   const R = Math.ceil(GOLIATH.buildRing + size);
   let best: { tx: number; ty: number } | null = null;
   let bestD = Infinity;
@@ -1553,10 +1553,7 @@ function shoveAside(w: World, faction: Faction, g: Unit, ctx: GoliathContext, cm
     // straight out from its middle (a unit dead on centre: toward our own frame's south)
     let dx = u.x - g.x;
     let dy = u.y - g.y;
-    if (dist(0, 0, dx, dy) < 0.05) {
-      dx = 0;
-      dy = fr.flip ? -1 : 1;
-    }
+    if (dist(0, 0, dx, dy) < 0.05) [dx, dy] = fr.vec(0, 1);
     const n = Math.max(0.05, dist(0, 0, dx, dy));
     const to = inMap(w, { x: g.x + (dx / n) * 3, y: g.y + (dy / n) * 3 });
     const mc = moveClassOf(u.kind);
@@ -1617,12 +1614,12 @@ function keepEscorts(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan
   }
   if (escorts.length === 0) return;
   const fr = sideFrame(w, faction);
-  const G = fr.pt(g);
+  const G = fr.toFrame(g);
   escorts.forEach((u, i) => {
     ctx.used.add(u.id);
     if (u.order.type === "attack" || u.autoTargetId !== null) return; // (in a fight: let it)
     const a = (i * 2 * Math.PI) / Math.max(3, escorts.length) + 0.4;
-    let post = fr.pt({ x: G.x + sin(a) * GOLIATH_AI.post, y: G.y - cos(a) * GOLIATH_AI.post });
+    let post = fr.toWorld({ x: G.x + sin(a) * GOLIATH_AI.post, y: G.y - cos(a) * GOLIATH_AI.post });
     if (moveClassOf(u.kind) !== "air" && !passable(w, Math.floor(post.x), Math.floor(post.y), moveClassOf(u.kind))) post = { x: g.x, y: g.y };
     if (dist(u.x, u.y, post.x, post.y) <= 3.5) return;
     const o = u.order;
@@ -1651,7 +1648,7 @@ function liftAirspace(w: World, faction: Faction, seen: readonly Sighting[]) {
 /** The nearest ground a Goliath can stand on to (x, y), within 12 tiles (frame order for ties), or null. */
 function nearestLand(w: World, faction: Faction, p: P): P | null {
   const fr = sideFrame(w, faction);
-  const q = fr.pt(p);
+  const q = fr.toFrame(p);
   let best: P | null = null;
   let bestD = Infinity;
   for (let dy = -12; dy <= 12; dy++)

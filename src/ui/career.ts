@@ -27,6 +27,7 @@ import { gameMode } from "../game/mode";
 import { PLAYER } from "../game/controller";
 import { loadBest } from "../game/survival";
 import { addReportSection, type ReportContext } from "./report";
+import { SIDE_NAME } from "../game/side-style";
 
 /**
  * Career UI: the menu's rank badge, Daily Op card and mutator picker, the
@@ -462,7 +463,7 @@ function spectatorHtml(w: World, rules: string): string | null {
     .map((f) => {
       const ids = medalsOf(w, f);
       if (!ids.length) return "";
-      return `<div class="cr-side ${f}"><span class="cr-sl">${f === "blue" ? "Blue" : "Red"}</span><div class="cr-medals">${ids
+      return `<div class="cr-side ${f}"><span class="cr-sl">${SIDE_NAME[f]}</span><div class="cr-medals">${ids
         .map((id, i) => medalChip(id, i, false))
         .join("")}</div></div>`;
     })

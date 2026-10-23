@@ -7,6 +7,7 @@ import { applySpawnRank, bannedBy, rulesOf } from "./rules";
 import type { Calldown, Command, Faction, PowerKind, PowerState, UnitKind, World } from "./types";
 import { distToBuilding, hasBuilding, hqOf, inBounds, moveClassOf, onHomeLand, passable, regionAt, spawnUnit } from "./world";
 import { atan2, cos, hypot, sin } from "./fmath";
+import { QUARTER, isMulti, otherSide, perSide, rivalsOf, sidesOf, turnVec } from "./sides";
 
 /**
  * Commander calldowns. Each side has a Command meter (0–100) that fills
@@ -31,18 +32,17 @@ export const POWER_NAMES: Record<PowerKind, string> = {
   hammer: "Sky Hammer"
 };
 
-const FACTIONS: Faction[] = ["blue", "red"];
 const ticks = (secs: number) => Math.round(secs * TICK_RATE);
 
 export function createPowerState(): PowerState {
   const ready = () => ({ barrage: 0, emp: 0, droppod: 0, hammer: ticks(POWERS.hammer.unlock) });
   const zero = () => ({ barrage: 0, emp: 0, droppod: 0, hammer: 0 });
   return {
-    meter: { blue: 0, red: 0 },
-    readyAt: { blue: ready(), red: ready() },
+    meter: perSide(() => 0),
+    readyAt: perSide(ready),
     active: [],
     stunned: new Map(),
-    fired: { blue: zero(), red: zero() }
+    fired: perSide(zero)
   };
 }
 
@@ -166,15 +166,13 @@ export function applyCalldown(w: World, c: Extract<Command, { type: "calldown" }
   w.fx.push({ type: "calldown", id, faction: c.faction, power: c.power, x: c.x, y: c.y, radius, landTick });
 }
 
-const enemyOf = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
-
 /**
  * Per tick, before combat: power-ups come online, stuns wear off and
  * telegraphed calldowns land (so their victims die in this tick's cleanup).
  */
 export function tickPowers(w: World): void {
   const ps = w.powers;
-  for (const f of FACTIONS)
+  for (const f of sidesOf(w))
     if (w.tick === ps.readyAt[f].hammer && !rulesOf(w).noCalldowns) w.fx.push({ type: "powerOnline", faction: f, power: "hammer" });
   if (ps.stunned.size > 0)
     for (const [id, until] of ps.stunned)
@@ -201,13 +199,16 @@ export function tickPowers(w: World): void {
 /** Per tick, after deaths are settled: the Command meters fill (mostly from losses). */
 export function chargePowers(w: World): void {
   const m = w.powers.meter;
-  for (const f of FACTIONS) m[f] += POWERS.passive / TICK_RATE;
+  const sides = sidesOf(w);
+  for (const f of sides) m[f] += POWERS.passive / TICK_RATE;
   for (const ev of w.fx) {
     if (ev.type !== "death") continue;
     if (!ev.free) m[ev.faction] += ev.value * POWERS.perScrapLost; // (a free Condor's loss cost nothing)
-    m[enemyOf(ev.faction)] += ev.value * POWERS.perScrapKilled;
+    // (a duel's other side made the kill; in a free-for-all, whoever did, when it's known)
+    const by = isMulti(w) ? ev.by ?? null : otherSide(ev.faction);
+    if (by) m[by] += ev.value * POWERS.perScrapKilled;
   }
-  for (const f of FACTIONS) m[f] = Math.min(POWERS.meterMax, m[f]);
+  for (const f of sides) m[f] = Math.min(POWERS.meterMax, m[f]);
 }
 
 /** Who a calldown's kills are credited to: the HQ (so faction stats count them, and no unit takes their XP), else no one (0). */
@@ -228,15 +229,19 @@ function landShell(w: World, c: Calldown, x: number, y: number): void {
 function landEmp(w: World, c: Calldown): void {
   const r = POWERS.emp.radius;
   const until = w.tick + ticks(POWERS.emp.stun);
-  const victim = enemyOf(c.faction);
-  const ids: number[] = [];
-  for (const u of w.units.values())
-    if (u.faction === victim && hypot(u.x - c.x, u.y - c.y) <= r) ids.push(u.id);
-  for (const b of w.buildings.values())
-    if (b.faction === victim && distToBuilding(b, c.x, c.y) <= r) ids.push(b.id);
-  for (const id of ids) w.powers.stunned.set(id, Math.max(until, w.powers.stunned.get(id) ?? 0));
-  if (ids.length > 0) w.fx.push({ type: "stun", faction: victim, ids, x: c.x, y: c.y, until });
-  impact(w, c, c.x, c.y, ids.length);
+  let hits = 0;
+  // every side but the caster's (a duel's one enemy), each side's stun its own event
+  for (const victim of rivalsOf(w, c.faction)) {
+    const ids: number[] = [];
+    for (const u of w.units.values())
+      if (u.faction === victim && hypot(u.x - c.x, u.y - c.y) <= r) ids.push(u.id);
+    for (const b of w.buildings.values())
+      if (b.faction === victim && distToBuilding(b, c.x, c.y) <= r) ids.push(b.id);
+    for (const id of ids) w.powers.stunned.set(id, Math.max(until, w.powers.stunned.get(id) ?? 0));
+    if (ids.length > 0) w.fx.push({ type: "stun", faction: victim, ids, x: c.x, y: c.y, until });
+    hits += ids.length;
+  }
+  impact(w, c, c.x, c.y, hits);
 }
 
 /**
@@ -271,7 +276,7 @@ function landPod(w: World, c: Calldown): void {
   const kinds = podCrew(w, c.faction);
   const ids: number[] = [];
   kinds.forEach((kind, i) => {
-    const spot = podSpot(w, kind, c.x, c.y, i, kinds.length, c.faction === "red");
+    const spot = podSpot(w, kind, c.x, c.y, i, kinds.length, QUARTER[c.faction]);
     if (!spot) return;
     const u = spawnUnit(w, kind, c.faction, spot.x, spot.y);
     applySpawnRank(w, u); // the Veterans mutator ranks pod crews too
@@ -285,11 +290,10 @@ function landPod(w: World, c: Calldown): void {
  * Where crew member i of n steps out of the pod: a small ring around the
  * landing point, or the nearest tile its movement class can stand on.
  */
-function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: number, flip = false): { x: number; y: number } | null {
+function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: number, q = 0): { x: number; y: number } | null {
   const mc = moveClassOf(kind);
-  // the crew ring (and the tile search below) in the side's own frame: red's is blue's turned 180°
-  const a = (i / n) * Math.PI * 2 + 0.4 + (flip ? Math.PI : 0);
-  const s = flip ? -1 : 1;
+  // the crew ring (and the tile search below) in the side's own frame: red's is blue's turned 180°, green's and purple's a quarter turn
+  const a = (i / n) * Math.PI * 2 + 0.4 + (q === 2 ? Math.PI : q === 1 ? Math.PI / 2 : q === 3 ? Math.PI * 1.5 : 0);
   const px = x + sin(a) * 0.65;
   const py = y - cos(a) * 0.65;
   // crew step out onto the pod's own landmass, never across water onto an island
@@ -301,8 +305,7 @@ function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: n
     let bestD = Infinity;
     for (let i2 = -r; i2 <= r; i2++)
       for (let j2 = -r; j2 <= r; j2++) {
-        const dy = i2 * s;
-        const dx = j2 * s;
+        const [dx, dy] = turnVec(q, j2, i2);
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const tx = Math.floor(px) + dx;
         const ty = Math.floor(py) + dy;
@@ -320,15 +323,15 @@ function podSpot(w: World, kind: UnitKind, x: number, y: number, i: number, n: n
 
 function landHammer(w: World, c: Calldown): void {
   const h = POWERS.hammer;
-  const victim = enemyOf(c.faction);
   const hits: { id: number; damage: number }[] = [];
+  // (every side but the caster's: a duel's one enemy)
   for (const u of w.units.values()) {
-    if (u.faction !== victim) continue;
+    if (u.faction === c.faction) continue;
     const d = hypot(u.x - c.x, u.y - c.y);
     if (d <= h.radius) hits.push({ id: u.id, damage: h.unitDamage * (1 - 0.5 * (d / h.radius)) });
   }
   for (const b of w.buildings.values())
-    if (b.faction === victim && distToBuilding(b, c.x, c.y) <= h.radius) hits.push({ id: b.id, damage: h.buildingDamage });
+    if (b.faction !== c.faction && distToBuilding(b, c.x, c.y) <= h.radius) hits.push({ id: b.id, damage: h.buildingDamage });
   strikeDamage(w, hits, attackerOf(w, c.faction));
   impact(w, c, c.x, c.y, hits.length);
 }

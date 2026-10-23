@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { MAP_ART } from "./src/game/map-art";
-import { duelHash, simHash } from "./tools/arena/files";
+import { duelHash, ffaHash, simHash } from "./tools/arena/files";
 
 /**
  * Each map's terrain revision: a hash of its painted chunks (art/terrain.py
@@ -54,6 +54,8 @@ export default defineConfig({
     __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url)))),
     // a sound duel pairs only two phones running the same sim and duel code (SOUND-DUEL.md)
     __DUEL_HASH__: JSON.stringify(duelHash(fileURLToPath(new URL(".", import.meta.url)))),
+    // a four-player online battle seats only pages running the same sim and battle code (FFA.md)
+    __FFA_HASH__: JSON.stringify(ffaHash(fileURLToPath(new URL(".", import.meta.url)))),
     // the version tag this build is (v11), from tools/build-pages.mjs; null for main and local builds.
     // A record pinned to it (BattleRecord.version) is known to replay exactly, with nothing to check
     __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null)
@@ -82,7 +84,7 @@ export default defineConfig({
       // precache the shell, icons and menu art; painted map terrain
       // (a few MB per map) and each biome's rock material are cached on
       // first play instead
-      includeAssets: ["assets/icons/*", "assets/icons/red/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
+      includeAssets: ["assets/icons/*", "assets/icons/red/*", "assets/icons/green/*", "assets/icons/purple/*", "assets/ui/*", "assets/maps/*/thumb.webp", "icons/*"],
       workbox: {
         // There are no client-side routes. Exact precached URLs still work
         // offline, but /v1/ etc. must reach their own game and service worker.

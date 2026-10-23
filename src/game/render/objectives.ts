@@ -10,6 +10,11 @@ import { chuteGeometry, crateDef, instance, modelMesh, uplinkDef, type ModelInst
 import { Ease } from "../three/tween";
 import type { View } from "../three/view";
 import type { Fx } from "./fx";
+import { SIDE_CSS, SIDE_NAME } from "../side-style";
+import { isMulti } from "../../sim/sides";
+
+/** An Uplink's pip on the minimap, in its holder's colour. */
+const MINIMAP_OWNER: Record<Faction, string> = { blue: "#4fa3ff", red: "#ff5a4a", green: "#4fd86a", purple: "#b070ff" };
 
 /**
  * How the map objectives look and sound: the Uplink relays (a neutral
@@ -40,8 +45,8 @@ export interface ObjectiveRendererOpts {
   charted?(x: number, y: number): boolean;
 }
 
-const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
-const TEAM_CSS: Record<Faction, string> = { blue: "#7ec1ff", red: "#ff8a7a" };
+const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a, green: 0x4fd86a, purple: 0xb070ff };
+const TEAM_CSS: Record<Faction, string> = SIDE_CSS;
 const NEUTRAL = 0xe8c66a;
 const GOLD = 0xffd66e;
 /** The dark track under the capture bar and a crate's burn-out ring. */
@@ -243,7 +248,7 @@ export class ObjectiveRenderer {
       if (ev.owner) {
         this.sound("capture", x, y, 0.8);
         announce({
-          key: "uplink-spectate", text: `${ev.owner === "blue" ? "Blue" : "Red"} takes an Uplink`,
+          key: "uplink-spectate", text: `${SIDE_NAME[ev.owner]} takes an Uplink`,
           sub: "Scrap, vision and command charge while they hold it", tone: "info", priority: 3, x: ev.x, y: ev.y
         });
       }
@@ -270,7 +275,8 @@ export class ObjectiveRenderer {
     } else if (ev.owner) {
       this.sound("uplinkLost", x, y, 0.6, 0.2);
       this.opts.ping(ev.x, ev.y);
-      this.opts.notify("📡 The enemy took an Uplink", "bad");
+      // (a free-for-all names who: "the enemy" could be any of three)
+      this.opts.notify(isMulti(this.world) ? `📡 ${SIDE_NAME[ev.owner]} took an Uplink` : "📡 The enemy took an Uplink", "bad");
     }
   }
 
@@ -651,7 +657,7 @@ export class ObjectiveRenderer {
       ctx.lineTo(x, y + d);
       ctx.lineTo(x - d, y);
       ctx.closePath();
-      ctx.fillStyle = l.owner === "blue" ? "#4fa3ff" : l.owner === "red" ? "#ff5a4a" : "#6b6450";
+      ctx.fillStyle = l.owner ? MINIMAP_OWNER[l.owner] : "#6b6450";
       // held, but no troops on it (the enemy's only while we can see it)
       if (l.infantryOnly && l.owner && !l.crewed && (this.opts.spectator || l.owner === this.opts.player || this.opts.visibleAt(l.x, l.y)))
         ctx.globalAlpha = 0.4;

@@ -1,12 +1,12 @@
 // HUD portraits shot from the in-game 3D models (ICONS.md): public/assets/icons/<kind>.webp, and
-// red/<kind>.webp for every unit and building (the objectives are neutral). Each is the model
+// red/, green/ and purple/<kind>.webp for every unit and building (the objectives are neutral). Each is the model
 // gallery's ?icon=<kind> view (tools/models.ts) framed as FRAMING says, shot on black and on white
 // (the pair gives a clean alpha), fitted to 224 px in a 256 px square, then finished for the HUD's
 // dark navy buttons: the shadows lifted and a thin light rim drawn round the silhouette.
 // Usage: npx vite --port 5173, then
-//   node tools/model-portraits.mjs --all          every portrait, blue and red (about 8 minutes)
+//   node tools/model-portraits.mjs --all          every portrait, blue, red, green and purple (about 16 minutes)
 //   node tools/model-portraits.mjs lancer hq      just these, blue
-//     [--faction=red] [--out=public/assets/icons] (a scratch folder, to try a look without touching
+//     [--faction=red|green|purple] [--out=public/assets/icons] (a scratch folder, to try a look without touching
 //     the shipped portraits) [--pitch=50] (degrees below the horizon) [--turn=0.6] (rad, clockwise
 //     from nose north) [--head=0] (rad, a building's turret or head turned on its mount)
 //     [--solo] (one robot of a squad) [--url=http://localhost:5173/tools/models.html]
@@ -49,7 +49,8 @@ const out = opt.out ?? "public/assets/icons";
 const jobs = [];
 if ("all" in opt) {
   for (const k of [...UNITS, ...BUILDINGS, ...OBJECTIVES]) jobs.push({ kind: k, faction: "blue" });
-  for (const k of [...UNITS, ...BUILDINGS]) jobs.push({ kind: k, faction: "red" });
+  // (the other sides' portraits: red's for every duel, green's and purple's for a four-player map)
+  for (const f of ["red", "green", "purple"]) for (const k of [...UNITS, ...BUILDINGS]) jobs.push({ kind: k, faction: f });
 } else for (const k of args.filter((a) => !a.startsWith("--"))) jobs.push({ kind: k, faction: opt.faction ?? "blue" });
 
 const exe = ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p));
@@ -168,7 +169,7 @@ for (const { kind, faction } of jobs) {
     // (a model touching the edge of the shot was cut off by the gallery's framing)
     return { webp: dst.toDataURL("image/webp", 0.85), clipped: x0 === 0 || y0 === 0 || x1 === w - 1 || y1 === h - 1 };
   }, [...shots, { SIZE, FIT, GAMMA, GAIN, RIM_R, RIM, RIM_A }]);
-  const dir = faction === "red" ? `${out}/red` : out;
+  const dir = faction === "blue" ? out : `${out}/${faction}`;
   mkdirSync(dir, { recursive: true });
   const file = `${dir}/${kind}.webp`;
   writeFileSync(file, Buffer.from(webp.split(",")[1], "base64"));

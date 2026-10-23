@@ -50,7 +50,7 @@ export interface GoliathHost {
 }
 
 /** Team colours of rings on the ground. */
-const TEAM: Record<Faction, number> = { blue: 0x3d8bff, red: 0xff4a3a };
+const TEAM: Record<Faction, number> = { blue: 0x3d8bff, red: 0xff4a3a, green: 0x34d058, purple: 0xa860ff };
 /** A carried Goliath hangs this high (tiles, its feet clear of the ground). */
 export const LIFT_H = 0.55;
 /** A Condor carrying a Goliath flies this far above the top of it (tiles). */

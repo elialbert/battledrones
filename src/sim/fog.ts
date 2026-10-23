@@ -2,6 +2,7 @@ import { BUILDINGS, OBJECTIVES, UNITS } from "./balance";
 import type { Building, BuildingKind, Faction, World } from "./types";
 import { rulesOf } from "./rules";
 import { inBounds } from "./world";
+import { perSide, sidesOf } from "./sides";
 
 export const enum Vis {
   Unexplored = 0,
@@ -24,10 +25,7 @@ export interface FactionFog {
 }
 
 export function createFog(width: number, height: number): Record<Faction, FactionFog> {
-  return {
-    blue: { vis: new Uint8Array(width * height), known: new Map() },
-    red: { vis: new Uint8Array(width * height), known: new Map() }
-  };
+  return perSide(() => ({ vis: new Uint8Array(width * height), known: new Map() }));
 }
 
 const idx = (w: World, tx: number, ty: number) => ty * w.width + tx;
@@ -67,9 +65,9 @@ function footprintVisible(w: World, f: Faction, b: { kind: BuildingKind; tx: num
   return false;
 }
 
-/** Recompute both factions' visibility and building memory. */
+/** Recompute every side's visibility and building memory. */
 export function tickFog(w: World): void {
-  for (const f of ["blue", "red"] as const) {
+  for (const f of sidesOf(w)) {
     const fog = w.fog[f];
     // decay: everything visible becomes merely explored
     for (let i = 0; i < fog.vis.length; i++)

@@ -74,7 +74,8 @@ buildings, and renamed the Titan tank the Mastodon.
 ### Maps & terrain
 
 Six 2-player maps, all point-symmetric (rotated 180°) so both sides are
-equal, painted procedurally from a seed in `src/sim/maps.ts`. The rules are
+equal, and one 4-player map with four-way rotational symmetry (turned 90°,
+see FFA.md), painted procedurally from a seed in `src/sim/maps.ts`. The rules are
 symmetric too: every search whose ties go by scan order runs in each side's
 own frame (see *Side fairness* under Balance & pacing). The map picker lists
 them in `MAPS` order, the classic Proving Grounds first; the row scrolls
@@ -88,6 +89,7 @@ chevron (`ui/hscroll.ts`).
 | Dune Sea | 56² | Desert | Open sands between mesas, a palm oasis in the middle, three lanes |
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
+| Compass Rose | 72² | Arctic | Four players, one per corner: frozen streams with a bridge and a ford split the quarters, five Uplinks (the centre and one by each bridge); a free-for-all (see FFA.md) |
 | Archipelago | 108² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):

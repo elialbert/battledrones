@@ -2,7 +2,8 @@ import { BUILDINGS, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { canWalk, goliathReachAt, isLifted } from "./goliath";
 import { crushes, isInfantry, tickCrush } from "./infantry";
 import { Terrain, type Faction, type Unit, type World } from "./types";
-import { domainOf, inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
+import { domainOf, frameTileOf, inBounds, moveClassOf, passable, regionAt, regionLabels, terrainMult, terrainSpeed, type LandClass, type MoveClass } from "./world";
+import { QUARTER, turnVec } from "./sides";
 import { atan2, cos, hypot, sin } from "./fmath";
 
 const ARRIVE_DIST = 0.25;
@@ -49,17 +50,14 @@ export function findPath(
   faction?: Faction
 ): { x: number; y: number }[] | null {
   const pass = (x: number, y: number) => passable(w, x, y, mc);
-  // scan orders run in the side's own frame (red's is blue's turned 180°), so
-  // equal-cost ties resolve as mirror images for the two sides (see sideFrame)
-  const s = faction === "red" ? -1 : 1;
+  // scan orders run in the side's own frame (red's is blue's turned 180°, green's
+  // and purple's a quarter turn), so equal-cost ties resolve as mirror images for
+  // every side (see sideFrame)
+  const q = faction ? QUARTER[faction] : 0;
   // the tile under a point, floored in that frame too: a point on a tile edge
   // (e.g. an Uplink at (28, 28)) belongs to the tile on the side's own far side
-  const tileX = (x: number) => (s > 0 ? Math.floor(x) : w.width - 1 - Math.floor(w.width - x));
-  const tileY = (y: number) => (s > 0 ? Math.floor(y) : w.height - 1 - Math.floor(w.height - y));
-  const sx = tileX(fromX);
-  const sy = tileY(fromY);
-  let gx = tileX(toX);
-  let gy = tileY(toY);
+  const [sx, sy] = frameTileOf(w, faction, fromX, fromY);
+  let [gx, gy] = frameTileOf(w, faction, toX, toY);
   if (!inBounds(w, gx, gy)) {
     gx = Math.max(0, Math.min(w.width - 1, gx));
     gy = Math.max(0, Math.min(w.height - 1, gy));
@@ -78,8 +76,7 @@ export function findPath(
       let bestD = Infinity;
       for (let i = -r; i <= r; i++)
         for (let j = -r; j <= r; j++) {
-          const dy = i * s;
-          const dx = j * s;
+          const [dx, dy] = turnVec(q, j, i);
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
           if (!ok(gx + dx, gy + dy)) continue;
           const d = hypot(gx + dx - sx, gy + dy - sy);
@@ -175,8 +172,7 @@ export function findPath(
     const cy = Math.floor(cur / W);
     for (let i = -1; i <= 1; i++)
       for (let j = -1; j <= 1; j++) {
-        const dy = i * s;
-        const dx = j * s;
+        const [dx, dy] = turnVec(q, j, i);
         if (dx === 0 && dy === 0) continue;
         const nx = cx + dx;
         const ny = cy + dy;
@@ -384,12 +380,13 @@ function separate(w: World, driving: Set<number>): void {
       if (d < 1e-3) {
         // perfectly coincident (e.g. spawned at the same tile centre): no
         // direction to push along, so derive one deterministically — for a
-        // side's own pair from kinds and the clock, turned 180° for red, so
-        // both sides' mirror-image pairs split as mirror images
+        // side's own pair from kinds and the clock, turned 180° for red (a
+        // quarter turn for green and purple), so mirror-image pairs split as
+        // mirror images
         const angle =
           a.faction === b.faction
             ? ((KIND_INDEX[a.kind]! * 7 + KIND_INDEX[b.kind]! * 13 + w.tick) % 16) * (Math.PI / 8) +
-              (a.faction === "red" ? Math.PI : 0)
+              (a.faction === "red" ? Math.PI : a.faction === "green" ? Math.PI / 2 : a.faction === "purple" ? Math.PI * 1.5 : 0)
             : ((a.id * 7 + b.id * 13) % 16) * (Math.PI / 8);
         ux = sin(angle);
         uy = -cos(angle);

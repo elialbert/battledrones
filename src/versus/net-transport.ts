@@ -15,14 +15,11 @@
  *   const t = new NetTransport({ code, role })
  *   await t.opened         // the first connection, or a NetError
  *
- * The socket comes back by itself: a close the relay didn't mean as final
- * (a network change, the relay restarting, a phone that slept) reconnects
- * after 0.25, 0.5, 1, 2, then every 4 s, and the relay gives the seat to the
- * new socket. Packets lost in between are lost, as on the air: the lockstep
- * resends what wasn't acknowledged. A connection that delivered packets and
- * then has gone silent for STALE_MS is reconnected once (a socket the
- * network dropped without a word looks open for minutes); it is not tried
- * again until something arrives.
+ * The socket is a RelaySocket (src/net/relay-socket.ts): it comes back by itself
+ * after a close the relay didn't mean as final, and reconnects a connection
+ * that has gone silent; packets lost in between are lost, as on the air, and
+ * the lockstep resends what wasn't acknowledged. A message that isn't a
+ * packet is dropped unheard.
  *
  * The relay's final close codes end the transport: `stopped` turns true and
  * onError hears why (the lobby shows it). Before the first open, `opened`
@@ -31,22 +28,12 @@
  */
 import { type BandRole, type LinkPacket, type LinkStats, type LinkTransport, type ModemMode, type OutFrame } from "../link/transport";
 import { RelayTransport, type RelayWindow } from "./relay-transport";
+import { RelaySocket, type NetState, type NetTimers, type SocketLike } from "../net/relay-socket";
 
-/** The deployed relay (relay/fly.toml). */
-export const RELAY_URL = "wss://battledrones-relay.fly.dev";
-
-/** Room codes: Crockford base32 (no I, L, O, U), as the relay accepts them. */
-export const ROOM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-export const ROOM_CODE_LENGTH = 8;
-const ROOM_RE = /^[0-9A-HJKMNP-TV-Z]{6,16}$/;
-
-/** A new room code from the platform's CSPRNG (`bytes`: tests). 8 characters, 40 bits: the relay has no other guard against guessing. */
-export function roomCode(bytes: Uint8Array = crypto.getRandomValues(new Uint8Array(ROOM_CODE_LENGTH))): string {
-  // (32 divides 256: & 31 is unbiased)
-  return Array.from(bytes.subarray(0, ROOM_CODE_LENGTH), (b) => ROOM_ALPHABET[b & 31]).join("");
-}
-
-export const isRoomCode = (s: unknown): s is string => typeof s === "string" && ROOM_RE.test(s);
+export {
+  FINAL_CLOSE, NetError, OPEN_TIMEOUT_MS, RELAY_URL, RETRY_MS, ROOM_ALPHABET, ROOM_CODE_LENGTH, STALE_MS, isRoomCode, roomCode,
+  type NetState, type NetTimers, type SocketLike
+} from "../net/relay-socket";
 
 /** The invite link: this page (its version path included) with `#vs=<code>`. */
 export function inviteUrl(loc: Pick<Location, "origin" | "pathname">, code: string): string {
@@ -57,42 +44,7 @@ export function inviteUrl(loc: Pick<Location, "origin" | "pathname">, code: stri
 export function parseInvite(hash: string): string | null {
   const m = /^#vs=([0-9a-z]+)$/i.exec(hash.trim());
   const code = m ? m[1]!.toUpperCase() : null;
-  return isRoomCode(code) ? code : null;
-}
-
-/** The relay's final close codes, and what the player is told. */
-export const FINAL_CLOSE: Readonly<Record<number, string>> = {
-  4000: "The relay didn't accept this room code",
-  4001: "This battle was opened again in another tab or on another device",
-  4002: "The relay's time limit for one connection ran out",
-  4003: "This page isn't allowed to use the relay",
-  4010: "Nobody else was in the battle for 10 minutes",
-  4013: "The relay is full: try again later"
-};
-
-/** The first connection must open within this long. */
-export const OPEN_TIMEOUT_MS = 15_000;
-/** Reconnect waits, then the last one again and again. */
-export const RETRY_MS = [250, 500, 1000, 2000, 4000] as const;
-/** A connection that delivered packets and then nothing for this long is reconnected once. */
-export const STALE_MS = 6000;
-
-/** What NetTransport uses of a WebSocket (the browser's, or a test's). */
-export interface SocketLike {
-  readonly readyState: number;
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-  onopen: ((ev: unknown) => void) | null;
-  onclose: ((ev: { code: number; reason: string }) => void) | null;
-  onmessage: ((ev: { data: unknown }) => void) | null;
-  onerror: ((ev: unknown) => void) | null;
-}
-
-export interface NetTimers {
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(h: unknown): void;
-  setInterval(fn: () => void, ms: number): unknown;
-  clearInterval(h: unknown): void;
+  return code !== null && /^[0-9A-HJKMNP-TV-Z]{6,16}$/.test(code) ? code : null;
 }
 
 export interface NetOptions {
@@ -108,18 +60,13 @@ export interface NetOptions {
   timers?: NetTimers;
 }
 
-/** Why an online link couldn't be made, or ended (the lobby's "online" error). */
-export class NetError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NetError";
-  }
+/** A packet as one text message: `<nbits> <base64>` (null: not one). */
+function parsePacket(data: string): { nbits: number; base64: string } | null {
+  const sp = data.indexOf(" ");
+  const nbits = Number(data.slice(0, sp));
+  if (sp <= 0 || !Number.isInteger(nbits)) return null;
+  return { nbits, base64: data.slice(sp + 1) };
 }
-
-/** Where the socket is: the first connection on its way, open, between connections, or ended for good. */
-export type NetState = "connecting" | "open" | "retrying" | "ended";
-
-const OPEN = 1;
 
 export class NetTransport implements LinkTransport {
   readonly code: string;
@@ -127,59 +74,57 @@ export class NetTransport implements LinkTransport {
   readonly url: string;
   /** The first connection: resolves when it opens, rejects with a NetError (a final close, or OPEN_TIMEOUT_MS). */
   readonly opened: Promise<void>;
-  /** The relay ended it, or it never opened (the lobby: LobbyLink.stopped, set before onError). */
-  stopped = false;
   onError: ((message: string) => void) | null = null;
-  /** Connections opened so far (the first is 1). */
-  connections = 0;
   private readonly relay: RelayTransport;
   private readonly win: RelayWindow;
-  private readonly makeSocket: (url: string) => SocketLike;
-  private readonly clock: () => number;
-  private readonly timers: NetTimers;
-  private ws: SocketLike | null = null;
-  private stateNow: NetState = "connecting";
-  private retries = 0;
-  private retryTimer: unknown = null;
-  private openTimer: unknown = null;
-  private watchTimer: unknown = null;
-  private lastInAt: number | null = null;
-  /** A stale connection was reconnected: not again until a message arrives. */
-  private staleTried = false;
-  private closed = false;
-  private resolveOpened!: () => void;
-  private rejectOpened!: (e: NetError) => void;
+  private readonly socket: RelaySocket;
 
   constructor(o: NetOptions) {
-    if (!isRoomCode(o.code)) throw new NetError(FINAL_CLOSE[4000]!);
     this.code = o.code;
     this.role = o.role;
-    this.url = `${o.url ?? RELAY_URL}/${o.code}/${o.role}`;
-    this.makeSocket = o.socket ?? ((url) => new WebSocket(url) as unknown as SocketLike);
-    this.clock = o.now ?? (() => performance.now());
-    this.timers = o.timers ?? {
-      setTimeout: (fn, ms) => setTimeout(fn, ms),
-      clearTimeout: (h) => clearTimeout(h as number),
-      setInterval: (fn, ms) => setInterval(fn, ms),
-      clearInterval: (h) => clearInterval(h as number)
+    this.win = { __duelOut: (base64, nbits) => this.socket.send(`${nbits} ${base64}`) };
+    const clock = o.now ?? (() => performance.now());
+    const timers = o.timers ?? {
+      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+      clearTimeout: (h: unknown) => clearTimeout(h as number),
+      setInterval: (fn: () => void, ms: number) => setInterval(fn, ms),
+      clearInterval: (h: unknown) => clearInterval(h as number)
     };
-    this.opened = new Promise<void>((resolve, reject) => {
-      this.resolveOpened = resolve;
-      this.rejectOpened = reject;
+    // (the relay transport first: a socket that opens at once may hear a packet before the constructor returns)
+    this.relay = new RelayTransport({ role: o.role, win: this.win, now: clock, timers });
+    this.socket = new RelaySocket({
+      code: o.code,
+      role: o.role,
+      ...(o.url !== undefined ? { url: o.url } : {}),
+      ...(o.socket ? { socket: o.socket } : {}),
+      now: clock,
+      timers,
+      accept: (data) => parsePacket(data) !== null,
+      onMessage: (data) => {
+        const p = parsePacket(data)!;
+        this.win.__duelIn?.(p.base64, p.nbits);
+      }
     });
-    // (nobody may be awaiting it yet: a rejection is still handled)
-    this.opened.catch(() => undefined);
-    this.win = { __duelOut: (base64, nbits) => this.out(base64, nbits) };
-    this.relay = new RelayTransport({ role: o.role, win: this.win, now: this.clock, timers: this.timers });
-    this.openTimer = this.timers.setTimeout(() => {
-      if (this.connections === 0) this.end(`Couldn't reach the relay in ${OPEN_TIMEOUT_MS / 1000} s`);
-    }, OPEN_TIMEOUT_MS);
-    this.watchTimer = this.timers.setInterval(() => this.watch(), 1000);
-    this.connect();
+    this.socket.onError = (message) => {
+      this.relay.close();
+      this.onError?.(message);
+    };
+    this.url = this.socket.url;
+    this.opened = this.socket.opened;
+  }
+
+  /** The relay ended it, or it never opened (the lobby: LobbyLink.stopped, set before onError). */
+  get stopped(): boolean {
+    return this.socket.stopped;
+  }
+
+  /** Connections opened so far (the first is 1). */
+  get connections(): number {
+    return this.socket.connections;
   }
 
   get state(): NetState {
-    return this.stateNow;
+    return this.socket.state;
   }
 
   // ---------------------------------------------------------- LinkTransport ---
@@ -222,104 +167,7 @@ export class NetTransport implements LinkTransport {
   }
 
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.stateNow = "ended";
     this.relay.close();
-    this.timers.clearTimeout(this.retryTimer);
-    this.timers.clearTimeout(this.openTimer);
-    this.timers.clearInterval(this.watchTimer);
-    this.drop(1000, "bye");
-    this.rejectOpened(new NetError("Closed"));
-  }
-
-  // ------------------------------------------------------------- inside ---
-
-  private connect(): void {
-    if (this.closed) return;
-    let ws: SocketLike;
-    try {
-      ws = this.makeSocket(this.url);
-    } catch (e) {
-      this.end(e instanceof Error ? e.message : String(e));
-      return;
-    }
-    this.ws = ws;
-    ws.onopen = () => {
-      if (ws !== this.ws) return;
-      this.stateNow = "open";
-      this.retries = 0;
-      this.connections++;
-      this.lastInAt = null;
-      if (this.connections === 1) this.resolveOpened();
-    };
-    ws.onmessage = (ev) => {
-      if (ws !== this.ws) return;
-      this.receive(ev.data);
-    };
-    ws.onclose = (ev) => {
-      if (ws !== this.ws) return;
-      this.ws = null;
-      const final = FINAL_CLOSE[ev.code];
-      if (final) this.end(final);
-      else this.retry();
-    };
-    // (an error is always followed by a close)
-    ws.onerror = () => undefined;
-  }
-
-  private retry(): void {
-    if (this.closed) return;
-    this.stateNow = this.connections === 0 ? "connecting" : "retrying";
-    const wait = RETRY_MS[Math.min(this.retries, RETRY_MS.length - 1)]!;
-    this.retries++;
-    this.retryTimer = this.timers.setTimeout(() => this.connect(), wait);
-  }
-
-  /** A connection that brought packets and has gone quiet may be dead without knowing it: start a new one, once. */
-  private watch(): void {
-    if (this.closed || this.stateNow !== "open" || this.lastInAt === null || this.staleTried) return;
-    if (this.clock() - this.lastInAt < STALE_MS) return;
-    this.staleTried = true;
-    this.drop(4500, "stale");
-    this.retry();
-  }
-
-  /** Let the current socket go without hearing from it again. */
-  private drop(code: number, reason: string): void {
-    const ws = this.ws;
-    this.ws = null;
-    if (!ws) return;
-    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
-    try {
-      ws.close(code, reason);
-    } catch {
-      /* already closing */
-    }
-  }
-
-  private end(message: string): void {
-    if (this.closed) return;
-    this.stopped = true;
-    // (before close(), whose own rejection would win)
-    this.rejectOpened(new NetError(message));
-    this.close();
-    this.onError?.(message);
-  }
-
-  /** __duelOut: one packet, as one message. Lost while there is no open socket, as a packet on the air would be. */
-  private out(base64: string, nbits: number): void {
-    const ws = this.ws;
-    if (ws && ws.readyState === OPEN) ws.send(`${nbits} ${base64}`);
-  }
-
-  private receive(data: unknown): void {
-    if (typeof data !== "string") return;
-    const sp = data.indexOf(" ");
-    const nbits = Number(data.slice(0, sp));
-    if (sp <= 0 || !Number.isInteger(nbits)) return;
-    this.lastInAt = this.clock();
-    this.staleTried = false;
-    this.win.__duelIn?.(data.slice(sp + 1), nbits);
+    this.socket.close();
   }
 }
