@@ -657,7 +657,7 @@ async function run(browser, base, page, kind, url) {
   return r;
 }
 
-const browser = await chromium.launch({ executablePath: ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p)) });
+const browser = await chromium.launch({ executablePath: ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/usr/bin/google-chrome"].find((p) => existsSync(p)) });
 const scratch = mkdtempSync(join(tmpdir(), "worklet-smoke-"));
 try {
   // 1. production: the project's config, a scratch entry, a scratch outDir

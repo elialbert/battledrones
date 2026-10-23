@@ -26,7 +26,7 @@ const ref = relative(root, resolve(file)).replaceAll("\\", "/");
 const port = 5200 + Math.floor(Math.random() * 500);
 const vite = spawn("npx", ["vite", ...(prod ? ["preview"] : []), "--port", String(port), "--strictPort"], { cwd: root, stdio: ["ignore", "pipe", "inherit"], detached: true });
 await new Promise((ok) => vite.stdout.on("data", (d) => String(d).includes("Local") && ok()));
-const exe = ["/opt/pw-browsers/chromium", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"].find((p) => existsSync(p));
+const exe = ["/opt/pw-browsers/chromium", "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/usr/bin/google-chrome"].find((p) => existsSync(p));
 const browser = await chromium.launch({ executablePath: exe, args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"] });
 let failed = false;
 try {
