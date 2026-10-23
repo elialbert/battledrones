@@ -712,6 +712,18 @@ The battle used to be silent half the time. A procedural score
 now follows it, scheduled 200 ms ahead on the AudioContext clock at 96 BPM
 (menu 80), in 16th-note steps with one chord per two bars:
 
+- **Tracks:** the original **Home Signal** plus **Night Drive** (syncopated
+  breaks), **Distant Lights** (spacious half-time), **Iron Orbit** (driving
+  ostinato), **Sunward** (buoyant offbeats), and **Undertow** (rolling tresillo).
+  Each has its own progression, melody, bass groove and arp contour, played
+  in the current biome's mode with its instruments. A shuffled bag chooses
+  the first track randomly, plays every track before refilling, and prevents
+  adjacent repeats. Changes land after 24, 32 or 40 bars, always a complete
+  progression: 60–100 seconds in battle, 72–120 in the menu. The pad glides
+  into the new harmony without restarting the audio graph; battle layers
+  keep following intensity. Biome changes retain the current composition;
+  finales suspend rotation. Playlist randomness is independent of melody
+  variation and the simulation RNG.
 - **Layers**, each opened only on a bar line: a voice-led **pad** (always;
   four gliding voices, no muddy seconds or sevenths in the bass), a calm
   **melody** that plays call-and-answer phrases while you build, a **bass**

@@ -198,8 +198,9 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   icons were painted with OpenAI's `gpt-image-2.5-sunburst`; every sound
   is synthesised live.
 - An **adaptive soundtrack** synthesised live: each biome has its own mode,
-  chords and instruments; bass, drums and an arpeggio join as fights heat up
-  near your camera, an alarm motif plays when your base is under attack,
+  chords and instruments. Six compositions shuffle without repeats, changing
+  on phrase boundaries every 60–100 seconds in battle; bass, drums and an
+  arpeggio join as fights heat up near your camera, an alarm motif plays when your base is under attack,
   and matches end on a fanfare, a lament or (a Robot Love draw) a sweet
   sting. Quiet biome ambience (wind,
   birds, desert hiss, lava rumble) fills the lulls; Music / Effects / Voice

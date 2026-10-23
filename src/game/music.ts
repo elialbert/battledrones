@@ -5,7 +5,8 @@
  * there, a calm melody while you build, a bass pulse once units are in
  * contact, drums when a fight is on screen and an arpeggio when it gets
  * intense (with a tritone alarm while your base is hit). Each biome has
- * its own mode, progression and timbres. Stingers mark victory, defeat and
+ * its own mode and timbres; six compositions shuffle every 24–40 bars.
+ * Stingers mark victory, defeat and
  * announced big moments; the score is ducked by big sounds (audio.ts),
  * muffled while paused, and stops when the tab is hidden. A quiet biome
  * ambience bed (ambience.ts) rides under it.
@@ -102,7 +103,7 @@ export class Music {
   private hidden = false;
   private running = false;
   private timer = 0;
-  private composer = new Composer(FLAVOURS.temperate, (Math.random() * 1e9) | 0);
+  private composer = new Composer(FLAVOURS.temperate, (Math.random() * 1e9) | 0, true);
   private nextTime = 0;
   private pad: PadVoice[] = [];
   private padFlavour: Flavour | null = null;
@@ -227,6 +228,7 @@ export class Music {
     running: boolean;
     mode: string;
     biome: Biome;
+    track: string;
     bpm: number;
     step: number;
     intensity: number;
@@ -238,6 +240,7 @@ export class Music {
       running: this.running,
       mode: this.mode,
       biome: this.composer.flavour.biome,
+      track: this.composer.track.name,
       bpm: this.composer.bpm,
       step: this.composer.step,
       intensity: this.effectiveIntensity(),

@@ -6,6 +6,7 @@ import {
   FLAVOURS,
   LAYERS,
   MUSIC,
+  TRACKS,
   arpBar,
   bassBar,
   bellRange,
@@ -18,6 +19,7 @@ import {
   phrase,
   rng,
   stinger,
+  trackFlavour,
   voiceLead,
   type MixState,
   type MoodHooks,
@@ -28,6 +30,7 @@ import type { FxEvent } from "../src/sim/types";
 const mod12 = (n: number) => ((n % 12) + 12) % 12;
 const NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
 const names = (pcs: number[]) => pcs.map((p) => NAMES[p]).join(" ");
+const ALL_FLAVOURS = Object.values(FLAVOURS).flatMap((f) => TRACKS.map((t) => trackFlavour(f, t)));
 
 describe("harmony", () => {
   it("builds each biome's chords in its mode", () => {
@@ -45,7 +48,7 @@ describe("harmony", () => {
   });
 
   it("voice-leads every progression smoothly, in range, with no clashes", () => {
-    for (const f of Object.values(FLAVOURS)) {
+    for (const f of ALL_FLAVOURS) {
       let prev: number[] | null = null;
       for (let k = 0; k < 12; k++) {
         const pcs = chordPcs(f, f.progression[k % f.progression.length]!);
@@ -83,7 +86,7 @@ describe("harmony", () => {
 
 describe("melody", () => {
   it("walks the motif through the scale, landing strong beats on chord tones", () => {
-    for (const f of Object.values(FLAVOURS)) {
+    for (const f of ALL_FLAVOURS) {
       const scale = new Set(f.mode.map((o) => mod12(f.tonic + o)));
       const [lo, hi] = bellRange(f);
       const r = rng(7);
@@ -117,7 +120,7 @@ describe("melody", () => {
 
 describe("patterns", () => {
   it("gives every biome a full bar of drums, with fills and half-time where it should", () => {
-    for (const f of Object.values(FLAVOURS))
+    for (const f of ALL_FLAVOURS)
       for (const level of [1, 2] as const)
         for (const bar of [0, 3]) for (const steps of Object.values(drumBar(f, level, bar))) expect(steps).toHaveLength(16);
     const hits = (a: number[] | undefined) => (a ?? []).filter((v) => v > 0).length;
@@ -130,7 +133,7 @@ describe("patterns", () => {
   });
 
   it("drives the bass harder at level 2", () => {
-    for (const f of Object.values(FLAVOURS)) {
+    for (const f of ALL_FLAVOURS) {
       const a = bassBar(f, 1);
       const b = bassBar(f, 2);
       expect(b.length).toBeGreaterThan(a.length);
@@ -241,6 +244,107 @@ describe("composer", () => {
     const log = run(c, 60, () => ({ mode: "end", intensity: 1, alarm: false }));
     expect(log.some(({ ev }) => ev.some((e) => e.kind === "chord"))).toBe(false);
     expect(log.some(({ ev }) => ev.some((e) => e.kind === "drum" || e.kind === "bass"))).toBe(false);
+  });
+});
+
+describe("soundtrack rotation", () => {
+  const calm: MixState = { mode: "battle", intensity: 0, alarm: false };
+
+  it("adds five distinct compositions while preserving each biome's tuning and instruments", () => {
+    expect(TRACKS).toHaveLength(6);
+    for (const base of Object.values(FLAVOURS)) {
+      const phrases = new Set<string>();
+      for (const track of TRACKS) {
+        const f = trackFlavour(base, track);
+        expect(f).toMatchObject({ biome: base.biome, tonic: base.tonic, mode: base.mode, bell: base.bell, pad: base.pad });
+        const c = new Composer(f, 7);
+        phrases.add(JSON.stringify(Array.from({ length: 128 }, () => c.next(calm))));
+      }
+      expect(phrases.size).toBe(6);
+    }
+  });
+
+  function rotation(seed: number) {
+    const c = new Composer(FLAVOURS.temperate, seed, true);
+    const tracks = [c.track.id];
+    const lengths: number[] = [];
+    let steps = 0;
+    while (tracks.length < 14 && steps < 10000) {
+      const before = c.track;
+      const ev = c.next(calm);
+      if (before !== c.track) {
+        lengths.push(steps);
+        steps = 0;
+        tracks.push(c.track.id);
+        expect(c.step).toBe(1);
+        expect(ev.some((e) => e.kind === "chord")).toBe(true);
+      }
+      steps++;
+    }
+    expect(tracks).toHaveLength(14);
+    for (const length of lengths) expect([384, 512, 640]).toContain(length);
+    return tracks;
+  }
+
+  it("starts randomly, visits every track, and changes at whole progression boundaries without repeats", () => {
+    const starts = new Set<string>();
+    for (const seed of [1, 2, 3, 42, 99, 1234]) {
+      const tracks = rotation(seed);
+      starts.add(tracks[0]!);
+      expect(new Set(tracks.slice(0, 6)).size).toBe(6);
+      expect(new Set(tracks.slice(6, 12)).size).toBe(6);
+      for (let i = 1; i < tracks.length; i++) expect(tracks[i]).not.toBe(tracks[i - 1]);
+    }
+    expect(starts.size).toBeGreaterThan(1);
+    expect(rotation(42)).toEqual(rotation(42));
+    expect(rotation(42)).not.toEqual(rotation(99));
+  });
+
+  it("keeps rotation independent of melody randomness and battle intensity", () => {
+    const a = new Composer(FLAVOURS.temperate, 9, true);
+    const b = new Composer(FLAVOURS.temperate, 9, true);
+    for (let s = 0; s < 2048; s++) {
+      a.next(calm);
+      b.next({ mode: "battle", intensity: 1, alarm: true });
+      expect(a.track).toBe(b.track);
+      expect(a.step).toBe(b.step);
+    }
+  });
+
+  it("retains the current composition across biome changes and repeated play requests", () => {
+    const c = new Composer(FLAVOURS.temperate, 5, true);
+    const track = c.track;
+    for (let s = 0; s < 5; s++) c.next(calm);
+    c.setFlavour(FLAVOURS.desert);
+    for (let s = 0; s < 11; s++) c.next(calm);
+    expect(c.flavour.biome).toBe("temperate");
+    c.next(calm);
+    expect(c.flavour.biome).toBe("desert");
+    expect(c.track).toBe(track);
+    for (let s = 0; s < 31; s++) {
+      c.setFlavour(FLAVOURS.desert);
+      c.next(calm);
+    }
+    expect(c.step).toBe(32);
+    expect(c.track).toBe(track);
+  });
+
+  it("rotates in the menu but leaves finales on their current track", () => {
+    const c = new Composer(FLAVOURS.arctic, 12, true);
+    const first = c.track;
+    for (let s = 0; s <= 640; s++) c.next({ ...calm, mode: "menu" });
+    expect(c.track).not.toBe(first);
+    expect(c.bpm).toBe(MUSIC.menuBpm);
+    const last = c.track;
+    c.closeGates();
+    c.holdTonic(true, 64);
+    c.setFlavour(FLAVOURS.volcanic);
+    for (let s = 0; s < 1280; s++) {
+      const ev = c.next({ mode: "end", intensity: 1, alarm: true });
+      expect(c.track).toBe(last);
+      expect(c.flavour.biome).toBe("arctic");
+      expect(ev.some((e) => e.kind === "drum" || e.kind === "bass" || e.kind === "arp")).toBe(false);
+    }
   });
 });
 

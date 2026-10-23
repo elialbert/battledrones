@@ -81,6 +81,7 @@ export const MODES = {
 
 export type BellKind = "pluck" | "oud" | "glass" | "marimba" | "pan";
 export type Groove = "pulse" | "tresillo" | "chug" | "glide" | "calypso";
+type DrumPattern = "breaks" | "spacious" | "motor" | "offbeat" | "rolling";
 
 export interface Flavour {
   biome: Biome;
@@ -97,7 +98,9 @@ export interface Flavour {
   bell: BellKind;
   arp: Wave;
   bass: { wave: Wave; cutoff: number; drive: number; groove: Groove };
-  drums: { halfTime: boolean; tabla: boolean; toms: boolean };
+  drums: { halfTime: boolean; tabla: boolean; toms: boolean; pattern?: DrumPattern };
+  /** Indices into the five-note arp ring; the original uses a rising/falling wave. */
+  arpOrder?: readonly number[];
   /** Melody motif over a two-bar phrase: [step, length in steps, scale-step move]. */
   motif: readonly (readonly [number, number, number])[];
 }
@@ -179,6 +182,82 @@ export const FLAVOURS: Record<Biome, Flavour> = {
     motif: [[0, 3, 0], [3, 3, 1], [6, 2, 1], [8, 4, -1], [12, 2, -1], [14, 2, 2], [16, 6, 1], [22, 2, -1], [24, 8, -2]]
   }
 };
+
+export interface Track {
+  id: string;
+  name: string;
+  /** The original theme leaves the biome's arrangement intact. */
+  arrangement?: {
+    progression: readonly number[];
+    motif: Flavour["motif"];
+    groove: Groove;
+    drums: DrumPattern;
+    arpOrder: readonly number[];
+  };
+}
+
+/** Six compositions, reharmonised in the current biome's key and instruments. */
+export const TRACKS: readonly Track[] = [
+  { id: "home-signal", name: "Home Signal" },
+  {
+    id: "night-drive", name: "Night Drive",
+    arrangement: {
+      // A climbing answer over i–IV–III–VII, with a syncopated breakbeat.
+      progression: [0, 3, 2, 6], groove: "pulse", drums: "breaks",
+      motif: [[0, 3, 0], [3, 1, 2], [6, 2, -1], [8, 4, 2], [14, 2, -1], [16, 6, -2], [23, 1, 1], [24, 6, -1]],
+      arpOrder: [0, 2, 1, 3, 2, 4, 3, 1]
+    }
+  },
+  {
+    id: "distant-lights", name: "Distant Lights",
+    arrangement: {
+      // Long, floating notes; the bass leaves room for the pad to breathe.
+      progression: [2, 6, 0, 3], groove: "glide", drums: "spacious",
+      motif: [[0, 6, 0], [8, 4, 2], [14, 2, -1], [16, 8, 1], [26, 2, -2], [28, 4, -1]],
+      arpOrder: [0, 2, 4, 2, 1, 3, 4, 3]
+    }
+  },
+  {
+    id: "iron-orbit", name: "Iron Orbit",
+    arrangement: {
+      // A low, insistent ostinato opening into an ascending second phrase.
+      progression: [0, 5, 6, 3], groove: "chug", drums: "motor",
+      motif: [[0, 2, 0], [2, 2, 1], [6, 2, -1], [8, 6, -2], [16, 2, 2], [18, 2, 1], [22, 2, 1], [24, 6, -2]],
+      arpOrder: [0, 1, 2, 1, 0, 3, 2, 4]
+    }
+  },
+  {
+    id: "sunward", name: "Sunward",
+    arrangement: {
+      // Buoyant offbeats and a rising hook, followed by a relaxed descent.
+      progression: [3, 0, 2, 6], groove: "calypso", drums: "offbeat",
+      motif: [[0, 3, 0], [3, 2, 2], [6, 2, 1], [8, 3, -1], [12, 2, 1], [16, 6, 1], [22, 2, -1], [26, 2, -1], [28, 4, -1]],
+      arpOrder: [0, 2, 3, 1, 2, 4, 3, 2]
+    }
+  },
+  {
+    id: "undertow", name: "Undertow",
+    arrangement: {
+      // A falling call, a rising answer, and a rolling three-against-four pulse.
+      progression: [0, 5, 2, 3], groove: "tresillo", drums: "rolling",
+      motif: [[0, 6, 0], [6, 2, -1], [10, 2, -1], [12, 4, 1], [16, 3, 2], [19, 3, 1], [22, 2, -1], [24, 8, -2]],
+      arpOrder: [4, 2, 3, 1, 2, 0, 1, 2]
+    }
+  }
+];
+
+export function trackFlavour(base: Flavour, track: Track): Flavour {
+  const a = track.arrangement;
+  if (!a) return base;
+  return {
+    ...base,
+    progression: a.progression,
+    motif: a.motif,
+    bass: { ...base.bass, groove: a.groove },
+    drums: { ...base.drums, halfTime: base.drums.halfTime || a.drums === "spacious", pattern: a.drums },
+    arpOrder: a.arpOrder
+  };
+}
 
 export const mtof = (m: number): number => 440 * Math.pow(2, (m - 69) / 12);
 const mod12 = (n: number) => ((n % 12) + 12) % 12;
@@ -354,10 +433,33 @@ export type DrumVoice = "kick" | "snare" | "hat" | "open" | "tak" | "dhum" | "to
 /** One bar of drums: a velocity (0 = rest) per step for each voice. */
 export type DrumBar = Partial<Record<DrumVoice, number[]>>;
 
+const TRACK_DRUMS: Record<DrumPattern, { kick: [string, string]; snare: string; hat: string }> = {
+  breaks: { kick: ["X.....x...X.....", "X..x..x...X..x.."], snare: "....X.......X..o", hat: "x.o...x.x.o.x.o." },
+  spacious: { kick: ["X...............", "X.........x....."], snare: "........X.......", hat: "x...o...x...o..." },
+  motor: { kick: ["X...X...X...X...", "X..xX...X.x.X..."], snare: "....X.......X...", hat: "..x...x...x...x." },
+  offbeat: { kick: ["X.....x.X.......", "X..x..x.X..x...."], snare: "....X.......X..o", hat: "..x...x...x...xo" },
+  rolling: { kick: ["X..x..x.X..x....", "X..x.xx.X..x..x."], snare: "....X..o....X...", hat: "x..o..x.x..o..x." }
+};
+
 /** The drum bar for `level` 1 (a fight) or 2 (a big one); every fourth bar of a big fight ends in a fill. */
 export function drumBar(f: Flavour, level: 1 | 2, bar: number): DrumBar {
   const fill = level === 2 && bar % 4 === 3;
   const d = f.drums;
+  if (d.pattern) {
+    const p = TRACK_DRUMS[d.pattern];
+    const out: DrumBar = {
+      kick: pat(p.kick[level - 1]!),
+      snare: pat(fill ? d.halfTime ? "........X...x.xX" : "....X.......XxXX" : d.halfTime ? "........X......." : p.snare),
+      hat: pat(level === 2 && !d.halfTime ? "xoxoXoxoxoxoXoxo" : p.hat)
+    };
+    if (level === 2) out.open = pat("..............x.");
+    if (d.tabla) {
+      out.tak = pat(level === 1 ? "..x..x.x..x..x.x" : ".xx.xx.x.xx.xxox");
+      out.dhum = pat("X.....x....X....");
+    }
+    if (d.toms) out.tom = pat(fill ? "............xxXX" : "..............xx");
+    return out;
+  }
   if (d.halfTime)
     return level === 1
       ? { kick: pat("X..............."), snare: pat("........X......."), hat: pat("x...o...x...o...") }
@@ -433,7 +535,7 @@ export function bassBar(f: Flavour, level: 1 | 2): BassHit[] {
  * Arpeggio notes for one bar of 16ths: up and down the voicing an octave
  * above the pad. The alarm swaps the fifth for a tritone over the root.
  */
-export function arpBar(voicing: readonly number[], rootPc: number, alarm: boolean): number[] {
+export function arpBar(voicing: readonly number[], rootPc: number, alarm: boolean, order: readonly number[] = [0, 1, 2, 3, 4, 3, 2, 1]): number[] {
   let tones = voicing.map((m) => m + 12);
   if (alarm) {
     const root = tones.find((m) => mod12(m) === rootPc) ?? tones[0]!;
@@ -442,8 +544,7 @@ export function arpBar(voicing: readonly number[], rootPc: number, alarm: boolea
   tones = tones.map((m) => (m > 96 ? m - 12 : m)).sort((a, b) => a - b);
   const top = tones[0]! + 12 <= 96 ? tones[0]! + 12 : tones[tones.length - 1]!;
   const ring = [...tones, top];
-  const order = [0, 1, 2, 3, 4, 3, 2, 1];
-  return Array.from({ length: 16 }, (_, i) => ring[order[i % 8]!]!);
+  return Array.from({ length: 16 }, (_, i) => ring[order[i % order.length]!]!);
 }
 
 // -------------------------------------------------------------- layers ---
@@ -498,6 +599,7 @@ export function rng(seed: number): () => number {
  */
 export class Composer {
   flavour: Flavour;
+  track: Track = TRACKS[0]!;
   bpm: number = MUSIC.battleBpm;
   /** Steps since the current flavour began (drives bar / chord position). */
   step = 0;
@@ -513,15 +615,41 @@ export class Composer {
   /** A held chord (finale) overrides the progression for this many more steps. */
   private hold = 0;
   private rand: () => number;
+  private playlistRand: () => number;
+  private trackBag: Track[] = [];
+  private trackEnd = Infinity;
+  private baseFlavour: Flavour;
 
-  constructor(flavour: Flavour, seed = 1) {
+  constructor(flavour: Flavour, seed = 1, private shuffle = false) {
     this.flavour = flavour;
+    this.baseFlavour = flavour;
     this.rand = rng(seed);
+    this.playlistRand = rng(seed ^ 0x51f15e);
+    if (shuffle) this.changeTrack(true);
+  }
+
+  /** A shuffled bag gives every composition a turn, without repeats at the seam. */
+  private changeTrack(initial = false): void {
+    if (!this.trackBag.length) {
+      this.trackBag = [...TRACKS];
+      for (let i = this.trackBag.length - 1; i > 0; i--) {
+        const j = Math.floor(this.playlistRand() * (i + 1));
+        [this.trackBag[i], this.trackBag[j]] = [this.trackBag[j]!, this.trackBag[i]!];
+      }
+      const last = this.trackBag.length - 1;
+      if (!initial && this.trackBag[last] === this.track)
+        [this.trackBag[0], this.trackBag[last]] = [this.trackBag[last]!, this.trackBag[0]!];
+    }
+    this.track = this.trackBag.pop()!;
+    this.flavour = trackFlavour(this.baseFlavour, this.track);
+    this.step = 0;
+    // 24, 32 or 40 bars: three to five complete progressions (60–100 s in battle).
+    this.trackEnd = (24 + 8 * Math.floor(this.playlistRand() * 3)) * MUSIC.stepsPerBar;
   }
 
   /** Switch biome at the next bar line. */
   setFlavour(f: Flavour): void {
-    this.pending = f === this.flavour ? null : f;
+    this.pending = f === this.baseFlavour ? null : f;
   }
 
   get stepSeconds(): number {
@@ -555,11 +683,13 @@ export class Composer {
     const ev: NoteEvent[] = [];
     const sb = MUSIC.stepsPerBar;
     if (this.step % sb === 0) {
-      if (this.pending) {
-        this.flavour = this.pending;
+      if (this.pending && mix.mode !== "end") {
+        this.baseFlavour = this.pending;
+        this.flavour = this.shuffle ? trackFlavour(this.baseFlavour, this.track) : this.baseFlavour;
         this.pending = null;
         this.step = 0;
       }
+      if (this.shuffle && this.step >= this.trackEnd && mix.mode !== "end") this.changeTrack();
       this.bpm = mix.mode === "menu" ? MUSIC.menuBpm : MUSIC.battleBpm;
       const tg = layerTargets(mix.mode, mix.intensity, mix.alarm);
       for (const l of LAYERS) {
@@ -615,7 +745,7 @@ export class Composer {
       // the menu's arp is a slow 8th-note shimmer; battle runs 16ths
       const menu = mix.mode === "menu";
       if (!menu || inBar % 2 === 0) {
-        const notes = arpBar(this.voicing, this.root, this.alarm);
+        const notes = arpBar(this.voicing, this.root, this.alarm, f.arpOrder);
         ev.push({ kind: "arp", midi: notes[inBar]!, vel: inBar % 4 === 0 ? 1 : 0.62 });
       }
     }
