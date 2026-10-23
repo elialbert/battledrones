@@ -2696,8 +2696,10 @@ button {
 }
 .aar-legend {
   display: flex;
+  /* (a free-for-all's four sides with their personalities and openers don't fit one line) */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 2px 12px;
   font-size: 13px;
   font-weight: 700;
 }

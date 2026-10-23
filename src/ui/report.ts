@@ -294,7 +294,7 @@ function headMultiHtml(ctx: ReportContext, h: { title: string; cls: string; note
   const rows = placings(ctx.world);
   const mine = rows.find((r) => r.faction === ctx.pov);
   const place = !ctx.spectator && mine && ctx.winner !== null ? `${ordinal(mine.place)} of ${rows.length}` : null;
-  const line = [h.note, place, `${mapById(ctx.world.mapId).name} free-for-all`, fmtTime(ctx.secs), ctx.via].filter(Boolean).join(" · ");
+  const line = [h.note, place, `${mapById(ctx.world.mapId).name} free\u2011for\u2011all`, fmtTime(ctx.secs), ctx.via].filter(Boolean).join(" · ");
   const named = (f: Faction) => (f !== ctx.pov || ctx.spectator ? ctx.names?.[f] : undefined);
   const who = (f: Faction) =>
     escapeHtml(
