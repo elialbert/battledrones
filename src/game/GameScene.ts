@@ -12,6 +12,7 @@ import { buildingCenter, domainOf, hqOf } from "../sim/world";
 import { sfx } from "./audio";
 import { Controller, ENEMY, PLAYER, type TapHit } from "./controller";
 import { applyOpenersCanonical, composeTick } from "./local-side";
+import { restoreWorld } from "./restore";
 import { GestureRecognizer, isHoldRelease, strandedPointers, type GesturePointer } from "./gestures";
 import { announce } from "./announce";
 import { gameMode, matchOptions, unchartedMatch } from "./mode";
@@ -613,7 +614,7 @@ export class GameScene {
     if (target < this.world.tick) {
       const kf = feed.keyframe(target);
       if (!kf) return;
-      Object.assign(this.world, structuredClone(kf));
+      restoreWorld(this.world, kf);
       this.finale = null;
       this.finaleAt = null;
       this.ended = false;
