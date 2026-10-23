@@ -101,9 +101,6 @@ function rigEnv(session: AudioSessionLike): RigEnv {
 function fullscreenEnv(tab: Tab, session: AudioSessionLike | null | undefined) {
   const atReload: string[] = [];
   const env: FullscreenEnv = {
-    doc: { documentElement: {}, fullscreenElement: null },
-    win: fakeWindow().win,
-    storage: null,
     ...(session === undefined ? {} : { audioSession: session }),
     reload: () => void atReload.push(tab.override)
   };

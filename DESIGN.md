@@ -2261,12 +2261,12 @@ completion goal.
 
 ### Full-screen behavior
 
-The game owns the entire screen — no page chrome, no scrolling, no
-accidental browser gestures:
+The game fills the available viewport, with no scrolling or accidental
+browser gestures. Starting a match does not request browser fullscreen:
 
-- **Installed as PWA:** `display: "fullscreen"` in the manifest.
-- **In-browser play:** the Play tap requests the Fullscreen API where
-  available (Android); on iOS Safari we rely on `100dvh` layout.
+- **Installed as PWA:** `display: "standalone"` in the manifest.
+- **In-browser play:** browser controls stay available; `100dvh` layout
+  follows the available viewport.
 - **Viewport hygiene:** `100dvh`/`100dvw` sizing, `viewport-fit=cover` +
   `env(safe-area-inset-*)` padding, `touch-action: none`,
   `overscroll-behavior: none`, `user-select: none`, context-menu and iOS
@@ -2328,7 +2328,8 @@ labels shorten ("Move", "Army") so everything stays on one row down to
 
 ### Mouse & keyboard
 
-Left-click a unit to select (Shift+click adds or removes it), left-drag
+Left-click a unit or friendly building to select it, replacing the current selection
+(Shift+click adds or removes a unit), left-drag
 box-select (Shift+drag adds the box to the selection). With units selected,
 left-click open terrain to force-move without stopping to fight; right-click
 terrain to attack-move, an enemy to focus attack, or a friendly unit to

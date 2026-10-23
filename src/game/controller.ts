@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
-import { paidFor, producerCap, producersOf, type Producer } from "../sim/economy";
+import { paidFor, producerCap, producersOf, queuesOf, unitBlocker, type Producer } from "../sim/economy";
 import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
@@ -439,6 +439,8 @@ export class Controller {
   /** No new orders (a sound duel's resign is on its way). */
   locked = false;
   private queue: Command[] = [];
+  /** Build-menu repeat orders, kept locally; the resulting produce commands are recorded and sent normally. */
+  private autoBuild = new Set<UnitKind>();
   /** Bumped whenever the orders not applied yet change: ahead() is rebuilt on the next read. */
   private version = 0;
   private aheadAt = "";
@@ -446,7 +448,32 @@ export class Controller {
 
   constructor(public world: World) {}
 
+  isAutoBuilding(kind: UnitKind): boolean {
+    return this.autoBuild.has(kind);
+  }
+
+  toggleAutoBuild(kind: UnitKind): void {
+    if (this.spectator || this.locked) return;
+    if (!this.autoBuild.delete(kind)) this.autoBuild.add(kind);
+  }
+
+  /** Keep one of each enabled kind queued, behind existing orders, including orders still in flight. */
+  private queueAutoBuild(): void {
+    if (this.spectator || this.locked || this.paused || this.world.winner) return;
+    for (const kind of this.autoBuild) {
+      if (unitBlocker(this.world, PLAYER, kind)) continue;
+      const view = buildView(this.world, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
+      const queued = queuesOf(this.world, PLAYER, kind).some((p) =>
+        !view.closed(p.id) && p.queue.filter((q) => q.kind === kind).length + view.extra(p.id, kind) > 0
+      );
+      if (queued || view.scrap < unitCost(this.world, PLAYER, kind)) continue;
+      const at = pickProducer(this.world, kind, this.selectedUnits, view);
+      if (at) this.enqueue({ type: "produce", faction: PLAYER, buildingId: at.id, unit: kind });
+    }
+  }
+
   drainCommands(): Command[] {
+    this.queueAutoBuild();
     const cmds = this.queue;
     this.queue = [];
     if (this.flights) for (const c of cmds) this.flights.push({ c, at: this.world.tick });
@@ -663,7 +690,7 @@ export class Controller {
     return true;
   }
 
-  /** Mouse commands: left-click ground moves only; right-click commands without selecting or boarding. */
+  /** Mouse commands: left-click selects friendly buildings or moves on ground; right-click commands without selecting or boarding. */
   clickWorld(wx: number, wy: number, hit: TapHit, button: "left" | "right", toggle = false): void {
     if (button === "right") {
       if (hit.kind === "ownUnit") {
@@ -672,6 +699,8 @@ export class Controller {
       }
       if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
       this.forceMove = false;
+    } else if (hit.kind === "ownBuilding" && !this.placing && !this.ahead().sold(hit.id)) {
+      this.clearSelection();
     } else if (hit.kind === "ground" && this.selectedUnits.size > 0 && !this.placing) {
       this.forceMove = true;
     }

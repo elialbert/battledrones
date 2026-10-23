@@ -49,6 +49,15 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: +w, height: +h }, deviceScaleFactor: 2, hasTouch: true });
 const errors = [];
+await page.addInitScript(() => {
+  window.__fullscreenRequests = 0;
+  Element.prototype.requestFullscreen = () => {
+    window.__fullscreenRequests++;
+    return Promise.resolve();
+  };
+  // An old fullscreen restore preference must not cause a request on the first tap.
+  sessionStorage.setItem("battledrones.fullscreen", "1");
+});
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 page.on("pageerror", (e) => errors.push(String(e)));
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
@@ -193,6 +202,19 @@ if (sid) {
   if (order !== "attackMove" && order !== "idle") fail(`ground tap gave order ${order}`);
   if (order !== "attackMove") fail("ground tap did not issue attack-move");
   await shot("selected");
+
+  // A mouse click must switch from selected units to a friendly building.
+  const buildingId = await world(() => {
+    const b = [...window.__bd.world.buildings.values()].find((b) => b.faction === window.__bd.player && b.kind === "fab-plant");
+    window.__bd.cam.centerOn(b.tx + 1, b.ty + 1);
+    return b.id;
+  });
+  await ff(1);
+  const buildingPos = await world((id) => window.__bd.screenOf(id), buildingId);
+  await page.mouse.click(buildingPos.x, buildingPos.y);
+  const buildingSelection = await world(() => ({ building: window.__bd.ctrl.selectedBuilding, units: window.__bd.ctrl.selectedUnits.size }));
+  if (buildingSelection.building !== buildingId || buildingSelection.units !== 0)
+    fail(`clicking a building did not replace the unit selection: ${JSON.stringify(buildingSelection)}`);
 }
 
 // 4. long-press a build button: the info card opens
@@ -204,8 +226,36 @@ await page.mouse.down();
 await page.waitForTimeout(600);
 await page.mouse.up();
 if (await page.locator("#card").isHidden()) fail("long-press did not open the info card");
+// Autobuild lives in unit info and leaves already queued units intact when switched off.
+const auto = page.locator("#card-auto");
+if ((await auto.getAttribute("aria-pressed")) !== "false") fail("autobuild did not start off");
+await auto.click();
+if ((await auto.getAttribute("aria-pressed")) !== "true") fail("unit info did not enable autobuild");
+await ff(1);
+const autoQueued = await world(() => [...window.__bd.world.buildings.values()].some((b) =>
+  b.faction === window.__bd.player && b.queue.some((q) => q.kind === "wasp")
+));
+if (!autoQueued) fail("autobuild did not queue a Wasp");
+if (!(await wasp.getAttribute("class")).split(" ").includes("auto")) fail("autobuild marker missing");
 await shot("card");
-await page.locator("#card-x").click();
+await auto.click();
+if ((await auto.getAttribute("aria-pressed")) !== "false") fail("unit info did not disable autobuild");
+const stillQueued = await world(() => [...window.__bd.world.buildings.values()].some((b) =>
+  b.faction === window.__bd.player && b.queue.some((q) => q.kind === "wasp")
+));
+if (!stillQueued) fail("disabling autobuild cancelled the queued Wasp");
+// Clicking outside the card closes it; using the controls inside it kept it open above.
+const outsideCard = await page.evaluate(() => {
+  for (let y = 180; y < innerHeight; y += 20)
+    for (let x = 10; x < innerWidth; x += 20) {
+      const el = document.elementFromPoint(x, y);
+      if (el?.tagName === "CANVAS" && !el.closest("#hud")) return { x, y };
+    }
+  throw new Error("no battlefield point outside unit info");
+});
+if (+w >= 900) await page.mouse.click(outsideCard.x, outsideCard.y);
+else await page.touchscreen.tap(outsideCard.x, outsideCard.y);
+if (await page.locator("#card").isVisible()) fail("clicking away did not close unit info");
 
 // 5. pause and resume
 await page.locator("#btn-menu").tap();
@@ -233,6 +283,7 @@ await shot("late");
   else console.log(said);
 }
 
+if (await world(() => window.__fullscreenRequests !== 0)) fail("the game requested fullscreen automatically");
 if (errors.length) fail(`console errors: ${JSON.stringify(errors.slice(0, 10))}`);
 console.log(process.exitCode ? "SMOKE FAILED" : `SMOKE OK (${w}x${h}, ${side})`);
 await browser.close();

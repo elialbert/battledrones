@@ -11,7 +11,6 @@
  *   the Duel tap (main.ts, synchronously):  const t = duel.tapPlan(); sfx.unlock()
  *     const rig = t.practice ? null : duel.openRig({ micMode: t.micMode })
  *     t.practice || sfx.setLinkGuard("high"); music.stop()
- *     rig ? rig.ready.then(() => fullscreen.enterOnGesture()) : void fullscreen.enter()
  *     duel.showLobby({ host: menu, rig, shownMap, mutators, start, onClose })
  *   the rematch's reconnect tap: the same with tapPlan(true), then duel.reconnect({ … })
  *
@@ -26,8 +25,7 @@
  * its seat over a NetTransport (net-transport.ts), as a relay seat does,
  * with no rig, no guard and no sound copy; its rematch meets in the same
  * room (the stored rematch's `room`). It keeps the win/loss record, keeps
- * the screen awake itself (keepScreenOn: there is no rig to), and the host
- * asks for full screen only once paired, as the share sheet comes first.
+ * the screen awake itself (keepScreenOn: there is no rig to).
  *
  * Practice links (every build): `?duel=loop` pairs with an in-page friend
  * over PacketAir (loop-peer.ts), `?duel=relay&seat=host|guest` through the
@@ -1298,7 +1296,6 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
   let loop: LoopLink | null = null;
   let relay: RelayTransport | null = null;
   let net: NetTransport | null = null;
-  let disarmFullscreen: (() => void) | null = null;
   const offWake = online ? keepScreenOn(document, navigator) : () => undefined;
   let feed: VersusFeed | null = null;
   let machine: LobbyMachine | null = null;
@@ -1420,7 +1417,6 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
       offPageGone();
       dropPractice();
       offWake();
-      disarmFullscreen?.();
       o.onClose(why);
     }
   };
@@ -1461,8 +1457,6 @@ function run(o: LobbyOptions, rematch: DuelRematch | null): void {
     }
     // (cancelled: the sheet is gone, and the link says the end until the session may close)
     if (v.step === "closed") return void wrap.remove();
-    // (online, the tap asked for no full screen, for the share sheet's sake: the opener's tap does, once paired)
-    if (online && !disarmFullscreen && (v.step === "picking" || v.step === "waiting")) disarmFullscreen = fullscreen.enterOnGesture();
     render();
   };
   const loopFrame = () => {

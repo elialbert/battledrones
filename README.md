@@ -81,6 +81,10 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   Goliath walking mech.
 - **10 buildings** with a tech tree: HQ, Fab Plant, Airpad, Assembly Bay,
   Tech Lab, forward Depots, Turrets, SAM Sites, Radar and the Gantry.
+- **Autobuild**: right-click or long-press a unit in the build menu to open
+  its info, then turn Autobuild on. It keeps one of that type queued,
+  behind existing orders, waiting for scrap or queue space as needed.
+  Turn it off in the same panel; units already queued still finish.
 - **Robot infantry**: every side starts with a Trooper Squad beside its HQ,
   and an Assembly Bay trains more: Troopers (cheap rifles that hit air too),
   Rocket Squads (Mastodon and Hornet killers) and, with a Tech Lab, Sniper

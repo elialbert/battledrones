@@ -412,6 +412,7 @@ export function createHud(api: HudApi): Hud {
       <img class="ic" src="${icon(kind)}" alt="" draggable="false" />
       <span class="nm">${name}</span>
       <span class="cost">${cost}</span>
+      <span class="repeat" aria-hidden="true">↻</span>
       <span class="badge" hidden></span>
       <span class="prog" hidden></span>
       <span class="lock" hidden>🔒</span>
@@ -601,9 +602,10 @@ export function createHud(api: HudApi): Hud {
     }
     return true;
   }
-  // a click on the battlefield (an order, a placement) closes it; one on the sidebar doesn't
+  // Build keys close outside the dock; the info card closes outside the card itself.
   const closeOutside = (e: PointerEvent) => {
     if (keyMode && !dockEl.contains(e.target as Node)) setKeyMode(false);
+    if (!cardEl.hidden && !cardEl.contains(e.target as Node)) cardEl.hidden = true;
   };
   window.addEventListener("pointerdown", closeOutside, { capture: true });
 
@@ -680,11 +682,23 @@ export function createHud(api: HudApi): Hud {
       ${weapons ? `<table>${rows.slice(0, 2).join("")}</table>${weapons}<table>${rows.slice(2).join("")}</table>` : `<table>${rows.join("")}</table>`}
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
       ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
+      ${isUnit && !api.ctrl.spectator ? `<button class="cta small" id="card-auto" aria-pressed="${api.ctrl.isAutoBuilding(kind as UnitKind)}">Autobuild: ${api.ctrl.isAutoBuilding(kind as UnitKind) ? "ON" : "OFF"}</button><p>Queues another when this type finishes, behind existing orders. Waits for scrap and queue space.</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
       ${!isUnit && view.pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;
     layout.refresh(true); // (portrait: kept under the band at its real height)
     cardEl.querySelector("#card-x")!.addEventListener("click", () => (cardEl.hidden = true));
+    cardEl.querySelector("#card-auto")?.addEventListener("click", () => {
+      if (api.ctrl.locked) return;
+      const unit = kind as UnitKind;
+      if (!api.ctrl.isAutoBuilding(unit)) {
+        const why = unitBlocker(w, PLAYER, unit);
+        if (why) return toast(why);
+      }
+      api.ctrl.toggleAutoBuild(unit);
+      sfx.play("click");
+      showCard(kind);
+    });
     cardEl.querySelector("#card-cancel")?.addEventListener("click", () => {
       const now = api.ctrl.view();
       const p = queuesOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind) || now.extra(p.id, kind as UnitKind) > 0);
@@ -1405,6 +1419,7 @@ export function createHud(api: HudApi): Hud {
       if (pt.price !== cost) pt.cost.textContent = String((pt.price = cost));
       el.classList.toggle("locked", !!blocked);
       el.classList.toggle("poor", view.scrap < cost);
+      el.classList.toggle("auto", ctrl.isAutoBuilding(kind));
       lock.hidden = !blocked;
       markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       badge.hidden = queued === 0;

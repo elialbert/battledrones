@@ -111,7 +111,7 @@ export default defineConfig({
         short_name: "BattleDrones",
         description:
           "A mobile RTS: two armies of flying and ground drones battle for territory and resources.",
-        display: "fullscreen",
+        display: "standalone",
         orientation: "any",
         background_color: "#070a10",
         theme_color: "#070a10",

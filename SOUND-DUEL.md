@@ -1135,18 +1135,15 @@ master → high-pass 300 Hz → guardGain (−(GUARD_CUT_DB + makeup)) → limit
   2. `duel.openRig({ micMode })`;
   3. `sfx.setLinkGuard("high")`;
   4. `music.stop()`;
-  5. full screen: on a practice link `void fullscreen.enter()` (last: it
-     consumes the activation); otherwise, once `rig.ready` resolves,
-     `fullscreen.enterOnGesture()`, so the request comes on the first tap after
-     the microphone is in (on iPadOS a full-screen page hides the microphone
-     prompt). A lobby that closes first disarms it;
-  6. `duel.showLobby({ shownMap, mutators, start })`.
+  5. `duel.showLobby({ shownMap, mutators, start })`.
+
+  The lobby and match use the available viewport without requesting fullscreen.
 
   If the import or `addModule` fails, the lobby says "A new version is ready:
   reload this phone (and your friend's)".
 - **Start.** `start(feed)` calls `begin(false, () => duelSetup(feed.config),
-  feed)`, keeping the `starting` guard. begin skips its own
-  `fullscreen.enter()` and click sound when `feed.local` is set.
+  feed)`, keeping the `starting` guard. begin skips its click sound when
+  `feed.local` is set.
 - **`duelSetup(cfg)`** (`mode.ts`) never saves settings. It:
   - sets `gameMode.mapId` to the agreed map (a MAPS id, or
     `randomMapId(biome, seed)`);

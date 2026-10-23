@@ -268,6 +268,54 @@ describe("controller: touch placement", () => {
 });
 
 describe("mouse orders", () => {
+  it("left-clicking a friendly building replaces selected units without issuing a move", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const hq = hqOf(w, "blue")!;
+    const fab = spawnBuilding(w, "fab-plant", "blue", 9, 4);
+    for (const b of [hq, fab]) {
+      for (const shift of [false, true]) {
+        c.selectUnits([tank.id]);
+        c.forceMove = true;
+        c.clickWorld(b.tx + 1, b.ty + 1, { kind: "ownBuilding", id: b.id }, "left", shift);
+        expect(c.selectedUnits.size).toBe(0);
+        expect(c.selectedBuilding).toBe(b.id);
+        expect(c.forceMove).toBe(false);
+        expect(c.drainCommands()).toEqual([]);
+      }
+    }
+  });
+
+  it("right-clicking a friendly building still orders selected units there", () => {
+    const w = field();
+    const c = new Controller(w);
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const hq = hqOf(w, "blue")!;
+    c.selectUnits([tank.id]);
+    c.clickWorld(5.5, 5.5, { kind: "ownBuilding", id: hq.id }, "right");
+    expect([...c.selectedUnits]).toEqual([tank.id]);
+    expect(c.selectedBuilding).toBeNull();
+    expect(c.drainCommands()).toEqual([
+      { type: "attackMove", faction: "blue", unitIds: [tank.id], x: 5.5, y: 5.5 }
+    ]);
+  });
+
+  it("clicking a building being sold treats it as terrain and keeps the selected units", () => {
+    const w = field();
+    const c = new Controller(w);
+    c.trackInFlight();
+    const tank = spawnUnit(w, "stinger", "blue", 10, 10);
+    const fab = spawnBuilding(w, "fab-plant", "blue", 9, 4);
+    c.enqueue({ type: "sell", faction: "blue", buildingId: fab.id });
+    c.drainCommands();
+    c.selectUnits([tank.id]);
+    c.clickWorld(10, 5, { kind: "ownBuilding", id: fab.id }, "left");
+    expect([...c.selectedUnits]).toEqual([tank.id]);
+    expect(c.selectedBuilding).toBeNull();
+    expect(c.drainCommands()[0]).toMatchObject({ unitIds: [tank.id], x: 10, y: 5 });
+  });
+
   it("left-clicking terrain force-moves the selection; right-clicking attack-moves", () => {
     const w = field();
     const c = new Controller(w);
