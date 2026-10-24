@@ -4,6 +4,7 @@ import type { Faction, UnitKind } from "../sim/types";
 import { sfx } from "../game/audio";
 import { PLAYER } from "../game/controller";
 import { fullscreen } from "./fullscreen";
+import { iconUrl } from "../game/side-style";
 
 /**
  * The pre-match opener choice: three big cards over the (frozen) battlefield.
@@ -22,7 +23,7 @@ export interface OpenerPickerOptions {
   side?: Faction;
 }
 
-const ICON = (kind: string, side: Faction) => `assets/icons/${side === "red" ? "red/" : ""}${kind}.webp`;
+const ICON = (kind: string, side: Faction) => iconUrl(kind, side);
 
 /** What each card promises, as icon pills. */
 function pills(id: OpenerId, side: Faction): string {

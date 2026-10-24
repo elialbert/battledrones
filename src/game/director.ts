@@ -14,6 +14,7 @@
  */
 import { BUILDINGS, UNITS } from "../sim/balance";
 import type { Faction, FxEvent, World } from "../sim/types";
+import { sidesLeft } from "../sim/combat";
 
 /** localStorage: "0" when the player switched the cinematic camera off (on by default). */
 export const CINE_KEY = "battledrones.cinecam";
@@ -319,12 +320,13 @@ export class Director {
       this.aim = { x: next.x, y: next.y, zoom: zoomForSpread(next.spread) };
       return;
     }
-    // quiet: tour the armies, one side then the other
+    // quiet: tour the armies, one side then the next (a free-for-all's, those still in)
+    const sides = sidesLeft(this.world);
     if (this.t - this.tourSince >= CINE.tourS) {
       this.tourSince = this.t;
-      this.tourSide = this.tourSide === "blue" ? "red" : "blue";
+      this.tourSide = sides[(sides.indexOf(this.tourSide) + 1) % sides.length] ?? "blue";
     }
-    const a = this.army(this.tourSide) ?? this.army(this.tourSide === "blue" ? "red" : "blue");
+    const a = this.army(this.tourSide) ?? sides.map((f) => this.army(f)).find((p) => p) ?? null;
     if (a) this.aim = { x: a.x, y: a.y, zoom: CINE.zoom.wide + (CINE.zoom.mid - CINE.zoom.wide) * 0.35 };
   }
 

@@ -10,6 +10,7 @@ import { Terrain, type ArmorClass, type Building, type Domain, type Faction, typ
 import { rulesOf } from "./rules";
 import { buildingCenter, canGetWithin, distToBuilding, domainOf, hqOf, moveClassOf, removeBuilding, terrainAt } from "./world";
 import { atan2, hypot } from "./fmath";
+import { isMulti, otherSide, sidesOf } from "./sides";
 
 type Attacker = { unit: Unit } | { building: Building };
 
@@ -587,16 +588,20 @@ function rankFor(u: Unit): number {
 }
 
 /**
- * Credit a kill. The faction stat always goes to the victim's enemy (every
- * source of damage is hostile), even when the killer has since died or is a
- * building; XP and the kill count go to the killing unit if it was alive this
- * tick (one that dies on the tick of its killing blow keeps the kill).
+ * Credit a kill. In a duel the faction stat always goes to the victim's enemy
+ * (every source of damage is hostile), even when the killer has since died or
+ * is a building; in a free-for-all to the killer's side, when it is still on
+ * the map to say whose it was. XP and the kill count go to the killing unit
+ * if it was alive this tick (one that dies on the tick of its killing blow
+ * keeps the kill).
  */
 function creditKill(w: World, victimFaction: Faction, killerId: number | null, victimCost: number, building: boolean): void {
-  const enemy = victimFaction === "blue" ? "red" : "blue";
-  const stats = w.factions[enemy].stats;
-  if (building) stats.buildingsKilled++;
-  else stats.unitsKilled++;
+  const by = isMulti(w) ? sideOfId(w, killerId) : otherSide(victimFaction);
+  if (by && by !== victimFaction) {
+    const stats = w.factions[by].stats;
+    if (building) stats.buildingsKilled++;
+    else stats.unitsKilled++;
+  }
   if (killerId === null) return;
   const k = w.units.get(killerId);
   if (!k || k.faction === victimFaction) return;
@@ -609,8 +614,19 @@ function creditKill(w: World, victimFaction: Faction, killerId: number | null, v
   }
 }
 
-/** Killer id/kind if the last attacker is still alive this tick. */
-function killerOf(w: World, id: number | null): { killerId: number | null; killerKind: Unit["kind"] | null } {
+/** The side of unit or building `id`, if it is on the map. */
+function sideOfId(w: World, id: number | null): Faction | null {
+  if (id === null) return null;
+  return (w.units.get(id) ?? w.buildings.get(id))?.faction ?? null;
+}
+
+/** Killer id/kind if the last attacker is still alive this tick (a free-for-all: and whose it is, `by`). */
+function killerOf(w: World, id: number | null): { killerId: number | null; killerKind: Unit["kind"] | null; by?: Faction | null } {
+  const k = killerOfId(w, id);
+  return isMulti(w) ? { ...k, by: sideOfId(w, id) } : k;
+}
+
+function killerOfId(w: World, id: number | null): { killerId: number | null; killerKind: Unit["kind"] | null } {
   if (id === null) return { killerId: null, killerKind: null };
   const u = w.units.get(id);
   if (u) return { killerId: id, killerKind: u.kind };
@@ -691,11 +707,90 @@ export function cleanupDeaths(w: World): void {
       type: "death", id: b.id, faction: b.faction, unitKind: null, buildingKind: b.kind,
       x: c.x, y: c.y, air: false, value, ...killer, rank: 0, kills: 0
     });
-    if (b.kind === "hq" && w.winner === null && !hasGoliath(w, b.faction))
-      w.winner = b.faction === "blue" ? "red" : "blue";
+    if (b.kind === "hq" && w.winner === null && !hasGoliath(w, b.faction) && !isMulti(w))
+      w.winner = otherSide(b.faction);
   }
+  // a free-for-all: sides are knocked out one by one, and the last one standing wins
+  if (isMulti(w)) return settleFreeForAll(w);
   // the last Goliath of a side whose HQ is already gone (not Last Stand's waves: they never had one)
   for (const { u } of deadUnits)
     if (u.goliath && w.winner === null && !hqOf(w, u.faction) && !hasGoliath(w, u.faction) && (!w.survival || u.faction === w.survival.defender))
-      w.winner = u.faction === "blue" ? "red" : "blue";
+      w.winner = otherSide(u.faction);
+}
+
+/** Has this side been knocked out of a free-for-all? */
+export const isOut = (w: World, f: Faction): boolean => !!w.out?.some((o) => o.faction === f);
+
+/** The sides still in the match (a duel's two until it is decided). */
+export const sidesLeft = (w: World): Faction[] => sidesOf(w).filter((f) => !isOut(w, f));
+
+/**
+ * Knock `f` out of a free-for-all (its HQ and every Goliath gone, or it
+ * resigned): it goes down in `World.out`, its Uplinks fall neutral, and
+ * everything it still has self-destructs (hp 0, no killer: no one's kill,
+ * XP or ⚡). The wrecks are anyone's salvage. The next cleanupDeaths takes
+ * the dead off the map; settleFreeForAll calls it at once.
+ */
+export function eliminate(w: World, f: Faction, by: Faction | null): void {
+  if (isOut(w, f)) return;
+  (w.out ??= []).push({ faction: f, tick: w.tick, by });
+  w.fx.push({ type: "eliminated", faction: f, by, left: sidesLeft(w).length });
+  for (const l of w.objectives.uplinks) {
+    if (l.bar === f) {
+      l.bar = null;
+      l.progress = 0;
+    }
+    if (l.pushing === f) l.pushing = null;
+    if (l.owner !== f) continue;
+    l.owner = null;
+    w.fx.push({ type: "uplinkFlip", id: l.id, x: l.x, y: l.y, owner: null, prev: f, by: by ?? f });
+  }
+  w.factions[f].pending = null;
+  selfDestruct(w, f);
+}
+
+/** Everything `f` still has goes down: hp 0, nobody's kill. */
+function selfDestruct(w: World, f: Faction): boolean {
+  let any = false;
+  for (const u of w.units.values())
+    if (u.faction === f) {
+      u.hp = 0;
+      u.lastAttackerId = null;
+      any = true;
+    }
+  for (const b of w.buildings.values())
+    if (b.faction === f) {
+      b.hp = 0;
+      b.lastAttackerId = null;
+      any = true;
+    }
+  return any;
+}
+
+/**
+ * After a free-for-all's deaths: a side left with no HQ and no Goliath is
+ * knocked out (by whoever killed the last of them this tick), and anything a
+ * knocked-out side still has (squads that bailed out of a Condor it lost)
+ * goes too, the dead cleared at once. Then the last side standing wins (none
+ * left, a draw: the last ones fell together).
+ */
+function settleFreeForAll(w: World): void {
+  if (w.winner) return;
+  let again = false;
+  for (const f of sidesOf(w)) {
+    if (isOut(w, f)) {
+      if (selfDestruct(w, f)) again = true;
+      continue;
+    }
+    if (hqOf(w, f) || hasGoliath(w, f)) continue;
+    // who finished it: whoever killed its HQ or last Goliath this tick
+    let by: Faction | null = null;
+    for (const ev of w.fx)
+      if (ev.type === "death" && ev.faction === f && (ev.buildingKind === "hq" || ev.unitKind === "goliath")) by = ev.by ?? null;
+    eliminate(w, f, by);
+    again = true;
+  }
+  if (again) return cleanupDeaths(w);
+  const left = sidesLeft(w);
+  if (left.length <= 1) w.winner = left[0] ?? "draw";
 }

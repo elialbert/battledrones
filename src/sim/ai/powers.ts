@@ -7,6 +7,7 @@ import { dist, domainOf, hqOf, moveClassOf, passable, regionAt } from "../world"
 import type { AiMode, AiState, Difficulty } from "./commander";
 import { seenEnemies } from "./intel";
 import { cos, hypot, sin } from "../fmath";
+import { QUARTER, turnVec } from "../sides";
 
 /**
  * The commander's use of calldowns (powers.ts), and its reflex for getting
@@ -181,12 +182,11 @@ function bestClump(
 function podSite(w: World, faction: Faction, x: number, y: number): { x: number; y: number } | null {
   const cx = Math.floor(x);
   const cy = Math.floor(y);
-  const s = faction === "red" ? -1 : 1; // scan in the side's own frame (mirror-fair ties)
+  const q = QUARTER[faction]; // scan in the side's own frame (mirror-fair ties)
   for (let r = 0; r <= 4; r++)
     for (let i = -r; i <= r; i++)
       for (let j = -r; j <= r; j++) {
-        const dy = i * s;
-        const dx = j * s;
+        const [dx, dy] = turnVec(q, j, i);
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const tx = cx + dx;
         const ty = cy + dy;

@@ -6,6 +6,7 @@ import type { Faction, Unit, World } from "./types";
 import { goliathsOf, hasGoliath, isAnchored } from "./goliath";
 import { hqOf, sideFrame, spawnUnit } from "./world";
 import { atan2 } from "./fmath";
+import { perSide, sidesOf } from "./sides";
 
 /**
  * The free replacement Condor (the island map: MapDef.lifeline). Its island
@@ -23,10 +24,8 @@ import { atan2 } from "./fmath";
  * only after the delay, and the squad only when the side really needs it.
  */
 
-const FACTIONS: Faction[] = ["blue", "red"];
-
 export function setupLifeline(w: World): void {
-  w.lifeline = { blue: { due: null, given: 0 }, red: { due: null, given: 0 } };
+  w.lifeline = perSide(() => ({ due: null, given: 0 }));
 }
 
 /** Does this side have a Condor flying, or one being built? */
@@ -58,7 +57,7 @@ export function lifelineRoute(w: World, f: Faction): { from: { x: number; y: num
   if (!home) return null;
   // in the side's own frame its HQ sits bottom left, so the two sides' routes mirror
   const fr = sideFrame(w, f);
-  const c = fr.pt(home);
+  const c = fr.toFrame(home);
   const inset = LIFELINE.edgeInset;
   const edges = [
     { d: c.x, p: { x: inset, y: c.y } },
@@ -70,14 +69,14 @@ export function lifelineRoute(w: World, f: Faction): { from: { x: number; y: num
   for (const e of edges) if (e.d < near.d - 1e-9) near = e;
   // beside the HQ, on its flank away from the edge it came in over (two tiles out)
   const to = { x: c.x + 3, y: c.y - 3 };
-  return { from: fr.pt(near.p), to: fr.pt(to) };
+  return { from: fr.toWorld(near.p), to: fr.toWorld(to) };
 }
 
 /** Per tick, after deaths are settled: start, run and pay out each side's free-Condor clock. */
 export function tickLifeline(w: World): void {
   const lines = w.lifeline;
   if (!lines || w.winner || !rulesOf(w).lifeline) return;
-  for (const f of FACTIONS) {
+  for (const f of sidesOf(w)) {
     const slot = lines[f];
     if ((!hqOf(w, f) && !hasGoliath(w, f)) || bannedBy(w, "condor", f) || hasCondor(w, f)) {
       slot.due = null;

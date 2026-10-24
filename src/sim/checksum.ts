@@ -5,6 +5,7 @@
  * records pin its values.
  */
 import type { World } from "./types";
+import { sidesOf } from "./sides";
 
 const buf = new DataView(new ArrayBuffer(8));
 
@@ -34,7 +35,8 @@ export function worldHash(w: World): string {
   const h = new Fnv();
   h.num(w.tick);
   h.num(w.nextId);
-  for (const f of ["blue", "red"] as const) {
+  // (the sides playing: blue and red in every duel and every saved record)
+  for (const f of sidesOf(w)) {
     h.num(w.factions[f].scrap);
     h.num(w.powers.meter[f]);
     h.num(w.factions[f].pending?.remaining ?? -1);
@@ -58,7 +60,11 @@ export function worldHash(w: World): string {
   }
   h.num(w.projectiles.length);
   h.num(w.wrecks.length);
-  for (const l of w.objectives.uplinks) h.num(l.progress);
+  for (const l of w.objectives.uplinks) {
+    h.num(l.progress);
+    if (l.bar !== undefined) h.str(l.bar ?? "-"); // (a free-for-all's: whose bar it is)
+  }
+  if (w.out) for (const o of w.out) h.str(o.faction);
   h.str(w.winner ?? "-");
   return h.hex();
 }

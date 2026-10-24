@@ -22,8 +22,8 @@ import { OPENER_IDS, allowedOpener, pickAiOpener, type OpenerId } from "../sim/o
 import { placementBlocker } from "../sim/placement";
 import type { MutatorId } from "../sim/rules";
 import { step } from "../sim/sim";
-import type { Command, Faction, World } from "../sim/types";
-import { MAPS, createMapWorld, isKnownMapId } from "../sim/maps";
+import type { Command, Faction, PerSide, World } from "../sim/types";
+import { MAPS, createMapWorld, isKnownMapId, mapById } from "../sim/maps";
 import { tickFog } from "../sim/fog";
 import { applyOpener } from "../sim/openers";
 import { SideLog, type Urgent } from "./events";
@@ -67,7 +67,7 @@ export interface ArenaOptions {
   mutators?: MutatorId[];
   roundTicks?: number;
   maxTicks?: number;
-  seats: Record<Faction, SeatSpec>;
+  seats: PerSide<SeatSpec>;
   commit?: string | null;
   sim?: string | null;
   /** Called after every round (and the opener reveal) with the record: the runner rewrites the file. */
@@ -112,6 +112,8 @@ export class Arena {
     // (mapById falls back to the first map for an unknown id: say so instead)
     if (!isKnownMapId(opts.map))
       throw new Error(`unknown map "${opts.map}": ${MAPS.map((m) => m.id).join(", ")}, or random-<biome>-<code>`);
+    // (agent battles are duels: a four-player map's other two sides would have no one to play them)
+    if (mapById(opts.map).players === 4) throw new Error(`"${opts.map}" is a four-player map: agent battles are 1v1`);
     this.roundTicks = opts.roundTicks ?? ROUND_TICKS;
     this.maxTicks = opts.maxTicks ?? MAX_TICKS;
     this.onRound = opts.onRound;
@@ -119,7 +121,7 @@ export class Arena {
     this.w = createMapWorld(opts.map, { seed: opts.seed, objectives: true, ...(mutators.length ? { mutators } : {}) });
     tickFog(this.w); // (each side sees its own base in the opener round)
     const seat = (side: Faction): Seat => {
-      const spec = opts.seats[side];
+      const spec = opts.seats[side]!; // (a duel: blue and red)
       return {
         side, spec,
         ai: spec.kind === "ai" ? createAiState(spec.strategy, spec.difficulty, hash32(opts.seed, side === "blue" ? 1 : 2)) : null,
@@ -137,7 +139,8 @@ export class Arena {
         news: []
       };
     };
-    this.seats = { blue: seat("blue"), red: seat("red") };
+    // (a duel: only blue and red ever have seats)
+    this.seats = { blue: seat("blue"), red: seat("red") } as Record<Faction, Seat>;
     const info = (s: Seat): SeatInfo => ({
       player: seatName(s.spec),
       ...(s.spec.kind === "agent" && s.spec.settings ? { settings: s.spec.settings } : {})
@@ -197,7 +200,7 @@ export class Arena {
 
   /** Record a seat's model id and settings (the LLM driver sends them). */
   setSeatInfo(side: Faction, info: Partial<SeatInfo>): void {
-    Object.assign(this.record.seats[side], info);
+    Object.assign(this.record.seats[side] ?? {}, info);
   }
 
   /** Add token usage for a seat's round (the LLM driver sends it). */

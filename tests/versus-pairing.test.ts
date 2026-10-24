@@ -16,7 +16,8 @@ import { rxqOf } from "../src/versus/lockstep";
 import {
   FAILED_MESSAGE, LOBBY_FRAME_MAX, LOBBY_PROTO, NOTHING_HEARD_MESSAGE, NOTHING_HEARD_MS, PICK_TIMEOUT_MS, Pairing,
   VERSION_MESSAGE, confHash, delayFor, matchSeed, packetMs, readLobbyFrame, readLobbyHeader, writeLobbyFrame,
-  type DuelConfig, type HostOffer, type LobbyFrame, type PairingPhase, type PairingResult, type PairingState
+  type DuelConfig, type HostOffer, type LobbyFrame, type PairingPhase, type PairingResult, type PairingState,
+  DUEL_MAPS
 } from "../src/versus/pairing";
 
 /** The driver's step: how often the "session" looks at the link (ms of air time). */
@@ -234,7 +235,7 @@ function randomFrame(r: () => number): LobbyFrame {
   const opener = () => (r() < 0.25 ? null : OPENER_IDS[int(OPENER_IDS.length)]!);
   let config: DuelConfig | null = null;
   if (role === "host" && r() < 0.7) {
-    const mapId = r() < 0.5 ? MAPS[int(MAPS.length)]!.id : randomMapId(BIOMES[int(BIOMES.length)]!, r() < 0.2 ? 0xffffffff : int(2 ** 32));
+    const mapId = r() < 0.5 ? DUEL_MAPS[int(DUEL_MAPS.length)]!.id : randomMapId(BIOMES[int(BIOMES.length)]!, r() < 0.2 ? 0xffffffff : int(2 ** 32));
     config = { mapId, mutators: MUTATOR_IDS.filter(() => r() < 0.3), delay: 3 + int(6), hostSide: r() < 0.5 ? "blue" : "red", fast: r() < 0.5 };
   }
   const picked = r() < 0.6;
@@ -289,7 +290,7 @@ describe("the lobby frame", () => {
     // map codes 6, 7 and 13–15 name no map
     const MAP_AT = 2 + 1 + 4 + 16 + 16 + 16 + 3 + 8 + 8 + 7 + 1;
     for (const code of [6, 7, 13, 14, 15]) bad(patch(ok, MAP_AT, 4, code));
-    for (const code of [0, 5]) expect(readLobbyFrame(patch(ok, MAP_AT, 4, code).bits, ok.nbits).config!.mapId).toBe(MAPS[code]!.id);
+    for (const code of [0, 5]) expect(readLobbyFrame(patch(ok, MAP_AT, 4, code).bits, ok.nbits).config!.mapId).toBe(DUEL_MAPS[code]!.id);
     // delay codes 6 and 7 are D = 9 and 10
     const DELAY_AT = MAP_AT + 4 + 12;
     for (const code of [6, 7]) bad(patch(ok, DELAY_AT, 3, code));
@@ -307,10 +308,12 @@ describe("the lobby frame", () => {
 
   it("has room for every map and mutator, and its rules are the spec's", () => {
     // (a ninth built-in map, a ninth biome or a thirteenth mutator needs a wider field, and a new LOBBY_PROTO)
-    expect(MAPS.length).toBeLessThanOrEqual(8);
+    expect(DUEL_MAPS.length).toBeLessThanOrEqual(8);
+    // (a four-player map is no duel: no frame names it)
+    for (const m of MAPS.filter((d) => d.players === 4)) expect(DUEL_MAPS).not.toContain(m);
     expect(BIOMES.length).toBeLessThanOrEqual(8);
     expect(MUTATOR_IDS.length).toBeLessThanOrEqual(12);
-    for (const m of MAPS) expect(() => writeLobbyFrame({ ...randomFrame(rng(1)), role: "host", config: { mapId: m.id, mutators: [...MUTATOR_IDS], delay: 3, hostSide: "blue", fast: true } })).not.toThrow();
+    for (const m of DUEL_MAPS) expect(() => writeLobbyFrame({ ...randomFrame(rng(1)), role: "host", config: { mapId: m.id, mutators: [...MUTATOR_IDS], delay: 3, hostSide: "blue", fast: true } })).not.toThrow();
     // D = clamp(ceil((rtt / 2 + P + 50 ms) / 100 ms), 3, 8), P the starting mode's packet period on the plan
     expect([packetMs("high", "fast"), packetMs("high", "robust"), packetMs("low", "fast"), packetMs("low", "robust")]).toEqual([100, 200, 200, 400]);
     expect([0, 300, 301, 500, 501, 1100, 1101, 9999].map((rtt) => delayFor(rtt, 100))).toEqual([3, 3, 4, 4, 5, 7, 8, 8]);

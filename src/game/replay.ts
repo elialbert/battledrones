@@ -22,9 +22,11 @@ import { setupWorld, worldHash, type BattleRecord, type RoundLog } from "../aren
 import { TICK_RATE } from "../sim/balance";
 import { isKnownMapId } from "../sim/maps";
 import { OPENERS, isOpenerId } from "../sim/openers";
-import type { Command, Faction, World } from "../sim/types";
+import type { Command, Faction, PerSide, World } from "../sim/types";
 import { replayPanel, type ReplayPanel } from "../ui/replay";
 import type { GameScene, MatchFeed } from "./GameScene";
+import { FACTIONS } from "../sim/sides";
+import { SIDE_NAME } from "./side-style";
 
 declare const __SIM_HASH__: string | undefined;
 /** The sim this build plays (vite.config.ts; tools/arena/files.ts simHash), or null outside a Vite build. */
@@ -45,7 +47,7 @@ export const clock = (tick: number) => {
 
 export class ReplayFeed implements MatchFeed {
   readonly world: World;
-  readonly labels: Record<Faction, string>;
+  readonly labels: PerSide<string>;
   record: BattleRecord;
   /** The first tick whose hash didn't match, if any. */
   divergedAt: number | null = null;
@@ -67,13 +69,14 @@ export class ReplayFeed implements MatchFeed {
     this.record = record;
     this.world = setupWorld(record);
     this.keyframes.set(0, structuredClone(this.world));
-    this.labels = { blue: this.label("blue"), red: this.label("red") };
+    // (the sides that played: blue and red, and a four-player map's other two)
+    this.labels = Object.fromEntries(FACTIONS.filter((f) => record.seats[f]).map((f) => [f, this.label(f)])) as PerSide<string>;
     this.index();
   }
 
   private label(side: Faction): string {
     const opener = this.record.openers[side];
-    const player = this.record.seats[side].player;
+    const player = this.record.seats[side]?.player ?? SIDE_NAME[side];
     // a saved sound duel (src/versus/records.ts names its seats "sound-duel:host" and "sound-duel:guest"): the phone
     // and the opener as the game names them, "Host phone · Air Wing"; the record itself stays as it is
     const phone = SOUND_DUEL_SEAT.exec(player)?.[1];

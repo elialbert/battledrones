@@ -4,7 +4,8 @@
 
 Built. Every HUD portrait (`public/assets/icons/<kind>.webp`) is a shot of its
 in-game 3D model, and every unit and building also has a red one
-(`public/assets/icons/red/<kind>.webp`). `tools/model-portraits.mjs --all`
+(`public/assets/icons/red/<kind>.webp`), and a green and a purple one for the
+four-player map (`icons/green/`, `icons/purple/`, FFA.md). `tools/model-portraits.mjs --all`
 makes them all. `progress-shots/icons/` has the before and after: the
 mock-ups the design was chosen from, and the shipped set in a real match.
 
@@ -153,9 +154,10 @@ but the Mastodon is half as big again, with two tracks a side.
 
 ```bash
 npx vite --port 5173 &
-node tools/model-portraits.mjs --all              # everything, blue and red (about 7 minutes)
+node tools/model-portraits.mjs --all              # everything, blue, red, green and purple (about 16 minutes)
 node tools/model-portraits.mjs lancer             # one kind's blue portrait...
 node tools/model-portraits.mjs lancer --faction=red   # ...and its red one
+node tools/model-portraits.mjs lancer --faction=green # (and green, purple: the four-player map's sides)
 node tools/model-portraits.mjs hq --out=/tmp/p    # try a look without touching the shipped ones
 node tools/model-portraits.mjs radar --pitch=60 --turn=0 --out=/tmp/p   # override the framing
 ```

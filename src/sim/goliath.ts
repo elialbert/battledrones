@@ -5,6 +5,7 @@ import { applySpawnRank, goliathBase, rulesOf } from "./rules";
 import type { Command, Faction, GoliathMode, GoliathWeapon, Unit, UnitKind, World } from "./types";
 import { buildingCenter, hqOf, inBounds, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
 import { hypot } from "./fmath";
+import { FACTIONS, sidesOf } from "./sides";
 
 /**
  * The Goliath (GOLIATH.md): a giant walking mech that is also a mobile base.
@@ -146,7 +147,7 @@ export function repairUrgency(u: Unit): number {
 export function anchorFootprint(w: World, faction: Faction, x: number, y: number): { tx: number; ty: number; size: number } {
   const size = GOLIATH.footprint;
   const fr = sideFrame(w, faction);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   // the size² block of tiles whose middle is nearest the Goliath (in the side's own frame: mirror-fair rounding)
   const [tx, ty] = fr.tile(Math.round(p.x - size / 2), Math.round(p.y - size / 2), size);
   return { tx, ty, size };
@@ -333,7 +334,7 @@ export const trainableAt = (w: World, kind: UnitKind): boolean => trainable(kind
  * its last Goliath falls.
  */
 export function nomadStart(w: World): void {
-  for (const f of ["blue", "red"] as const) {
+  for (const f of sidesOf(w)) {
     const hq = hqOf(w, f);
     if (!hq) continue;
     const c = buildingCenter(hq);
@@ -354,10 +355,11 @@ export function nomadStart(w: World): void {
 export function tickLove(w: World): void {
   if (!rulesOf(w).robotLove || w.winner) return;
   let best: { a: Unit; b: Unit; d: number } | null = null;
+  // (pairs in canonical side order: a duel's blue Goliath first, then red's)
   for (const a of w.units.values()) {
-    if (!a.goliath || a.faction !== "blue" || a.hp <= 0) continue;
+    if (!a.goliath || a.hp <= 0) continue;
     for (const b of w.units.values()) {
-      if (!b.goliath || b.faction !== "red" || b.hp <= 0) continue;
+      if (!b.goliath || b.hp <= 0 || FACTIONS.indexOf(b.faction) <= FACTIONS.indexOf(a.faction)) continue;
       const d = hypot(a.x - b.x, a.y - b.y);
       if (d <= GOLIATH.love.range && (!best || d < best.d)) best = { a, b, d };
     }

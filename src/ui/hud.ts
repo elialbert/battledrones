@@ -5,7 +5,7 @@ import { anchorBlocker, modeProgress, unitCost, weaponReady } from "../sim/golia
 import { isTransport, squadAlive, squadSize, unitSeenBy } from "../sim/infantry";
 import { liftedBy } from "../sim/lift";
 import { goliathBase } from "../sim/rules";
-import type { BuildingKind, Faction, GoliathWeapon, QueueItem, Unit, UnitKind, World } from "../sim/types";
+import type { BuildingKind, Faction, GoliathWeapon, PerSide, QueueItem, Unit, UnitKind, World } from "../sim/types";
 import { hasBuilding } from "../sim/world";
 import { sfx } from "../game/audio";
 import { mapThumbUrl } from "../game/assets";
@@ -24,6 +24,8 @@ import { mountHudLayout } from "./layout";
 import { HINTS, HintQueue, type HintOffer } from "../game/hints";
 import { fullscreen } from "./fullscreen";
 import { mapById } from "../sim/maps";
+import { SIDE_NAME, iconUrl } from "../game/side-style";
+import { sidesOf } from "../sim/sides";
 
 export interface HudApi {
   world: World;
@@ -33,8 +35,8 @@ export interface HudApi {
   centerCamera(wx: number, wy: number): void;
   zoomBy(factor: number): void;
   matchSeconds(): number;
-  /** Spectator mode: the two AI strategy names, else null. */
-  strategies: { blue: string; red: string } | null;
+  /** Spectator mode: each side's AI strategy name (a four-player map's four), else null. */
+  strategies: PerSide<string> | null;
   enemy: { strategy: string; difficulty: string };
   /** Extra info-card line for a build option (the counter advisor). */
   cardNote?(kind: UnitKind | BuildingKind): string | null;
@@ -86,6 +88,10 @@ export interface DuelHud {
   practice: boolean;
   /** An online duel, through the relay. */
   online?: boolean;
+  /** The confirm lines, where a duel's don't fit (a four-player battle: resigning knocks you out, the others play on). */
+  asks?: { resign: string; leave: string; leaveButton: string };
+  /** Who played each side, for the report (a four-player online battle's names). */
+  names?: Partial<PerSide<string>>;
 }
 
 /** What a duel's end screen adds: a head instead of VICTORY / DEFEAT (no result), and more buttons (Copy debug info). */
@@ -118,6 +124,8 @@ export interface Hud {
   notice(msg: string, tone: "good" | "bad" | "info", x: number, y: number): void;
   /** A plain short toast (e.g. why a calldown can't fire). */
   notify(msg: string, tone?: "bad" | "good"): void;
+  /** A free-for-all player knocked out: the build dock and the ⚡ panel go, as a spectator sees the battle. */
+  watchOnly(): void;
   togglePause(): void;
   destroy(): void;
 }
@@ -217,7 +225,9 @@ const MINIMAP_SHROUD = "rgb(5,7,12)";
  */
 const MINIMAP_SIDE: Record<Faction, { building: string; own: string; foe: string; ring: string; goliath: string; goliathRim: string }> = {
   blue: { building: "#3d8bff", own: "#9fd0ff", foe: "#78bcff", ring: "rgba(159,208,255,0.6)", goliath: "#cfe8ff", goliathRim: "#1d4f8f" },
-  red: { building: "#ff4a3a", own: "#ffccc2", foe: "#ffb0a0", ring: "rgba(255,140,120,0.6)", goliath: "#ff7a66", goliathRim: "#5a0f08" }
+  red: { building: "#ff4a3a", own: "#ffccc2", foe: "#ffb0a0", ring: "rgba(255,140,120,0.6)", goliath: "#ff7a66", goliathRim: "#5a0f08" },
+  green: { building: "#2fbf55", own: "#c2f7cf", foe: "#8ee6a4", ring: "rgba(150,240,170,0.6)", goliath: "#c8ffd6", goliathRim: "#0f4d22" },
+  purple: { building: "#9a55ff", own: "#e3ccff", foe: "#c9a8ff", ring: "rgba(200,160,255,0.6)", goliath: "#e6d4ff", goliathRim: "#3a1270" }
 };
 
 /**
@@ -270,7 +280,7 @@ export function revealHtml(mapId: string): string {
 }
 
 /** A portrait in a side's paint (ours unless told otherwise): red's units and buildings show red, whoever is looking. */
-const icon = (kind: string, f: Faction = PLAYER) => `assets/icons/${f === "red" ? "red/" : ""}${kind}.webp`;
+const icon = (kind: string, f: Faction = PLAYER) => iconUrl(kind, f);
 
 export function createHud(api: HudApi): Hud {
   const root = document.getElementById("hud")!;
@@ -946,15 +956,22 @@ export function createHud(api: HudApi): Hud {
   ] as const)
     $(`#${id}`).addEventListener("click", () => api.zoomBy(factor));
 
-  if (api.ctrl.spectator) {
-    root.classList.add("spectator");
+  // (a four-player online battle: who plays which colour, the player's own side "You")
+  const roster = api.duel?.names && sidesOf(w).length > 2 ? api.duel.names : null;
+  if (api.ctrl.spectator || roster) {
+    if (api.ctrl.spectator) root.classList.add("spectator");
     const versus = $("#versus");
     versus.hidden = false;
-    versus.innerHTML = `<span class="vs-blue"></span><span class="vs-red"></span>`;
-    versus.querySelector(".vs-blue")!.textContent = api.strategies?.blue ?? "Blue";
-    versus.querySelector(".vs-red")!.textContent = api.strategies?.red ?? "Red";
-    versus.title = `${api.strategies?.blue} vs ${api.strategies?.red}`;
+    // (a four-player map's four commanders: two by two)
+    const sides = sidesOf(w);
+    const label = (f: Faction) => (roster ? (f === PLAYER ? "You" : roster[f] ?? SIDE_NAME[f]) : api.strategies?.[f] ?? SIDE_NAME[f]);
+    versus.classList.toggle("multi", sides.length > 2);
+    versus.innerHTML = sides.map((f) => `<span class="vs-${f}"></span>`).join("");
+    for (const f of sides) versus.querySelector(`.vs-${f}`)!.textContent = label(f);
+    versus.title = sides.map(label).join(" vs ");
   }
+  /** A free-for-all's knocked-out sides, struck through on the spectator's pill as they go. */
+  let outShown = 0;
 
   /** The match is over: the end screen is up (or a duel ended with no result). Nothing pauses any more. */
   let over = false;
@@ -1019,7 +1036,9 @@ export function createHud(api: HudApi): Hud {
     if (ask) {
       const q =
         ask === "leave"
-          ? `Leave with no result? The match ends for ${duel.opponent} too.`
+          ? duel.asks?.leave ?? `Leave with no result? The match ends for ${duel.opponent} too.`
+          : ask === "resign" && duel.asks
+          ? duel.asks.resign
           : `Resign${ask === "resign-leave" ? " and leave" : ""}? ${duel.opponent.charAt(0).toUpperCase()}${duel.opponent.slice(1)} wins.`;
       box.innerHTML = `<p class="p-ask">${q}</p>
         <button class="cta alt warn" id="p-yes">${ask === "leave" ? "Leave" : ask === "resign" ? "🏳 Resign" : "Resign and leave"}</button>
@@ -1035,7 +1054,7 @@ export function createHud(api: HudApi): Hud {
     }
     box.innerHTML = `${resigning ? "" : `<button class="cta alt" id="p-resign">🏳 Resign</button>`}
       ${ex.resignAndLeave && !resigning ? `<button class="cta alt" id="p-resign-leave">Resign and leave</button>` : ""}
-      ${ex.leave ? `<button class="cta alt warn" id="p-leave">Leave (no result)</button>` : ""}`;
+      ${ex.leave ? `<button class="cta alt warn" id="p-leave">${duel.asks?.leaveButton ?? "Leave (no result)"}</button>` : ""}`;
     box.querySelector("#p-resign")?.addEventListener("click", () => renderDuelExits(duel, "resign"));
     box.querySelector("#p-resign-leave")?.addEventListener("click", () => renderDuelExits(duel, "resign-leave"));
     box.querySelector("#p-leave")?.addEventListener("click", () => renderDuelExits(duel, "leave"));
@@ -1067,6 +1086,11 @@ export function createHud(api: HudApi): Hud {
     const dt = dtMs ?? Math.min(250, nowMs - lastFrame);
     lastFrame = nowMs;
     layout.refresh();
+    if ((api.ctrl.spectator || roster) && (w.out?.length ?? 0) !== outShown) {
+      outShown = w.out?.length ?? 0;
+      // (a replay rewound past a knockout: that side is back in)
+      for (const f of sidesOf(w)) root.querySelector(`#versus .vs-${f}`)?.classList.toggle("out", !!w.out?.some((o) => o.faction === f));
+    }
     // one-time hints: one at a time, never over a banner or the opener cards, paused time doesn't count
     const busy = api.busy?.() ?? false;
     const quiet = busy || api.ctrl.paused || !!w.winner || bannerCur !== null || bannerQueue.length > 0;
@@ -1461,6 +1485,7 @@ export function createHud(api: HudApi): Hud {
           ? {
               opponent: duel.opponent,
               via: duel.practice ? "practice link (no sound)" : duel.online ? "online" : "over sound",
+              ...(duel.names ? { names: duel.names } : {}),
               onRematch: () => duel.rematch(),
               onMenu: () => duel.menu(),
               after: [...duel.actions(), ...replay, ...(opts?.actions ?? [])]
@@ -1477,6 +1502,9 @@ export function createHud(api: HudApi): Hud {
   return {
     update,
     showEnd,
+    watchOnly() {
+      root.classList.add("spectator");
+    },
     alert(msg, x, y) {
       toast(`⚠ ${msg}`, () => api.centerCamera(x, y), "bad");
     },

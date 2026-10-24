@@ -29,6 +29,7 @@ import {
 } from "./awareness";
 import type { Hud } from "../ui/hud";
 import { MARKER, mountAwareness, type ArrowSpec, type AwarenessUi } from "../ui/awareness";
+import { isMulti } from "../sim/sides";
 
 export interface AwarenessHooks {
   rig: CameraRig;
@@ -327,8 +328,10 @@ export class Awareness {
     if (!paused) {
       const m = this.meter.update(this.tally, this.lastShotInView, this.simT, deltaMs, this.viewJumped);
       this.viewJumped = false;
-      this.ui.setMeter(m.shown, m.share);
-      if (m.turning) this.ui.turning(m.turning);
+      // (a spectator's meter is blue's against red's: a four-side brawl has no such pair)
+      const two = !this.h.spectator || !isMulti(this.h.world);
+      this.ui.setMeter(m.shown && two, m.share);
+      if (m.turning && two) this.ui.turning(m.turning);
     }
   }
 

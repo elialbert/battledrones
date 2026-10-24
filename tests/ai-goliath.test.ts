@@ -10,6 +10,7 @@ import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
 import type { BuildingKind, Command, Faction, FxEvent, Unit, World } from "../src/sim/types";
 import { buildingCenter, hqOf, regionAt, removeBuilding, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { perSide } from "../src/sim/sides";
 
 /**
  * The commander and the Goliath (GOLIATH.md "Balancing and playtesting": the
@@ -418,7 +419,7 @@ describe("mutators", () => {
     const w = createMapWorld(map, { mutators });
     const ai = { blue: createAiState(blue, "normal", 3), red: createAiState(red, "normal", 4) };
     const peak = { blue: 0, red: 0 };
-    const harvestersBuilt = { blue: 0, red: 0 };
+    const harvestersBuilt = perSide(() => 0);
     for (let i = 0; i < mins * 60 * TICK_RATE && !w.winner; i++) {
       const cmds = [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)];
       for (const c of cmds) if (c.type === "produce" && c.unit === "harvester") harvestersBuilt[c.faction]++;

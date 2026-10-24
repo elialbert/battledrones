@@ -1,6 +1,7 @@
 import { POWER_NAMES } from "../sim/powers";
 import type { Faction, FxEvent, PowerKind, World } from "../sim/types";
 import { hqOf } from "../sim/world";
+import { otherSide, rivalsOf, sidesOf } from "../sim/sides";
 
 /**
  * Which deaths a commander calldown caused. powers.ts credits calldown damage
@@ -43,28 +44,32 @@ export function powerPhrase(p: PowerKind): string {
  * Was `death` a calldown kill? `impacts` are this tick's impacts so far;
  * `hqId` names each side's HQ (null when it has none), `hqStanding` says
  * whether it still stands (a side without one credits its strikes to no one).
+ * `rivals`: the sides that could have fired it (a duel's one enemy by default;
+ * every other side in a free-for-all), the nearest impact of any of them wins.
  */
 export function calldownKillOf(
   death: Death,
   impacts: readonly Impact[],
   hqId: (f: Faction) => number | null,
-  hqStanding: (f: Faction) => boolean = (f) => hqId(f) !== null
+  hqStanding: (f: Faction) => boolean = (f) => hqId(f) !== null,
+  rivals: readonly Faction[] = [otherSide(death.faction)]
 ): CalldownKill | null {
   if (death.killerKind !== null) return null;
-  const by: Faction = death.faction === "blue" ? "red" : "blue";
-  if (death.killerId === null ? hqStanding(by) : death.killerId !== hqId(by)) return null;
   const slack = death.buildingKind ? SLACK.building : SLACK.unit;
   let best: Impact | null = null;
   let bestD = Infinity;
-  for (const im of impacts) {
-    if (im.faction !== by) continue;
-    const d = Math.hypot(death.x - im.x, death.y - im.y);
-    if (d <= im.radius + slack && d < bestD) {
-      bestD = d;
-      best = im;
+  for (const by of rivals) {
+    if (death.killerId === null ? hqStanding(by) : death.killerId !== hqId(by)) continue;
+    for (const im of impacts) {
+      if (im.faction !== by) continue;
+      const d = Math.hypot(death.x - im.x, death.y - im.y);
+      if (d <= im.radius + slack && d < bestD) {
+        bestD = d;
+        best = im;
+      }
     }
   }
-  return best ? { power: best.power, faction: by, calldownId: best.id } : null;
+  return best ? { power: best.power, faction: best.faction, calldownId: best.id } : null;
 }
 
 /**
@@ -78,8 +83,7 @@ export class CalldownCredit {
   private hqs: Partial<Record<Faction, number | null>> = {};
 
   constructor(private w: World) {
-    this.hqId("blue");
-    this.hqId("red");
+    for (const f of sidesOf(w)) this.hqId(f);
   }
 
   private hqId(f: Faction): number | null {
@@ -101,7 +105,7 @@ export class CalldownCredit {
       return null;
     }
     if (ev.type !== "death" || this.impacts.length === 0) return null;
-    return calldownKillOf(ev, this.impacts, (f) => this.hqId(f), (f) => hqOf(this.w, f) !== null);
+    return calldownKillOf(ev, this.impacts, (f) => this.hqId(f), (f) => hqOf(this.w, f) !== null, rivalsOf(this.w, ev.faction));
   }
 
   /** One tick's events at once: death id → credit (empty when no calldown landed). */

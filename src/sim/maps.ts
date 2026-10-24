@@ -12,11 +12,14 @@ import { nomadStart } from "./goliath";
 import { armadaStart } from "./lift";
 import { hypot } from "./fmath";
 import { isRandomMapId, randomMapDef } from "./mapgen";
+import { FACTIONS, QUARTER, turnPoint, turnTile } from "./sides";
 
 /**
  * Skirmish maps, in map-picker order (the classic Proving Grounds first, to
- * learn on). Every map is 2-player and point-symmetric (rotated 180°
- * about the centre), so both sides get identical terrain. Maps are painted
+ * learn on). A 2-player map is point-symmetric (rotated 180° about the
+ * centre), so both sides get identical terrain; a four-player map (`players:
+ * 4`) is symmetric under a quarter turn, one side in each corner (sides.ts),
+ * so all four do. Maps are painted
  * procedurally from a fixed seed with simple shape primitives — the same
  * definition feeds the simulation and (via tools/export-maps.ts) the
  * offline terrain renderer that paints the matching ground art.
@@ -29,8 +32,10 @@ export interface MapDef {
   size: number;
   /** One-line flavour for the map picker. */
   blurb: string;
-  /** Blue HQ top-left tile; red is mirrored. */
+  /** Blue HQ top-left tile; red is mirrored (on a four-player map every side's is blue's, turned). */
   hq: [number, number];
+  /** Four sides, one per corner, the map symmetric under a quarter turn (default 2: blue and red). */
+  players?: 2 | 4;
   seed: number;
   paint(p: Painter): void;
   /**
@@ -58,6 +63,8 @@ export interface MapDef {
   hqTrickle?: number;
   /** Mutators that would break this map: left out of its matches, greyed out on the menu. */
   bannedMutators?: MutatorId[];
+  /** Why they're banned, for the menu ("island Uplinks need Condors and infantry"). */
+  banReason?: string;
   /** Offered for Last Stand? (default yes) */
   lastStand?: boolean;
   /** Career ★★ "win within" time on this map, in seconds (default STAR_SECS). */
@@ -79,7 +86,7 @@ export interface RandomMapInfo {
 
 /** Why a mutator can't be played on this map (null: it can). */
 export function mapBansMutator(def: MapDef, id: MutatorId): string | null {
-  return def.bannedMutators?.includes(id) ? `Not on ${def.name}: island Uplinks need Condors and infantry` : null;
+  return def.bannedMutators?.includes(id) ? `Not on ${def.name}: ${def.banReason ?? "island Uplinks need Condors and infantry"}` : null;
 }
 
 // ---------------------------------------------------------------- noise ---
@@ -110,9 +117,10 @@ export function valueNoise(x: number, y: number, seed: number): number {
 
 type Pt = [number, number];
 
-/** Paints terrain shapes, always mirrored through the map centre. */
+/** Paints terrain shapes, always mirrored through the map centre (on a four-player map, copied a quarter turn at a time). */
 export class Painter {
-  constructor(public w: World, public seed: number) {}
+  /** `quarters`: a four-player map, every tile goes down four times, turned. */
+  constructor(public w: World, public seed: number, private readonly quarters = false) {}
 
   private n(x: number, y: number, scale = 0.35): number {
     return valueNoise(x * scale, y * scale, this.seed) - 0.5;
@@ -121,6 +129,15 @@ export class Painter {
   /** Paint one tile and its mirror. `only` restricts which terrain may be overwritten. */
   set(tx: number, ty: number, t: Terrain, only?: Terrain[]): void {
     const { w } = this;
+    if (this.quarters) {
+      for (let q = 0; q < 4; q++) {
+        const [x, y] = turnTile(q, w.width, w.height, tx, ty);
+        if (!inBounds(w, x, y)) continue;
+        if (only && !only.includes(terrainAt(w, x, y))) continue;
+        setTerrain(w, x, y, t);
+      }
+      return;
+    }
     for (const [x, y] of [
       [tx, ty],
       [w.width - 1 - tx, w.height - 1 - ty]
@@ -340,6 +357,59 @@ export const MAPS: MapDef[] = [
     }
   },
   {
+    id: "compass-rose",
+    name: "Compass Rose",
+    biome: "arctic",
+    size: 72,
+    blurb: "Four players, one in each corner. Frozen streams split the quadrants: every side for itself.",
+    // blue's corner, bottom left; green's top left, red's top right, purple's bottom right (sides.ts)
+    hq: [5, 64],
+    players: 4,
+    seed: 89,
+    // painted in blue's quarter (bottom left); the Painter turns every stroke onto the other three.
+    // Each relay is copied four ways: the centre one is its own copy (one relay), and each bridge's
+    // sits between two neighbours (this one between blue and green, its copies round the compass)
+    uplinks: [[36, 36], [18, 34.5]],
+    dropSites: [[24.5, 50.5], [30.5, 40.5], [10.5, 41.5]], // mid-quarter, the gap to the centre, by the ford
+    lastStand: false,
+    bannedMutators: ["robotlove"],
+    banReason: "Robot Love needs exactly two sides",
+    starSecs: 900,
+    paint(p) {
+      // a frozen stream in from the west edge's midpoint (blue's and green's border): its copies
+      // run in from the other three edges, offset like a pinwheel, and stop short of the centre
+      const stream: Pt[] = [[-2, 33], [6, 34.5], [13, 33.6], [20, 34.6], [26, 34.4], [29.6, 35.6]];
+      p.stroke(stream, 3.4, Terrain.Water, 0.2);
+      p.stroke(stream, 6.2, Terrain.Rough, 0.35, [G]);
+      // the centre: an open plateau (the relay), slush round it, four rich crystals
+      p.blob(36, 36, 5.2, G, 0.15, [Terrain.Rough]);
+      p.blob(36, 36, 9.5, Terrain.Rough, 0.3, [G]);
+      p.blob(36, 36, 6.5, G, 0.12, [Terrain.Rough]);
+      p.rect(33, 38, 33, 38, Terrain.Crystal);
+      // crossings: a timber bridge mid-stream, a shallow ford out by the edge
+      p.stroke([[18, 30], [18, 39]], 2.2, Terrain.Bridge, 0, [Terrain.Water]);
+      p.stroke([[18, 30], [18, 39]], 2.2, Terrain.Road, 0, [G, Terrain.Rough, Terrain.Forest]);
+      p.stroke([[5, 30.5], [5, 38.5]], 3, Terrain.Shallows, 0.1, [Terrain.Water]);
+      // snowy pine woods and rock outcrops shaping the approaches
+      p.blob(21, 57, 2.6, Terrain.Forest, 0.45, OPEN);
+      p.blob(10, 49.5, 2.2, Terrain.Forest, 0.45, OPEN);
+      p.blob(30, 63, 2.3, Terrain.Forest, 0.45, OPEN);
+      p.blob(25.5, 41.5, 1.7, Terrain.Forest, 0.4, OPEN);
+      p.blob(2.5, 60, 2, Terrain.Forest, 0.45, OPEN);
+      p.blob(17, 45.5, 1.8, Terrain.Rock, 0.4, OPEN);
+      p.blob(28.5, 53.5, 1.7, Terrain.Rock, 0.35, OPEN);
+      p.blob(13.5, 68.5, 1.3, Terrain.Rock, 0.4, OPEN);
+      p.scatter(20, 44, 32, 52, 3, 1.3, Terrain.Rough, [G]);
+      // plowed roads from the HQ to the bridge and toward the centre
+      p.stroke([[8, 63], [12, 56], [16, 47], [18, 39]], 1.8, Terrain.Road, 0, OPEN);
+      p.stroke([[9, 65], [18, 57], [25, 49.5], [30.5, 42.5]], 1.8, Terrain.Road, 0, OPEN);
+      // resources: a home field, a second one out by the ford, contested crystals toward the centre
+      p.blob(14, 60, 2.1, Terrain.Scrap, 0.25);
+      p.blob(6, 45, 1.8, Terrain.Scrap, 0.25);
+      p.blob(24.5, 45.5, 1.4, Terrain.Crystal, 0.2);
+    }
+  },
+  {
     id: "archipelago",
     name: "Archipelago",
     biome: "tropical",
@@ -522,6 +592,9 @@ export interface MatchOptions {
 export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   const def = mapById(id);
   const w = createWorld(def.size, def.size);
+  // a four-player map seats four sides; Last Stand and an op on one play blue against red (its terrain is the same)
+  const four = def.players === 4 && !opts.survival && !opts.op;
+  if (four) w.sides = [...FACTIONS];
   w.mapId = def.id;
   w.biome = def.biome;
   w.seed = (opts.seed ?? def.seed) >>> 0;
@@ -531,11 +604,12 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
     for (let i = 0; i < g.length; i++) setTerrain(w, i % def.size, Math.floor(i / def.size), g[i] as Terrain);
   }
   else {
-    def.paint(new Painter(w, def.seed));
+    def.paint(new Painter(w, def.seed, def.players === 4));
     clearBase(w, def);
   }
   const [hx, hy] = def.hq;
   const hs = BUILDINGS.hq.size;
+  if (four) return setupFourCorners(w, def, opts);
   const rx = def.size - hx - hs;
   const ry = def.size - hy - hs;
   spawnBuilding(w, "hq", "blue", hx, hy);
@@ -592,6 +666,52 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
   return w;
 }
 
+/**
+ * A four-player map's start (createMapWorld): an HQ in each corner, blue's at
+ * `def.hq` and every other side's blue's turned (sides.ts), each with the
+ * classic harvester and Trooper Squad placed as blue's are, turned; then the
+ * mutators, openers and objectives as in a duel. Every per-side step runs in
+ * canonical side order (blue, red, green, purple), the order ids are handed out in.
+ * Skirmish only: Last Stand and the ops are 2-player.
+ */
+function setupFourCorners(w: World, def: MapDef, opts: MatchOptions): World {
+  const S = def.size;
+  const [hx, hy] = def.hq;
+  const hs = BUILDINGS.hq.size;
+  const turned = (f: Faction, x: number, y: number) => turnPoint(QUARTER[f], S, S, x, y);
+  for (const f of FACTIONS) {
+    const [tx, ty] = turnTile(QUARTER[f], S, S, hx, hy, hs);
+    spawnBuilding(w, "hq", f, tx, ty);
+  }
+  // the starting harvester just east of blue's HQ, and every side's in the same spot turned
+  for (const f of FACTIONS) {
+    const p = turned(f, hx + hs + 1.5, hy + 1.5);
+    spawnUnit(w, "harvester", f, p.x, p.y);
+  }
+  // the Trooper Squad on the HQ's other flank (snapped onto ground a squad can stand on, in the side's own frame)
+  const squads = FACTIONS.map((f) => {
+    const at = turned(f, hx - 1.5, hy + 1.5);
+    const p = dropPoint(w, f, at.x, at.y) ?? at;
+    return spawnUnit(w, "trooper", f, p.x, p.y);
+  });
+  const mutators = (opts.mutators ?? []).filter((m) => !mapBansMutator(def, m));
+  if (mutators.length) applyMutators(w, mutators);
+  applyMapRules(w, def);
+  if (rulesOf(w).nomads) nomadStart(w);
+  const armada = !!rulesOf(w).armada;
+  if (armada) armadaStart(w);
+  const starters = armada ? [] : squads;
+  for (const u of starters) applySpawnRank(w, u);
+  const extra = rulesOf(w).startUnits;
+  if (extra.length) for (const u of starters) spawnStartUnits(w, u.faction, extra, u);
+  for (const f of FACTIONS) {
+    const o = opts.openers?.[f];
+    if (o && !armada) applyOpener(w, f, o);
+  }
+  if (opts.objectives) setupObjectives(w, def.uplinks, def.dropSites);
+  return w;
+}
+
 /** The map's own match rules (skirmish): its start units, HQ trickle and free Condors. */
 function applyMapRules(w: World, def: MapDef): void {
   if (!def.startUnits?.length && def.hqTrickle === undefined && !def.lifeline && !def.islands) return;
@@ -615,10 +735,13 @@ export function clearBase(w: World, def: MapDef): void {
     for (let tx = 0; tx < w.width; tx++) {
       const d = hypot(tx + 0.5 - cx, ty + 0.5 - cy);
       if (d > 5.2) continue;
-      for (const [x, y] of [
-        [tx, ty],
-        [w.width - 1 - tx, w.height - 1 - ty]
-      ] as Pt[])
+      const copies: Pt[] = def.players === 4
+        ? [0, 1, 2, 3].map((q) => turnTile(q, w.width, w.height, tx, ty))
+        : [
+            [tx, ty],
+            [w.width - 1 - tx, w.height - 1 - ty]
+          ];
+      for (const [x, y] of copies)
         if (!keep.has(terrainAt(w, x, y))) setTerrain(w, x, y, Terrain.Ground);
     }
 }

@@ -20,6 +20,7 @@ import {
 // type-only: the AI module imports the sim, never the other way round at runtime
 import type { StrategyName } from "./ai/commander";
 import { atan2, hypot } from "./fmath";
+import { FACTIONS } from "./sides";
 
 /**
  * Quick-start openers. Instead of the classic "HQ + one harvester, now wait"
@@ -104,7 +105,7 @@ export function openerValue(id: OpenerId): number {
  * Ironclad either ground opener, seeded so a match replays identically.
  */
 export function pickAiOpener(strategy: StrategyName, seed: number, faction: Faction): OpenerId {
-  const roll = hash32(seed, saltOf("opener"), faction === "blue" ? 0 : 1);
+  const roll = hash32(seed, saltOf("opener"), FACTIONS.indexOf(faction));
   switch (strategy) {
     case "rush":
       return "blitz";
@@ -158,7 +159,7 @@ export function applyOpener(w: World, faction: Faction, id: OpenerId): AppliedOp
   const base = basePoint(w, faction);
   if (!base) return out;
   const fr = frame(w, faction);
-  const hqC = fr.pt(base);
+  const hqC = fr.toFrame(base);
   const field = nearestResourceInFrame(w, fr, hqC);
   const centre = { x: w.width / 2, y: w.height / 2 };
 
@@ -171,7 +172,7 @@ export function applyOpener(w: World, faction: Faction, id: OpenerId): AppliedOp
     const b = spawnBuilding(w, o.building, faction, tx, ty);
     if (outpost) b.outpost = true;
     out.buildingId = b.id;
-    front = fr.pt(buildingCenter(b));
+    front = fr.toFrame(buildingCenter(b));
   }
 
   // units wait on the enemy-facing side of their factory
@@ -211,7 +212,7 @@ export function applyOpener(w: World, faction: Faction, id: OpenerId): AppliedOp
  */
 export function spawnStartUnits(w: World, faction: Faction, kinds: readonly UnitKind[], near: Pt): number[] {
   const fr = frame(w, faction);
-  const at = fr.pt(near);
+  const at = fr.toFrame(near);
   const centre = { x: w.width / 2, y: w.height / 2 };
   const ids: number[] = [];
   for (const kind of kinds) {
@@ -227,7 +228,7 @@ export function predictOpenerSite(w: World, faction: Faction, kind: BuildingKind
   const base = basePoint(w, faction);
   if (!base) return null;
   const fr = frame(w, faction);
-  const hqC = fr.pt(base);
+  const hqC = fr.toFrame(base);
   const site = findSite(w, faction, fr, kind, hqC, nearestResourceInFrame(w, fr, hqC), { x: w.width / 2, y: w.height / 2 });
   if (!site) return null;
   const [tx, ty] = fr.tile(site.fx, site.fy, BUILDINGS[kind].size);
@@ -246,7 +247,7 @@ function basePoint(w: World, faction: Faction): { x: number; y: number } | null 
 
 type Pt = { x: number; y: number };
 
-/** Coordinates as seen from one side: identity for blue, a 180° turn for red (world.ts). */
+/** Coordinates as seen from one side: identity for blue, a 180° turn for red, a quarter turn for green and purple (world.ts). */
 type Frame = SideFrame;
 const frame = sideFrame;
 
@@ -368,7 +369,7 @@ function freeSpot(w: World, fr: Frame, kind: UnitKind, target: Pt, around: Pt): 
     if (!inBounds(w, tx, ty)) continue;
     // aircraft can hover anywhere but still don't park on rooftops
     if (mc === "air" ? w.occupancy[ty * w.width + tx] !== 0 : !passable(w, tx, ty, mc)) continue;
-    const wp = fr.pt(p);
+    const wp = fr.toWorld(p);
     let clear = true;
     for (const u of w.units.values())
       if ((UNITS[u.kind].domain === "air") === (mc === "air") && hypot(u.x - wp.x, u.y - wp.y) < 0.9) {
@@ -381,8 +382,8 @@ function freeSpot(w: World, fr: Frame, kind: UnitKind, target: Pt, around: Pt): 
 }
 
 function spawnFacing(w: World, faction: Faction, kind: UnitKind, fr: Frame, p: Pt, look: Pt) {
-  const wp = fr.pt(p);
-  const wl = fr.pt(look);
+  const wp = fr.toWorld(p);
+  const wl = fr.toWorld(look);
   const u = spawnUnit(w, kind, faction, wp.x, wp.y);
   applySpawnRank(w, u); // the Veterans mutator ranks opener armies too
   u.facing = u.aim = atan2(wl.x - wp.x, -(wl.y - wp.y));

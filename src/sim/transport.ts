@@ -174,11 +174,11 @@ function nearestClear(ok: StandOk, p: { x: number; y: number }, span: number, ma
 export function dropPoint(w: World, faction: Faction, x: number, y: number): { x: number; y: number } | null {
   const fr = sideFrame(w, faction);
   const ok = standOk(w, fr);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   if (isClear(ok, p.x, p.y)) return { x, y };
   const R = INFANTRY.dropSearch;
   const at = nearestClear(ok, p, Math.ceil(R), R) ?? nearestClear(ok, p, Math.max(w.width, w.height), Infinity);
-  return at ? fr.pt(at) : null;
+  return at ? fr.toWorld(at) : null;
 }
 
 /** Ring steps (eighths of a turn) a passenger tries from its own spot, alternating either way… */
@@ -198,7 +198,7 @@ function seatSpots(w: World, faction: Faction, x: number, y: number, ps: readonl
   if (ps.length <= 1) return ps.map(() => ({ x, y }));
   const fr = sideFrame(w, faction);
   const ok = standOk(w, fr);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   const out: { x: number; y: number }[] = [];
   ps.forEach((u, i) => {
     const a0 = (i / ps.length) * Math.PI * 2 + 0.4;
@@ -216,7 +216,7 @@ function seatSpots(w: World, faction: Faction, x: number, y: number, ps: readonl
     }
     out.push(s ?? p);
   });
-  return out.map((q) => fr.pt(q));
+  return out.map((q) => fr.toWorld(q));
 }
 
 /** Put a Condor's passengers back on the field around (x, y); returns their ids. */
@@ -247,7 +247,7 @@ function disembarkAll(w: World, c: Unit, x: number, y: number, bailout: boolean)
 /** Is the Condor over ground its passengers could bail out onto? (Not Water, Rock or a building; the tile under it in its side's frame.) */
 export function canBailOut(w: World, c: Unit): boolean {
   const fr = sideFrame(w, c.faction);
-  const p = fr.pt(c);
+  const p = fr.toFrame(c);
   return standOk(w, fr)(Math.floor(p.x), Math.floor(p.y));
 }
 
@@ -259,8 +259,8 @@ export function canBailOut(w: World, c: Unit): boolean {
 export function bailOut(w: World, c: Unit): number[] {
   // (where it fell, nudged clear of the water's edge: in the side's frame, like a drop)
   const fr = sideFrame(w, c.faction);
-  const at = nearestClear(standOk(w, fr), fr.pt(c), 1, 1.5);
-  const p = at ? fr.pt(at) : { x: c.x, y: c.y };
+  const at = nearestClear(standOk(w, fr), fr.toFrame(c), 1, 1.5);
+  const p = at ? fr.toWorld(at) : { x: c.x, y: c.y };
   return disembarkAll(w, c, p.x, p.y, true);
 }
 

@@ -1,5 +1,6 @@
 import type { Announcement } from "./announce";
 import type { Faction } from "../sim/types";
+import { SIDE_NAME } from "./side-style";
 import type { Fx } from "./render/fx";
 import { Ease } from "./three/tween";
 import type { View } from "./three/view";
@@ -194,8 +195,18 @@ export function finaleBanner(o: {
   spectator: boolean;
   x: number;
   y: number;
+  /** A free-for-all: the last side knocked out (whose fall decided it). */
+  lastOut?: Faction | null;
 }): Announcement {
   const { x, y } = o;
+  if (o.lastOut && o.winner !== "draw") {
+    // a free-for-all's end: the last rival standing falls
+    const loser = SIDE_NAME[o.lastOut];
+    const won = SIDE_NAME[o.winner];
+    if (o.spectator) return { key: "hq-destroyed", text: `${loser} knocked out`, sub: `${won} wins`, tone: "epic", priority: 0, x, y };
+    if (o.winner === o.player) return { key: "victory", text: "Last rival knocked out", sub: "Victory", tone: "epic", priority: 0, x, y };
+    return { key: "defeat", text: o.lastOut === o.player ? "We're out" : `${won} takes the field`, sub: o.lastOut === o.player ? "Defeat" : `${won} wins`, tone: "bad", priority: 0, x, y };
+  }
   if (o.cause === "resign") {
     if (o.winner === "draw") return { key: "draw", text: "Both resigned", sub: "Draw", tone: "info", priority: 0, x, y };
     if (o.spectator) {

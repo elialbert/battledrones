@@ -44,8 +44,14 @@ interface Team {
 
 export const TEAMS: Record<Faction, Team> = {
   blue: { main: 0x2a6cf2, dark: 0x1a3f94, light: 0x7aacff },
-  red: { main: 0xe0322e, dark: 0x8c1c16, light: 0xff7a62 }
+  red: { main: 0xe0322e, dark: 0x8c1c16, light: 0xff7a62 },
+  // (a four-player map's other two: emerald and violet, clear of the amber lights and the gold of neutral Uplinks)
+  green: { main: 0x1fae4c, dark: 0x0f5c28, light: 0x6fe08f },
+  purple: { main: 0x8a42f0, dark: 0x4a1f94, light: 0xbb8cff }
 };
+
+/** Whose paint a team palette is. */
+const teamFaction = (t: Team): Faction => (Object.keys(TEAMS) as Faction[]).find((f) => TEAMS[f] === t) ?? "blue";
 
 /** A spinning part: geometry pivoting at its own origin, placed at `at`, spinning about `axis`. */
 export interface Rotor {
@@ -533,7 +539,7 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
 
   // the map draws the Goliath as a posed rig (goliath.ts); this is it standing at rest, every part baked into one
   goliath: (t) => ({
-    hull: goliathStatic(t === TEAMS.red ? "red" : "blue"),
+    hull: goliathStatic(teamFaction(t)),
     mount: [0, 0, 0], muzzle: [0, 2.1, -0.5], rotors: [], height: GOLIATH_RIG.height
   }),
 
@@ -645,7 +651,7 @@ const UNIT_MODELS: Record<UnitKind, UnitBuilder> = {
 export const CONDOR_BAY = { floor: -0.1, bench: -0.064, wall: 0.0, benchX: 0.136, w: 0.34, z0: -0.31, z1: 0.17, ramp: 0.34, rampW: 0.27 };
 
 function squadModel(kind: BotKind, t: Team): ModelDef {
-  const f: Faction = t === TEAMS.red ? "red" : "blue";
+  const f: Faction = teamFaction(t);
   const h = botHeight(kind);
   return { hull: squadStatic(kind, f), mount: [0, 0, 0], muzzle: [0, h * 0.75, -0.3], rotors: [], height: h };
 }
@@ -861,7 +867,7 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
   "assembly-bay": (t) => {
     // a robot works: an open assembly floor under a team gantry, a half-built robot on its cradle
     // (welding arms at it), finished robots charging in lit alcoves along the parts hall behind
-    const f: Faction = t === TEAMS.red ? "red" : "blue";
+    const f: Faction = teamFaction(t);
     const b = siteB();
     b.block(1.92, 0.12, 1.92, [0, 0.06, 0], GM_D, { taper: 0.03, bevel: 0.03 });
     b.box(1.7, 0.02, 1.0, [0, 0.125, 0.3], 0x3a3e44);
@@ -936,7 +942,7 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
     // where a Goliath is built: a 3×3 assembly pad, open front and back (it walks out toward the back of
     // its base), a cradle in the middle between two lattice scaffold towers whose welding arms reach in
     // over it, a luffing crane on the east tower, floor lights down the cradle, armour plates racked on the apron
-    const f: Faction = t === TEAMS.red ? "red" : "blue";
+    const f: Faction = teamFaction(t);
     const b = siteB();
     b.block(2.9, 0.14, 2.9, [0, 0.07, 0], GM_D, { taper: 0.02, bevel: 0.04 });
     b.box(2.3, 0.02, 2.82, [0, 0.145, 0], 0x3a3e44);
@@ -1024,7 +1030,8 @@ const BUILDING_MODELS: Record<BuildingKind, (t: Team) => ModelDef> = {
     const s = unitScale("goliath");
     const m = new THREE.Matrix4().compose(
       new THREE.Vector3(),
-      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, f === "red" ? 0 : Math.PI, 0)),
+      // (toward the back of its side's base: blue's south, red's north, green's west, purple's east)
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, f === "red" ? 0 : f === "green" ? Math.PI / 2 : f === "purple" ? -Math.PI / 2 : Math.PI, 0)),
       new THREE.Vector3(s, s, s)
     );
     const parts: NonNullable<ModelDef["parts"]> = {

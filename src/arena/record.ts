@@ -91,7 +91,8 @@ export interface BattleRecord {
   survival?: SurvivalOptions;
   /** An op played in the game: its id (ops.ts). */
   op?: string;
-  seats: Record<Faction, SeatInfo>;
+  /** Who played each side: blue and red always; green and purple too on a four-player map (sim/sides.ts). */
+  seats: Record<"blue" | "red", SeatInfo> & Partial<Record<Faction, SeatInfo>>;
   /** Coordinates in `log` are each side's own frame; `turns` and `radio` ticks are true. */
   frames: "own";
   /** Non-empty turns only: [tick, side, commands in true map coordinates]. */

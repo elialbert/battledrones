@@ -81,7 +81,7 @@ describe("composeTick", () => {
     "plays a match the same from either seat",
     () => {
       const s = SETUPS[0]!;
-      const strategy: Record<Faction, StrategyName> = { blue: "rush", red: "boom" };
+      const strategy: Record<"blue" | "red", StrategyName> = { blue: "rush", red: "boom" };
       const trails = SIDES.map((local) => {
         setLocalSide(local);
         const w = setupWorld(s);
@@ -90,8 +90,8 @@ describe("composeTick", () => {
         // (3 minutes: stepping our own commands first splits the two trails at about 80 s here)
         for (let t = 0; t < 1800 && !w.winner; t++) {
           // (the commanders think in a fixed order: only who counts as "mine" changes)
-          const cmds = { blue: tickAi(w, "blue", ai.blue), red: tickAi(w, "red", ai.red) };
-          step(w, composeTick(PLAYER, cmds[PLAYER], cmds[ENEMY]));
+          const cmds: Partial<Record<Faction, Command[]>> = { blue: tickAi(w, "blue", ai.blue), red: tickAi(w, "red", ai.red) };
+          step(w, composeTick(PLAYER, cmds[PLAYER]!, cmds[ENEMY]!));
           trail.push(worldHash(w));
         }
         return trail;

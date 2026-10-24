@@ -10,6 +10,7 @@
 import { tickFog } from "../sim/fog";
 import { applyOpener, type AppliedOpener, type OpenerId } from "../sim/openers";
 import type { Command, Faction, World } from "../sim/types";
+import { sidesOf } from "../sim/sides";
 
 /** A tick's commands as the sim takes them: blue's, then red's, each side's in the order given. */
 export function composeTick(local: Faction, mine: readonly Command[], theirs: readonly Command[]): Command[] {
@@ -24,7 +25,8 @@ export function composeTick(local: Faction, mine: readonly Command[], theirs: re
  */
 export function applyOpenersCanonical(w: World, picks: Partial<Record<Faction, OpenerId>>): Partial<Record<Faction, AppliedOpener>> {
   const applied: Partial<Record<Faction, AppliedOpener>> = {};
-  for (const f of ["blue", "red"] as const) {
+  // (canonical side order: a four-player map's green and purple after blue and red)
+  for (const f of sidesOf(w)) {
     const id = picks[f];
     if (id) applied[f] = applyOpener(w, f, id);
   }

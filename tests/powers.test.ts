@@ -9,6 +9,7 @@ import { calldownBlocker, isStunned, powerStatus, telegraphTicks } from "../src/
 import { step } from "../src/sim/sim";
 import { Terrain, type Command, type Faction, type FxEvent, type PowerKind, type World } from "../src/sim/types";
 import { createWorld, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { perSide } from "../src/sim/sides";
 
 /** A small open field with both HQs, fog computed, meters full. */
 function arena(size = 40): World {
@@ -355,7 +356,7 @@ describe("AI and calldowns", () => {
   });
 
   it("uses calldowns in a full AI-vs-AI match, legally, and Easy never shells", () => {
-    const fired: Record<Faction, Record<string, number>> = { blue: {}, red: {} };
+    const fired: Record<Faction, Record<string, number>> = perSide(() => ({}));
     // (a match long enough for both sides to need them: with seed 1001 the Easy Rush wins by 5:30 without one)
     const seed = 1002;
     const w = createMapWorld("riverlands", {

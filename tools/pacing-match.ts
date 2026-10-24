@@ -6,8 +6,9 @@ import { createMapWorld } from "../src/sim/maps";
 import { pickAiOpener } from "../src/sim/openers";
 import { rulesOf } from "../src/sim/rules";
 import { step } from "../src/sim/sim";
-import type { Faction, FxEvent, UnitKind } from "../src/sim/types";
+import type { Faction, FxEvent, PerSide, UnitKind } from "../src/sim/types";
 import { buildingCenter, hqOf } from "../src/sim/world";
+import { perSide } from "../src/sim/sides";
 
 const COMBAT = new Set<UnitKind>([
   "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "wasp", "raptor", "hornet", "mender", "trooper", "rocket-squad", "sniper"
@@ -19,7 +20,7 @@ export interface Match {
   blue: StrategyName;
   red: StrategyName;
   seed: number;
-  openers: Record<Faction, string>;
+  openers: PerSide<string>;
   winner: Faction | "draw";
   min: number;
   firstCombatDeath: number | null;
@@ -101,13 +102,14 @@ export function playMatch(map: string, blue: StrategyName, red: StrategyName, se
   const m: Match = {
     map, blue, red, seed, openers, winner: "draw", min: 0, firstCombatDeath: null,
     bins: new Array(10).fill(0), combatBins: new Array(10).fill(0), leadAt: {}, leadChanges: 0,
-    wasBehind: { blue: false, red: false }, series: [], fights: [], calldowns: { blue: {}, red: {} },
-    uplinkFlips: 0, uplinkLost: 0, cratesLanded: 0, cratesClaimed: 0, harvest4: { blue: 0, red: 0 },
-    built: { blue: { infantry: 0, condor: 0, air: 0, vehicles: 0 }, red: { infantry: 0, condor: 0, air: 0, vehicles: 0 } },
+    // (a duel's two sides: perSide fills in the four-player map's other two, never used here)
+    wasBehind: perSide(() => false), series: [], fights: [], calldowns: perSide(() => ({})),
+    uplinkFlips: 0, uplinkLost: 0, cratesLanded: 0, cratesClaimed: 0, harvest4: perSide(() => 0),
+    built: perSide(() => ({ infantry: 0, condor: 0, air: 0, vehicles: 0 })),
     unloads: { relay: 0, elsewhere: 0, bailout: 0 },
-    islandCaptures: { blue: 0, red: 0 }, islandRetakes: { blue: 0, red: 0 }, firstIsland: { blue: null, red: null },
-    crewedSecs: { blue: 0, red: 0 }, unitDeaths: 0, relayDeaths: 0, condorsLost: { blue: 0, red: 0 },
-    income: { blue: { harvested: 0, uplinks: 0 }, red: { harvested: 0, uplinks: 0 } }
+    islandCaptures: perSide(() => 0), islandRetakes: perSide(() => 0), firstIsland: perSide(() => null),
+    crewedSecs: perSide(() => 0), unitDeaths: 0, relayDeaths: 0, condorsLost: perSide(() => 0),
+    income: perSide(() => ({ harvested: 0, uplinks: 0 }))
   };
   const uplinks = w.objectives.uplinks;
   const R = OBJECTIVES.uplink.radius;
