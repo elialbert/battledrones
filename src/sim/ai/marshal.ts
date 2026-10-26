@@ -44,6 +44,7 @@ import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
+import { capApm } from "./apm";
 
 export interface MarshalOptions {
   /** Seconds between the commander's planning passes. */
@@ -233,6 +234,16 @@ export const MARSHAL: Record<
     fight: { breakOff: 0.5, retreatHold: 20, finish: 1.5, switch: 2 }
   }
 };
+
+/**
+ * Marshal at `difficulty` playing `plan` (with an op's `tweak` on top), under
+ * its difficulty's APM cap: the bot every seat in the game gets (game/meta.ts,
+ * ffa/match.ts). Deterministic from `seed`.
+ */
+export function seatMarshal(side: Faction, seed: number, difficulty: Difficulty, plan: PlanName, tweak?: Partial<Strategy>): Bot {
+  const m = MARSHAL[difficulty];
+  return capApm(marshal(side, seed, difficulty, { ...m, strategy: plan, tweak: { ...m.tweak, ...tweak } }), m.apm, m.burst);
+}
 
 /** Orders by rank: the cap spends from the top. */
 const enum Rank {

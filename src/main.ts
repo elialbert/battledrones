@@ -1,4 +1,3 @@
-import { BOTS, BOT_IDS, OPPONENT_IDS } from "./sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "./sim/ai/commander";
 import { MARSHAL_PLANS, type PlanName } from "./sim/ai/marshal";
 import { MAPS, isKnownMapId, mapById } from "./sim/maps";
@@ -9,6 +8,8 @@ import { music } from "./game/music";
 import { loadTerrainArt, mapThumbUrl } from "./game/assets";
 import { GameScene, type MatchFeed } from "./game/GameScene";
 import { setLocalSide } from "./game/controller";
+import { SIDE_NAME } from "./game/side-style";
+import { FACTIONS } from "./sim/sides";
 import { activeMutators, duelSetup, gameMode, loadSettings, saveSettings, unchartedMatch, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
 import { HELP_HTML } from "./ui/hud";
@@ -27,7 +28,7 @@ import type * as DuelLobby from "./versus/lobby";
 import type { VersusFeed } from "./versus/feed";
 import type * as FfaLobby from "./ffa/lobby";
 import type { FfaFeed } from "./ffa/feed";
-import { aiStrategy } from "./game/meta";
+import { marshalPlanFor } from "./game/meta";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -112,15 +113,9 @@ const DUEL_UPDATE = "A new version is ready: reload this phone (and your friend'
 /** Marshal's plans, for Watch AI vs AI's plan picker. */
 const PLAN_NAMES = Object.keys(MARSHAL_PLANS) as PlanName[];
 
-/** A bot picker's options: 🎲 Random AI, then `ids` under their groups (every bot for Watch AI vs AI, the Opponent picker's own). */
-function watchOptions(ids: string[] = BOT_IDS): string {
-  const opt = (id: string) => `<option value="${id}" title="${BOTS[id]!.about}">${BOTS[id]!.label}</option>`;
-  const groups = [...new Set(ids.map((id) => BOTS[id]!.group))];
-  return (
-    '<option value="random">🎲 Random AI</option>' +
-    groups.map((g) => `<optgroup label="${g}">${ids.filter((id) => BOTS[id]!.group === g).map(opt).join("")}</optgroup>`).join("")
-  );
-}
+/** A Marshal plan picker's options: 🎲 any plan, then every plan (the only AI the menu seats: game/meta.ts). */
+const planOptions = (): string =>
+  '<option value="random">🎲 Any plan</option>' + PLAN_NAMES.map((n) => `<option value="${n}">${MARSHAL_PLANS[n].label}</option>`).join("");
 
 /**
  * sessionStorage: what the next boot skips into (the end screen's Rematch: "1", "spectate", "daily", "op:<id>",
@@ -371,7 +366,7 @@ function showMenu(linkedMap?: string | null): void {
       <div class="seg" id="diff">
         ${diffs.map((d) => `<button data-d="${d}">${DIFFICULTY[d].label}</button>`).join("")}
       </div>
-      <label class="watchpick opppick" id="opprow"><span class="opplabel">Opponent</span><select id="opponent" aria-label="Opponent">${watchOptions(OPPONENT_IDS)}</select></label>
+      <label class="watchpick opppick" id="opprow"><span class="opplabel">Marshal</span><select id="opponent" aria-label="Opponent's plan">${planOptions()}</select></label>
       <p class="opphint" id="opphint" hidden></p>
       <button class="mutbtn main"></button>
       <button class="cta big" id="play">▶ Play</button>
@@ -385,12 +380,10 @@ function showMenu(linkedMap?: string | null): void {
         <button class="cta alt" id="howto">? How to play</button>
       </div>
       <div class="row watchrow" id="watchrow">
-        ${(["blue", "red"] as const)
-          .map((side) => {
-            const name = side === "blue" ? "Blue" : "Red";
-            return `<div class="watchpick ${side}"><select id="watch-${side}" aria-label="${name} AI to watch">${watchOptions()}</select><div class="watchopts" id="watchopts-${side}" hidden><select id="watch-${side}-diff" aria-label="${name} Marshal's difficulty">${diffs.map((d) => `<option value="${d}">${DIFFICULTY[d].label}</option>`).join("")}</select><select id="watch-${side}-plan" aria-label="${name} Marshal's plan"><option value="random">🎲 Any plan</option>${PLAN_NAMES.map((n) => `<option value="${n}">${MARSHAL_PLANS[n].label}</option>`).join("")}</select></div></div>`;
-          })
-          .join('<span class="watchvs">vs</span>')}
+        ${FACTIONS.map((side) => {
+            const name = SIDE_NAME[side];
+            return `<div class="watchpick ${side}"><select id="watch-${side}-plan" aria-label="${name} Marshal's plan">${planOptions()}</select><div class="watchopts"><select id="watch-${side}-diff" aria-label="${name} Marshal's difficulty">${diffs.map((d) => `<option value="${d}">${DIFFICULTY[d].label}</option>`).join("")}</select></div></div>`;
+          }).join('<span class="watchvs">vs</span>')}
       </div>
       <div class="help" id="helpbox" hidden>${HELP_HTML}</div>
       <p class="credits">Art generated with OpenAI gpt-image-2.5 · sound synthesised live</p>
@@ -530,13 +523,12 @@ function showMenu(linkedMap?: string | null): void {
     ops.sync();
     menu.querySelector<HTMLElement>("#play-spectate")!.hidden = opsMode;
     menu.querySelector<HTMLElement>("#watchrow")!.hidden = gameMode.mode !== "skirmish";
-    // a picked opponent plays fair and banks no career stars; one with no difficulties ignores the difficulty
-    const foe = gameMode.opponent === "random" ? null : BOTS[gameMode.opponent];
+    // a picked plan banks no career stars (🎲 any plan is the ladder)
+    const plan = gameMode.opponent === "random" ? null : MARSHAL_PLANS[gameMode.opponent];
     menu.querySelector<HTMLElement>("#opprow")!.hidden = gameMode.mode !== "skirmish";
     const hint = menu.querySelector<HTMLElement>("#opphint")!;
-    hint.hidden = gameMode.mode !== "skirmish" || !foe;
-    hint.textContent = foe ? `${foe.label}: plays fair · no career stars${foe.difficulties ? "" : " · one speed, whatever the difficulty"}` : "";
-    menu.querySelector<HTMLElement>("#diff")!.classList.toggle("na", gameMode.mode === "skirmish" && !!foe && !foe.difficulties);
+    hint.hidden = gameMode.mode !== "skirmish" || !plan;
+    hint.textContent = plan ? `Marshal always plays ${plan.label} · no career stars` : "";
     duelRow.hidden = gameMode.mode !== "skirmish";
     menu.classList.toggle("ops-mode", opsMode);
     // Last Stand isn't offered on every map (the island map): show the first that is, without
@@ -579,6 +571,9 @@ function showMenu(linkedMap?: string | null): void {
     menu.querySelector("#blurb")!.textContent = blind ? "An unknown battlefield. Scout it to learn its shape." : m.blurb;
     menu.querySelector<HTMLElement>("#rndpanel")!.hidden = opsMode || !isRandomMapId(shown);
     const four = m.players === 4;
+    // a four-player map: a bot for each of its four sides
+    menu.querySelector<HTMLElement>("#watchrow")!.classList.toggle("four", four);
+    for (const side of ["green", "purple"] as const) menu.querySelector<HTMLElement>(`.watchpick.${side}`)!.hidden = !four;
     menu.querySelector("#sub")!.textContent = opsMode
       ? "Short missions with a twist. Three stars each — can you take them all?"
       : survival
@@ -735,30 +730,21 @@ function showMenu(linkedMap?: string | null): void {
     if (!ops.locked(op)) ops.openBrief(op);
   });
   menu.querySelector("#play-spectate")!.addEventListener("click", () => begin(true));
-  // who you play (saved): 🎲 Marshal at the difficulty, drawing a plan (meta.ts difficultyBot), or any bot
+  // who you play (saved): Marshal at the difficulty, drawing a plan (🎲, meta.ts difficultyBot) or playing the one picked
   const oppPick = menu.querySelector<HTMLSelectElement>("#opponent")!;
   oppPick.value = gameMode.opponent;
   oppPick.addEventListener("change", () => {
-    gameMode.opponent = oppPick.value;
+    gameMode.opponent = oppPick.value as PlanName | "random";
     saveSettings();
     sync();
   });
-  // who plays Watch AI vs AI (saved): a bot per side, or 🎲 a random commander as ever; Marshal also takes a difficulty and a plan
-  for (const side of ["blue", "red"] as const) {
-    const pick = menu.querySelector<HTMLSelectElement>(`#watch-${side}`)!;
-    const opts = menu.querySelector<HTMLElement>(`#watchopts-${side}`)!;
+  // who plays Watch AI vs AI (saved): Marshal on every side, each at its own difficulty and plan
+  for (const side of FACTIONS) {
     const diff = menu.querySelector<HTMLSelectElement>(`#watch-${side}-diff`)!;
     const plan = menu.querySelector<HTMLSelectElement>(`#watch-${side}-plan`)!;
     const m = gameMode.watchMarshal[side];
-    pick.value = gameMode.watch[side];
     diff.value = m.difficulty;
     plan.value = m.plan;
-    opts.hidden = pick.value !== "marshal";
-    pick.addEventListener("change", () => {
-      gameMode.watch[side] = pick.value;
-      opts.hidden = pick.value !== "marshal";
-      saveSettings();
-    });
     diff.addEventListener("change", () => {
       m.difficulty = diff.value as Difficulty;
       saveSettings();
@@ -869,7 +855,8 @@ function showMenu(linkedMap?: string | null): void {
           map: plan?.map ?? shownMap(),
           mutators: plan?.mutators ?? activeMutators(),
           difficulty: plan?.difficulty ?? gameMode.difficulty,
-          strategy: () => aiStrategy(plan?.difficulty ?? gameMode.difficulty),
+          // (the menu's Marshal plan, or 🎲 one the rules allow for each seat)
+          plan: (d) => marshalPlanFor(d, gameMode.opponent, (Math.random() * 1e9) | 0),
           ...(plan ? { code: plan.code } : {}),
           start: startFfa,
           onClose: ffaClosed

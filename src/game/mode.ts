@@ -1,10 +1,10 @@
-import { isBotId, isOpponentId } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import { MARSHAL_PLANS, type PlanName } from "../sim/ai/marshal";
 import { isKnownMapId, mapBansMutator, mapById, type MatchOptions } from "../sim/maps";
 import { isRandomMapId } from "../sim/mapgen";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import { opById, type OpDef } from "../sim/ops";
+import { FACTIONS, perSide } from "../sim/sides";
 import type { Faction } from "../sim/types";
 import { setLocalSide } from "./controller";
 import type { DailyOp } from "./daily";
@@ -12,19 +12,17 @@ import type { DailyOp } from "./daily";
 /** Skirmish (vs an AI commander), Last Stand (survive endless waves) or the Ops campaign. */
 export type GameType = "skirmish" | "survival" | "ops";
 
+/** A Marshal plan a menu or saved setting may name: "random", or one of MARSHAL_PLANS. */
+export const isPlanPick = (s: unknown): s is PlanName | "random" => typeof s === "string" && (s === "random" || Object.hasOwn(MARSHAL_PLANS, s));
+
 /** Match settings, chosen on the menu before the game boots. */
 export const gameMode = {
   /** AI vs AI: both factions computer-controlled, player just watches. */
   spectator: false,
-  /** Watch AI vs AI's bot for each side (saved): a sim/ai/bots.ts id, or "random" (a commander personality). */
-  watch: { blue: "random", red: "random" } as Record<Faction, string>,
-  /** Watch AI vs AI's Marshal for each side (saved): its difficulty, and its plan or "random" (one from the difficulty's pool). */
-  watchMarshal: {
-    blue: { difficulty: "normal", plan: "random" },
-    red: { difficulty: "normal", plan: "random" }
-  } as Record<Faction, { difficulty: Difficulty; plan: PlanName | "random" }>,
-  /** The skirmish opponent (saved): a sim/ai/bots.ts id, or "random" (Marshal at the difficulty, drawing a plan: meta.ts difficultyBot). */
-  opponent: "random",
+  /** Watch AI vs AI's Marshal for each side (saved; green and purple play only on a four-player map): its difficulty, and its plan or "random" (one from the difficulty's pool). */
+  watchMarshal: perSide(() => ({ difficulty: "normal", plan: "random" })) as Record<Faction, { difficulty: Difficulty; plan: PlanName | "random" }>,
+  /** The skirmish opponent's plan (saved): Marshal at the difficulty playing it, or "random" (drawing one, for career stars: meta.ts difficultyBot). */
+  opponent: "random" as PlanName | "random",
   mapId: "riverlands",
   difficulty: "normal" as Difficulty,
   mode: "skirmish" as GameType,
@@ -128,14 +126,12 @@ export function loadSettings(): void {
     if (typeof s.opId === "string" && opById(s.opId)) gameMode.opId = s.opId;
     if (Array.isArray(s.mutators)) gameMode.mutators = s.mutators.filter(isMutatorId);
     gameMode.uncharted = s.uncharted === true;
-    // (a bot the Opponent picker no longer lists, like the stock commanders: back to 🎲)
-    if (typeof s.opponent === "string" && isOpponentId(s.opponent)) gameMode.opponent = s.opponent;
-    for (const side of ["blue", "red"] as const) {
-      const pick = s.watch?.[side];
-      if (typeof pick === "string" && (pick === "random" || isBotId(pick))) gameMode.watch[side] = pick;
+    // (anything that isn't a Marshal plan, like an older build's bot id: back to 🎲)
+    if (isPlanPick(s.opponent)) gameMode.opponent = s.opponent;
+    for (const side of FACTIONS) {
       const m = s.watchMarshal?.[side];
       if (typeof m?.difficulty === "string" && Object.hasOwn(DIFFICULTY, m.difficulty)) gameMode.watchMarshal[side].difficulty = m.difficulty;
-      if (typeof m?.plan === "string" && (m.plan === "random" || Object.hasOwn(MARSHAL_PLANS, m.plan))) gameMode.watchMarshal[side].plan = m.plan;
+      if (isPlanPick(m?.plan)) gameMode.watchMarshal[side].plan = m.plan;
     }
   } catch {
     /* storage unavailable — defaults are fine */
@@ -145,7 +141,7 @@ export function loadSettings(): void {
 export function saveSettings(): void {
   if (gameMode.daily || gameMode.op) return; // the Daily Op's / an op's map and difficulty are not the player's picks
   try {
-    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted, watch: gameMode.watch, watchMarshal: gameMode.watchMarshal, opponent: gameMode.opponent }));
+    localStorage.setItem(KEY, JSON.stringify({ mapId: gameMode.mapId, difficulty: gameMode.difficulty, mode: gameMode.mode, mutators: gameMode.mutators, opId: gameMode.opId, uncharted: gameMode.uncharted, watchMarshal: gameMode.watchMarshal, opponent: gameMode.opponent }));
   } catch {
     /* ignore */
   }

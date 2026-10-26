@@ -13,9 +13,10 @@
  * on and they catch up by playing faster. Engine-free: the sockets and the
  * clock come in through options (tests drive it with fakes).
  */
-import { pickAiOpener, allowedOpener, OPENER_IDS, type OpenerId } from "../sim/openers";
+import { allowedOpener, OPENER_IDS, type OpenerId } from "../sim/openers";
+import { seatMarshal, type PlanName } from "../sim/ai/marshal";
 import { setupWorld } from "../sim/setup";
-import type { Difficulty, StrategyName } from "../sim/ai/commander";
+import type { Difficulty } from "../sim/ai/commander";
 import type { MutatorId } from "../sim/rules";
 import type { Command, Faction } from "../sim/types";
 import { RelaySocket, type NetTimers, type SocketLike } from "../net/relay-socket";
@@ -51,10 +52,10 @@ export interface HostOptions {
   build: string;
   map: string;
   mutators: MutatorId[];
-  /** The commanders' difficulty (open seats, stand-ins). */
+  /** Marshal's difficulty in the open seats. */
   difficulty: Difficulty;
-  /** Commanders' personalities to pick from for the open seats (the menu's rules decide which fit). */
-  strategy: () => StrategyName;
+  /** Marshal's plan for an open seat at `difficulty` (the menu's rules decide which fit). */
+  plan: (difficulty: Difficulty) => PlanName;
   random: () => number;
   /** The relay (default the deployed one) and the pieces (tests). */
   url?: string;
@@ -185,19 +186,19 @@ export class FfaHost {
     const bare = setupWorld({ map: o.map, seed: 0, mutators: o.mutators, openers: {} });
     const seats: SeatPlan[] = [{ side: SEAT_SIDE[0]!, kind: "human", name: this.name }];
     for (const f of this.seats)
-      seats.push(f.joined && !f.left ? { side: f.side, kind: "human", name: f.name } : { side: f.side, kind: "ai", strategy: o.strategy(), difficulty: o.difficulty, seed: rnd() });
+      seats.push(f.joined && !f.left ? { side: f.side, kind: "human", name: f.name } : { side: f.side, kind: "ai", plan: o.plan(o.difficulty), difficulty: o.difficulty, seed: rnd() });
     const seed = rnd();
     const openers: Partial<Record<Faction, OpenerId>> = {};
     seats.forEach((p, i) => {
-      const want = p.kind === "ai" ? pickAiOpener(p.strategy, seed, p.side) : i === 0 ? this.pick : this.seats[i - 1]!.pick ?? OPENER_IDS[0]!;
+      const want = p.kind === "ai" ? seatMarshal(p.side, p.seed, p.difficulty, p.plan).opener! : i === 0 ? this.pick : this.seats[i - 1]!.pick ?? OPENER_IDS[0]!;
       const ok = allowedOpener(bare, p.side, want);
       if (ok) openers[p.side] = ok;
     });
     const setup: FfaSetup = {
       id: `${this.code}-${rnd().toString(36)}`,
       map: o.map, seed, mutators: o.mutators.slice(), openers, seats,
-      // (a stand-in plays for a person: Normal, with no income handicap either way)
-      standIn: { strategy: o.strategy(), difficulty: "normal", seed: rnd() }
+      // (a stand-in plays for a person: Normal)
+      standIn: { plan: o.plan("normal"), difficulty: "normal", seed: rnd() }
     };
     this.match = new FfaMatch(setup);
     this.phase = "playing";

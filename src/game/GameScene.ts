@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/commander";
+import { DIFFICULTY } from "../sim/ai/commander";
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
 import { canPlaceBuilding, nearestReachableResource } from "../sim/economy";
 import { isExplored, isVisible, tickFog } from "../sim/fog";
 import { unitSeenBy } from "../sim/infantry";
 import { createMapWorld, mapById } from "../sim/maps";
-import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, pickAiOpener, type OpenerId } from "../sim/openers";
+import { OPENERS, OPENER_IDS, allowedOpener, applyOpener, openerBlocked, type OpenerId } from "../sim/openers";
 import { step } from "../sim/sim";
 import type { Building, Command, Faction, FxEvent, PerSide, Unit, World } from "../sim/types";
 import { buildingCenter, domainOf, hqOf } from "../sim/world";
@@ -28,7 +28,7 @@ import { chronicleOf, type Chronicle, type ChronicleSnapshot } from "./chronicle
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { aiSeed, aiStrategy, announceRules, difficultyBot, opEnemyAi, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
+import { announceRules, difficultyBot, opEnemyBot, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
 import { OpsPresenter } from "./ops";
 import { MatchRecorder } from "./recorder";
 import type { BattleRecord } from "../arena/record";
@@ -140,19 +140,16 @@ const ABORT_HEAD: Record<AbortReason, { title: string; cls: "lose"; sub: string 
 export class GameScene {
   world!: World;
   ctrl!: Controller;
-  /** The enemy commander, playing ENEMY (null in Last Stand and survival ops: the waves have none). */
-  private ai: AiState | null = null;
   /** Watching AI vs AI: the bots playing each side (red's is null in a watched Last Stand: the waves). */
   private watched: { blue: WatchedBot; red: WatchedBot | null } | null = null;
-  /** The bot the player picked to play against on the menu, playing ENEMY (null: the classic commander in `ai`). */
+  /** The bot playing ENEMY against the player: the menu's pick, the difficulty's, or an op's (null in Last Stand and survival ops: the waves have none). */
   private foe: WatchedBot | null = null;
   /**
-   * Every classic commander, keyed by side: a duel's ENEMY when no bot was
-   * picked (`watched`/`foe` play the duel's bots); on a four-player map every
-   * side but the player's (all four, spectating). Each tick's orders are
-   * stepped in canonical side order.
+   * A four-player map's bots, keyed by side: every side but the player's
+   * (all four, spectating). Each tick's orders are stepped in canonical side
+   * order. (A duel's are `watched` and `foe`.)
    */
-  private ais = new Map<Faction, AiState>();
+  private bots = new Map<Faction, WatchedBot>();
   /** A free-for-all: the player's side was knocked out and the match goes on (watching now). */
   private knockedOut = false;
   /** Whose fog of war the view shows when it's on (the player's; the battle viewer switches it). */
@@ -272,41 +269,36 @@ export class GameScene {
         ping: (x, y) => this.hud?.ping(x, y),
         gfx: over
       });
-    // spectating pits the menu's two bots against each other (random: two Normal commanders);
-    // mutators / the Daily Op decide which personalities can play (meta.ts)
+    // every AI here is Marshal (meta.ts): spectating, the menu's pick for each side; playing, the
+    // picked plan or the menu's difficulty, or an op's enemy
     const multi = isMulti(this.world);
     if (multi) {
-      // a four-player map: a commander for every side the player doesn't play (all four, watching)
-      const aiDiff = gameMode.spectator ? "normal" : gameMode.difficulty;
+      // a four-player map: a bot for every side the player doesn't play (all four, watching)
       if (!feed)
-        sidesOf(this.world).forEach((f, i) => {
-          if (f !== PLAYER || gameMode.spectator) this.ais.set(f, createAiState(aiStrategy(aiDiff), aiDiff, aiSeed(1 + i)));
-        });
+        for (const f of sidesOf(this.world))
+          if (gameMode.spectator) this.bots.set(f, watchBot(f));
+          else if (f !== PLAYER) this.bots.set(f, opponentBot(f) ?? difficultyBot(f));
     } else {
-      if (gameMode.spectator && !feed)
-        this.watched = { blue: watchBot("blue", this.world.seed), red: this.world.survival ? null : watchBot("red", this.world.seed) };
-      // (the menu's difficulty is Marshal at that difficulty: meta.ts difficultyBot; an op's enemy keeps its scripted commander)
-      if (!gameMode.spectator && !feed && !this.world.survival && !this.world.ops)
-        this.foe = opponentBot(ENEMY, this.world.seed) ?? difficultyBot(ENEMY);
-      this.ai =
-        this.world.survival || feed || this.watched || this.foe ? null : opEnemyAi() ?? createAiState(aiStrategy(gameMode.difficulty), gameMode.difficulty, aiSeed(1));
-      if (this.ai) this.ais.set(ENEMY, this.ai);
+      if (gameMode.spectator && !feed) this.watched = { blue: watchBot("blue"), red: this.world.survival ? null : watchBot("red") };
+      if (!gameMode.spectator && !feed && !this.world.survival)
+        this.foe = this.world.ops ? opEnemyBot(ENEMY) : opponentBot(ENEMY) ?? difficultyBot(ENEMY);
     }
     if (gameMode.spectator) {
       this.ctrl.spectator = true;
       this.ctrl.showFog = false; // watch the whole battle by default
     }
     if (opts) {
-      const commander = (s: AiState) => `ai:${s.strategy.name}:${s.difficulty}`;
       if (multi)
         this.recorder = new MatchRecorder(
           this.world.mapId,
           opts,
-          Object.fromEntries(sidesOf(this.world).map((f) => [f, { player: this.ais.has(f) ? commander(this.ais.get(f)!) : "player" }]))
+          Object.fromEntries(
+            sidesOf(this.world).map((f) => [f, { player: this.bots.get(f)?.seat ?? "player" }])
+          )
         );
       else {
         const enemy =
-          this.watched?.red?.seat ?? this.foe?.seat ?? (this.ai ? commander(this.ai) : this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
+          this.watched?.red?.seat ?? this.foe?.seat ?? (this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
         this.recorder = new MatchRecorder(this.world.mapId, opts, {
           [PLAYER]: { player: this.watched?.blue.seat ?? "player" },
           [ENEMY]: { player: enemy }
@@ -319,9 +311,9 @@ export class GameScene {
     if (this.world.survival || this.world.ops || feed) {
       /* no opener cards (a fed match was dealt its own) */
     } else if (multi && gameMode.spectator) {
-      // four commanders: each picks its own, in canonical side order (they take ids from the shared counter)
-      for (const [f, ai] of this.ais) {
-        const o = allowedOpener(this.world, f, pickAiOpener(ai.strategy.name, this.world.seed, f));
+      // four bots: each picks its own, in canonical side order (they take ids from the shared counter)
+      for (const [f, bot] of this.bots) {
+        const o = allowedOpener(this.world, f, bot.opener);
         if (o) openers[f] = o;
       }
       applyOpenersCanonical(this.world, openers);
@@ -471,7 +463,7 @@ export class GameScene {
         ? feed.labels
         : multi && gameMode.spectator
         ? (Object.fromEntries(
-            [...this.ais].map(([f, ai]) => [f, `${ai.strategy.label}${openers[f] ? ` · ${OPENERS[openers[f]!].name}` : ""}`])
+            [...this.bots].map(([f, bot]) => [f, `${bot.label}${openers[f] ? ` · ${OPENERS[openers[f]!].name}` : ""}`])
           ) as PerSide<string>)
         : this.watched
         ? {
@@ -481,12 +473,12 @@ export class GameScene {
         : null,
       // (a free-for-all's rivals: their personalities, "Rush, Boom and Skyforce")
       enemy: multi
-        ? { strategy: listNames([...this.ais.values()].map((a) => a.strategy.label)), difficulty: gameMode.difficulty }
+        ? { strategy: listNames([...this.bots.values()].map((b) => b.label)), difficulty: gameMode.difficulty }
         : this.foe?.ladder
         ? { strategy: this.foe.label, difficulty: gameMode.difficulty }
         : this.foe
         ? { strategy: this.foe.label, difficulty: "", versus: this.foe.versus } // (no "try a harder AI" tips: it's not the career ladder)
-        : { strategy: this.ai?.strategy.label ?? this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
+        : { strategy: this.watched?.red?.label ?? "Last Stand", difficulty: gameMode.difficulty },
       cardNote: (k) => this.command?.cardNote(k) ?? null,
       busy: () => this.holdStart || !!this.finale,
       battleRecord: () => this.battleRecord(),
@@ -550,7 +542,7 @@ export class GameScene {
     if (this.world.ops) this.ops = new OpsPresenter(this.world, { notify: (m, t, x, y) => this.hud.notice(m, t, x, y) });
     if (focus && !gameMode.op) this.frameStart(); // an op opens on its own focus point
     if (this.holdStart) {
-      const rivals = multi ? `${this.ais.size} AIs` : this.ai ? `${this.ai.strategy.label} AI` : "the waves";
+      const rivals = multi ? `${this.bots.size} AIs` : "the waves";
       const picker = showOpenerPicker({
         context: `${uncharted ? "Uncharted" : mapById(gameMode.mapId).name} · ${this.foe ? this.foe.versus : `vs ${rivals} (${DIFFICULTY[gameMode.difficulty].label})`}`,
         onPick: (id) => this.startWithOpener(id),
@@ -710,8 +702,8 @@ export class GameScene {
     // (the rules alone decide what's allowed, so the AI's pick is the same before or after ours lands)
     const foe = this.foe && allowedOpener(this.world, ENEMY, this.foe.opener);
     if (foe) picks[ENEMY] = foe;
-    for (const [f, ai] of this.ais) {
-      const theirs = allowedOpener(this.world, f, pickAiOpener(ai.strategy.name, this.world.seed, f));
+    for (const [f, bot] of this.bots) {
+      const theirs = allowedOpener(this.world, f, bot.opener);
       if (theirs) picks[f] = theirs;
     }
     const mine = applyOpenersCanonical(this.world, picks)[PLAYER]!;
@@ -1070,7 +1062,7 @@ export class GameScene {
     const mine = this.watched ? this.watched.blue.bot.tick(this.world) : this.interactive ? [] : this.ctrl.drainCommands();
     // (Last Stand: the waves have no commander)
     const bot = this.watched?.red ?? this.foe;
-    const theirs = bot ? bot.bot.tick(this.world) : this.ai ? tickAi(this.world, ENEMY, this.ai) : [];
+    const theirs = bot ? bot.bot.tick(this.world) : [];
     return composeTick(PLAYER, mine, theirs);
   }
 
@@ -1078,8 +1070,8 @@ export class GameScene {
   private multiTick(): Command[] {
     const cmds: Command[] = [];
     for (const f of sidesOf(this.world)) {
-      const ai = this.ais.get(f);
-      if (ai) cmds.push(...tickAi(this.world, f, ai));
+      const bot = this.bots.get(f);
+      if (bot) cmds.push(...bot.bot.tick(this.world));
       else if (f === PLAYER && !this.interactive) cmds.push(...this.ctrl.drainCommands());
     }
     return cmds;

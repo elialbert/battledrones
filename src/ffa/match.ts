@@ -5,12 +5,13 @@
  * step the same orders on every tick, so their worlds stay the same.
  *
  * Tick n's orders are its logged ones (people's, stamped with their side)
- * plus whatever the commanders playing a seat order this tick (tickAi, run
+ * plus whatever the Marshals playing a seat order this tick (seatMarshal, run
  * here on every page at the same tick, from the same seed), each side's in
  * canonical side order. A control event in tick n's entry hands a seat to a
- * stand-in commander (its person left) or back (they returned), from tick n.
+ * stand-in Marshal (its person left) or back (they returned), from tick n.
  */
-import { DIFFICULTY, createAiState, tickAi, type AiState } from "../sim/ai/commander";
+import { botSeat, type Bot } from "../sim/ai/bots";
+import { MARSHAL_PLANS, seatMarshal, type PlanName } from "../sim/ai/marshal";
 import type { BattleRecord, SeatInfo } from "../arena/record";
 import { worldHash } from "../sim/checksum";
 import { setupWorld } from "../sim/setup";
@@ -35,8 +36,8 @@ export class FfaMatch {
   readonly log: LogEvent[] = [];
   /** Each sealed tick's events in the log (index: the tick). */
   private readonly spans: TickSpan[] = [];
-  /** The commanders playing a seat now: the setup's AI seats, and stand-ins for people who left. */
-  private readonly ais = new Map<Faction, AiState>();
+  /** The Marshals playing a seat now: the setup's AI seats, and stand-ins for people who left. */
+  private readonly ais = new Map<Faction, { bot: Bot; plan: PlanName }>();
   /** The host's world hashes from the log, and this page's, by tick (compared once both are known). */
   private readonly theirHash = new Map<number, string>();
   private readonly ownHash = new Map<number, string>();
@@ -53,7 +54,7 @@ export class FfaMatch {
   constructor(setup: FfaSetup) {
     this.setup = setup;
     this.world = setupWorld({ map: setup.map, seed: setup.seed, mutators: setup.mutators, openers: setup.openers });
-    for (const p of setup.seats) if (p.kind === "ai") this.ais.set(p.side, createAiState(p.strategy, p.difficulty, p.seed));
+    for (const p of setup.seats) if (p.kind === "ai") this.ais.set(p.side, { bot: seatMarshal(p.side, p.seed, p.difficulty, p.plan), plan: p.plan });
   }
 
   /** Ticks sealed in the log so far (tick n is playable once n < sealed()). */
@@ -70,7 +71,7 @@ export class FfaMatch {
   playerOf(f: Faction): string {
     const plan = this.setup.seats.find((p) => p.side === f);
     const ai = this.ais.get(f);
-    if (ai) return plan?.kind === "human" ? `${plan.name} (AI stand-in)` : `${ai.strategy.label} AI`;
+    if (ai) return plan?.kind === "human" ? `${plan.name} (AI stand-in)` : `Marshal · ${MARSHAL_PLANS[ai.plan].label}`;
     return plan?.kind === "human" ? plan.name : "";
   }
 
@@ -92,7 +93,7 @@ export class FfaMatch {
 
   /**
    * Tick `tick`'s orders, every side's, in canonical side order: people's from
-   * the log, the commanders' from tickAi (run now: call once per tick, right
+   * the log, the Marshals' from their bots (run now: call once per tick, right
    * before the step). Null while the tick isn't sealed.
    */
   commandsFor(tick: number): Command[] | null {
@@ -110,7 +111,7 @@ export class FfaMatch {
     const out: Command[] = [];
     for (const f of sidesOf(w)) {
       const ai = this.ais.get(f);
-      if (ai) out.push(...tickAi(w, f, ai));
+      if (ai) out.push(...ai.bot.tick(w));
       else for (const c of people) if (c.faction === f) out.push(c);
     }
     this.stepping = out;
@@ -143,10 +144,8 @@ export class FfaMatch {
   record(): BattleRecord {
     const w = this.world;
     const seats = Object.fromEntries(
-      this.setup.seats.map((p) => [p.side, { player: p.kind === "ai" ? `ai:${p.strategy}:${p.difficulty}` : `online:${p.name}` } satisfies SeatInfo])
+      this.setup.seats.map((p) => [p.side, { player: p.kind === "ai" ? botSeat("marshal", p.difficulty) : `online:${p.name}` } satisfies SeatInfo])
     ) as BattleRecord["seats"];
-    const income: Partial<Record<Faction, number>> = {};
-    for (const p of this.setup.seats) if (p.kind === "ai" && DIFFICULTY[p.difficulty].incomeMult !== 1) income[p.side] = DIFFICULTY[p.difficulty].incomeMult;
     const end = w.winner
       ? { tick: w.tick, winner: w.winner === "draw" ? null : w.winner, reason: w.resigned ? ("resign" as const) : ("hq" as const) }
       : null;
@@ -169,9 +168,7 @@ export class FfaMatch {
       log: [],
       tick: w.tick,
       end,
-      usage: {},
-      // (the AI seats' income handicap: a replay steps their orders without them, as arena/match.ts records it)
-      ...(Object.keys(income).length ? { income } : {})
+      usage: {} // (no income handicaps: Marshal plays fair)
     };
   }
 
@@ -180,14 +177,14 @@ export class FfaMatch {
   /** A seat changes hands from this tick: a stand-in commander takes over, or gives it back. */
   private control(f: Faction, on: boolean): void {
     if (!on) {
-      // (a setup's AI seat is never handed to anyone; the person plays on at their own income, whatever the commander had)
-      if (this.setup.seats.find((p) => p.side === f)?.kind === "human" && this.ais.delete(f)) this.world.factions[f].incomeMult = 1;
+      // (a setup's AI seat is never handed to anyone)
+      if (this.setup.seats.find((p) => p.side === f)?.kind === "human") this.ais.delete(f);
       return;
     }
     if (this.ais.has(f)) return;
     const s = this.setup.standIn;
     const seat = this.setup.seats.findIndex((p) => p.side === f);
-    this.ais.set(f, createAiState(s.strategy, s.difficulty, (s.seed + seat * 7919) | 0));
+    this.ais.set(f, { bot: seatMarshal(f, (s.seed + seat * 7919) | 0, s.difficulty, s.plan), plan: s.plan });
   }
 
   private noteHash(into: Map<number, string>, tick: number, h: string): void {

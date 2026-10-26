@@ -1403,6 +1403,27 @@ button {
 .watchpick.red {
   --side: var(--red);
 }
+.watchpick.green {
+  --side: var(--side-green);
+}
+.watchpick.purple {
+  --side: var(--side-purple);
+}
+/* (two sides: no "vs" before the hidden green and purple) */
+.watchrow:not(.four) .watchpick.red ~ .watchvs {
+  display: none;
+}
+/* four sides: two rows of two, no "vs" */
+.menu .watchrow.four {
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+.watchrow.four .watchpick {
+  flex: 1 1 calc(50% - 4px);
+}
+.watchrow.four .watchvs {
+  display: none;
+}
 .watchpick select {
   flex: 1;
   min-width: 0;
@@ -1419,16 +1440,13 @@ button {
 .watchpick select optgroup {
   background: var(--panel-solid);
 }
-/* Marshal's difficulty and plan, under its pick */
-.watchpick:has(.watchopts:not([hidden])) {
+/* Marshal's difficulty, under its plan */
+.watchpick:has(.watchopts) {
   flex-direction: column;
 }
 .watchopts {
   display: flex;
   border-top: 1px solid var(--line);
-}
-.watchopts[hidden] {
-  display: none;
 }
 .watchopts select {
   min-height: 32px;

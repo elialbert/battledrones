@@ -216,7 +216,7 @@ function lobby(opts: { friends: number[]; picks?: Partial<Record<number, "blitz"
   let r = 0;
   const host = new FfaHost({
     code: CODE, build: BUILD, map: "compass-rose", mutators: [], difficulty: "normal",
-    strategy: () => "balanced",
+    plan: () => "balanced",
     // (a fixed stream: the same battle every run)
     random: () => ((r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff),
     socket: relay.socket, now: time.now, timers: time.timers
@@ -295,11 +295,11 @@ describe("four-player protocol", () => {
       id: "K7QM2XP4-x", map: "compass-rose", seed: 0x7fffffff, mutators: [], openers: { blue: "blitz" },
       seats: [
         { side: "blue", kind: "human", name: "Host" },
-        { side: "red", kind: "ai", strategy: "rush", difficulty: "hard", seed: -0x7fffffff },
+        { side: "red", kind: "ai", plan: "rush", difficulty: "hard", seed: -0x7fffffff },
         { side: "green", kind: "human", name: "Ann" },
-        { side: "purple", kind: "ai", strategy: "boom", difficulty: "easy", seed: 2_000_000_000 }
+        { side: "purple", kind: "ai", plan: "turtle", difficulty: "easy", seed: 2_000_000_000 }
       ],
-      standIn: { strategy: "balanced", difficulty: "normal", seed: 1_999_999_999 }
+      standIn: { plan: "balanced", difficulty: "normal", seed: 1_999_999_999 }
     };
     expect(readHostMsg(JSON.stringify({ t: "start", setup }))).toEqual({ t: "start", setup });
   });
@@ -560,7 +560,7 @@ describe("the four-player feed (what GameScene plays through)", () => {
     const { hostFeed, guestFeed } = feeds();
     expect(hostFeed.labels.blue).toBe("Host");
     expect(hostFeed.labels.red).toBe("P2");
-    expect(hostFeed.labels.green).toBe("Balanced AI");
+    expect(hostFeed.labels.green).toBe("Marshal · Balanced");
     expect(hostFeed.live).toBe(true);
     expect(hostFeed.duel.asks?.leave).toMatch(/ends for everyone/);
     expect(guestFeed.duel.asks?.leave).toMatch(/AI takes over/);

@@ -8,7 +8,8 @@
  * the four-player chunk.
  */
 import qrcode from "qrcode-generator";
-import { DIFFICULTY, type Difficulty, type StrategyName } from "../sim/ai/commander";
+import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
+import type { PlanName } from "../sim/ai/marshal";
 import { mapById } from "../sim/maps";
 import { OPENERS, OPENER_IDS, type OpenerId } from "../sim/openers";
 import { MUTATORS, type MutatorId } from "../sim/rules";
@@ -46,8 +47,8 @@ export interface HostLobbyOptions extends LobbyHooks {
   map: string;
   mutators: MutatorId[];
   difficulty: Difficulty;
-  /** A commander's personality for an open seat (the menu's rules decide which fit). */
-  strategy(): StrategyName | undefined;
+  /** Marshal's plan for an open seat at a difficulty (the menu's rules decide which fit). */
+  plan(difficulty: Difficulty): PlanName;
   /** A rematch: the same battle code, so the friends' links still lead here. */
   code?: string;
 }
@@ -142,10 +143,7 @@ export function showHostLobby(o: HostLobbyOptions): void {
     map: o.map,
     mutators: o.mutators,
     difficulty: o.difficulty,
-    strategy: () => {
-      const pool = DIFFICULTY[o.difficulty].pool;
-      return o.strategy() ?? pool[Math.floor(Math.random() * pool.length)] ?? "balanced";
-    },
+    plan: o.plan,
     random: Math.random,
     ...(relayUrl() ? { url: relayUrl()! } : {})
   });

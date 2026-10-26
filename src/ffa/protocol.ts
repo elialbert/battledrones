@@ -22,13 +22,14 @@
  */
 import { MUTATOR_IDS, type MutatorId } from "../sim/rules";
 import { OPENER_IDS, type OpenerId } from "../sim/openers";
-import { STRATEGIES, DIFFICULTY, type Difficulty, type StrategyName } from "../sim/ai/commander";
+import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
+import { MARSHAL_PLANS, type PlanName } from "../sim/ai/marshal";
 import { FACTIONS, isFaction } from "../sim/sides";
 import type { BuildingKind, Command, Faction, PowerKind, UnitKind } from "../sim/types";
 import { isKnownMapId } from "../sim/maps";
 
 /** Bump when the messages or the turn log change meaning. */
-export const FFA_PROTO = 1;
+export const FFA_PROTO = 2;
 
 /** Seats: 0 is the host (blue), 1–3 the friends' (red, green, purple: canonical side order, sim/sides.ts). */
 export const SEATS = 4;
@@ -63,10 +64,10 @@ export function parseFfaInvite(hash: string): { code: string; seat: number } | n
 
 // ------------------------------------------------------------ setup ---
 
-/** Who plays a seat: a person, or a commander (its personality, difficulty and seed, so every page runs the same one). */
+/** Who plays a seat: a person, or Marshal (its plan, difficulty and seed, so every page runs the same one). */
 export type SeatPlan =
   | { side: Faction; kind: "human"; name: string }
-  | { side: Faction; kind: "ai"; strategy: StrategyName; difficulty: Difficulty; seed: number };
+  | { side: Faction; kind: "ai"; plan: PlanName; difficulty: Difficulty; seed: number };
 
 /** Everything every page needs to set the same match up (sim/setup.ts setupWorld, and the commanders). */
 export interface FfaSetup {
@@ -77,8 +78,8 @@ export interface FfaSetup {
   mutators: MutatorId[];
   openers: Partial<Record<Faction, OpenerId>>;
   seats: SeatPlan[];
-  /** A commander's seed for a seat a person leaves (it takes over: the same on every page). */
-  standIn: { strategy: StrategyName; difficulty: Difficulty; seed: number };
+  /** The Marshal for a seat a person leaves (it takes over: the same on every page). */
+  standIn: { plan: PlanName; difficulty: Difficulty; seed: number };
 }
 
 // ------------------------------------------------------------ the turn log ---
@@ -279,13 +280,15 @@ export function readGuestMsg(text: string): GuestMsg | null {
   }
 }
 
+const isPlan = (x: unknown): x is PlanName => typeof x === "string" && Object.hasOwn(MARSHAL_PLANS, x);
+
 const seatPlan = (x: unknown): SeatPlan | null => {
   if (!x || typeof x !== "object") return null;
   const s = x as Record<string, unknown>;
   if (!isFaction(s.side)) return null;
   if (s.kind === "human") return { side: s.side, kind: "human", name: shortText(s.name) };
-  if (s.kind === "ai" && typeof s.strategy === "string" && s.strategy in STRATEGIES && typeof s.difficulty === "string" && s.difficulty in DIFFICULTY && int(s.seed))
-    return { side: s.side, kind: "ai", strategy: s.strategy as StrategyName, difficulty: s.difficulty as Difficulty, seed: s.seed };
+  if (s.kind === "ai" && isPlan(s.plan) && typeof s.difficulty === "string" && s.difficulty in DIFFICULTY && int(s.seed))
+    return { side: s.side, kind: "ai", plan: s.plan, difficulty: s.difficulty as Difficulty, seed: s.seed };
   return null;
 };
 
@@ -301,11 +304,11 @@ function readSetup(x: unknown): FfaSetup | null {
   const seats = s.seats.map(seatPlan);
   if (seats.some((p) => !p)) return null;
   const st = s.standIn as Record<string, unknown> | undefined;
-  if (!st || typeof st.strategy !== "string" || !(st.strategy in STRATEGIES) || typeof st.difficulty !== "string" || !(st.difficulty in DIFFICULTY) || !int(st.seed))
+  if (!st || !isPlan(st.plan) || typeof st.difficulty !== "string" || !(st.difficulty in DIFFICULTY) || !int(st.seed))
     return null;
   return {
     id: s.id.slice(0, 40), map: s.map, seed: s.seed, mutators: s.mutators as MutatorId[], openers, seats: seats as SeatPlan[],
-    standIn: { strategy: st.strategy as StrategyName, difficulty: st.difficulty as Difficulty, seed: st.seed }
+    standIn: { plan: st.plan, difficulty: st.difficulty as Difficulty, seed: st.seed }
   };
 }
 

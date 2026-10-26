@@ -33,7 +33,7 @@
 import type { BattleRecord } from "../arena/record";
 import type { Controller } from "../game/controller";
 import type { AbortReason, MatchFeed } from "../game/GameScene";
-import { STRATEGIES } from "../sim/ai/commander";
+import { MARSHAL_PLANS } from "../sim/ai/marshal";
 import type { Command, Faction, PerSide, World } from "../sim/types";
 import type { DuelHud } from "../ui/hud";
 import { SIDE_NAME } from "../game/side-style";
@@ -107,7 +107,7 @@ function browserEnv(): FfaFeedEnv {
 }
 
 /** Who plays a seat, for the labels: a person's name, or the commander's personality. */
-export const seatLabel = (s: FfaSetup["seats"][number]): string => (s.kind === "human" ? s.name : `${STRATEGIES[s.strategy].label} AI`);
+export const seatLabel = (s: FfaSetup["seats"][number]): string => (s.kind === "human" ? s.name : `Marshal · ${MARSHAL_PLANS[s.plan].label}`);
 
 export class FfaFeed implements MatchFeed {
   readonly world: World;
