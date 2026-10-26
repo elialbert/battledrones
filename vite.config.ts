@@ -58,7 +58,9 @@ export default defineConfig({
     __FFA_HASH__: JSON.stringify(ffaHash(fileURLToPath(new URL(".", import.meta.url)))),
     // the version tag this build is (v11), from tools/build-pages.mjs; null for main and local builds.
     // A record pinned to it (BattleRecord.version) is known to replay exactly, with nothing to check
-    __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null)
+    __VERSION_TAG__: JSON.stringify(process.env.VERSION_TAG || null),
+    // the online relay this build connects to (src/net/relay-socket.ts); null: the deployed Fly relay
+    __RELAY_URL__: JSON.stringify(process.env.RELAY_URL || null)
   },
   build: {
     target: "es2022",

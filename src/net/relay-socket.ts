@@ -27,8 +27,10 @@
 /** The relay's two seats of a room. */
 export type RelayRole = "host" | "guest";
 
-/** The deployed relay (relay/fly.toml). */
-export const RELAY_URL = "wss://battledrones-relay.fly.dev";
+declare const __RELAY_URL__: string | null | undefined;
+
+/** The deployed relay (relay/fly.toml), or the build's own (RELAY_URL at build time: vite.config.ts). */
+export const RELAY_URL: string = (typeof __RELAY_URL__ === "undefined" ? null : __RELAY_URL__) ?? "wss://battledrones-relay.fly.dev";
 
 /** Room codes: Crockford base32 (no I, L, O, U), as the relay accepts them. */
 export const ROOM_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
