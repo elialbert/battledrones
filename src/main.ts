@@ -309,7 +309,7 @@ function showMenu(linkedMap?: string | null): void {
     <div class="keyart"></div>
     <button class="round menu-mute" id="menu-mute" title="Mute all">🔊</button>
     <div class="menu-inner">
-      <h1 class="logo">BATTLE<br/><span>DRONES</span></h1>
+      <h1 class="logo">BATTLE<br/><span>DRONES</span><small class="fork"><b>eli's fork</b><i>feat. better keybindings and smarter bots</i></small></h1>
       <div class="menu-side" id="menuside">
         <button class="rankbadge" id="rankbadge"></button>
         <div class="dailyop" id="dailyop"></div>

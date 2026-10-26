@@ -1205,6 +1205,37 @@ button {
   color: var(--gold);
   letter-spacing: 9px;
 }
+/* this fork's stamp under the logo */
+.logo .fork {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-shadow: none;
+}
+.logo .fork b {
+  padding: 2px 10px 3px;
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  color: var(--gold);
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  transform: rotate(-3deg);
+  background: rgba(8, 11, 18, 0.55);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.logo .fork i {
+  color: #c3cde0;
+  font-size: 12px;
+  font-weight: 700;
+  font-style: italic;
+  text-shadow: 0 2px 8px #000;
+}
 .sub {
   color: #c3cde0;
   font-weight: 600;
