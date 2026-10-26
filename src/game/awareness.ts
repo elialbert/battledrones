@@ -20,6 +20,7 @@ import { POWER_NAMES } from "../sim/powers";
 import type { Faction, FxEvent, Unit, UnitKind, World } from "../sim/types";
 import { hqOf } from "../sim/world";
 import { CalldownCredit } from "./calldown-credit";
+import { SIDE_NAME } from "./side-style";
 
 export const AWARE = {
   // ------------------------------------------------------------- speed --
@@ -356,7 +357,7 @@ export class HeatMap {
         x: k.sx / k.w,
         y: k.sy / k.w,
         heat: k.w,
-        label: spectator ? (cls === 4 ? `${k.hq === "red" ? "Red" : "Blue"} HQ` : "Fight") : CLASS_LABEL[cls]!,
+        label: spectator ? (cls === 4 ? `${k.hq ? SIDE_NAME[k.hq] : "Blue"} HQ` : "Fight") : CLASS_LABEL[cls]!,
         priority: CLASS_PRIORITY[cls]! + Math.min(9, k.w)
       });
     }

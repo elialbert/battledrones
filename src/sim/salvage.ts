@@ -4,6 +4,7 @@ import type { Building, Faction, Unit, World, Wreck } from "./types";
 import { incomeOf } from "./rules";
 import { worldRandom } from "./rand";
 import { buildingAtTile, buildingCenter, domainOf, groundPassable, sideFrame } from "./world";
+import { otherSide, perSide } from "./sides";
 import { cos, hypot, sin } from "./fmath";
 
 /**
@@ -44,7 +45,7 @@ export function wreckRestingSpot(w: World, x: number, y: number, faction?: Facti
   // (with a faction, scanned in its side's frame, so mirror-image falls rest as mirror images: a
   // Goliath dropped onto a building, lift.ts; without one, the world's frame as wrecks always were)
   const fr = sideFrame(w, faction);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   const pass = (fx: number, fy: number) => groundPassable(w, ...fr.tile(fx, fy, 1));
   const tx = Math.floor(p.x);
   const ty = Math.floor(p.y);
@@ -67,7 +68,7 @@ export function wreckRestingSpot(w: World, x: number, y: number, faction?: Facti
       bestD = d;
       best = { x: cx, y: cy };
     }
-  return best ? fr.pt(best) : null;
+  return best ? fr.toWorld(best) : null;
 }
 
 /** Make room for one more wreck: the field holds so much, and the oldest burns out first. */
@@ -193,9 +194,9 @@ export function tickSalvage(w: World): void {
   if (w.wrecks.length === 0) return;
   const reach = SALVAGE.pickupRadius;
   // a side on a frozen economy (an op's zero income) can't cash wrecks in: its units drive over them
-  const earns = { blue: incomeOf(w, "blue") > 0, red: incomeOf(w, "red") > 0 };
+  const earns = perSide((f) => incomeOf(w, f) > 0);
   // ...nor can Last Stand's waves (no economy to feed): the wrecks stay for the defender
-  if (w.survival) earns[w.survival.defender === "blue" ? "red" : "blue"] = false;
+  if (w.survival) earns[otherSide(w.survival.defender)] = false;
   const ground: Unit[] = [];
   for (const u of w.units.values()) if (domainOf(u) === "ground" && earns[u.faction]) ground.push(u);
   const keep: Wreck[] = [];

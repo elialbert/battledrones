@@ -1,0 +1,75 @@
+/* the four-player online battle (src/ffa/): its lobby sheet, and the battle's status pill; loaded with its chunk */
+.ffa-sheet h2 { margin-bottom: 4px; }
+.ffa-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--dim);
+}
+.ffa-name input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font: 700 16px inherit;
+}
+.ffa-lbl { margin: 10px 0 4px; font-size: 13px; font-weight: 700; color: var(--dim); }
+.ffa-lbl b { color: var(--text); letter-spacing: 1px; }
+.ffa-seats { display: flex; flex-direction: column; gap: 6px; }
+.ffa-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(12, 18, 28, 0.6);
+}
+.ffa-dot { flex: 0 0 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.ffa-who { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.ffa-who span { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.ffa-who em { font-style: normal; font-size: 12px; font-weight: 800; }
+.ffa-who em.on { color: var(--green); }
+.ffa-who em.off { color: var(--gold); }
+.ffa-open { color: var(--dim); }
+.ffa-acts { display: flex; gap: 6px; flex: 0 0 auto; }
+.ffa-acts .cta { margin: 0; padding: 8px 10px; min-height: 0; font-size: 14px; width: auto; }
+.ffa-acts .cta.on { border-color: var(--accent); }
+.ffa-qr {
+  width: min(56vw, 220px);
+  margin: 4px auto 6px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #fff;
+}
+.ffa-qr svg { display: block; width: 100%; height: auto; }
+.ffa-picks { margin-bottom: 4px; }
+.ffa-picks button.on { outline: 2px solid var(--accent); }
+.ffa-err:empty { display: none; }
+
+/* in the battle: who it waits for, a link that went quiet */
+.ffa-status {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: calc(100% - 32px);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(10, 16, 26, 0.85);
+  border: 1px solid rgba(255, 214, 110, 0.45);
+  color: #fff3c4;
+  font-size: 14px;
+  font-weight: 700;
+  pointer-events: none;
+  text-align: center;
+}
+.ffa-status[hidden] { display: none; }

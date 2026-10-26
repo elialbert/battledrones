@@ -1,4 +1,11 @@
-export type Faction = "blue" | "red";
+/** The sides: blue and red in every match; green and purple join them on a four-player map (sides.ts). */
+export type Faction = "blue" | "red" | "green" | "purple";
+/**
+ * A value for each side playing: blue's and red's always, green's and
+ * purple's when a four-player map adds them (records, recaps, reports). The
+ * world's own per-side state is a full Record<Faction, …> (sides.ts perSide).
+ */
+export type PerSide<T> = Record<"blue" | "red", T> & Partial<Record<"green" | "purple", T>>;
 export type Domain = "ground" | "air";
 export type TargetDomain = "ground" | "air" | "both" | "none";
 
@@ -358,6 +365,18 @@ export type FxEvent =
       kills: number;
       /** A map-given unit (Unit.free): its loss charges no ⚡ meter. */
       free?: boolean;
+      /** A free-for-all: the killer's side, when it was on the map to say (absent in a duel: the other side). */
+      by?: Faction | null;
+    }
+  | {
+      /**
+       * A free-for-all: `faction` is out (its HQ and every Goliath gone, or it
+       * resigned), finished off by `by`; `left` sides remain (combat.ts eliminate).
+       */
+      type: "eliminated";
+      faction: Faction;
+      by: Faction | null;
+      left: number;
     }
   | {
       /** A harvester started unloading `amount` scrap at a drop-off. */
@@ -620,8 +639,13 @@ export interface Uplink {
   x: number;
   y: number;
   owner: Faction | null;
-  /** Capture bar: −100 (red holds it) … 0 (neutral) … +100 (blue holds it). */
+  /**
+   * Capture bar: −100 (red holds it) … 0 (neutral) … +100 (blue holds it). In
+   * a free-for-all, how full `bar`'s colour is: 0 … 100 (objectives.ts uplinkBar).
+   */
   progress: number;
+  /** A free-for-all's bar: whose colour it is filling (absent in a duel). */
+  bar?: Faction | null;
   /** Who is pushing the bar right now (null: nobody, or contested). */
   pushing: Faction | null;
   /** Both sides are inside the zone (the bar is frozen). */
@@ -786,6 +810,16 @@ export interface World {
   love?: { ids: [number, number]; x: number; y: number; tick: number } | null;
   /** The side that resigned, when a `resign` command decided the match. */
   resigned?: Faction | null;
+  /**
+   * The sides playing, in canonical order (sides.ts). Absent: blue and red,
+   * as in every 2-player match. A four-player map sets all four.
+   */
+  sides?: Faction[];
+  /**
+   * A free-for-all's eliminations so far, in order (combat.ts eliminate): the
+   * side, the tick, and who finished it (null: nobody, or a resign).
+   */
+  out?: { faction: Faction; tick: number; by: Faction | null }[];
 }
 
 /** One side's free-Condor clock (lifeline.ts). */

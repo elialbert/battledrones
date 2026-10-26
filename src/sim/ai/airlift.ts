@@ -10,6 +10,7 @@ import type { AiState, Difficulty, StrategyName } from "./commander";
 import { airspace, route } from "./condor";
 import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectiveness, type Sighting } from "./intel";
 import { cos, sin } from "../fmath";
+import { otherSide } from "../sides";
 
 /**
  * The commander's airlift, for maps whose Uplinks sit on islands only robot
@@ -263,7 +264,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
   if (!airliftActive(w, faction, s)) return cmds;
   const relays = islandRelays(w);
   const m = memo(s);
-  const enemy: Faction = faction === "blue" ? "red" : "blue";
+  const enemy: Faction = otherSide(faction); // (island maps are duels)
   const fr = sideFrame(w, faction);
   const tps = TICK_RATE;
 
@@ -369,7 +370,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
       if (l.owner === null && it.ours.length === 0 && cargo < 200 && exposure > -0.3) score *= 0.4;
       score -= it.guard / 100; // a fight first
       if (l.owner === faction && !l.crewed) score *= 1.3; // ours, standing empty: cheap to put right
-      const key = fr.pt(l);
+      const key = fr.toFrame(l);
       const better =
         !best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && (key.y < best.key.y || (key.y === best.key.y && key.x < best.key.x)));
       if (better) best = { it, drop: at, waypoint, score, key };
@@ -411,7 +412,7 @@ export function planAirlift(w: World, faction: Faction, s: AiState, ctx: Airlift
    * its anti-air), at most a Condor's load. The first such island, in our frame.
    */
   const surplus = (): { it: Island; squads: Unit[] } | null => {
-    for (const it of [...islands].sort((a, b) => fr.pt(a.l).y - fr.pt(b.l).y || fr.pt(a.l).x - fr.pt(b.l).x)) {
+    for (const it of [...islands].sort((a, b) => fr.toFrame(a.l).y - fr.toFrame(b.l).y || fr.toFrame(a.l).x - fr.toFrame(b.l).x)) {
       const extra = it.ours.length - crewOf(it.l);
       if (it.l.owner !== faction || !it.l.crewed || extra <= 0 || it.guard > 0) continue;
       const squads = it.ours
@@ -627,7 +628,7 @@ function strikes(
   enemies: readonly Sighting[]
 ): Command[] {
   if (s.difficulty === "easy") return [];
-  const enemy: Faction = faction === "blue" ? "red" : "blue";
+  const enemy: Faction = otherSide(faction); // (island maps are duels)
   const bombers = ctx.army.filter(
     (u) => (u.kind === "wasp" || u.kind === "hornet") && u.order.type === "idle" && !ctx.used.has(u.id) && u.hp >= UNITS[u.kind].hp * 0.5
   );
@@ -692,9 +693,9 @@ function postSpot(w: World, faction: Faction, it: Island, i: number): P {
   const l = it.l;
   if (i === 0) return { x: l.x, y: l.y };
   const fr = sideFrame(w, faction);
-  const c = fr.pt(l);
+  const c = fr.toFrame(l);
   const a = (i - 1) * ((2 * Math.PI) / 5) + 0.6;
-  const p = fr.pt({ x: c.x + sin(a) * 1.1, y: c.y - cos(a) * 1.1 });
+  const p = fr.toWorld({ x: c.x + sin(a) * 1.1, y: c.y - cos(a) * 1.1 });
   return footRegion(w, p) === it.region ? p : { x: l.x, y: l.y };
 }
 

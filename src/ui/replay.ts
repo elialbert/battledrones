@@ -1,16 +1,19 @@
 /**
  * The battle viewer's panel (dev builds only, with src/game/replay.ts): the
  * clock and a seek bar, jumps of 30 s, whose eyes to look through (the whole
- * field, blue's fog or red's), each side's scrap, income a minute and ⚡
- * meter, a "thinking…" line while a live battle waits
- * on its next round, the divergence warning, and each commander's orders and
- * notes for the round on screen.
+ * field, or any side's fog: blue's and red's, and a four-player map's green
+ * and purple), each side's scrap, income a minute and ⚡ meter, a "thinking…"
+ * line while a live battle waits on its next round, the divergence warning,
+ * and each commander's orders and notes for the round on screen. It steps
+ * aside while the report is up at the end.
  */
 import type { GameScene } from "../game/GameScene";
 import type { ReplayFeed } from "../game/replay";
 import { clock, pinnedLink } from "../game/replay";
 import { TICK_RATE } from "../sim/balance";
 import type { Faction, World } from "../sim/types";
+import { FACTIONS, isFaction } from "../sim/sides";
+import { SIDE_CSS, SIDE_NAME } from "../game/side-style";
 
 /** Income a minute is measured over the last minute of game time. */
 const RATE_TICKS = 60 * TICK_RATE;
@@ -28,12 +31,14 @@ export interface ReplayPanel {
 }
 
 const CSS = `
+#replay-panel[hidden] { display: none; }
 #replay-panel { position: fixed; top: 56px; left: 50%; transform: translateX(-50%); z-index: 40; width: min(760px, calc(100vw - 32px));
   font: 13px/1.35 system-ui, sans-serif; color: #e8eef5; pointer-events: none; }
 #replay-panel .rp-bar { pointer-events: auto; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 6px 10px;
   background: rgba(12, 18, 26, 0.82); border-radius: 10px; backdrop-filter: blur(4px); }
 #replay-panel .rp-vs { flex: 1 1 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#replay-panel .blue { color: #7ec1ff; font-weight: 600; } #replay-panel .red { color: #ff8a7a; font-weight: 600; }
+#replay-panel .rp-vs.multi { white-space: normal; }
+${FACTIONS.map((f) => `#replay-panel .${f} { color: ${SIDE_CSS[f]}; font-weight: 600; }`).join(" ")}
 #replay-panel input[type=range] { flex: 1 1 160px; min-width: 120px; }
 #replay-panel button { font: inherit; color: inherit; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18);
   border-radius: 6px; padding: 2px 8px; cursor: pointer; }
@@ -59,20 +64,25 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
   const root = document.createElement("div");
   root.id = "replay-panel";
   const r = feed.record;
+  // (the sides that played: blue and red, and a four-player map's green and purple)
+  const sides = FACTIONS.filter((f) => feed.labels[f] !== undefined);
+  const vs = sides.map((f) => `<span class="${f}">${SIDE_NAME[f]}</span> ${esc(feed.labels[f]!)}`).join(" vs ");
   root.innerHTML = `
     <div class="rp-bar">
-      <div class="rp-vs"><span class="blue">Blue</span> ${esc(feed.labels.blue)} vs <span class="red">Red</span> ${esc(feed.labels.red)} · ${esc(r.map)} seed ${esc(String(r.seed))}</div>
+      <div class="rp-vs${sides.length > 2 ? " multi" : ""}">${vs} · ${esc(r.map)} seed ${esc(String(r.seed))}</div>
       <span class="rp-time"></span>
       <input type="range" min="0" step="1" value="0" aria-label="Seek">
       <button data-jump="-300" title="Back 30 s">−30s</button><button data-jump="300" title="Forward 30 s">+30s</button>
-      <button data-fog="off" title="The whole battlefield">All</button><button data-fog="blue" title="Through blue's eyes">Blue's eyes</button><button data-fog="red" title="Through red's eyes">Red's eyes</button>
+      <button data-fog="off" title="The whole battlefield">All</button>${sides
+        .map((f) => `<button data-fog="${f}" title="Through ${f}'s eyes">${SIDE_NAME[f]}'s eyes</button>`)
+        .join("")}
       <button data-notes title="Orders and notes">Notes</button>
     </div>
     <div class="rp-econ"><span data-side="blue"></span><span data-side="red"></span></div>
     <div class="rp-status" hidden></div>
     <div class="rp-warn" hidden></div>
     ${asPlayed(r) ? `<div class="rp-status rp-upgraded">${esc(asPlayed(r)!)}</div>` : ""}
-    <div class="rp-notes" hidden><div class="rp-side" data-side="blue"></div><div class="rp-side" data-side="red"></div></div>`;
+    <div class="rp-notes" hidden>${sides.map((f) => `<div class="rp-side" data-side="${f}"></div>`).join("")}</div>`;
   document.body.appendChild(root);
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
   const time = $("span.rp-time");
@@ -92,7 +102,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
   for (const b of fogButtons)
     b.addEventListener("click", () => {
       const v = b.dataset.fog;
-      scene.setFog(v === "blue" || v === "red" ? v : null);
+      scene.setFog(isFaction(v) ? v : null);
     });
   $("[data-notes]").addEventListener("click", (e) => {
     notes.hidden = !notes.hidden;
@@ -101,7 +111,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
 
   const econ = { blue: $(".rp-econ [data-side=blue]"), red: $(".rp-econ [data-side=red]") };
   /** Each side's scrap earned, sampled every second of game time (cleared on a seek back). */
-  let samples: { tick: number; earned: Record<Faction, number> }[] = [];
+  let samples: { tick: number; earned: Partial<Record<Faction, number>> }[] = [];
   const updateEcon = (w: World) => {
     const last = samples[samples.length - 1];
     if (last && w.tick < last.tick) samples = [];
@@ -113,7 +123,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     const span = w.tick - from.tick;
     for (const side of ["blue", "red"] as const) {
       const now = earned(w, side);
-      const perMin = span >= 10 * TICK_RATE ? ((now - from.earned[side]) / span) * RATE_TICKS : w.tick ? (now / w.tick) * RATE_TICKS : 0;
+      const perMin = span >= 10 * TICK_RATE ? ((now - (from.earned[side] ?? 0)) / span) * RATE_TICKS : w.tick ? (now / w.tick) * RATE_TICKS : 0;
       const label = side === "blue" ? "Blue" : "Red";
       econ[side].innerHTML =
         `<span class="${side}">${label}</span> 💰 ${Math.floor(w.factions[side].scrap).toLocaleString()} · ` +
@@ -136,8 +146,12 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
     );
   };
 
+  // (the report, at the end: it is the screen now, the panel would sit on its head)
+  const endEl = document.getElementById("endscreen");
   return {
     update() {
+      root.hidden = !!endEl && !endEl.hidden;
+      if (root.hidden) return;
       const t = scene.tick;
       const end = feed.playedTo;
       time.textContent = `${clock(t)} / ${clock(end)}${feed.record.end ? "" : " …"}`;
@@ -163,7 +177,7 @@ export function replayPanel(feed: ReplayFeed, scene: GameScene): ReplayPanel {
       const round = feed.roundAt(Math.max(0, t - 1));
       if (!notes.hidden && round !== shownRound) {
         shownRound = round;
-        for (const side of ["blue", "red"] as const) $(`.rp-side[data-side=${side}]`).innerHTML = sideHtml(side, round);
+        for (const side of sides) $(`.rp-side[data-side=${side}]`).innerHTML = sideHtml(side, round);
       } else if (notes.hidden) shownRound = -1;
     },
     destroy() {

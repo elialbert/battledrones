@@ -52,7 +52,7 @@ import type { BandPlan, BandRole } from "../link/transport";
 import { isKnownMapId } from "../sim/maps";
 import { isMutatorId, type MutatorId } from "../sim/rules";
 import type { MatchSetup } from "../sim/setup";
-import type { Command, Faction } from "../sim/types";
+import type { Command, Faction, PerSide } from "../sim/types";
 import { isRoomCode } from "./net-transport";
 
 /** A world hash goes into the saved record every this many ticks (the arena's rate: the viewer checks them). */
@@ -159,7 +159,7 @@ export function duelEnd(tick: number, winner: Faction | "draw" | null, resigned?
 export interface DuelRecordInput {
   setup: MatchSetup;
   /** Which band each side's phone played (the host plays hostSide). */
-  seats: Record<Faction, BandRole>;
+  seats: PerSide<BandRole>;
   /** Non-empty turns as stepped: [tick, side, commands], blue's before red's on a tick. */
   turns: [number, Faction, Command[]][];
   /** [tick, worldHash] every HASH_EVERY ticks. */

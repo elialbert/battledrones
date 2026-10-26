@@ -1,6 +1,7 @@
 import { UNITS } from "../sim/balance";
 import { hash32 } from "../sim/rand";
 import type { Faction, UnitKind, World } from "../sim/types";
+import { perSide } from "../sim/sides";
 
 /**
  * Veteran heroes: every unit has a callsign derived from its id; from rank 2
@@ -37,7 +38,7 @@ export function baseCallsign(id: number): number {
 
 export class CallsignRegistry {
   private names = new Map<number, string>();
-  private used: Record<Faction, Map<string, number>> = { blue: new Map(), red: new Map() };
+  private used: Record<Faction, Map<string, number>> = perSide(() => new Map());
 
   /** The unit's callsign, assigning one on first use. */
   name(id: number, faction: Faction): string {

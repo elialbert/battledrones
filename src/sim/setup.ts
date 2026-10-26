@@ -3,7 +3,8 @@
  * records, AGENT-BATTLES.md; sound duels, SOUND-DUEL.md; a Last Stand or an
  * op played here, game/recorder.ts, with `survival` or `op`): the map with
  * objectives, blue's opener then red's (they take ids from the shared counter,
- * so the order matters), each side's income, then the fog drawn once. Two
+ * so the order matters; a four-player map's in canonical side order, sides.ts),
+ * each side's income, then the fog drawn once. Two
  * phones that call this with the same setup hold the same world.
  */
 import { tickFog } from "./fog";
@@ -12,6 +13,7 @@ import type { SurvivalOptions } from "./modes/survival";
 import { applyOpener, type OpenerId } from "./openers";
 import type { MutatorId } from "./rules";
 import type { Faction, World } from "./types";
+import { sidesOf } from "./sides";
 
 export interface MatchSetup {
   map: string;
@@ -34,7 +36,7 @@ export function setupWorld(r: MatchSetup): World {
     ...(r.survival ? { survival: r.survival } : {}),
     ...(r.op ? { op: r.op } : {})
   });
-  for (const f of ["blue", "red"] as const) {
+  for (const f of sidesOf(w)) {
     const o = r.openers[f];
     if (o) applyOpener(w, f, o);
     const m = r.income?.[f];

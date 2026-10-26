@@ -8,6 +8,7 @@ import { isRandomMapId } from "../sim/mapgen";
 import type { Faction, World } from "../sim/types";
 import { chronicleOf, type Chronicle } from "./chronicle";
 import { today as todayIndex } from "./daily";
+import { perSide, rivalsOf } from "../sim/sides";
 
 /**
  * The Commander career: XP and ten ranks, medal counts, map stars per
@@ -390,7 +391,8 @@ export function recapOf(w: World, chronicle: Chronicle, pov: Faction): MatchReca
     pov,
     won: w.winner === pov,
     secs: w.tick / TICK_RATE,
-    stats: { blue: w.factions.blue.stats, red: w.factions.red.stats },
+    stats: perSide((f) => w.factions[f].stats),
+    rivals: rivalsOf(w, pov),
     samples: chronicle.samples,
     deaths: chronicle.deaths,
     bestUnitKills: mvp[pov]?.kills ?? 0,

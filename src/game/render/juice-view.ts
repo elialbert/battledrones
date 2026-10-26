@@ -23,7 +23,7 @@ import type { EntityRenderer } from "./entities";
 import { AIR_H } from "../three/view";
 
 /** Team colours for ground rings and death pulses. */
-const TEAM: Record<Faction, number> = { blue: 0x3d8bff, red: 0xff4a3a };
+const TEAM: Record<Faction, number> = { blue: 0x3d8bff, red: 0xff4a3a, green: 0x34d058, purple: 0xa860ff };
 const TRAIL_COLOR = "#fff1c0";
 const POP_CSS = 19;
 

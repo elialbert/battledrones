@@ -87,7 +87,7 @@ export interface Rules {
    * land is still known once the HQ has fallen (or, under Nomads, was never
    * built) and the side plays on round a Goliath (world.ts onHomeLand).
    */
-  homeTiles?: Record<Faction, [number, number]>;
+  homeTiles?: Partial<Record<Faction, [number, number]>>;
 }
 
 export const DEFAULT_RULES: Readonly<Rules> = Object.freeze({

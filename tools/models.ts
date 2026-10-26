@@ -32,7 +32,7 @@ import { setVariant } from "../src/game/three/materials";
 import { ModelBuilder } from "../src/game/three/builder";
 import { UNIT_KINDS, BUILDING_KINDS } from "../src/game/assets";
 import { UNITS } from "../src/sim/balance";
-import type { UnitKind } from "../src/sim/types";
+import type { Faction, UnitKind } from "../src/sim/types";
 
 const q = new URLSearchParams(location.search);
 const stage = new Stage(document.getElementById("game")!, Math.min(2, devicePixelRatio));
@@ -48,7 +48,7 @@ const icon = q.get("icon");
 const turn = Number(q.get("turn") ?? 0);
 /** ?head=rad: a turret or radar head turned clockwise on its mount (the Radar's dish faces the viewer so). */
 const head = Number(q.get("head") ?? 0);
-const facs = (icon ? q.get("faction") ?? "blue" : q.get("faction") ?? "blue,red").split(",") as ("blue" | "red")[];
+const facs = (icon ? q.get("faction") ?? "blue" : q.get("faction") ?? "blue,red").split(",") as Faction[];
 const only = icon ? "icon" : q.get("only");
 const anim = q.get("anim") ?? "walk";
 const BOTS: BotKind[] = ["trooper", "rocket-squad", "sniper"];
@@ -62,7 +62,7 @@ const cface = -Number(q.get("cface") ?? 0.35);
 let iconRoot: THREE.Object3D | null = null;
 
 /** A Condor at (x, z), `y` up, riders aboard, its ramp `ramp` of the way open. */
-function condor(f: "blue" | "red", x: number, y: number, z: number, load: BotKind[], ramp: number, face = cface): void {
+function condor(f: Faction, x: number, y: number, z: number, load: BotKind[], ramp: number, face = cface): void {
   const c = instance(unitDef("condor", f));
   const s = unitScale("condor");
   c.root.scale.setScalar(s);
@@ -83,7 +83,7 @@ function condor(f: "blue" | "red", x: number, y: number, z: number, load: BotKin
 }
 
 /** A Goliath rig at (x, z) facing `face` (rad, sim-style: clockwise from north), posed once. */
-function goliath(f: "blue" | "red", x: number, z: number, face: number, pose: Partial<GoliathPose> = {}, y = 0): GoliathRig {
+function goliath(f: Faction, x: number, z: number, face: number, pose: Partial<GoliathPose> = {}, y = 0): GoliathRig {
   const r = new GoliathRig(f);
   r.root.scale.setScalar(unitScale("goliath"));
   r.root.position.set(x, y, z);

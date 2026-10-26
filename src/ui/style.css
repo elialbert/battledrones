@@ -16,6 +16,9 @@
   --blue: #4c9dff;
   --green: #7ef29b;
   --red: #ff7a6a;
+  /* a four-player map's other two sides (team colours, not the good/bad signal --green) */
+  --side-green: #4fd86a;
+  --side-purple: #b685ff;
   --r: 12px;
   /* in-battle chrome: every widget floating over the 3D battlefield sits on the
      same lift (a soft drop shadow plus a hairline top bevel), so the set reads
@@ -330,6 +333,22 @@ button {
 }
 .vs-red {
   color: #ff8a7a;
+}
+.vs-green {
+  color: #86eea0;
+}
+.vs-purple {
+  color: #c9a2ff;
+}
+/* a four-player map's four commanders, two by two; a side knocked out is struck through */
+.versus.multi {
+  grid-template-columns: auto auto;
+  column-gap: 10px;
+  font-size: 11px;
+}
+.versus > span.out {
+  text-decoration: line-through;
+  opacity: 0.5;
 }
 @media (orientation: portrait) {
   /* (a stacked column, no row to line up with: the two lines get their breathing room) */
@@ -2784,8 +2803,10 @@ button {
 }
 .aar-legend {
   display: flex;
+  /* (a free-for-all's four sides with their personalities and openers don't fit one line) */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 2px 12px;
   font-size: 13px;
   font-weight: 700;
 }
@@ -5976,3 +5997,69 @@ button {
     border-color: #8fb8f0;
   }
 }
+/* ---------------------------------------------- four-player sides (green, purple)
+   every rule that paints a side blue or red, for the two sides a four-player map adds */
+.lk.green i,
+.rk.green i,
+.aar-stats th i.green,
+.aar-story i.green {
+  background: var(--side-green);
+}
+.lk.purple i,
+.rk.purple i,
+.aar-stats th i.purple,
+.aar-story i.purple {
+  background: var(--side-purple);
+}
+.aar-svg .ln.green { stroke: var(--side-green); }
+.aar-svg .ln.purple { stroke: var(--side-purple); }
+.aar-svg .xd.green { fill: var(--side-green); }
+.aar-svg .xd.purple { fill: var(--side-purple); }
+.cr-side.green .cr-sl { color: var(--side-green); }
+.cr-side.purple .cr-sl { color: var(--side-purple); }
+.objpill .pip.green {
+  background: #4fd86a;
+  border-color: #cdf7d6;
+}
+.objpill .pip.purple {
+  background: #b070ff;
+  border-color: #e6d4ff;
+}
+.objpill .pip.green.idle {
+  border-color: #4fd86a;
+}
+.objpill .pip.purple.idle {
+  border-color: #b070ff;
+}
+/* the report's stats table with a column per side */
+.aar-stats.multi td,
+.aar-stats.multi th {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.aar-stats.multi th.hb {
+  font-size: 11px;
+}
+.aar-placings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.aar-placings li i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+.aar-placings li.me {
+  font-weight: 700;
+}
+.aar-placings li i.blue { background: var(--blue); }
+.aar-placings li i.red { background: var(--red); }
+.aar-placings li i.green { background: var(--side-green); }
+.aar-placings li i.purple { background: var(--side-purple); }

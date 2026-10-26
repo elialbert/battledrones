@@ -16,6 +16,8 @@ import { hqOf } from "../sim/world";
 import type { Announcement, AnnounceTone } from "./announce";
 import { baseGoliath, calldownThreatens } from "./awareness";
 import { CalldownCredit, powerName, powerPhrase, type CalldownKill } from "./calldown-credit";
+import { SIDE_NAME } from "./side-style";
+import { isMulti, perSide, rivalsOf, sidesOf } from "../sim/sides";
 
 /** A line for the radio announcer. */
 export interface RadioLine {
@@ -145,7 +147,7 @@ export interface CalloutHooks {
   announce(a: Announcement): void;
 }
 
-const SIDE: Record<Faction, string> = { blue: "Blue", red: "Red" };
+const SIDE: Readonly<Record<Faction, string>> = SIDE_NAME;
 /** Shorter names where a banner must fit a phone ("ELITE FLAK DOWN"). */
 const SHORT: Partial<Record<UnitKind, string>> = { "flak-crawler": "Flak" };
 const enemyOf = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
@@ -184,10 +186,7 @@ interface Streak {
 export class BattleCallouts {
   private last = new Map<string, number>();
   private ownDeaths: number[] = [];
-  private streaks: Record<Faction, Streak> = {
-    blue: { kills: [], powers: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 },
-    red: { kills: [], powers: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 }
-  };
+  private streaks: Record<Faction, Streak> = perSide(() => ({ kills: [], powers: [], tier: 0, pending: 0, pendingAt: 0, big: null, x: 0, y: 0 }));
   /** Names the Barrage / Sky Hammer behind a kill (calldown-credit.ts). */
   private credit: CalldownCredit;
   private firstBlood = false;
@@ -196,8 +195,8 @@ export class BattleCallouts {
   private shown: number[] = [];
   private lastBigKill = -Infinity;
   private wasReady = false;
-  private airSeen: Record<Faction, number> = { blue: -Infinity, red: -Infinity };
-  private airArmed: Record<Faction, boolean> = { blue: true, red: true };
+  private airSeen: Record<Faction, number> = perSide(() => -Infinity);
+  private airArmed: Record<Faction, boolean> = perSide(() => true);
   private lastAirScan = -Infinity;
   /** An enemy strike we warned about lands about now: its hits are that news, not new news. */
   private strikeQuietUntil = -Infinity;
@@ -234,6 +233,7 @@ export class BattleCallouts {
       else if (ev.type === "goliathMode") this.goliathMode(ev, t);
       else if (ev.type === "goliathLift") this.goliathLift(ev, t);
       else if (ev.type === "goliathWeapon") (weapons ??= []).push(ev); // (one line for systems lost together)
+      else if (ev.type === "eliminated") this.knockedOut(ev, t);
     }
     if (weapons) this.goliathWeapons(weapons, t);
     this.poll(t, fx);
@@ -245,9 +245,29 @@ export class BattleCallouts {
    */
   inbound(domain: "air" | "ground" | "mixed", t: number): void {
     if (domain === "ground" || this.h.spectator) return;
-    const f = enemyOf(this.h.player);
-    this.airArmed[f] = false;
-    this.airSeen[f] = t;
+    for (const f of rivalsOf(this.h.world, this.h.player)) {
+      this.airArmed[f] = false;
+      this.airSeen[f] = t;
+    }
+  }
+
+  /** A free-for-all: a side is out. Everyone hears it; the side itself hears it its own way. */
+  private knockedOut(ev: Extract<FxEvent, { type: "eliminated" }>, t: number): void {
+    const h = this.h;
+    if (ev.left <= 1) return; // (the last one standing: the match's end says it)
+    const mine = !h.spectator && ev.faction === h.player;
+    const byUs = !h.spectator && ev.by === h.player;
+    const by = ev.by ? (byUs ? "by us" : `by ${SIDE[ev.by]}`) : "";
+    this.raise(
+      {
+        key: `out-${ev.faction}`,
+        text: mine ? "We're out of the fight" : `${SIDE[ev.faction]} knocked out`,
+        sub: mine ? `Our base has fallen${by ? ` ${by}` : ""} · ${ev.left} sides fight on` : `${by ? `${by.charAt(0).toUpperCase()}${by.slice(1)} · ` : ""}${ev.left} sides left`,
+        tone: mine ? "bad" : byUs ? "epic" : "info",
+        priority: 1
+      },
+      t
+    );
   }
 
   /** An outside cue (HUD): "no-scrap", or "cant-build" for a refused placement. */
@@ -364,7 +384,9 @@ export class BattleCallouts {
   private death(ev: Extract<FxEvent, { type: "death" }>, t: number, by: CalldownKill | null): void {
     const h = this.h;
     const victim = ev.faction;
-    const killer = enemyOf(victim);
+    // (a free-for-all's killer is whoever made the kill, when known: any of three)
+    const multi = isMulti(h.world);
+    const killer: Faction | null = multi ? ev.by ?? by?.faction ?? null : enemyOf(victim);
     if (ev.buildingKind) {
       if (ev.buildingKind === "hq") {
         this.hqFell(ev, t, by);
@@ -396,7 +418,7 @@ export class BattleCallouts {
       } else if (victim === h.player) {
         if (this.ready("structure-lost", t))
           this.say({ key: "structure-lost", text: `Structure lost: ${name}`, priority: 1, tone: "bad", x: ev.x, y: ev.y, caption: true }, t);
-      } else if (this.ready("structure-killed", t)) {
+      } else if ((!multi || killer === h.player) && this.ready("structure-killed", t)) {
         this.say({ key: "structure-killed", text: `Enemy ${name} destroyed`, priority: 2, tone: "good", x: ev.x, y: ev.y, caption: true }, t);
       }
       return;
@@ -404,7 +426,7 @@ export class BattleCallouts {
     const kind = ev.unitKind;
     if (!kind) return;
     if (kind === "goliath") this.weaponState.delete(ev.id);
-    if (h.spectator || killer === h.player) this.kill(ev, killer, t, by?.power ?? null);
+    if (killer && (h.spectator || killer === h.player)) this.kill(ev, killer, t, by?.power ?? null);
     // (a Goliath is always said, on screen or off, and never folded into "Squad lost")
     if (!h.spectator && victim === h.player) {
       if (kind === "goliath") this.goliathLost(ev, t);
@@ -425,6 +447,9 @@ export class BattleCallouts {
     if (w.winner) return; // the winner line covers it
     const f = ev.faction;
     const n = goliathsOf(w, f).length;
+    // a free-for-all: an HQ with no Goliath to fight on is a side knocked out, and its own banner says so (knockedOut)
+    const multi = isMulti(w);
+    if (multi && n === 0) return;
     if (h.spectator)
       this.raise({ key: `hq-fell-${f}`, text: `${SIDE[f]} HQ destroyed`, sub: `${SIDE[f]}'s ${fightsOn(n)}`, tone: "epic", priority: 1, x: ev.x, y: ev.y }, t);
     else if (f === h.player)
@@ -434,7 +459,9 @@ export class BattleCallouts {
       this.last.set("enemy-hq-fell", t);
       this.banner(
         {
-          key: "enemy-hq-fell", text: "Enemy HQ destroyed", sub: `Destroy their ${n > 1 ? "Goliaths" : "Goliath"} to win`, tone: "epic", priority: 1,
+          key: "enemy-hq-fell", text: multi ? `${SIDE[f]} HQ destroyed` : "Enemy HQ destroyed",
+          sub: multi ? `Destroy its ${n > 1 ? "Goliaths" : "Goliath"} to knock ${SIDE[f]} out` : `Destroy their ${n > 1 ? "Goliaths" : "Goliath"} to win`,
+          tone: "epic", priority: 1,
           x: ev.x, y: ev.y, ...(by ? { say: `Enemy HQ destroyed by ${powerPhrase(by.power)}` } : {})
         },
         t
@@ -604,24 +631,30 @@ export class BattleCallouts {
         return;
       }
       // what fell last: the HQ, or (the HQ long gone, or never there: Nomads) the last Goliath — the finale banner words it the same way
-      const byGoliath = decidedByGoliath(fx, enemyOf(w.winner));
+      // (a free-for-all's loser: the last side knocked out)
+      const lastOut: Faction = isMulti(w) ? w.out?.at(-1)?.faction ?? enemyOf(w.winner) : enemyOf(w.winner);
+      const byGoliath = decidedByGoliath(fx, lastOut);
       if (w.survival) {
         // (watched or played, Last Stand only ends one way: matches the banner and the lament)
         const text = byGoliath ? "Base overrun. The last Goliath has fallen." : "Base overrun. The HQ has fallen.";
         this.say({ key: "defeat", text, priority: 0, tone: "bad", caption: false }, t);
         return;
       }
-      const loser = SIDE[enemyOf(w.winner)];
+      const loser = SIDE[lastOut];
       const text = h.spectator
         ? `${byGoliath ? `${loser}'s last Goliath destroyed. ` : ""}${SIDE[w.winner]} wins the battle`
-        : w.winner === h.player
-          ? byGoliath ? "Last enemy Goliath destroyed. Victory!" : "Enemy HQ destroyed. Victory!"
-          : byGoliath ? "Our last Goliath has fallen. Mission failed." : "Our HQ has fallen. Mission failed.";
+        : isMulti(w)
+          ? w.winner === h.player
+            ? "Last rival knocked out. Victory!"
+            : lastOut === h.player ? `We're out. ${SIDE[w.winner]} wins the battle.` : `${SIDE[w.winner]} wins the battle.`
+          : w.winner === h.player
+            ? byGoliath ? "Last enemy Goliath destroyed. Victory!" : "Enemy HQ destroyed. Victory!"
+            : byGoliath ? "Our last Goliath has fallen. Mission failed." : "Our HQ has fallen. Mission failed.";
       this.say({ key: w.winner === h.player || h.spectator ? "victory" : "defeat", text, priority: 0, tone: w.winner === h.player || h.spectator ? "epic" : "bad", caption: false }, t);
       return;
     }
     // streak banners whose hold has run out
-    for (const f of ["blue", "red"] as Faction[]) this.flushStreak(f, t);
+    for (const f of sidesOf(w)) this.flushStreak(f, t);
     if (!h.spectator) {
       const ready = !!w.factions[h.player].pending?.ready;
       if (ready && !this.wasReady)
@@ -911,7 +944,7 @@ export class BattleCallouts {
   private scanAir(t: number): void {
     const h = this.h;
     const w = h.world;
-    const sides: Faction[] = h.spectator ? ["blue", "red"] : [enemyOf(h.player)];
+    const sides: readonly Faction[] = h.spectator ? sidesOf(w) : rivalsOf(w, h.player);
     for (const f of sides) {
       let spotted: { x: number; y: number } | null = null;
       for (const u of w.units.values()) {

@@ -6,6 +6,7 @@ import { applySpawnRank } from "./rules";
 import { wreckRestingSpot } from "./salvage";
 import type { Command, Unit, World } from "./types";
 import { buildingCenter, hqOf, inBounds, passable, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
+import { sidesOf } from "./sides";
 import { atan2, cos, hypot, sin } from "./fmath";
 
 /**
@@ -100,7 +101,7 @@ export function setDownPoint(w: World, g: Unit, x: number, y: number): { x: numb
   const ok = (tx: number, ty: number) => passable(w, tx, ty, "ground");
   // (the tile under the point in the side's frame: on a tile edge, red's is blue's mirror)
   const fr = sideFrame(w, g.faction);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   if (ok(...fr.tile(Math.floor(p.x), Math.floor(p.y), 1))) return { x, y };
   const R = Math.ceil(GOLIATH.lift.setDownSearch);
   let best: { x: number; y: number } | null = null;
@@ -114,7 +115,7 @@ export function setDownPoint(w: World, g: Unit, x: number, y: number): { x: numb
       const d = hypot(fx + 0.5 - p.x, fy + 0.5 - p.y);
       if (d > GOLIATH.lift.setDownSearch || d >= bestD - 1e-9) continue;
       bestD = d;
-      best = fr.pt({ x: fx + 0.5, y: fy + 0.5 });
+      best = fr.toWorld({ x: fx + 0.5, y: fy + 0.5 });
     }
   return best;
 }
@@ -332,7 +333,7 @@ export function dropLifts(w: World): void {
     const killer = down?.lastAttackerId ?? g.lastAttackerId ?? 0;
     // the tile under it in its side's frame (as canBailOut takes it for squads: mirror-fair on a tile edge)
     const fr = sideFrame(w, g.faction);
-    const fp = fr.pt(g);
+    const fp = fr.toFrame(g);
     const [tx, ty] = fr.tile(Math.floor(fp.x), Math.floor(fp.y), 1);
     let lands = inBounds(w, tx, ty) && TERRAIN[terrainAt(w, tx, ty)].ground;
     if (lands && w.occupancy[ty * w.width + tx] !== 0) {
@@ -368,21 +369,21 @@ const ARMADA: readonly (readonly [number, number])[] = [
  * (HQ, Harvester, Trooper Squad) and four Goliaths take its place in the air,
  * on the corners of a square round where the HQ stood, facing the map
  * centre, each already carried by two Condors. Placed in the side's own
- * frame, so red's armada is blue's mirror image. With no HQ, a side is
+ * frame, so every side's armada is blue's, turned. With no HQ, a side is
  * beaten when its last Goliath falls.
  */
 export function armadaStart(w: World): void {
   const centre = { x: w.width / 2, y: w.height / 2 };
   const edge = GOLIATH.lift.span + 1; // (a Condor's hook point stays over the map)
-  for (const f of ["blue", "red"] as const) {
+  for (const f of sidesOf(w)) {
     const hq = hqOf(w, f);
     if (!hq) continue;
     const fr = sideFrame(w, f);
-    const home = fr.pt(buildingCenter(hq));
+    const home = fr.toFrame(buildingCenter(hq));
     for (const b of [...w.buildings.values()]) if (b.faction === f) removeBuilding(w, b);
     for (const u of [...w.units.values()]) if (u.faction === f) w.units.delete(u.id);
     for (const [dx, dy] of ARMADA) {
-      const at = fr.pt({
+      const at = fr.toWorld({
         x: Math.min(w.width - edge, Math.max(edge, home.x + dx * GOLIATH.armada.gap)),
         y: Math.min(w.height - edge, Math.max(edge, home.y + dy * GOLIATH.armada.gap))
       });

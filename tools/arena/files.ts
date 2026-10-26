@@ -38,7 +38,12 @@ export function simHash(root = ROOT): string {
 
 /** The sim plus the sound-duel code (SOUND-DUEL.md): two phones pair only when this matches. */
 export function duelHash(root = ROOT): string {
-  return treeHash(root, ["src/sim", "src/versus", "src/link", "src/game/local-side.ts"]);
+  return treeHash(root, ["src/sim", "src/versus", "src/link", "src/net", "src/game/local-side.ts"]);
+}
+
+/** The sim plus the four-player online code (FFA.md "Build check"): a friend's page joins only when this matches. */
+export function ffaHash(root = ROOT): string {
+  return treeHash(root, ["src/sim", "src/ffa", "src/net"]);
 }
 
 export function gitCommit(root = ROOT): string | null {

@@ -24,8 +24,9 @@ import {
 import { allowedOpener } from "../src/sim/openers";
 import { podCrew } from "../src/sim/powers";
 import { step } from "../src/sim/sim";
-import type { World } from "../src/sim/types";
+import type { Faction, World } from "../src/sim/types";
 import { createWorld, hqOf, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { perSide } from "../src/sim/sides";
 
 const run = (w: World, ticks: number) => {
   for (let i = 0; i < ticks; i++) step(w, []);
@@ -343,9 +344,9 @@ describe("infantry mutators", () => {
     for (const seed of [3, 4]) {
       const w = createMapWorld("frostbite", { seed, mutators: ["airborne"] });
       const ai = { blue: createAiState("skyforce", "normal", 1), red: createAiState("airswarm", "normal", 2) };
-      const bays = { blue: 0, red: 0 };
-      const drops = { blue: 0, red: 0 };
-      const home = { blue: hqOf(w, "blue")!, red: hqOf(w, "red")! };
+      const bays = { blue: 0, red: 0 } as Record<Faction, number>;
+      const drops = { blue: 0, red: 0 } as Record<Faction, number>;
+      const home = perSide((f) => hqOf(w, f)!);
       for (let i = 0; i < 8 * 60 * TICK_RATE && !w.winner; i++) {
         step(w, [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)]);
         for (const e of w.fx)
@@ -366,7 +367,7 @@ describe("infantry mutators", () => {
     const a = createAiState("balanced", "normal", 1);
     const b = createAiState("rush", "normal", 2);
     const banned = new Set<string>([...rulesOf(w).bannedUnits, ...rulesOf(w).bannedBuildings]);
-    const bays = { blue: 0, red: 0 };
+    const bays = { blue: 0, red: 0 } as Record<Faction, number>;
     let squads = 0;
     for (let i = 0; i < 25 * 60 * TICK_RATE && !w.winner; i++) {
       step(w, [...tickAi(w, "blue", a), ...tickAi(w, "red", b)]);

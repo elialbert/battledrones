@@ -1,4 +1,5 @@
-import { cleanupDeaths, tickCombat } from "./combat";
+import { cleanupDeaths, eliminate, isOut, tickCombat } from "./combat";
+import { isMulti, otherSide, sidesOf } from "./sides";
 import {
   applyEconomyCommand,
   tickConstruction,
@@ -124,11 +125,19 @@ function applyCommand(w: World, c: Command, held?: HeldLiftOrders): void {
       applyCalldown(w, c);
       break;
     case "resign":
+      // a free-for-all: that side is out (the last one standing wins: combat.ts)
+      if (isMulti(w)) {
+        if (w.winner || isOut(w, c.faction) || !sidesOf(w).includes(c.faction)) break;
+        w.fx.push({ type: "resign", faction: c.faction });
+        eliminate(w, c.faction, null);
+        cleanupDeaths(w);
+        break;
+      }
       // the other side wins this tick; both resigning in the same tick is a draw
       // (step() returns before any command once a winner is set, so only a
       // resign earlier in this same batch can have decided it)
       if (!w.winner) {
-        w.winner = c.faction === "blue" ? "red" : "blue";
+        w.winner = otherSide(c.faction);
         w.resigned = c.faction;
       } else if (w.winner === c.faction) {
         w.winner = "draw";

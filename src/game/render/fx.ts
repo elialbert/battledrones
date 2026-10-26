@@ -38,7 +38,7 @@ interface Flier {
   onHit?: () => void;
 }
 
-const LASER_TINT: Record<Faction, number> = { blue: 0x7fd4ff, red: 0xff6a4a };
+const LASER_TINT: Record<Faction, number> = { blue: 0x7fd4ff, red: 0xff6a4a, green: 0x8affa6, purple: 0xd6a4ff };
 const DUST_TINT: Record<Biome, number> = {
   temperate: 0x8a7453, desert: 0xd8b77a, arctic: 0xf2f6ff, volcanic: 0x5d5752, tropical: 0xe6dcc4
 };

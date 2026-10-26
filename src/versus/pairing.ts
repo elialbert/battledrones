@@ -305,6 +305,8 @@ export interface LobbyFrame extends LobbyHeader {
 
 const ROLES: readonly BandRole[] = ["host", "guest"];
 const SIDES: readonly Faction[] = ["blue", "red"];
+/** The maps a duel can be played on, in their frame codes' order: the 2-player ones (a four-player map is no duel). */
+export const DUEL_MAPS = MAPS.filter((m) => m.players !== 4);
 const PICK_NONE = 3;
 
 const pickCode = (p: OpenerId | null): number => (p === null ? PICK_NONE : OPENER_IDS.indexOf(p));
@@ -312,7 +314,7 @@ const pickOf = (code: number): OpenerId | null => OPENER_IDS[code] ?? null;
 
 /** A map's code in the frame (and a random map's seed). Throws RangeError for a map no frame can name (a ninth built-in map needs a wider field, and a new LOBBY_PROTO). */
 function mapCode(mapId: string): { code: number; seed: number | null } {
-  const i = MAPS.findIndex((m) => m.id === mapId);
+  const i = DUEL_MAPS.findIndex((m) => m.id === mapId);
   if (i >= 0 && i < MAP_RANDOM) return { code: i, seed: null };
   const r = parseRandomMapId(mapId);
   const b = r ? BIOMES.indexOf(r.biome) : -1;
@@ -398,7 +400,7 @@ export function readLobbyFrame(bits: Uint8Array, nbits: number): LobbyFrame {
     if (head.role !== "host") throw new CodecError("a config from the guest");
     const code = rd.bits(4);
     let mapId: string;
-    if (code < MAPS.length) mapId = MAPS[code]!.id;
+    if (code < DUEL_MAPS.length) mapId = DUEL_MAPS[code]!.id;
     else if (code >= MAP_RANDOM && code < MAP_RANDOM + BIOMES.length) mapId = randomMapId(BIOMES[code - MAP_RANDOM]!, rd.bits(32));
     else throw new CodecError(`map code ${code}`);
     const mutators: MutatorId[] = [];
@@ -1171,7 +1173,8 @@ export class Pairing {
 
   /** The openers a side may pick under a config: those not blocked in setupWorld({ map, seed, mutators, openers: {} }). */
   private offeredFor(c: DuelConfig, side: Faction): OpenerId[] {
-    return this.offeredWorld(c)[side];
+    const o = this.offeredWorld(c);
+    return side === "red" ? o.red : o.blue; // (a duel: blue or red)
   }
 
   private offeredWorld(c: DuelConfig): { blue: OpenerId[]; red: OpenerId[]; world: World } {

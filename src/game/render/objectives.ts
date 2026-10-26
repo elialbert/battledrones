@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OBJECTIVES, TICK_RATE } from "../../sim/balance";
-import { CRATE_NAMES, uplinkPay } from "../../sim/objectives";
+import { CRATE_NAMES, uplinkBar, uplinkPay } from "../../sim/objectives";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, Uplink, World } from "../../sim/types";
 import { buildingCenter, hqOf } from "../../sim/world";
 import { announce } from "../announce";
@@ -10,6 +10,11 @@ import { chuteGeometry, crateDef, instance, modelMesh, uplinkDef, type ModelInst
 import { Ease } from "../three/tween";
 import type { View } from "../three/view";
 import type { Fx } from "./fx";
+import { SIDE_CSS, SIDE_NAME } from "../side-style";
+import { isMulti } from "../../sim/sides";
+
+/** An Uplink's pip on the minimap, in its holder's colour. */
+const MINIMAP_OWNER: Record<Faction, string> = { blue: "#4fa3ff", red: "#ff5a4a", green: "#4fd86a", purple: "#b070ff" };
 
 /**
  * How the map objectives look and sound: the Uplink relays (a neutral
@@ -40,8 +45,8 @@ export interface ObjectiveRendererOpts {
   charted?(x: number, y: number): boolean;
 }
 
-const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a };
-const TEAM_CSS: Record<Faction, string> = { blue: "#7ec1ff", red: "#ff8a7a" };
+const TEAM: Record<Faction, number> = { blue: 0x4fa3ff, red: 0xff5a4a, green: 0x4fd86a, purple: 0xb070ff };
+const TEAM_CSS: Record<Faction, string> = SIDE_CSS;
 const NEUTRAL = 0xe8c66a;
 const GOLD = 0xffd66e;
 /** The dark track under the capture bar and a crate's burn-out ring. */
@@ -243,7 +248,7 @@ export class ObjectiveRenderer {
       if (ev.owner) {
         this.sound("capture", x, y, 0.8);
         announce({
-          key: "uplink-spectate", text: `${ev.owner === "blue" ? "Blue" : "Red"} takes an Uplink`,
+          key: "uplink-spectate", text: `${SIDE_NAME[ev.owner]} takes an Uplink`,
           sub: "Scrap, vision and command charge while they hold it", tone: "info", priority: 3, x: ev.x, y: ev.y
         });
       }
@@ -270,31 +275,15 @@ export class ObjectiveRenderer {
     } else if (ev.owner) {
       this.sound("uplinkLost", x, y, 0.6, 0.2);
       this.opts.ping(ev.x, ev.y);
-      this.opts.notify("📡 The enemy took an Uplink", "bad");
+      // (a free-for-all names who: "the enemy" could be any of three)
+      this.opts.notify(isMulti(this.world) ? `📡 ${SIDE_NAME[ev.owner]} took an Uplink` : "📡 The enemy took an Uplink", "bad");
     }
   }
 
   private incoming(ev: Extract<FxEvent, { type: "crateIncoming" }>): void {
     const c = this.world.objectives.crates.find((k) => k.id === ev.id);
     if (!c) return;
-    const h = this.v.terrain.surfaceAt(ev.x, ev.y);
-    const crate = instance(crateDef());
-    crate.root.visible = false;
-    const chute = modelMesh(chuteGeometry(), false);
-    chute.visible = false;
-    const gm = discMat(GOLD, 0);
-    const glow = new THREE.Mesh(discGeo, gm);
-    glow.position.set(ev.x, h + 0.08, ev.y);
-    glow.scale.setScalar(1.6);
-    glow.renderOrder = 3;
-    const pm = glowMat(0xffffff, 0.3);
-    pm.map = beamTexture();
-    const pillar = new THREE.Mesh(pillarGeo, pm);
-    pillar.position.set(ev.x, h, ev.y);
-    pillar.scale.set(0.9, 14, 1);
-    pillar.renderOrder = 8;
-    this.group.add(crate.root, chute, glow, pillar);
-    this.crates.set(ev.id, { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false });
+    this.addCrate(c);
     if (this.announced.has(ev.drop)) return;
     this.announced.add(ev.drop);
     // one banner per drop, pointing at the crate on our side
@@ -314,6 +303,55 @@ export class ObjectiveRenderer {
       y: at.y
     });
     this.opts.ping(at.x, at.y);
+  }
+
+  /** A crate's models: in the air (hidden) under its pillar of light, until it lands. */
+  private addCrate(c: Crate): CrateView {
+    const h = this.v.terrain.surfaceAt(c.x, c.y);
+    const crate = instance(crateDef());
+    crate.root.visible = false;
+    const chute = modelMesh(chuteGeometry(), false);
+    chute.visible = false;
+    const gm = discMat(GOLD, 0);
+    const glow = new THREE.Mesh(discGeo, gm);
+    glow.position.set(c.x, h + 0.08, c.y);
+    glow.scale.setScalar(1.6);
+    glow.renderOrder = 3;
+    const pm = glowMat(0xffffff, 0.3);
+    pm.map = beamTexture();
+    const pillar = new THREE.Mesh(pillarGeo, pm);
+    pillar.position.set(c.x, h, c.y);
+    pillar.scale.set(0.9, 14, 1);
+    pillar.renderOrder = 8;
+    this.group.add(crate.root, chute, glow, pillar);
+    const v: CrateView = { c, crate, chute, glow, glowMat: gm, pillar, pillarMat: pm, h, landed: false };
+    this.crates.set(c.id, v);
+    return v;
+  }
+
+  /**
+   * The world was put back to a saved copy, or stepped ahead unseen (a
+   * replay's seek): its Uplinks and crates are new objects, and crates came
+   * and went with nobody watching. The Uplinks follow the new ones; the
+   * crates are drawn again as they now are, quietly (no dust, no banner).
+   */
+  resync(): void {
+    for (const v of this.uplinks) {
+      const l = this.world.objectives.uplinks.find((u) => u.id === v.l.id);
+      if (l) v.l = l;
+      v.flash = 0;
+    }
+    for (const v of this.crates.values()) this.destroyCrate(v);
+    this.crates.clear();
+    for (const c of this.world.objectives.crates) {
+      const v = this.addCrate(c);
+      if (this.world.tick < c.landTick) continue;
+      v.landed = true;
+      v.crate.root.visible = true;
+      v.crate.root.position.set(c.x, v.h, c.y);
+      v.crate.root.rotation.set(0, c.id * 0.7, 0);
+      this.group.remove(v.pillar);
+    }
   }
 
   private land(v: CrateView): void {
@@ -460,15 +498,17 @@ export class ObjectiveRenderer {
     if (owner && seen && !idle) g.fillStyle(col, 0.05 + 0.03 * breathe).fillCircle(x, y, R);
     // a loaded Condor selected: gold chevrons close in on every island relay its troops could take
     if (l.infantryOnly && !(owner === this.opts.player && l.crewed) && this.opts.dropReady?.()) this.dropMarks(x, y, R);
-    // the capture bar: a ring around the platform, filled toward whoever is winning it,
-    // on a dark track notched into quarters like the health bars' segments
+    // the capture bar: a ring around the platform in the colour of whoever's bar it is (a duel's
+    // signed progress, a free-for-all's `bar`: uplinkBar), on a dark track notched into quarters
+    // like the health bars' segments
     const ar = 1.38;
-    const p = l.progress / 100;
+    const bar = uplinkBar(l);
+    const p = bar.fill / 100;
     const bh = v.h + 0.2;
     g.lineStyle(8, TRACK, 0.62 * k, 0).strokeCircle(x, y, ar, bh);
     const a0 = -Math.PI / 2;
-    const a1 = a0 + Math.PI * 2 * Math.abs(p);
-    if (Math.abs(p) > 0.001) g.lineStyle(5, p > 0 ? TEAM.blue : TEAM.red, 0.95 * k, 0).arc(x, y, ar, a0, a1, bh + 0.005);
+    const a1 = a0 + Math.PI * 2 * p;
+    if (bar.side && p > 0.001) g.lineStyle(5, TEAM[bar.side], 0.95 * k, 0).arc(x, y, ar, a0, a1, bh + 0.005);
     const notch = this.px(x, y, 4.5);
     g.lineStyle(1.5, TRACK, 0.8 * k, 0);
     for (let i = 0; i < 4; i++) {
@@ -477,7 +517,7 @@ export class ObjectiveRenderer {
       const cy = Math.sin(a);
       g.lineBetween(x + cx * (ar - notch), y + cy * (ar - notch), x + cx * (ar + notch), y + cy * (ar + notch), bh + 0.01);
     }
-    if (Math.abs(p) > 0.001 && Math.abs(p) < 0.999) {
+    if (bar.side && p > 0.001 && p < 0.999) {
       // a bright tip on the leading edge, pulsing while it moves
       const tip = l.pushing ? 4.5 + 1.5 * Math.sin(this.time * 0.02) : 3.5;
       g.fillStyle(0xffffff, (l.pushing ? 0.95 : 0.7) * k).fillCircle(x + Math.cos(a1) * ar, y + Math.sin(a1) * ar, this.px(x, y, tip), bh + 0.015);
@@ -651,7 +691,7 @@ export class ObjectiveRenderer {
       ctx.lineTo(x, y + d);
       ctx.lineTo(x - d, y);
       ctx.closePath();
-      ctx.fillStyle = l.owner === "blue" ? "#4fa3ff" : l.owner === "red" ? "#ff5a4a" : "#6b6450";
+      ctx.fillStyle = l.owner ? MINIMAP_OWNER[l.owner] : "#6b6450";
       // held, but no troops on it (the enemy's only while we can see it)
       if (l.infantryOnly && l.owner && !l.crewed && (this.opts.spectator || l.owner === this.opts.player || this.opts.visibleAt(l.x, l.y)))
         ctx.globalAlpha = 0.4;

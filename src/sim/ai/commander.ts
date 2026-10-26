@@ -1,7 +1,9 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { knownBuildings } from "../fog";
+import { isVisible, knownBuildings } from "../fog";
+import { isOut } from "../combat";
+import { QUARTER, isMulti, rivalsOf, turnPoint } from "../sides";
 import { isInfantry } from "../infantry";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
@@ -288,6 +290,12 @@ export interface AiState {
    * the army's.
    */
   hornetStyle?: "strike";
+  /**
+   * A free-for-all: the rival this commander is out to beat (pickFocus), and
+   * the tick it looks again. Absent in a duel: there is only one.
+   */
+  focus?: Faction | null;
+  focusUntil?: number;
 }
 
 /**
@@ -345,6 +353,65 @@ const INFANTRY_KINDS: UnitKind[] = ["trooper", "rocket-squad", "sniper"];
 
 const mirror = (w: World, x: number, y: number) => ({ x: w.width - x, y: w.height - y });
 
+/** A free-for-all's focus holds this long before it is looked at again (s), unless that side is knocked out. */
+const FOCUS_SECS = 100;
+/** A raid at home this big (scrap value) turns the focus on whoever sent it, for at least this long (s). */
+const GRUDGE_VALUE = 400;
+const GRUDGE_SECS = 70;
+
+/**
+ * Where `rival`'s base is, from ours (`origin`, where our HQ stands or stood):
+ * the map is symmetric, so it is our spot turned onto their corner (a duel's:
+ * the mirror image).
+ */
+function homeOf(w: World, faction: Faction, rival: Faction, origin: { x: number; y: number }): { x: number; y: number } {
+  return turnPoint((QUARTER[rival] - QUARTER[faction] + 4) & 3, w.width, w.height, origin.x, origin.y);
+}
+
+/**
+ * A free-for-all's focus: the rival this commander builds its waves, raids
+ * and strikes against. A side that raids our base earns a grudge (focus on
+ * it at once); otherwise the focus holds for FOCUS_SECS, then goes to the
+ * rival that looks easiest: near (its base's distance from ours), and hurt
+ * (its HQ's health, when we have seen it), with a seeded shuffle so four
+ * commanders don't all pile onto the same one. Knocked-out sides are skipped.
+ */
+function pickFocus(w: World, faction: Faction, s: AiState, origin: { x: number; y: number }, raiders: Map<Faction, number>): Faction | null {
+  const rivals = rivalsOf(w, faction).filter((f) => !isOut(w, f));
+  if (rivals.length === 0) return null;
+  let grudge: Faction | null = null;
+  let worst = GRUDGE_VALUE;
+  for (const f of rivals) {
+    const v = raiders.get(f) ?? 0;
+    if (v >= worst) {
+      worst = v;
+      grudge = f;
+    }
+  }
+  if (grudge) {
+    if (s.focus !== grudge) s.focusUntil = w.tick + GRUDGE_SECS * TICK_RATE;
+    s.focus = grudge;
+    return grudge;
+  }
+  if (s.focus && rivals.includes(s.focus) && w.tick < (s.focusUntil ?? 0)) return s.focus;
+  let best: Faction | null = null;
+  let bestScore = Infinity;
+  for (const f of rivals) {
+    const home = homeOf(w, faction, f, origin);
+    const hq = knownBuildings(w, faction).find((kb) => kb.kind === "hq" && kb.faction === f);
+    const live = hq ? w.buildings.get(hq.id) : undefined;
+    const health = live && isVisible(w, faction, hq!.tx + 1, hq!.ty + 1) ? live.hp / BUILDINGS.hq.hp : 1;
+    const score = dist(origin.x, origin.y, home.x, home.y) * (0.6 + 0.4 * health) + rand(s) * 18;
+    if (score < bestScore) {
+      bestScore = score;
+      best = f;
+    }
+  }
+  s.focus = best;
+  s.focusUntil = w.tick + FOCUS_SECS * TICK_RATE;
+  return best;
+}
+
 const canHitDomain = (targets: TargetDomain, domain: Domain): boolean =>
   targets === "both" || targets === domain;
 
@@ -399,16 +466,23 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   observeEnemy(s, seen, enemyGantryBuilds(w, faction).length);
 
   // where our HQ stands, or stood (Nomads: where our Goliath started): the enemy's home is its
-  // mirror image, and that stays put
+  // mirror image, and that stays put (a free-for-all's: the focus rival's corner, homeOf)
   const origin = hq ? buildingCenter(hq) : lostHome(w, faction, s);
   if (hq) noteHome(s, origin);
+  const multi = isMulti(w);
   // the base: the HQ, else (lost, or Nomads) our first dug-in Goliath, else where the HQ stood
   const baseGoliath = hq ? undefined : goliaths.find(isAnchored);
   const hqC = baseGoliath ? { x: baseGoliath.x, y: baseGoliath.y } : origin;
   // island maps: the two landmasses meet only at the bridges, and a field on
   // the enemy's side of them is theirs to defend, not ours to mine
   const islandMap = !!w.rules?.islands;
-  const enemyHome = mirror(w, origin.x, origin.y);
+  // --- threats: armed intruders near our buildings, harvesters or Uplinks ---
+  const threats = findThreats(w, faction, seen, myBuildings, harvesters);
+  // (where our base is, for the raid tally below: the HQ, else a dug-in Goliath, else where the HQ stood)
+  const home0 = hq ? origin : goliaths.find(isAnchored) ?? origin;
+  // a free-for-all: who we're out to beat this pass (a raid on our base turns us on the raider)
+  const focus = multi ? pickFocus(w, faction, s, origin, raidersAt(w, threats, home0)) : null;
+  const enemyHome = focus ? homeOf(w, faction, focus, origin) : mirror(w, origin.x, origin.y);
   const ourSide = (tx: number, ty: number) =>
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
   const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
@@ -421,14 +495,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       }
     : hqC;
 
-  // --- threats: armed intruders near our buildings, harvesters or Uplinks ---
-  const threats = findThreats(w, faction, seen, myBuildings, harvesters);
   threats.sort((a, b) => dist(a.x, a.y, hqC.x, hqC.y) - dist(b.x, b.y, hqC.x, hqC.y));
   // (a Goliath counts for what it can still fire: ai/goliath.ts threatValue)
   const atHome = threats.filter((t) => dist(t.x, t.y, hqC.x, hqC.y) <= DEFENSE_RADIUS);
   const raidValue = atHome.reduce((v, t) => v + t.value, 0);
   const threatened = raidValue >= HOME_ALARM_VALUE;
-  const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq");
+  const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq" && (!focus || b.faction === focus));
   const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : enemyHome;
 
   // --- construction: place a ready building, or start the next one -------
@@ -510,7 +582,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (h.order.type !== "idle" && !astray) continue;
     const field = fieldFrom(h.x, h.y);
     if (field) cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
-    else if (astray) cmds.push({ type: "move", faction, unitIds: [h.id], x: hqC.x, y: hqC.y + (sideFrame(w, faction).flip ? -3 : 3) });
+    else if (astray) {
+      const [dx, dy] = sideFrame(w, faction).vec(0, 3); // (just behind the HQ, in the side's frame)
+      cmds.push({ type: "move", faction, unitIds: [h.id], x: hqC.x + dx, y: hqC.y + dy });
+    }
   }
 
   // --- production: adaptive counters to the enemy composition -------------
@@ -848,7 +923,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   if (s.mode === "harass") {
     const group = raiders.filter((u) => !used.has(u.id));
-    const raid = enemyHarvestArea(w, faction, hqC, seen);
+    const raid = enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus);
     const flying = group.filter((u) => UNITS[u.kind].domain === "air").length;
     // raiders don't fly into flak (seen now, or remembered): they wait for
     // the main assault instead
@@ -879,7 +954,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const launchAt = airWar ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
 
     if (stagedValue >= launchAt) {
-      const target = pickPriorityTarget(w, faction, seen, enemyHqPos);
+      const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
       // robot infantry still marching up (1.6–1.8 tiles/s) goes with the wave, not left for the next one
       const marching = army.filter(
         (u) =>
@@ -892,7 +967,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       for (const u of idleArmy()) {
         if (dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < 14) {
           // already deep in enemy territory: keep fighting, don't yo-yo home
-          const target = pickPriorityTarget(w, faction, seen, enemyHqPos);
+          const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
           launchWave(w, cmds, faction, [u], target, used);
         } else if (dist(u.x, u.y, staging.x, staging.y) > STAGE_RADIUS) {
           used.add(u.id);
@@ -963,8 +1038,16 @@ interface PriorityTarget {
  * all of them (killed mid-build, the progress is lost); once the enemy HQ is
  * seen gone, its Goliaths are what's left to beat, so they come first; and
  * with nothing else known, the nearest Goliath beats an empty plot.
+ * A free-for-all's `focus`: that rival's first; anyone's when none of its is known.
  */
-function pickPriorityTarget(w: World, faction: Faction, seen: Unit[], fallback: { x: number; y: number }): PriorityTarget {
+function pickPriorityTarget(w: World, faction: Faction, seen: Unit[], fallback: { x: number; y: number }, focus: Faction | null = null): PriorityTarget {
+  if (focus) {
+    const theirs = pickPriorityTarget(w, faction, seen.filter((u) => u.faction === focus), fallback, null);
+    const ownerOf = (id?: number) => (id === undefined ? null : (w.units.get(id) ?? w.buildings.get(id))?.faction ?? knownBuildings(w, faction).find((kb) => kb.id === id)?.faction ?? null);
+    if (theirs.id !== undefined && ownerOf(theirs.id) === focus) return theirs;
+    const any = pickPriorityTarget(w, faction, seen, fallback, null);
+    return any.id !== undefined ? any : theirs;
+  }
   const building = enemyGantryBuilds(w, faction).sort(
     (a, b) => dist(a.x, a.y, fallback.x, fallback.y) - dist(b.x, b.y, fallback.x, fallback.y) || a.id - b.id
   )[0];
@@ -1204,7 +1287,8 @@ function depotSite(
   const spot = findPlacementSpot(w, faction, "depot", best);
   if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) return null;
   // reachable by ground from just behind the HQ (in the side's own frame)
-  if (!findPath(w, hqC.x, hqC.y + (fr.flip ? -2.5 : 2.5), best.x, best.y, "ground", faction)) return null;
+  const [bx, by] = fr.vec(0, 2.5);
+  if (!findPath(w, hqC.x + bx, hqC.y + by, best.x, best.y, "ground", faction)) return null;
   return { spot };
 }
 
@@ -1219,7 +1303,7 @@ function findPlacementSpot(
   // candidates are generated and compared in the side's own frame, so ties
   // (common: spots equidistant from the HQ) resolve as mirror images
   const fr = sideFrame(w, faction);
-  const a = fr.pt(anchor);
+  const a = fr.toFrame(anchor);
   let best: { tx: number; ty: number } | null = null;
   let bestD = Infinity;
   // round every building of the base (outposts never give build range) and every dug-in Goliath's ring
@@ -1231,7 +1315,7 @@ function findPlacementSpot(
   /** A tile's lane round a dug-in Goliath's feet stays open (it walks out again once packed up). */
   const atFeet = (tx: number, ty: number) => dugIn.some((g) => distToFootprint(tx, ty, size, g.x, g.y) < GOLIATH.footprint / 2 + 1);
   for (const { c: at, r } of centres) {
-    const c = fr.pt(at);
+    const c = fr.toFrame(at);
     for (let dy = -r; dy <= r; dy++)
       for (let dx = -r; dx <= r; dx++) {
         const fx = Math.round(c.x + dx - size / 2);
@@ -1283,7 +1367,8 @@ function enemyHarvestArea(
   w: World,
   faction: Faction,
   hqC: { x: number; y: number },
-  seen: Unit[]
+  seen: Unit[],
+  focus: Faction | null = null
 ): { x: number; y: number; targetId?: number } {
   // a Gantry with a Goliath on the cradle beats anything (killed mid-build, the build is lost)
   const gantry = enemyGantryBuilds(w, faction).sort((a, b) => dist(a.x, a.y, hqC.x, hqC.y) - dist(b.x, b.y, hqC.x, hqC.y) || a.id - b.id)[0];
@@ -1291,8 +1376,21 @@ function enemyHarvestArea(
   // a visible enemy harvester is the best target
   for (const u of seen) if (u.kind === "harvester") return { x: u.x, y: u.y, targetId: u.id };
   const own = nearestScrapTile(w, hqC.x, hqC.y, faction);
+  // (a free-for-all: the focus rival's field, ours turned onto its corner)
+  if (focus) return homeOf(w, faction, focus, own ? { x: own.x + 0.5, y: own.y + 0.5 } : hqC);
   if (own) return mirror(w, own.x + 0.5, own.y + 0.5);
   return mirror(w, hqC.x, hqC.y);
+}
+
+/** A free-for-all: each rival's threat value raiding our base (within DEFENSE_RADIUS of it), for pickFocus. */
+function raidersAt(w: World, threats: readonly Threat[], home: { x: number; y: number }): Map<Faction, number> {
+  const out = new Map<Faction, number>();
+  for (const t of threats) {
+    const f = w.units.get(t.id)?.faction;
+    if (!f || dist(t.x, t.y, home.x, home.y) > DEFENSE_RADIUS) continue;
+    out.set(f, (out.get(f) ?? 0) + t.value);
+  }
+  return out;
 }
 
 export type { Unit };

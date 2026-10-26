@@ -1,5 +1,5 @@
 import { UNITS } from "./balance";
-import type { BuildingKind, Faction, FactionStats, PowerKind, UnitKind } from "./types";
+import type { BuildingKind, Faction, FactionStats, PerSide, PowerKind, UnitKind } from "./types";
 
 /**
  * Medals: pure functions of an end-of-match recap (stats, the army-strength
@@ -109,6 +109,8 @@ export interface RecapDeath {
   byBuilding: boolean;
   /** Killed by a commander calldown (then not byBuilding). */
   power?: PowerKind | null;
+  /** The killer's side, when known (a free-for-all's medals count only the pov side's own kills). */
+  by?: Faction | null;
 }
 
 /** A commander calldown and what came of it (from the chronicle). */
@@ -133,9 +135,11 @@ export interface MatchRecap {
   won: boolean;
   /** Match length in seconds. */
   secs: number;
-  stats: Record<Faction, FactionStats>;
+  stats: PerSide<FactionStats>;
+  /** Everyone the pov side fought: a free-for-all's three (default the duel's one enemy). */
+  rivals?: Faction[];
   /** Army strength over time (both sides). */
-  samples: { t: number; army: Record<Faction, number> }[];
+  samples: { t: number; army: PerSide<number> }[];
   deaths: RecapDeath[];
   /** Most kills scored by one of the pov side's units (alive or fallen). */
   bestUnitKills: number;
@@ -146,16 +150,18 @@ export interface MatchRecap {
 }
 
 const enemyOf = (f: Faction): Faction => (f === "blue" ? "red" : "blue");
+const rivalsIn = (r: MatchRecap): Faction[] => r.rivals ?? [enemyOf(r.pov)];
+/** A free-for-all: several rivals, and a kill counts only when it was the pov side's own. */
+const multi = (r: MatchRecap): boolean => rivalsIn(r).length > 1;
 
-/** Was the pov side ever down to half the enemy's army (after the opening)? */
+/** Was the pov side ever down to half the enemy's army (after the opening)? (A free-for-all: the strongest rival's.) */
 export function wasBehind(r: MatchRecap): boolean {
-  const them = enemyOf(r.pov);
-  return r.samples.some(
-    (s) =>
-      s.t >= AWARDS.comebackAfterSecs &&
-      s.army[them] - s.army[r.pov] >= AWARDS.comebackMinGap &&
-      s.army[r.pov] <= s.army[them] * AWARDS.comebackRatio
-  );
+  const rivals = rivalsIn(r);
+  return r.samples.some((s) => {
+    const theirs = Math.max(...rivals.map((f) => s.army[f] ?? 0));
+    const mine = s.army[r.pov] ?? 0;
+    return s.t >= AWARDS.comebackAfterSecs && theirs - mine >= AWARDS.comebackMinGap && mine <= theirs * AWARDS.comebackRatio;
+  });
 }
 
 /**
@@ -164,17 +170,18 @@ export function wasBehind(r: MatchRecap): boolean {
  * not one unit or building hit when it landed.
  */
 export function strikesDodged(r: MatchRecap): number {
-  const them = enemyOf(r.pov);
+  const rivals = rivalsIn(r);
   return (r.strikes ?? []).filter(
-    (s) => s.faction === them && (s.power === "barrage" || s.power === "hammer") && s.exposed >= AWARDS.dodgeExposed && s.hits === 0
+    (s) => rivals.includes(s.faction) && (s.power === "barrage" || s.power === "hammer") && s.exposed >= AWARDS.dodgeExposed && s.hits === 0
   ).length;
 }
 
 /** Enemy units the pov side destroyed matching a filter. */
 function killsWhere(r: MatchRecap, pred: (d: RecapDeath) => boolean): number {
-  const them = enemyOf(r.pov);
+  const rivals = rivalsIn(r);
+  const ours = (d: RecapDeath) => !multi(r) || d.by === r.pov;
   let n = 0;
-  for (const d of r.deaths) if (d.faction === them && d.unitKind && pred(d)) n++;
+  for (const d of r.deaths) if (rivals.includes(d.faction) && ours(d) && d.unitKind && pred(d)) n++;
   return n;
 }
 
@@ -191,8 +198,12 @@ export function computeMedals(r: MatchRecap): MedalId[] {
     if (r.waves >= AWARDS.unbreakableWaves) out.push("unbreakable");
     return out;
   }
-  const me = r.stats[r.pov];
-  const them = r.stats[enemyOf(r.pov)];
+  const me = r.stats[r.pov]!;
+  // (a free-for-all's tycoon out-mines every rival: the best of them)
+  const them = rivalsIn(r)
+    .map((f) => r.stats[f])
+    .filter((x): x is FactionStats => !!x)
+    .sort((a, b) => b.scrapHarvested - a.scrapHarvested)[0]!;
   const out: MedalId[] = [];
   if (r.won && r.secs < AWARDS.lightningSecs) out.push("lightning");
   if (r.won && me.buildingsLost === 0) out.push("untouchable");

@@ -1,8 +1,9 @@
 import { COMBAT, INFANTRY, OBJECTIVES, POWERS, TICK_RATE, UNITS } from "./balance";
 import { isInfantry } from "./infantry";
 import { worldPick, worldRandom } from "./rand";
-import type { Crate, CrateReward, Faction, ObjectiveState, Unit, UnitKind, Uplink, World } from "./types";
-import { buildingAtTile, inBounds, passable, spawnUnit } from "./world";
+import type { Crate, CrateReward, Faction, ObjectiveState, PerSide, Unit, UnitKind, Uplink, World } from "./types";
+import { FACE, buildingAtTile, inBounds, passable, spawnUnit } from "./world";
+import { isMulti, perSide, sidesOf, symmetryTurns, turnPoint, turnVec } from "./sides";
 import { hypot } from "./fmath";
 
 /**
@@ -38,7 +39,7 @@ export const CRATE_NAMES: Record<CrateReward, string> = {
 
 export function createObjectiveState(): ObjectiveState {
   const zero = () => ({ uplinkScrap: 0, crateScrap: 0, captures: 0, crates: 0 });
-  return { uplinks: [], crates: [], dropSites: [], drops: 0, lastSite: -1, stats: { blue: zero(), red: zero() } };
+  return { uplinks: [], crates: [], dropSites: [], drops: 0, lastSite: -1, stats: perSide(zero) };
 }
 
 /** The point-mirror of (x, y): maps are symmetric under a 180° turn about the centre. */
@@ -58,7 +59,9 @@ export type UplinkDef =
 /**
  * Put a map's objectives into the world: an Uplink at each listed point and
  * at its mirror (a point at the very centre is its own mirror: one relay),
- * and the supply-drop sites. Points are blue-side; tiles are continuous.
+ * and the supply-drop sites. Points are blue-side; tiles are continuous. On
+ * a four-player map each point is copied a quarter turn at a time instead,
+ * blue's, green's, red's and purple's in that order.
  */
 export function setupObjectives(w: World, uplinks: readonly UplinkDef[], dropSites: [number, number][]): void {
   const o = w.objectives;
@@ -73,6 +76,14 @@ export function setupObjectives(w: World, uplinks: readonly UplinkDef[], dropSit
       if (def.infantryOnly) Object.assign(extra, { infantryOnly: true, crewed: false });
       if (def.income !== undefined) extra.income = def.income;
       if (def.charge !== undefined) extra.charge = def.charge;
+    }
+    if (isMulti(w)) {
+      extra.bar = null; // (a free-for-all's bar: uplinkBar)
+      for (const q of symmetryTurns(w)) {
+        const p = turnPoint(q, w.width, w.height, x, y);
+        add(p.x, p.y, extra);
+      }
+      continue;
     }
     add(x, y, extra);
     const m = mirrorPoint(w, x, y);
@@ -110,9 +121,9 @@ export function nextDropTick(w: World): number | null {
   return w.objectives.dropSites.length > 0 ? dropAnnounceTick(w.objectives.drops) : null;
 }
 
-/** Capture-zone presence: each unit inside, weighted by captureWeight. */
-export function presence(w: World, l: Uplink): Record<Faction, number> {
-  const p = { blue: 0, red: 0 };
+/** Capture-zone presence: each unit inside, weighted by captureWeight (per side playing). */
+export function presence(w: World, l: Uplink): PerSide<number> {
+  const p = Object.fromEntries(sidesOf(w).map((f) => [f, 0])) as Record<Faction, number>;
   const r2 = U.radius * U.radius;
   for (const u of w.units.values()) {
     const k = captureWeight(l, u.kind);
@@ -134,12 +145,23 @@ function towards(v: number, target: number, d: number): number {
   return v < target ? Math.min(target, v + d) : Math.max(target, v - d);
 }
 
+/**
+ * Whose colour an Uplink's capture bar shows and how full it is (0–100):
+ * a duel's bar is one signed number (+ blue, − red); a free-for-all's is
+ * `bar` and a fill (tickUplinkMulti).
+ */
+export function uplinkBar(l: Uplink): { side: Faction | null; fill: number } {
+  if (l.bar !== undefined) return { side: l.progress > 0 ? l.bar : null, fill: l.progress };
+  return { side: l.progress > 0 ? "blue" : l.progress < 0 ? "red" : null, fill: Math.abs(l.progress) };
+}
+
 /** Advance one Uplink's capture bar and settle who owns it. */
 function tickUplink(w: World, l: Uplink): void {
+  if (isMulti(w)) return tickUplinkMulti(w, l);
   const p = presence(w, l);
   const dt = 1 / TICK_RATE;
   // an island relay pays only while its holder's squads stand in it
-  if (l.infantryOnly) l.crewed = !!l.owner && p[l.owner] > 0;
+  if (l.infantryOnly) l.crewed = !!l.owner && (p[l.owner] ?? 0) > 0;
   l.contested = p.blue > 0 && p.red > 0;
   if (l.contested) {
     l.pushing = null; // both sides inside: the bar freezes
@@ -168,6 +190,53 @@ function tickUplink(w: World, l: Uplink): void {
     const f: Faction = l.progress > 0 ? "blue" : "red";
     l.owner = f;
     if (l.infantryOnly) l.crewed = p[f] > 0;
+    w.objectives.stats[f].captures++;
+    w.fx.push({ type: "uplinkFlip", id: l.id, x: l.x, y: l.y, owner: f, prev: null, by: f });
+  }
+}
+
+/**
+ * A free-for-all's capture bar: `bar` is the side whose colour it is, and
+ * `progress` how full (0–100). One side alone in the zone pushes it: its own
+ * bar up, anyone else's down to empty first (and then up in its own colour),
+ * as a duel's bar crosses neutral. Two or more sides inside freeze it; nobody
+ * inside lets it settle back (full for the holder, empty for no one). The bar
+ * is the holder's whenever it is held, so pushing it to empty takes it off them.
+ */
+function tickUplinkMulti(w: World, l: Uplink): void {
+  const p = presence(w, l);
+  const dt = 1 / TICK_RATE;
+  if (l.infantryOnly) l.crewed = !!l.owner && (p[l.owner] ?? 0) > 0;
+  const inside = sidesOf(w).filter((f) => (p[f] ?? 0) > 0);
+  l.contested = inside.length > 1;
+  const bar = l.bar ?? null;
+  if (l.contested) l.pushing = null;
+  else if (inside.length === 1) {
+    const f = inside[0]!;
+    if (bar === f && l.progress >= 100) l.pushing = null; // fully held already
+    else {
+      if (l.pushing !== f) w.fx.push({ type: "uplinkContest", id: l.id, x: l.x, y: l.y, faction: f, owner: l.owner });
+      l.pushing = f;
+      // the bar as f sees it: its own fill, or someone else's as negative
+      const v = towards(bar === f || bar === null ? l.progress : -l.progress, 100, Math.min(U.maxRate, U.perUnit * (p[f] ?? 0)) * dt);
+      if (v > 0) l.bar = f;
+      else if (v === 0) l.bar = null;
+      l.progress = Math.abs(v);
+    }
+  } else {
+    l.pushing = null;
+    l.progress = towards(l.progress, l.owner ? 100 : 0, U.settle * dt);
+    if (l.progress === 0 && !l.owner) l.bar = null;
+  }
+  if (l.owner && (l.bar !== l.owner || l.progress <= 0)) {
+    const prev = l.owner;
+    l.owner = null;
+    w.fx.push({ type: "uplinkFlip", id: l.id, x: l.x, y: l.y, owner: null, prev, by: l.pushing ?? prev });
+  }
+  if (!l.owner && l.bar && l.progress >= 100) {
+    const f = l.bar;
+    l.owner = f;
+    if (l.infantryOnly) l.crewed = (p[f] ?? 0) > 0;
     w.objectives.stats[f].captures++;
     w.fx.push({ type: "uplinkFlip", id: l.id, x: l.x, y: l.y, owner: f, prev: null, by: f });
   }
@@ -218,20 +287,19 @@ export function pickDropSite(w: World, k: number, last: number): number {
 /**
  * Where a crate aimed at (x, y) can land: the spot, or the nearest open ground
  * within 3 tiles (`mirrored`: scanned in red's frame, so a drop's mirror crate
- * lands on the mirror of its twin's tile).
+ * lands on the mirror of its twin's tile; `q`: in the frame that many quarter
+ * turns round, for a four-player map's copies).
  */
-export function crateSpot(w: World, x: number, y: number, mirrored = false): { x: number; y: number } | null {
+export function crateSpot(w: World, x: number, y: number, mirrored = false, q = mirrored ? 2 : 0): { x: number; y: number } | null {
   const ok = (tx: number, ty: number) => inBounds(w, tx, ty) && passable(w, tx, ty, "ground");
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   if (ok(tx, ty)) return { x, y };
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
-  const s = mirrored ? -1 : 1;
   for (let i = -3; i <= 3; i++)
     for (let j = -3; j <= 3; j++) {
-      const dy = i * s;
-      const dx = j * s;
+      const [dx, dy] = turnVec(q, j, i);
       if (!ok(tx + dx, ty + dy)) continue;
       const d = hypot(dx, dy);
       if (d < bestD) {
@@ -252,8 +320,10 @@ function announceDrop(w: World): void {
   const s = o.dropSites[site]!;
   const m = mirrorPoint(w, s.x, s.y);
   const landTick = dropLandTick(k);
-  for (const at of [s, m]) {
-    const spot = crateSpot(w, at.x, at.y, at === m);
+  // (a four-player map: one crate in each side's quarter, the same spot turned)
+  const at4 = isMulti(w) ? symmetryTurns(w).map((q) => ({ ...turnPoint(q, w.width, w.height, s.x, s.y), q })) : null;
+  for (const at of at4 ?? [{ ...s, q: 0 }, { ...m, q: 2 }]) {
+    const spot = crateSpot(w, at.x, at.y, false, at.q);
     if (!spot) continue;
     const c: Crate = {
       id: w.nextId++, x: spot.x, y: spot.y, reward, drop: k,
@@ -353,7 +423,7 @@ export function claimCrate(w: World, c: Crate, faction: Faction, collectorId: nu
     case "unit": {
       const u = spawnUnit(w, D.unit, faction, c.x, c.y);
       for (let r = 0; r < D.unitRank; r++) promote(u);
-      u.facing = u.aim = faction === "blue" ? 0 : Math.PI;
+      u.facing = u.aim = FACE[faction];
       unitIds.push(u.id);
       amount = UNITS[D.unit].cost;
       break;
@@ -399,7 +469,7 @@ export const PAD_RADIUS = 1.2;
 
 /** Uplinks each side holds (HUD, AI). */
 export function uplinksHeld(w: World): Record<Faction, number> {
-  const n = { blue: 0, red: 0 };
+  const n = perSide(() => 0);
   for (const l of w.objectives.uplinks) if (l.owner) n[l.owner]++;
   return n;
 }

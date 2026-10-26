@@ -50,6 +50,14 @@ WS  /<code>/<seat>       join room <code> as seat "host" or "guest"
   stops other web pages from using it, but not other programs, which can
   send any `Origin` they like.
 
+**Four-player battles** (`FFA.md`, `src/ffa/`) use the same two-seat
+rooms, with no change here: a battle is a star of rooms. For battle code
+`K7QM2XP4` the host's page holds the host seat of `K7QM2XP41`, `K7QM2XP42`
+and `K7QM2XP43`, and the friend invited to seat *k* joins `K7QM2XP4k` as its
+guest. Messages are JSON text kept under 900 bytes, and the host sends each
+room at most 30 a second. A seat waiting for a friend reconnects through
+4010 twice, so a lobby can wait 30 minutes, then gives up like any other.
+
 Close codes. The client should not reconnect after 4002, 4003 or 4010:
 
 | Code | Meaning |

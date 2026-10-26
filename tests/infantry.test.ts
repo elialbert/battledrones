@@ -665,7 +665,7 @@ describe("determinism", () => {
   function play(seed: number): string {
     const w = createMapWorld("riverlands", { seed, objectives: true });
     const ai = { blue: createAiState("balanced", "normal", seed), red: createAiState("rush", "normal", seed + 1) };
-    const extra: Record<Faction, { condor: number; squads: number[]; mastodon: number }> = { blue: null!, red: null! };
+    const extra: Record<Faction, { condor: number; squads: number[]; mastodon: number }> = { blue: null!, red: null!, green: null!, purple: null! };
     for (const f of ["blue", "red"] as const) {
       const hq = hqOf(w, f)!;
       const s = f === "blue" ? 1 : -1;

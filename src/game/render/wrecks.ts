@@ -14,6 +14,9 @@ import type { View } from "../three/view";
 import type { Fx } from "./fx";
 import { TOPPLE_SLAM_MS } from "./goliath";
 
+/** A spectator's salvage pop, in the collector's colour. */
+const SALVAGE_CSS: Record<Faction, string> = { blue: "#9fd0ff", red: "#ff9a8a", green: "#a6f3b8", purple: "#d8bcff" };
+
 /**
  * Battlefield wrecks (sim: salvage.ts). A destroyed combat unit's own model
  * stays on the field as a charred hull with its turret blown off,
@@ -168,7 +171,7 @@ export class WreckRenderer {
       this.trackHaul(amount, ev.x, ev.y);
     } else {
       // spectating: each side's haul in its team colour; playing: the enemy's in muted red
-      this.floatText(ev.x, ev.y, amount, this.opts.spectator && ev.faction === "blue" ? "#9fd0ff" : "#ff9a8a", 13);
+      this.floatText(ev.x, ev.y, amount, this.opts.spectator ? SALVAGE_CSS[ev.faction] : "#ff9a8a", 13);
     }
   }
 

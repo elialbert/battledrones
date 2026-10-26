@@ -17,6 +17,7 @@ import {
   AHEAD_MAX, CHECKPOINT_EVERY, END_CHECK_MS, HEADER_MAX, Lockstep, SLACK_FRAMES, TRAIL_START, foldTrail, minCapacity, readGameFrame, rxqOf, segmentsFor,
   unwrap16
 } from "../src/versus/lockstep";
+import { perSide } from "../src/sim/sides";
 
 const MAP = { width: 56, height: 56 };
 
@@ -134,11 +135,11 @@ describe("lockstep turns and frames", () => {
 
   it("steps the same decoded commands on both phones, blue's first", () => {
     const { a, b, exchange } = wire({ delay: 4 });
-    const raw: Record<Faction, Command> = {
+    const raw: Record<"blue" | "red", Command> = {
       blue: { type: "move", faction: "blue", unitIds: [9, 3, 3], x: 10.123456, y: 7.77 },
       red: { type: "attack", faction: "blue" /* (stamped by the receiver as red) */, unitIds: [44], targetId: 3 }
     };
-    const stepped: Record<Faction, Command[][]> = { blue: [], red: [] };
+    const stepped: Record<Faction, Command[][]> = perSide(() => []);
     for (let t = 0; t < 12; t++) {
       for (const [ls, side] of [[a, "blue"], [b, "red"]] as const) {
         const cmds = tryStep(ls, () => (t === 0 ? [raw[side]] : []));
@@ -1585,7 +1586,7 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
     // burst n's orders go to cells of their own: tile column n, at the 1/16-tile rows MOVE_ROW and ATTACK_ROW
     const MOVE_ROW = Math.floor((20 + Math.E / 7) * 16);
     const ATTACK_ROW = Math.floor(41.0001 * 16);
-    const bursts: Record<Faction, { at: number; ids: number[] }[]> = { blue: [], red: [] };
+    const bursts: Record<Faction, { at: number; ids: number[] }[]> = perSide(() => []);
     const cellOf = (c: Command) => ("x" in c && c.x !== undefined && c.y !== undefined ? { n: Math.floor(c.x), row: Math.floor(c.y * 16) } : null);
     const r = duel({
       map: "riverlands", seed: 8, strategies: ["balanced", "balanced"], delay: 4, ticks: FIVE_MINUTES,

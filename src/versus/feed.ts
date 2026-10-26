@@ -102,7 +102,7 @@
  */
 import type { BattleRecord } from "../arena/record";
 import type { Controller } from "../game/controller";
-import type { AbortReason, MatchFeed } from "../game/GameScene";
+import type { AbortReason, DuelAbortReason, MatchFeed } from "../game/GameScene";
 import { CAPTURE_OK_MS, LEAVE_AFTER_FAILURES, RIG_ADVICE, type Rig } from "../link/rig";
 import { worldHash } from "../sim/checksum";
 import type { MutatorId } from "../sim/rules";
@@ -231,7 +231,8 @@ export interface VersusFeedOptions {
   env?: Partial<FeedEnv>;
 }
 
-const OTHER: Record<Faction, Faction> = { blue: "red", red: "blue" };
+// (a duel's two sides)
+const OTHER: Record<Faction, Faction> = { blue: "red", red: "blue", green: "purple", purple: "green" };
 const isLiftOrder = (c: Command): c is Extract<Command, { type: "move" | "attackMove" | "unload" | "stop" }> =>
   c.type === "move" || c.type === "attackMove" || c.type === "unload" || c.type === "stop";
 
@@ -331,7 +332,7 @@ export class VersusFeed implements MatchFeed {
   /** The tick a resign was ordered on (null: none), and whether it was "Resign and leave". */
   private resignAt: number | null = null;
   private resignLeave = false;
-  private aborted: AbortReason | null = null;
+  private aborted: DuelAbortReason | null = null;
   /** The outcome counted (once, or moved over: settle), and the record as it then stood. */
   private settled: DuelOutcome | null = null;
   /** `settled` is abandoned for now: counted when the page went hidden mid-match (wentHidden). */
@@ -633,7 +634,7 @@ export class VersusFeed implements MatchFeed {
   // ------------------------------------------------------------ the end ---
 
   /** End with no result: count it, drop the orders in flight, and the scene's end screen. */
-  private abort(reason: AbortReason): void {
+  private abort(reason: DuelAbortReason): void {
     if (this.aborted) return;
     this.aborted = reason;
     this.settle(reason === "desync" ? "noContest" : "abandoned");
@@ -752,7 +753,7 @@ export class VersusFeed implements MatchFeed {
   }
 
   /** How the match ended with no result (null: it didn't). */
-  get abortReason(): AbortReason | null {
+  get abortReason(): DuelAbortReason | null {
     return this.aborted;
   }
 

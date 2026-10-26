@@ -1,6 +1,6 @@
 import { OBJECTIVES, TICK_RATE, UNITS } from "../balance";
 import { unitSeenBy } from "../infantry";
-import { captureWeight } from "../objectives";
+import { captureWeight, uplinkBar } from "../objectives";
 import type { Command, Crate, Faction, Unit, Uplink, World } from "../types";
 import { canGetWithin, dist, moveClassOf } from "../world";
 import type { AiMode, AiState } from "./commander";
@@ -58,7 +58,10 @@ const inZone = (u: { x: number; y: number }, l: Uplink, slack = 0) =>
   hypot(u.x - l.x, u.y - l.y) <= OBJECTIVES.uplink.radius + slack;
 
 /** Is the bar not yet fully ours? (Then units inside it are busy capturing.) */
-const unfinished = (l: Uplink, f: Faction) => l.progress * (f === "blue" ? 1 : -1) < 100;
+const unfinished = (l: Uplink, f: Faction) => {
+  const bar = uplinkBar(l);
+  return !(bar.side === f && bar.fill >= 100);
+};
 
 /**
  * Units the objectives have a claim on this pass: garrisons on post,
@@ -186,13 +189,12 @@ export function planObjectives(w: World, faction: Faction, s: AiState, ctx: Obje
   // (mid-assault only when the army is big enough to spare a squad and still push)
   if (ctx.threatened || w.tick < UPLINK_GRACE) return cmds;
   const armyValue = value(ctx.army);
-  const enemy: Faction = faction === "blue" ? "red" : "blue";
   const near = (l: Uplink) => dist(l.x, l.y, ctx.hqC.x, ctx.hqC.y);
   const far = (l: Uplink) => dist(l.x, l.y, ctx.enemyHqPos.x, ctx.enemyHqPos.y);
   const ownFlank = [...o.uplinks].sort((a, b) => near(a) - far(a) - (near(b) - far(b)))[0];
   const targets = o.uplinks
     // (island relays only a Condor's squads reach: the airlift's business, ai/airlift.ts)
-    .filter((l) => !l.infantryOnly && (l.owner !== faction || l.pushing === enemy))
+    .filter((l) => !l.infantryOnly && (l.owner !== faction || (l.pushing !== null && l.pushing !== faction)))
     // Boom only holds its own flank (the relay nearest its base); everyone else contests everything
     .filter((l) => s.strategy.name !== "boom" || l === ownFlank)
     // Easy takes neutral relays but never comes to take yours

@@ -15,6 +15,7 @@ import {
   type World
 } from "./types";
 import { hypot } from "./fmath";
+import { QUARTER, perSide, turnPoint, turnTile, turnVec } from "./sides";
 
 const newFaction = (): FactionState => ({
   scrap: ECONOMY.startingScrap,
@@ -38,7 +39,7 @@ export function createWorld(width: number, height: number): World {
     wrecks: [],
     powers: createPowerState(),
     objectives: createObjectiveState(),
-    factions: { blue: newFaction(), red: newFaction() },
+    factions: perSide(newFaction),
     winner: null,
     fx: [],
     fog: createFog(width, height),
@@ -227,6 +228,9 @@ export function terrainSpeed(w: World, x: number, y: number, mc: MoveClass): num
   return terrainMult(info, mc) || 1;
 }
 
+/** Which way a side's new units and turrets face: toward the map centre from its corner, north for blue (its frame's north for the rest). */
+export const FACE: Readonly<Record<Faction, number>> = { blue: 0, red: Math.PI, green: Math.PI / 2, purple: Math.PI * 1.5 };
+
 export function spawnUnit(
   w: World,
   kind: UnitKind,
@@ -241,8 +245,8 @@ export function spawnUnit(
     x,
     y,
     hp: UNITS[kind].hp,
-    facing: faction === "blue" ? 0 : Math.PI,
-    aim: faction === "blue" ? 0 : Math.PI,
+    facing: FACE[faction],
+    aim: FACE[faction],
     order: { type: "idle" },
     path: null,
     pathGoal: null,
@@ -300,7 +304,7 @@ export function spawnBuilding(
     hp: BUILDINGS[kind].hp,
     queue: [],
     rally: null,
-    facing: faction === "blue" ? 0 : Math.PI,
+    facing: FACE[faction],
     cooldown: 0,
     damagedTick: -1000,
     lastAttackerId: null,
@@ -452,28 +456,56 @@ export function hasBuilding(w: World, faction: Faction, kind: BuildingKind): boo
 }
 
 /**
- * Coordinates as seen from one side. Every map is point-symmetric and red
- * plays it rotated 180°, so any search whose tie-breaks depend on scan order
- * (grid scans, BFS/A* neighbour order, "prefer the south side") must run in
- * the side's own frame, or blue and red make different choices in mirror-
- * image situations (that bias once handed red ~70% of Ashlands mirror games).
- * Identity for blue, the map turn for red (its own inverse).
+ * Coordinates as seen from one side. Every map is symmetric and each side
+ * plays it turned so its HQ sits where blue's does (sides.ts: red 180°, and
+ * on a four-player map green and purple a quarter turn either way), so any
+ * search whose tie-breaks depend on scan order (grid scans, BFS/A* neighbour
+ * order, "prefer the south side") must run in the side's own frame, or the
+ * sides make different choices in mirror-image situations (that bias once
+ * handed red ~70% of Ashlands mirror games). Identity for blue.
  */
 export interface SideFrame {
-  flip: boolean;
-  /** Frame point ↔ world point. */
-  pt(p: { x: number; y: number }): { x: number; y: number };
+  /** Quarter turns from blue's frame (sides.ts QUARTER). */
+  q: number;
+  /** World point → frame point. */
+  toFrame(p: { x: number; y: number }): { x: number; y: number };
+  /** Frame point → world point. (For blue and red the same turn as toFrame: a half turn is its own inverse.) */
+  toWorld(p: { x: number; y: number }): { x: number; y: number };
   /** Top-left world tile of a `size`² footprint whose frame top-left is (fx, fy). */
   tile(fx: number, fy: number, size: number): [number, number];
+  /** A step (dx, dy) in the frame, as a world step. */
+  vec(dx: number, dy: number): [number, number];
 }
 
-const IDENTITY_FRAME: SideFrame = { flip: false, pt: (p) => ({ x: p.x, y: p.y }), tile: (fx, fy) => [fx, fy] };
+const same = (p: { x: number; y: number }) => ({ x: p.x, y: p.y });
+const IDENTITY_FRAME: SideFrame = { q: 0, toFrame: same, toWorld: same, tile: (fx, fy) => [fx, fy], vec: (dx, dy) => [dx, dy] };
 
 export function sideFrame(w: World, faction: Faction | undefined): SideFrame {
-  if (faction !== "red") return IDENTITY_FRAME;
+  const q = faction ? QUARTER[faction] : 0;
+  if (q === 0) return IDENTITY_FRAME;
+  if (q === 2) {
+    const turn = (p: { x: number; y: number }) => ({ x: w.width - p.x, y: w.height - p.y });
+    return { q, toFrame: turn, toWorld: turn, tile: (fx, fy, size) => [w.width - fx - size, w.height - fy - size], vec: (dx, dy) => [-dx, -dy] };
+  }
+  const back = 4 - q;
   return {
-    flip: true,
-    pt: (p) => ({ x: w.width - p.x, y: w.height - p.y }),
-    tile: (fx, fy, size) => [w.width - fx - size, w.height - fy - size]
+    q,
+    toFrame: (p) => turnPoint(back, w.width, w.height, p.x, p.y),
+    toWorld: (p) => turnPoint(q, w.width, w.height, p.x, p.y),
+    tile: (fx, fy, size) => turnTile(q, w.width, w.height, fx, fy, size),
+    vec: (dx, dy) => turnVec(q, dx, dy)
   };
+}
+
+/**
+ * The world tile under point (x, y) as `faction` sees it: floored in the
+ * side's own frame, so a point exactly on a tile edge (an Uplink at (28, 28))
+ * belongs to the tile on the side's own far side, as it does for blue.
+ */
+export function frameTileOf(w: World, faction: Faction | undefined, x: number, y: number): [number, number] {
+  const q = faction ? QUARTER[faction] : 0;
+  if (q === 0) return [Math.floor(x), Math.floor(y)];
+  if (q === 2) return [w.width - 1 - Math.floor(w.width - x), w.height - 1 - Math.floor(w.height - y)];
+  const f = turnPoint(4 - q, w.width, w.height, x, y);
+  return turnTile(q, w.width, w.height, Math.floor(f.x), Math.floor(f.y), 1);
 }

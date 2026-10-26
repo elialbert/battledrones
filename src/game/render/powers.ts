@@ -11,6 +11,7 @@ import { instance, podDef, type ModelInstance } from "../three/models";
 import { Ease } from "../three/tween";
 import type { View } from "../three/view";
 import type { Fx } from "./fx";
+import { SIDE_NAME } from "../side-style";
 
 /**
  * Everything the commander calldowns look and sound like: public reticles
@@ -205,7 +206,7 @@ export class PowerRenderer {
     if (this.friendly(ev.faction)) return;
     if (this.opts.spectator) {
       if (ev.power === "hammer")
-        announce({ key: "sky-hammer-inbound", text: "Sky Hammer inbound!", sub: `${ev.faction === "blue" ? "Blue" : "Red"} calls an orbital strike`, tone: "info", priority: 1, x: ev.x, y: ev.y });
+        announce({ key: "sky-hammer-inbound", text: "Sky Hammer inbound!", sub: `${SIDE_NAME[ev.faction]} calls an orbital strike`, tone: "info", priority: 1, x: ev.x, y: ev.y });
       return;
     }
     // the enemy's: warn, loudly if it threatens anything of ours

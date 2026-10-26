@@ -25,6 +25,9 @@ import { openMapPreview } from "./ui/map-preview";
 // (types only: the sound duel's code is a lazily loaded chunk, reached through loadDuel() alone)
 import type * as DuelLobby from "./versus/lobby";
 import type { VersusFeed } from "./versus/feed";
+import type * as FfaLobby from "./ffa/lobby";
+import type { FfaFeed } from "./ffa/feed";
+import { aiStrategy } from "./game/meta";
 
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -147,6 +150,21 @@ function inviteCode(): string | null {
   return m ? m[1]!.toUpperCase() : null;
 }
 
+/**
+ * The four-player online battle (FFA.md): its lobby and everything under it in one lazily loaded chunk,
+ * fetched when a four-player map's online button, an invite link or the host's rematch needs it.
+ */
+let ffaLoad: Promise<typeof FfaLobby> | null = null;
+const loadFfa = (): Promise<typeof FfaLobby> => (ffaLoad ??= import("./ffa/lobby"));
+/** The four-player rematch token (src/ffa/feed.ts stores it with the host's plan). */
+const FFA_REMATCH = "ffa";
+
+/** A four-player battle's invite link (`#ffa=<code>-<seat>`, ffa/protocol.ts ffaInviteUrl): the code and seat, or null. */
+function ffaInvite(): { code: string; seat: number } | null {
+  const m = /^#ffa=([0-9A-HJKMNP-TV-Z]{8})-([1-3])$/i.exec(location.hash);
+  return m ? { code: m[1]!.toUpperCase(), seat: Number(m[2]) } : null;
+}
+
 /** Render at device resolution (capped at 2× for phone GPUs) for crisp art. */
 const dpr = () => Math.min(2, Math.max(1, window.devicePixelRatio || 1));
 
@@ -263,6 +281,9 @@ function showMenu(linkedMap?: string | null): void {
   if (duelRematch && !duelPractice && !duelOnlineRematch) sfx.linkMode = true;
   // an online duel's invite link (not over a rematch, which has its own room)
   const invite = duelRematch ? null : inviteCode();
+  // a four-player battle's invite link, or the host's rematch (its new lobby, with the same code)
+  const ffaJoin = duelRematch ? null : ffaInvite();
+  const ffaRematch = token === FFA_REMATCH;
   // ?map=<id> (a shared random map, or any built-in): preselect it and keep it as the pick
   if (linkedMap && isKnownMapId(linkedMap)) {
     gameMode.mapId = linkedMap;
@@ -310,7 +331,7 @@ function showMenu(linkedMap?: string | null): void {
           <button class="mapcard" data-id="${m.id}">
             <img src="${mapThumbUrl(m.id)}" alt="" draggable="false" />
             <span class="mn">${m.name}</span>
-            <span class="mb">${m.size}×${m.size} · ${m.biome}</span>
+            <span class="mb">${m.size}×${m.size} · ${m.players === 4 ? "4 players" : m.biome}</span>
             <span class="mbest" hidden></span>
             <span class="mstars" hidden></span>
           </button>`
@@ -557,11 +578,17 @@ function showMenu(linkedMap?: string | null): void {
     const blind = gameMode.uncharted && isRandomMapId(shown);
     menu.querySelector("#blurb")!.textContent = blind ? "An unknown battlefield. Scout it to learn its shape." : m.blurb;
     menu.querySelector<HTMLElement>("#rndpanel")!.hidden = opsMode || !isRandomMapId(shown);
+    const four = m.players === 4;
     menu.querySelector("#sub")!.textContent = opsMode
       ? "Short missions with a twist. Three stars each — can you take them all?"
       : survival
         ? "Hold your base against endless, themed waves. How long can you last?"
-        : "Mine scrap. Build your swarm. Destroy the enemy HQ and its Goliaths.";
+        : four
+          ? "Four commanders, one survivor. Knock out every rival's HQ and Goliaths."
+          : "Mine scrap. Build your swarm. Destroy the enemy HQ and its Goliaths.";
+    // a four-player map: no sound duel (two phones only), and online seats up to four
+    duelBtn.hidden = !duelable || four;
+    onlineBtn.textContent = four ? "🌐 Battle friends online (up to 4)" : "🌐 Duel a friend online";
     const best = menu.querySelector<HTMLElement>("#lsbest")!;
     best.hidden = !survival;
     if (survival) {
@@ -813,9 +840,51 @@ function showMenu(linkedMap?: string | null): void {
     else if (duelBroken) duelUpdate();
   });
   onlineBtn.addEventListener("click", () => {
+    if (mapById(shownMap()).players === 4) return openFfaHost();
     if (duel) duelTap(duel, false, { seat: "host" });
     else if (duelBroken) duelUpdate();
   });
+
+  // ------------------------------------------------------- four-player online ---
+  /** The four-player battle's match: main's begin, with the host's map, rules and this page's side (never saved). */
+  const startFfa = (feed: FfaFeed) => {
+    const s = feed.match.setup;
+    void begin(false, () => duelSetup({ mapId: s.map, mutators: s.mutators, local: feed.local }), feed);
+  };
+  const ffaFailed = (e: unknown) => {
+    console.warn("four-player battle:", e);
+    openSheet(menu, "ffaupdate", `<h2>🌐 Four-player battle</h2><p class="sh-sub">${DUEL_UPDATE}</p>
+       <div class="sh-actions"><button class="cta alt sheet-close">Close</button></div>`);
+  };
+  const ffaClosed = () => {
+    if (!starting) music.play("menu", biomeOf(shownMap()));
+  };
+  /** The host's lobby for the shown map (a rematch: the stored plan and code). */
+  const openFfaHost = (plan: { code: string; map: string; mutators: MutatorId[]; difficulty: Difficulty } | null = null) => {
+    sfx.play("click", 0.5);
+    loadFfa().then(
+      (f) =>
+        f.showHostLobby({
+          host: menu,
+          map: plan?.map ?? shownMap(),
+          mutators: plan?.mutators ?? activeMutators(),
+          difficulty: plan?.difficulty ?? gameMode.difficulty,
+          strategy: () => aiStrategy(plan?.difficulty ?? gameMode.difficulty),
+          ...(plan ? { code: plan.code } : {}),
+          start: startFfa,
+          onClose: ffaClosed
+        }),
+      ffaFailed
+    );
+  };
+  if (ffaJoin)
+    loadFfa().then((f) => f.showJoin({ host: menu, code: ffaJoin.code, seat: ffaJoin.seat, start: startFfa, onClose: ffaClosed }), ffaFailed);
+  else if (ffaRematch)
+    loadFfa().then((f) => {
+      const plan = f.takeRematch();
+      if (plan && isKnownMapId(plan.map) && plan.difficulty in DIFFICULTY)
+        openFfaHost({ code: plan.code, map: plan.map, mutators: plan.mutators as MutatorId[], difficulty: plan.difficulty as Difficulty });
+    }, ffaFailed);
   // an online duel's invite link: one button, whose tap joins the friend's room
   if (invite) {
     const scr = (rematchScreen = document.createElement("div"));

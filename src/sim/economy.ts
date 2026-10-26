@@ -37,6 +37,7 @@ import {
 } from "./world";
 import { applySpawnRank, bannedBy, incomeOf, rulesOf } from "./rules";
 import { atan2, hypot } from "./fmath";
+import { QUARTER, turnTile, turnVec } from "./sides";
 
 // ---------------------------------------------------------- tech rules ----
 
@@ -408,7 +409,7 @@ function applyRally(w: World, u: Unit, rally: { x: number; y: number } | null): 
  */
 export function nearestScrapTile(w: World, x: number, y: number, faction?: Faction): { x: number; y: number } | null {
   const fr = sideFrame(w, faction);
-  const p = fr.pt({ x, y });
+  const p = fr.toFrame({ x, y });
   let best: { x: number; y: number } | null = null;
   let bestD = Infinity;
   for (let fy = 0; fy < w.height; fy++)
@@ -447,8 +448,8 @@ export function nearestReachableResource(
   misses?: Uint8Array[]
 ): { x: number; y: number } | null {
   const W = w.width;
-  // neighbour order in the side's own frame: red's BFS is blue's, turned 180°
-  const s = faction === "red" ? -1 : 1;
+  // neighbour order in the side's own frame: red's BFS is blue's, turned 180° (green's and purple's a quarter turn)
+  const q = faction ? QUARTER[faction] : 0;
   const start = tileIndex(w, Math.floor(x), Math.floor(y));
   if (start < 0 || start >= W * w.height) return null;
   if (misses?.some((m) => m[start])) return null;
@@ -465,8 +466,7 @@ export function nearestReachableResource(
     const cy = Math.floor(cur / W);
     for (let i = -1; i <= 1; i++)
       for (let j = -1; j <= 1; j++) {
-        const dy = i * s;
-        const dx = j * s;
+        const [dx, dy] = turnVec(q, j, i);
         if (dx === 0 && dy === 0) continue;
         const nx = cx + dx;
         const ny = cy + dy;
@@ -503,7 +503,15 @@ function distToSite(s: DropSite, x: number, y: number): number {
 const FLEE_TICKS = 4 * TICK_RATE;
 
 /** Where a harvester parks to unload at a drop site: just outside the footprint, nearest side. */
-function dockPoint(b: DropSite, x: number, y: number): { x: number; y: number } {
+function dockPoint(w: World, b: DropSite, x: number, y: number): { x: number; y: number } {
+  const q = QUARTER[b.faction];
+  if (q === 1 || q === 3) {
+    // a quarter-turned side: worked out in its own frame (as blue's), then turned back
+    const fr = sideFrame(w, b.faction);
+    const [tx, ty] = turnTile(4 - q, w.width, w.height, b.tx, b.ty, b.size);
+    const p = fr.toFrame({ x, y });
+    return fr.toWorld(dockPoint(w, { ...b, faction: "blue", tx, ty }, p.x, p.y));
+  }
   const size = b.size;
   const cx = Math.max(b.tx + 0.5, Math.min(b.tx + size - 0.5, x));
   const cy = Math.max(b.ty + 0.5, Math.min(b.ty + size - 0.5, y));
@@ -535,7 +543,7 @@ export function tickHarvest(w: World): void {
     ) {
       const home = nearestDropSite(w, u.faction, u.x, u.y, "ground");
       if (home) {
-        const d = dockPoint(home, u.x, u.y);
+        const d = dockPoint(w, home, u.x, u.y);
         moveUnitToward(w, u, d.x, d.y);
         o.phase = "toField"; // resume mining from scratch once safe
         continue;
@@ -601,7 +609,7 @@ export function tickHarvest(w: World): void {
         if (!hasGoliath(w, u.faction)) u.order = { type: "idle" };
         continue;
       }
-      const d = dockPoint(home, u.x, u.y);
+      const d = dockPoint(w, home, u.x, u.y);
       if (moveUnitToward(w, u, d.x, d.y) || distToSite(home, u.x, u.y) < 1.2) {
         o.phase = "unloading";
         const c = { x: home.tx + home.size / 2, y: home.ty + home.size / 2 };

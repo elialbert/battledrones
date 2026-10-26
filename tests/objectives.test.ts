@@ -20,6 +20,7 @@ import { pickAiOpener } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, UnitKind, World } from "../src/sim/types";
 import { createWorld, passable, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { turnPoint } from "../src/sim/sides";
 
 const U = OBJECTIVES.uplink;
 const D = OBJECTIVES.drops;
@@ -68,15 +69,16 @@ describe("map objectives setup", () => {
     }
   });
 
-  it("every map gets 2–3 mirrored Uplinks on ground units can stand on (an island map, more, for infantry)", () => {
+  it("every map gets 2–3 mirrored Uplinks on ground units can stand on (an island map, more, for infantry; a four-player map, one per border and the centre)", () => {
     for (const m of MAPS) {
       const w = createMapWorld(m.id, { objectives: true });
       const ls = w.objectives.uplinks;
       expect(ls.length).toBeGreaterThanOrEqual(2);
-      expect(ls.length).toBeLessThanOrEqual(m.islands ? 9 : 3);
+      expect(ls.length).toBeLessThanOrEqual(m.islands ? 9 : m.players === 4 ? 5 : 3);
       for (const l of ls) {
-        const mm = mirrorPoint(w, l.x, l.y);
-        expect(ls.some((o) => Math.hypot(o.x - mm.x, o.y - mm.y) < 1e-9)).toBe(true);
+        // (each relay's copies: its mirror, or on a four-player map every quarter turn of it)
+        const copies = m.players === 4 ? [1, 2, 3].map((q) => turnPoint(q, w.width, w.height, l.x, l.y)) : [mirrorPoint(w, l.x, l.y)];
+        for (const mm of copies) expect(ls.some((o) => Math.hypot(o.x - mm.x, o.y - mm.y) < 1e-9)).toBe(true);
         expect(l.owner).toBeNull();
         expect(l.progress).toBe(0);
         // a tank can stand in the zone (Riverlands' centre Uplink sits on the bridge);
@@ -258,7 +260,7 @@ describe("supply drops", () => {
   });
 
   it("drop pairs are mirror images holding the same reward (fair to both sides)", () => {
-    for (const m of MAPS)
+    for (const m of MAPS.filter((d) => d.players !== 4))
       for (const seed of [1, 2, 3]) {
         const w = createMapWorld(m.id, { seed, objectives: true });
         run(w, dropAnnounceTick(0) + 1);
@@ -268,6 +270,22 @@ describe("supply drops", () => {
         expect(b!.x).toBeCloseTo(mm.x, 9);
         expect(b!.y).toBeCloseTo(mm.y, 9);
         expect(a!.reward).toBe(b!.reward);
+      }
+  });
+
+  it("a four-player map's drops land four crates, one in each side's quarter, each the first turned", () => {
+    for (const m of MAPS.filter((d) => d.players === 4))
+      for (const seed of [1, 2, 3]) {
+        const w = createMapWorld(m.id, { seed, objectives: true });
+        run(w, dropAnnounceTick(0) + 1);
+        const cs = w.objectives.crates;
+        expect(cs).toHaveLength(4);
+        for (const [q, c] of cs.entries()) {
+          const at = turnPoint(q, w.width, w.height, cs[0]!.x, cs[0]!.y);
+          expect(c.x).toBeCloseTo(at.x, 9);
+          expect(c.y).toBeCloseTo(at.y, 9);
+          expect(c.reward).toBe(cs[0]!.reward);
+        }
       }
   });
 
