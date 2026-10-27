@@ -238,6 +238,21 @@ describe("controller: touch placement", () => {
     expect(c.idleArmy()).toEqual([tank.id, squad.id]);
   });
 
+  it("Q selects the unassigned army units: none already saved in a squad", () => {
+    const w = field();
+    const c = new Controller(w);
+    const [a, b, d] = [1, 2, 3].map((i) => spawnUnit(w, "stinger", "blue", 10 + i, 10));
+    c.selectUnits([a!.id]);
+    c.assignSquad(0);
+    expect(c.selectUnassignedArmy()).toBe(2);
+    expect([...c.selectedUnits]).toEqual([b!.id, d!.id]);
+    // every unit in a squad: the selection stays, and a tip says why
+    c.assignSquad(1);
+    expect(c.selectUnassignedArmy()).toBe(0);
+    expect([...c.selectedUnits]).toEqual([b!.id, d!.id]);
+    expect(c.tip).toMatch(/unassigned army units/);
+  });
+
   it("Shift+click adds a unit to the selection, or takes it out", () => {
     const w = field();
     const c = new Controller(w);

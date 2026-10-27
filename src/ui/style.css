@@ -6112,3 +6112,84 @@ button {
 .aar-placings li i.red { background: var(--red); }
 .aar-placings li i.green { background: var(--side-green); }
 .aar-placings li i.purple { background: var(--side-purple); }
+
+/* Shift+? keyboard shortcuts overlay (src/ui/shortcuts.ts): over the menu and the battle alike */
+.keysheet {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: rgba(3, 5, 9, 0.55);
+  animation: aarFade 0.15s both;
+  opacity: 0;
+}
+.keysheet .ks-card {
+  width: min(760px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 16px 20px 18px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line-hi);
+  border-radius: var(--r);
+  box-shadow: var(--lift);
+  color: var(--text);
+}
+.keysheet .ks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+.keysheet h2 {
+  font-size: 20px;
+  letter-spacing: 0.04em;
+}
+.keysheet .ks-hint {
+  color: var(--dim);
+  font-size: 13px;
+}
+.keysheet .ks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px 24px;
+}
+.keysheet h3 {
+  margin-bottom: 4px;
+  color: var(--gold);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.keysheet dl {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) 1fr;
+  gap: 4px 12px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.keysheet dt {
+  max-width: 8.5em;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.keysheet dd {
+  min-width: 0;
+}
+.keysheet kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 5px;
+  border: 1px solid var(--line-hi);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+}

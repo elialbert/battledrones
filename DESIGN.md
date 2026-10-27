@@ -2348,9 +2348,11 @@ box-select (Shift+drag adds the box to the selection). With units selected,
 left-click open terrain to force-move without stopping to fight; right-click
 terrain to attack-move, an enemy to focus attack, or a friendly unit to
 attack-move to its position without selecting, boarding or lifting it. Wheel zoom,
-middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select army,
+middle-drag or arrows/WASD pan, +/− zoom, P or Space pause, Q select the
+unassigned army units (combat units not saved in a squad),
 Delete sell, Esc cancel/deselect, `.` game speed, J jump to the action,
-C cinematic camera (AI vs AI),
+C cinematic camera (AI vs AI), Shift+? the keyboard shortcuts overlay
+(on the menu too; Shift+? again, Esc or a click closes it),
 1–3 select a squad (twice quickly: fly there), Ctrl/Cmd/Shift+1–3 save
 one (Shift for browsers that keep Ctrl+digit for tabs). While placing, the
 ghost follows the mouse, a click builds and a right-click cancels. Hold

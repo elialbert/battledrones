@@ -23,6 +23,7 @@ import { appUpdate, mountUpdatePill } from "./ui/update";
 import { scrollCue } from "./ui/hscroll";
 import { showReplayPicker } from "./ui/replay-picker";
 import { openMapPreview } from "./ui/map-preview";
+import { installShortcutsOverlay } from "./ui/shortcuts";
 // (types only: the sound duel's code is a lazily loaded chunk, reached through loadDuel() alone)
 import type * as DuelLobby from "./versus/lobby";
 import type { VersusFeed } from "./versus/feed";
@@ -89,6 +90,8 @@ function setupPageZoomRescue(): void {
   });
 }
 setupPageZoomRescue();
+// Shift+? shows the keyboard shortcuts, on the menu and in battle
+installShortcutsOverlay();
 // iOS's audio session back to "auto" before any audio context exists, on every boot: a sound duel's page that
 // went without letting it go (its rig sets play-and-record) left it so for this one, as Safari keeps the type
 // in the tab while this page reads "auto" (ui/fullscreen.ts resetAudioSession). A context made under it can

@@ -1801,7 +1801,7 @@ export class GameScene {
       else if ((e.key === "p" || e.key === " ") && !this.holdStart) {
         if (e.key === " ") e.preventDefault();
         this.hud.togglePause();
-      } else if (e.key === "q") this.ctrl.selectArmy();
+      } else if (e.key === "q") this.ctrl.selectUnassignedArmy(); // the unassigned army units (not in squads 1–3)
       else if (e.key === "e" && !this.ctrl.spectator) this.selectIdle();
       else if (e.key === "x") this.ctrl.stopSelected();
       else if (e.key === "f" && this.ctrl.selectedUnits.size > 0 && !this.ctrl.spectator)

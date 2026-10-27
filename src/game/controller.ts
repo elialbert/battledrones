@@ -631,6 +631,19 @@ export class Controller {
     this.selectUnits(this.armyIds());
   }
 
+  /** The unassigned army units (Q): the army ⚔ grabs, less every unit saved in a squad. */
+  unassignedArmyIds(): number[] {
+    return this.armyIds().filter((id) => this.squads.slotOf(id) < 0);
+  }
+
+  /** Q: select the unassigned army units. When the squads hold them all, keep the selection and say so. */
+  selectUnassignedArmy(): number {
+    const ids = this.unassignedArmyIds();
+    if (ids.length > 0) this.selectUnits(ids);
+    else if (this.armyIds().length > 0) this.tip = "No unassigned army units: they're all in squads (1–3)";
+    return ids.length;
+  }
+
   /**
    * Combat units with no orders (sitting at home, or done with their last
    * order). A Goliath dug in, digging in, packing up or on a lift is busy,
