@@ -64,8 +64,8 @@ level. Only on the walled maps does Turtle hold Rush; on open ones it loses.
 1. **Play it by hand**: the walls and gates on each map (art and minimap),
    chaining a Turret to a gate (the overlay's longer reach for a Turret),
    Deploy Depot, the faster/slower Stinger's feel, Turtle and Rush as opponents.
-2. `MARSHAL_POOL`s unchanged: Rush and Turtle aren't in Hard's or Brutal's
-   pool. Decide whether the reworked plans should be.
+2. ~~`MARSHAL_POOL`s~~ Done 2026-10-29: every difficulty now draws from
+   every plan (Skyforce included). Easy's 5:00 peace still holds Rush's wave.
 3. **Commit, then push with care:** `CODEC_VERSION` is 2, so the site and the
    relay must be redeployed together (a push to main deploys the site; the
    relay is manual). Decide whether `tools/rps/` (untracked) goes in.
@@ -475,7 +475,8 @@ the game at once). Expect a few rounds of tuning the expansion's cost, build
 time and the ring width against each other.
 
 Then update `APM-BOTS.md` with the results, and check every difficulty's
-`MARSHAL_POOL`: Easy shouldn't meet Rush.
+`MARSHAL_POOL` (since 2026-10-29 every level draws every plan, Rush
+included: Easy's peace holds its wave till 5:00).
 
 ## Later, not in this pass
 

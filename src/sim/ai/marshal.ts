@@ -65,6 +65,11 @@ export interface MarshalOptions {
   holdUntil?: number;
   /** Changes to whichever plan it plays (MARSHAL: Hard's economy). */
   tweak?: Partial<Strategy>;
+  /**
+   * Army value it waves at, unless its plan sets its own (Rush's early wave,
+   * Turtle's one push, Juggernaut's Goliath escort keep theirs).
+   */
+  assaultValue?: number;
   /** Changes to how it fights (FIGHT). */
   fight?: Partial<Fight>;
 }
@@ -185,20 +190,19 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
 }
 
 /**
- * The plans each difficulty picks from, at random for each game (APM-BOTS.md,
- * "Retuning the levels"). Easy plays the slow plans, no Rush and no Greed (a
- * beginner gets a few minutes' peace, and Greed is the strongest plan);
- * Normal all of them but Skyforce (an all-air plan needs more hands, and it
- * won 27% of a round robin at 50 APM); Hard the four strongest. Juggernaut
- * and Hornet Strike, the fun ones, come up everywhere but Easy (Easy meets
- * no Goliath, and no bombers on its HQ at 2:30).
+ * The plans each difficulty picks from, at random for each game: every plan,
+ * at every level (a player at any level can meet any of them). The level is
+ * in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
+ * Rush's wave till 5:00; Hornet Strike's bombers and Juggernaut's Goliath
+ * don't wait for it (they never did on Casual).
  */
+const ALL_PLANS = Object.keys(MARSHAL_PLANS) as PlanName[];
 export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
-  easy: ["balanced", "boom", "turtle"],
-  casual: ["balanced", "boom", "turtle", "airswarm", "juggernaut", "strike"],
-  normal: ["balanced", "rush", "airswarm", "boom", "ironclad", "turtle", "greed", "juggernaut", "strike"],
-  hard: ["balanced", "airswarm", "ironclad", "greed", "juggernaut", "strike"],
-  brutal: ["balanced", "airswarm", "ironclad", "greed", "juggernaut", "strike"]
+  easy: ALL_PLANS,
+  casual: ALL_PLANS,
+  normal: ALL_PLANS,
+  hard: ALL_PLANS,
+  brutal: ALL_PLANS
 };
 
 /**
@@ -227,7 +231,8 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
  * left out): Brutal's `apm` plus `burst` is 120, so no minute of a game sees
  * more than 120 actions. Fight micro never gives more than one order at a
  * time (MICRO_BURST), so even Brutal's is at most 2 a second, a human's pace.
- * Brutal also plays every plan with a bigger economy and army (`tweak`) and
+ * Brutal also plays every plan with a bigger economy (`tweak`), waves at a
+ * bigger army unless the plan times its own (`assaultValue`), and
  * fights its own way (`fight`). Each level beats the one below it 87–99% of
  * 60 games. APM-BOTS.md ("Retuning the levels", "Hard, harder", "Five
  * levels") has the numbers.
@@ -236,7 +241,7 @@ export const MARSHAL: Record<
   Difficulty,
   {
     think: number; react: number; apm: number; burst?: number; microApm: number; fast: boolean; holdUntil: number;
-    tweak?: Partial<Strategy>; fight?: Partial<Fight>;
+    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>;
   }
 > = {
   easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300 },
@@ -248,8 +253,10 @@ export const MARSHAL: Record<
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
     think: 2, react: 0.5, apm: 115, burst: 5, microApm: 120, fast: true, holdUntil: 0,
-    // twelve harvesters (and one per depot), waves at 2500, factories as soon as scrap piles up
-    tweak: { harvesters: 12, assaultValue: 2500, expandEarly: true },
+    // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
+    // the plan times its own
+    tweak: { harvesters: 12, expandEarly: true },
+    assaultValue: 2500,
     // a lost fight broken off sooner, and stayed out of longer; the finishing push at 1.5× the enemy army
     // seen; a shooter switches to a target twice as good (not 3×)
     fight: { breakOff: 0.5, retreatHold: 20, finish: 1.5, switch: 2 }
@@ -396,10 +403,17 @@ function alreadyDoing(u: Unit, c: Command): boolean {
   }
 }
 
+/** The personality Marshal plays with these options: its plan, then its level's wave size and changes. */
+export function marshalStrategy(opts: MarshalOptions): Partial<Strategy> {
+  const own = MARSHAL_PLANS[opts.strategy].tweak?.assaultValue !== undefined;
+  const assault = opts.assaultValue !== undefined && !own ? { assaultValue: opts.assaultValue } : {};
+  return { ...planStrategy(opts.strategy, opts.fast), ...assault, holdUntil: opts.holdUntil, ...opts.tweak };
+}
+
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
   const plan = MARSHAL_PLANS[opts.strategy];
   const K: Fight = { ...FIGHT, ...opts.fight };
-  const s = createAiState(plan.base, difficulty, seed, { ...planStrategy(opts.strategy, opts.fast), holdUntil: opts.holdUntil, ...opts.tweak });
+  const s = createAiState(plan.base, difficulty, seed, marshalStrategy(opts));
   s.fair = true;
   s.interval = opts.think;
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)

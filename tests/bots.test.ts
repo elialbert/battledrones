@@ -3,7 +3,7 @@ import { Arena, SIDES, parseSeat, seatName } from "../src/arena/match";
 import { replay, type BattleRecord } from "../src/arena/record";
 import { APM_BURST, capApm } from "../src/sim/ai/apm";
 import { BOTS, BOT_IDS, OPPONENT_IDS, isOpponentId, type Bot } from "../src/sim/ai/bots";
-import { MARSHAL, MARSHAL_PLANS, MARSHAL_POOL, marshalPlan, planStrategy, type PlanName } from "../src/sim/ai/marshal";
+import { MARSHAL, MARSHAL_PLANS, MARSHAL_POOL, marshalPlan, marshalStrategy, planStrategy, type PlanName } from "../src/sim/ai/marshal";
 import { pickAiOpener } from "../src/sim/openers";
 import { makeRules, strategyFits } from "../src/sim/rules";
 import { STRATEGIES } from "../src/sim/ai/commander";
@@ -181,9 +181,16 @@ describe("Marshal, the bot built for a budget", () => {
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm + (MARSHAL[d].burst ?? APM_BURST));
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(120); // (fight orders at most 2 a second)
     }
-    expect(MARSHAL_POOL.easy).not.toContain("rush");
-    expect(MARSHAL_POOL.easy).not.toContain("greed");
+    for (const d of ["easy", "casual", "normal", "hard", "brutal"] as const)
+      expect([...MARSHAL_POOL[d]].sort()).toEqual(Object.keys(MARSHAL_PLANS).sort()); // (every level, every plan)
     expect(MARSHAL.easy.holdUntil).toBeGreaterThan(0);
+  });
+
+  it("keeps a plan's own wave timing on Brutal, and waves bigger otherwise", () => {
+    const brutal = (strategy: PlanName) => marshalStrategy({ ...MARSHAL.brutal, strategy });
+    for (const p of ["rush", "turtle", "greed", "juggernaut"] as const) expect(brutal(p).assaultValue).toBe(planStrategy(p).assaultValue);
+    expect(brutal("balanced").assaultValue).toBe(MARSHAL.brutal.assaultValue);
+    expect(brutal("rush").harvesters).toBe(12);
   });
 
   it("draws only plans the match rules allow", () => {
