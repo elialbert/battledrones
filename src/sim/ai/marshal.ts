@@ -83,28 +83,49 @@ export const MARSHAL_PLANS: Record<
   { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush"; hornets?: "strike" }
 > = {
   balanced: { base: "balanced", label: "Balanced", fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
-  /** (no fast version: Rush is the plan that skips the economy; with a depot it beat the rest of the field more often) */
-  rush: { base: "rush", label: "Rush" },
+  /**
+   * A flood of Stingers (RUSH-RPS.md): a Depot, three Fab Plants by 0:50,
+   * seven harvesters, one big wave instead of raids, then the rest of the
+   * order and an expansion. (Hard, 24 games: beat Greed 11–9 and Turtle
+   * 14–9 at Stinger buildTime 10–11; raids instead of one wave were no better.)
+   */
+  rush: {
+    base: "rush",
+    label: "Rush",
+    tweak: {
+      buildOrder: ["fab-plant", "depot", "fab-plant", "fab-plant", "assembly-bay", "turret", "airpad", "tech-lab", "depot"],
+      harvesters: 7,
+      assaultValue: 1500,
+      harassGroup: Infinity,
+      infantry: 0.15,
+      spend: { maxDepots: 2 }
+    }
+  },
   airswarm: { base: "airswarm", label: "Air Swarm", fast: fastDepot(["airpad", "depot", "fab-plant", "turret", "tech-lab", "airpad"]) },
   boom: { base: "boom", label: "Boom", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "airpad", "turret", "radar", "sam-site"]) },
   skyforce: { base: "skyforce", label: "Skyforce" },
   ironclad: { base: "ironclad", label: "Ironclad", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "assembly-bay", "airpad", "fab-plant", "sam-site"]) },
   /**
-   * Turrets and a SAM round home, heavy tech and a depot behind them, no
-   * raids, and one army big enough to end it. (Against stock Balanced at
-   * 14 APM: 72% of 36 games; 33% with five towers, a radar and only the
-   * usual four harvesters: towers cost actions as well as scrap.)
+   * Holds the way into its base (ai/choke.ts) with turrets and the whole
+   * army, a turret more for every two tanks it sees, techs up behind them
+   * (Mortars for a Stinger flood, then heavy armour), no raids, and one army
+   * big enough to end it. (RUSH-RPS.md: about even with Rush, loses to
+   * Greed; on open maps it has no gate and loses more.)
    */
   turtle: {
     base: "ironclad",
     label: "Turtle",
     tweak: {
-      buildOrder: ["fab-plant", "turret", "tech-lab", "depot", "sam-site", "turret", "fab-plant", "radar"],
-      harvesters: 5,
+      buildOrder: ["fab-plant", "turret", "turret", "tech-lab", "depot", "fab-plant", "turret", "sam-site", "radar"],
+      harvesters: 6,
       assaultValue: 3000,
-      harassGroup: Infinity
+      harassGroup: Infinity,
+      holdChoke: true,
+      turretsVsGround: 2,
+      mortarShare: 0.35,
+      expandEarly: true
     },
-    fast: fastDepot(["fab-plant", "turret", "depot", "tech-lab", "sam-site", "turret", "fab-plant", "radar"])
+    fast: { buildOrder: ["fab-plant", "depot", "turret", "turret", "tech-lab", "fab-plant", "turret", "sam-site", "radar"], harvesters: 7 }
   },
   /** Two depots before anything else, a harvester for each, then a late push. (78% at 14 APM; 56% with a turret and the Tech Lab between the depots.) */
   greed: {

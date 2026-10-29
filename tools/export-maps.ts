@@ -17,8 +17,8 @@ for (const id of ids)
     console.error(`unknown map "${id}": ${MAPS.map((m) => m.id).join(", ")}, or random-<biome>-<code>`);
     process.exit(1);
   }
-// terrain enum -> char: Ground . Rock # Scrap $ Water ~ Road = Rough : Forest T Crystal * Bridge H Shallows , Deep (space)
-const CH = ".#$~=:T*H, ";
+// terrain enum -> char: Ground . Rock # Scrap $ Water ~ Road = Rough : Forest T Crystal * Bridge H Shallows , Deep (space) Wasteland -
+const CH = ".#$~=:T*H, -";
 
 for (const def of ids.length ? ids.map(mapById) : MAPS) {
   const w = createMapWorld(def.id);

@@ -87,7 +87,7 @@ export class PlacementView {
   /** Placing, the building is ready, and the ghost has a spot. */
   private get active(): boolean {
     const c = this.h.ctrl;
-    return !!c.placing && !!c.placeAt && !!this.h.world.factions[PLAYER].pending?.ready;
+    return !!c.placing && !!c.placeAt && (!!c.foundCrew || !!this.h.world.factions[PLAYER].pending?.ready);
   }
 
   private worldAt(sx: number, sy: number): { x: number; y: number } {
@@ -113,6 +113,15 @@ export class PlacementView {
   private enter(kind: BuildingKind): void {
     const c = this.h.viewCentre();
     const size = BUILDINGS[kind].size;
+    // (an expansion's crew: the ghost starts among them, wherever that is)
+    const crew = this.h.ctrl.foundCrew?.map((id) => this.h.world.units.get(id)).filter((u) => !!u) ?? [];
+    if (crew.length) {
+      const x = crew.reduce((a, u) => a + u!.x, 0) / crew.length;
+      const y = crew.reduce((a, u) => a + u!.y, 0) / crew.length;
+      this.h.ctrl.placeAt = { tx: Math.round(x - size / 2), ty: Math.round(y - size / 2) };
+      this.pulse = 0;
+      return;
+    }
     const s = suggestPlacement(this.h.world, PLAYER, kind, c);
     this.h.ctrl.placeAt = s ?? { tx: Math.round(c.x - size / 2), ty: Math.round(c.y - size / 2) };
     if (s && !this.h.inView(s.tx + size / 2, s.ty + size / 2)) this.h.glideTo(s.tx + size / 2, s.ty + size / 2);
@@ -123,7 +132,7 @@ export class PlacementView {
 
   /** Every frame, before drawing. */
   update(delta: number): void {
-    const ready = !!this.h.world.factions[PLAYER].pending?.ready;
+    const ready = !!this.h.ctrl.foundCrew || !!this.h.world.factions[PLAYER].pending?.ready;
     const kind = ready ? this.h.ctrl.placing : null;
     if (kind !== this.kind) {
       this.kind = kind;
@@ -242,7 +251,8 @@ export class PlacementView {
     // where you may build: the build-range zone, tinted (an anchored Goliath's ring in team
     // blue: outposts), with a soft glow under a crisp rounded outline
     const g = v.over;
-    const z = this.buildZone(w, kind);
+    // (an expansion goes anywhere on our land: no zone)
+    const z = this.h.ctrl.foundCrew ? { runs: [], ring: [], loops: [] } : this.buildZone(w, kind);
     g.fillStyle(ZONE, 0.08);
     for (let i = 0; i < z.runs.length; i += 3) g.fillRect(z.runs[i]!, z.runs[i + 1]!, z.runs[i + 2]!, 1);
     g.fillStyle(RING, 0.14);
@@ -336,14 +346,14 @@ export class PlacementView {
    */
   private buildZone(w: World, kind: BuildingKind): { runs: number[]; ring: number[]; loops: Pt[][] } {
     const goliaths = kind === "hq" ? [] : anchoredGoliaths(w, PLAYER);
-    let key = "";
+    let key = kind === "turret" ? "turret:" : ""; // (a Turret's zone reaches farther: ECONOMY.turretReach)
     for (const b of w.buildings.values()) if (b.faction === PLAYER) key += `${b.id}${b.outpost ? "o" : ""},`;
     for (const g of goliaths) key += `g${g.id}:${g.goliath!.mode}@${g.x},${g.y},`;
     if (this.zone?.key === key) return this.zone;
     const W = w.width;
     const inZone = new Uint8Array(W * w.height);
     // (with no Goliath anchored there is no ring to test: base range alone)
-    const test: BuildingKind = goliaths.length > 0 ? kind : "hq";
+    const test: BuildingKind = goliaths.length > 0 || kind === "turret" ? kind : "hq";
     for (let ty = 0; ty < w.height; ty++) for (let tx = 0; tx < W; tx++) inZone[ty * W + tx] = zoneAt(w, PLAYER, test, tx, ty);
     const at = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < w.height && inZone[y * W + x]! > 0;
     const runs: number[] = [];
@@ -437,7 +447,7 @@ export class PlacementView {
  * an HQ goes up there, as an outpost), else 0.
  */
 export function zoneAt(w: World, faction: Faction, kind: BuildingKind, tx: number, ty: number): 0 | 1 | 2 {
-  if (inBuildRange(w, faction, tx + 0.5, ty + 0.5)) return 1;
+  if (inBuildRange(w, faction, tx + 0.5, ty + 0.5, kind)) return 1;
   return kind !== "hq" && inGoliathRing(w, faction, tx, ty, 1) ? 2 : 0;
 }
 

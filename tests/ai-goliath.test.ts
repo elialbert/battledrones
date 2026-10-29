@@ -10,7 +10,8 @@ import { goliathCost, goliathsOf, isAnchored } from "../src/sim/goliath";
 import { createMapWorld } from "../src/sim/maps";
 import { step } from "../src/sim/sim";
 import type { BuildingKind, Command, Faction, FxEvent, Unit, World } from "../src/sim/types";
-import { buildingCenter, hqOf, regionAt, removeBuilding, spawnBuilding, spawnUnit } from "../src/sim/world";
+import { Terrain } from "../src/sim/types";
+import { buildingCenter, hqOf, regionAt, removeBuilding, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
 import { perSide } from "../src/sim/sides";
 
 /**
@@ -437,9 +438,23 @@ describe("Menders and a Goliath", () => {
   });
 });
 
+/**
+ * The Archipelago without its two outlying patches on each mainland (a field there gives a Goliath
+ * somewhere to walk to on its own land): the lift to an island relay is then its way out.
+ */
+function liftOnly(w: World): World {
+  for (const [x0, y0] of [[5, 70], [41, 99]] as const)
+    for (let y = y0; y <= y0 + 1; y++)
+      for (let x = x0; x <= x0 + 1; x++) {
+        setTerrain(w, x, y, Terrain.Ground);
+        setTerrain(w, w.width - 1 - x, w.height - 1 - y, Terrain.Ground);
+      }
+  return w;
+}
+
 describe("the two-Condor lift", () => {
   it("on the Archipelago, two Condors fly a Goliath to an island relay; no other planner touches a lift Condor", () => {
-    const w = createMapWorld("archipelago", { objectives: true });
+    const w = liftOnly(createMapWorld("archipelago", { objectives: true }));
     const ai = createAiState("boom", "normal", 1);
     const hq = hqOf(w, "red")!;
     const c = buildingCenter(hq);
@@ -618,7 +633,7 @@ describe("mutators", () => {
     return { w, peak, harvestersBuilt };
   }
 
-  for (const [map, blue, red] of [["riverlands", "balanced", "ironclad"], ["ashlands", "boom", "rush"]] as const)
+  for (const [map, blue, red] of [["dune-sea", "balanced", "ironclad"], ["ashlands", "boom", "rush"]] as const)
     it(`Nomads on ${map}: both sides build an economy and an army round their Goliaths, and the match ends`, () => {
       const { w, peak, harvestersBuilt } = play(map, blue, red, 25, ["nomads"]);
       for (const f of ["blue", "red"] as const) {
@@ -691,9 +706,10 @@ export type { Unit };
 
 describe("final review regressions", () => {
   /** Red Boom on the Archipelago with an Airpad, a Goliath by its HQ and `condors` Condors, 2,000 scrap. */
-  function islands(condors: number, mutators: ("robotlove")[] = []) {
-    const w = createMapWorld("archipelago", { objectives: true, mutators });
-    const ai = createAiState("boom", "normal", 1);
+  function islands(condors: number, mutators: ("robotlove")[] = [], strip = true, seed = 1) {
+    const made = createMapWorld("archipelago", { objectives: true, mutators });
+    const w = strip ? liftOnly(made) : made;
+    const ai = createAiState("boom", "normal", seed);
     const hq = hqOf(w, "red")!;
     const c = buildingCenter(hq);
     hqOf(w, "blue")!.hp = 1e9;
@@ -772,7 +788,8 @@ describe("final review regressions", () => {
   }, 60000);
 
   it("Robot Love: a Condor held for a lift is let go when love calls the lift off", () => {
-    const { w, ai, g, cs } = islands(1, ["robotlove"]);
+    // (AI seed 2: on seed 1 the lift no longer comes up within 400 s since the Stinger retune, RUSH-RPS.md)
+    const { w, ai, g, cs } = islands(1, ["robotlove"], false, 2);
     const condor = cs[0]!;
     let suitor: Unit | null = null;
     let after = 0;

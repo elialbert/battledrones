@@ -2,7 +2,7 @@ import { BUILDINGS, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
 import { applySpawnRank, goliathBase, rulesOf } from "./rules";
-import type { Command, Faction, GoliathMode, GoliathWeapon, Unit, UnitKind, World } from "./types";
+import { Terrain, type Command, type Faction, type GoliathMode, type GoliathWeapon, type Unit, type UnitKind, type World } from "./types";
 import { buildingCenter, hqOf, inBounds, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
 import { hypot } from "./fmath";
 import { FACTIONS, sidesOf } from "./sides";
@@ -154,6 +154,12 @@ export function anchorFootprint(w: World, faction: Faction, x: number, y: number
 }
 
 /**
+ * Ground a Goliath can dig in on: anything buildable, and the Wasteland round a field too (it walks up
+ * to its field and harvests from it; only buildings keep their distance).
+ */
+export const anchorGround = (t: Terrain): boolean => TERRAIN[t].buildable || t === Terrain.Wasteland;
+
+/**
  * Why Goliath `u` can't anchor where it stands, as a short phrase for the HUD,
  * or null when it can. It digs in anywhere a building could be placed —
  * buildable ground, no building, Uplink platform, crate or other ground unit
@@ -172,7 +178,7 @@ export function anchorBlocker(w: World, u: Unit): string | null {
       const y = ty + dy;
       if (!inBounds(w, x, y)) return "Off the map";
       if (w.occupancy[y * w.width + x] !== 0) return "Blocked"; // (a building, or another dug-in Goliath)
-      if (!TERRAIN[terrainAt(w, x, y)].buildable) return "Needs open ground";
+      if (!anchorGround(terrainAt(w, x, y))) return "Needs open ground";
     }
   if (blocksObjective(w, tx, ty, size)) return "Blocked";
   for (const o of w.units.values())
@@ -443,7 +449,7 @@ export function anchorBlockedAt(w: World, faction: Faction, x: number, y: number
       const fy = ty + dy;
       if (!inBounds(w, fx, fy)) return "Off the map";
       if (w.occupancy[fy * w.width + fx] !== 0) return "Blocked"; // (a building, or another dug-in Goliath)
-      if (!TERRAIN[terrainAt(w, fx, fy)].buildable) return "Needs open ground";
+      if (!anchorGround(terrainAt(w, fx, fy))) return "Needs open ground";
     }
   if (blocksObjective(w, tx, ty, size)) return "Blocked";
   for (const o of w.units.values())

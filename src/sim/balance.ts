@@ -35,6 +35,8 @@ export interface ArmedStats {
   fx?: WeaponFx;
   /** Damage multiplier against aircraft (generalist weapons are weaker vs air). */
   airMult?: number;
+  /** Damage multiplier against light armour (a Turret's autocannon shreds Stingers and Wasps). */
+  lightMult?: number;
 }
 
 export interface UnitStats extends ArmedStats {
@@ -112,9 +114,9 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   },
   stinger: {
     name: "Stinger", role: "Fast light tank. Beats Flak and Mortars. Can't hit air.",
-    cost: 150, hp: 255, speed: 2.3, sight: 5, domain: "ground", armor: "medium",
+    cost: 150, hp: 255, speed: 2.8, sight: 5, domain: "ground", armor: "light",
     targets: "ground", dps: 22, range: 3.2, shotInterval: 0.6, dmgType: "kinetic", fx: "cannon",
-    buildTime: 7, builtAt: "fab-plant", turret: true, radius: 0.38
+    buildTime: 11, builtAt: "fab-plant", turret: true, radius: 0.38
   },
   "flak-crawler": {
     name: "Flak Crawler", role: "Anti-air. Shreds drones. Helpless vs ground.",
@@ -231,14 +233,14 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
     targets: "none", dps: 0, range: 0
   },
   depot: {
-    name: "Depot", role: "Forward scrap drop-off. Build it near distant fields.",
+    name: "Depot", role: "Scrap drop-off. Build it in your base, or past it: 4 Harvesters can deploy one anywhere on your land (they become it).",
     cost: 250, hp: 800, sight: 4, size: 2, buildTime: 10, dropOff: true,
     targets: "none", dps: 0, range: 0
   },
   turret: {
-    name: "Turret", role: "Autocannon defence. Hits ground and air.",
+    name: "Turret", role: "Autocannon defence. Hits ground and air, shreds light armour. Reaches past the build zone.",
     cost: 225, hp: 650, sight: 6, size: 1, buildTime: 8,
-    targets: "both", dps: 26, range: 4.5, shotInterval: 0.5, dmgType: "kinetic", fx: "cannon"
+    targets: "both", dps: 26, range: 4.5, shotInterval: 0.5, dmgType: "kinetic", fx: "cannon", lightMult: 1.5
   },
   "sam-site": {
     name: "SAM Site", role: "Long-range anti-air missiles.",
@@ -303,7 +305,8 @@ export const TERRAIN: Record<Terrain, TerrainInfo> = {
   [Terrain.Crystal]: { name: "Crystal field", ground: true, hover: true, speed: 0.85, hoverSpeed: 1, footSpeed: 0.85, buildable: false, cover: 1 },
   [Terrain.Bridge]: { name: "Bridge", ground: true, hover: true, speed: 1.35, hoverSpeed: 1.15, footSpeed: 1.35, buildable: false, cover: 1 },
   [Terrain.Shallows]: { name: "Shallows", ground: true, hover: true, speed: 0.5, hoverSpeed: 1, footSpeed: 0.8, buildable: false, cover: 1 },
-  [Terrain.Deep]: { name: "Open sea", ground: false, hover: false, speed: 0, hoverSpeed: 0, footSpeed: 0, buildable: false, cover: 1 }
+  [Terrain.Deep]: { name: "Open sea", ground: false, hover: false, speed: 0, hoverSpeed: 0, footSpeed: 0, buildable: false, cover: 1 },
+  [Terrain.Wasteland]: { name: "Wasteland", ground: true, hover: true, speed: 1, hoverSpeed: 1, footSpeed: 1, buildable: false, cover: 1 }
 };
 
 /**
@@ -325,17 +328,38 @@ export const ECONOMY = {
   /** Scrap a harvester can carry per trip. */
   harvesterCapacity: 100,
   /** Scrap mined per second while sitting on a field. */
-  harvestRate: 21,
+  harvestRate: 18,
   /** Scrap transferred per second while unloading at a drop-off. */
   unloadRate: 140,
   /** Scrap in a fresh scrap-field tile. */
-  scrapPerTile: 1500,
+  scrapPerTile: 1250,
   /** Raw crystal in a fresh crystal tile… */
-  crystalPerTile: 1200,
+  crystalPerTile: 1000,
   /** …and each unit of it mined is worth this much scrap in the hold. */
   crystalValue: 1.6,
-  /** New buildings must be placed within this range of a friendly building. */
+  /**
+   * Open ground within this many tiles (centre to centre) of a scrap or crystal tile is Wasteland
+   * (maps.ts paintWasteland): a depot stands a short haul off its field, never touching it.
+   */
+  wastelandRing: 2,
+  /**
+   * A Depot deployed by harvesters (an expansion), the way past the build zone: a crew of `crew` of them
+   * (the `found` command) unpack their rigs into one anywhere on the side's land, build range or not.
+   * When they all stand within `crewRadius` tiles of the site's middle, `cost` is paid, the crew is used
+   * up (they become the Depot), and it goes up there for `buildTime` s from `siteHp` of full hp, taking
+   * no loads until it's done. `cost` is a sidebar Depot's: the crew is the real price. `consume: false`
+   * (an experiment) leaves the crew standing.
+   */
+  expansion: { cost: 250, buildTime: 28, crew: 4, crewRadius: 3.5, siteHp: 0.25, consume: true },
+  /** New buildings must be placed within this range of the HQ… */
   buildRadius: 6,
+  /**
+   * …or this range of any other building of the base (economy.ts buildRadiusOf): building out toward a
+   * far field takes a chain of them, slower and dearer than 4 Harvesters deploying a Depot there.
+   */
+  extendRadius: 3,
+  /** A Turret may go this much farther out than other buildings (economy.ts buildRadiusOf): dig in at the gate. */
+  turretReach: 2,
   /** Fraction of cost refunded when selling a building. */
   sellRefund: 0.5,
   /** Scrap per second every HQ salvages on its own (keeps broke sides alive). */

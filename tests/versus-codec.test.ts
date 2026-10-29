@@ -122,6 +122,8 @@ function handWritten(): Sample[] {
     add({ type: "unload", faction: f, unitIds: [44], x: Infinity, y: 2 }, ctx);
     add({ type: "lift", faction: f, unitIds: [70, 71], goliathId: 69 }, ctx);
     add({ type: "lift", faction: f, unitIds: [0, TOP], goliathId: 5 }, ctx);
+    add({ type: "found", faction: f, unitIds: [12, 13, 14, 15], tx: 0, ty: ctx.height - 1 }, ctx);
+    add({ type: "found", faction: f, unitIds: [0, 3, 9, TOP, 40], tx: ctx.width - 2, ty: 7 }, ctx);
     // long lists, split into pieces
     const many = Array.from({ length: 30 }, (_, i) => 400 + i * 37);
     add({ type: "attackMove", faction: f, unitIds: [...many].reverse(), x: 20.1234, y: 9.87 }, ctx);
@@ -434,9 +436,9 @@ describe("the command codec", () => {
 
   it("has complete, explicit tables", () => {
     expect(TABLES_COMPLETE).toBe(true);
-    expect(CODEC_VERSION).toBe(1);
+    expect(CODEC_VERSION).toBe(2);
     expect(new Set(COMMAND_TYPES).size).toBe(COMMAND_TYPES.length);
-    expect(COMMAND_TYPES.length).toBe(20);
+    expect(COMMAND_TYPES.length).toBe(21);
     expect(new Set(UNIT_KINDS)).toEqual(new Set(Object.keys(UNITS)));
     expect(UNIT_KINDS.length).toBe(Object.keys(UNITS).length);
     expect(new Set(BUILDING_KINDS)).toEqual(new Set(Object.keys(BUILDINGS)));

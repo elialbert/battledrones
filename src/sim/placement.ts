@@ -5,7 +5,7 @@
  * fails and find a good valid one, so they can never disagree with it.
  */
 import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN } from "./balance";
-import { canPlaceBuilding, inBaseRange } from "./economy";
+import { buildRadiusOf, canPlaceBuilding, inBaseRange } from "./economy";
 import { anchoredGoliaths, inGoliathRing, overlapsGoliath } from "./goliath";
 import { Terrain, type BuildingKind, type Faction, type World } from "./types";
 import { buildingAtTile, buildingCenter, domainOf, inBounds, terrainAt } from "./world";
@@ -67,8 +67,10 @@ export function placementBlocker(
     }
   if (offMap) return "Off the map";
   // the most fundamental problem first: nothing nearby can be fixed by nudging
-  if (!inBuildRange(w, faction, tx + size / 2, ty + size / 2) && (kind === "hq" || !inGoliathRing(w, faction, tx, ty, size)))
-    return "Too far from base";
+  if (!inBuildRange(w, faction, tx + size / 2, ty + size / 2, kind) && (kind === "hq" || !inGoliathRing(w, faction, tx, ty, size)))
+    // (a Depot can go further: harvesters deploy it, economy.ts orderFound)
+    return kind === "depot" ? `Too far: ${ECONOMY.expansion.crew} Harvesters can deploy it` : "Too far from base";
+  if (ground === Terrain.Wasteland) return "Can't build on wasteland";
   if (ground !== null) return `Not on ${groundName(w, ground)}`;
   if (building) return "Blocked";
   for (const u of w.units.values())
@@ -83,8 +85,8 @@ export function placementBlocker(
  * Outposts (built in a Goliath's ring) never count as base; the rings
  * themselves are inGoliathRing.
  */
-export function inBuildRange(w: World, faction: Faction, cx: number, cy: number): boolean {
-  return inBaseRange(w, faction, cx, cy);
+export function inBuildRange(w: World, faction: Faction, cx: number, cy: number, kind?: BuildingKind): boolean {
+  return inBaseRange(w, faction, cx, cy, kind);
 }
 
 /**
@@ -124,7 +126,7 @@ export function suggestPlacement(
   // search around the base's buildings (not outposts: they don't count) and anchored Goliaths' rings
   const centres: { c: { x: number; y: number }; r: number }[] = [];
   for (const b of w.buildings.values())
-    if (b.faction === faction && !b.outpost) centres.push({ c: buildingCenter(b), r: Math.ceil(ECONOMY.buildRadius + size) });
+    if (b.faction === faction && !b.outpost) centres.push({ c: buildingCenter(b), r: Math.ceil(buildRadiusOf(b, kind) + size) });
   if (kind !== "hq") for (const g of anchoredGoliaths(w, faction)) centres.push({ c: g, r: Math.ceil(GOLIATH.buildRing + size) });
   for (const { c, r } of centres) {
     for (let dy = -r; dy <= r; dy++)

@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { Terrain, type Biome } from "../sim/types";
-import type { MapDef } from "../sim/maps";
+import { Terrain, type Biome, type World } from "../sim/types";
+import { withWasteland, type MapDef } from "../sim/maps";
 import type { TerrainArt } from "./three/terrain";
 import { bridgeRuns, type BridgeRun } from "./three/terrain-bridges";
 
@@ -27,6 +27,8 @@ const hex = (h: number): RGB => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
 
 interface Palette {
   ground: RGB; ground2: RGB; cover: number;
+  /** Wasteland's baked crust round the fields (as the ground shader draws it in the 3D view). */
+  waste: RGB;
   rough: RGB; rough2: RGB;
   rockLit: RGB; rock: RGB; rockDark: RGB;
   scrap: RGB; rust: RGB; metal: RGB;
@@ -45,7 +47,7 @@ interface Palette {
 // colours from the built-in maps' painted art (per-terrain medians, see art/terrain.py for the looks)
 const PAL: Record<Biome, Palette> = {
   temperate: {
-    ground: hex(0x5e7826), ground2: hex(0x6e7430), cover: 0.35,
+    ground: hex(0x5e7826), ground2: hex(0x6e7430), cover: 0.35, waste: hex(0x7a6d5e),
     rough: hex(0x6a5236), rough2: hex(0x4e3f2a),
     rockLit: hex(0x86827a), rock: hex(0x605d57), rockDark: hex(0x34322f),
     scrap: hex(0x4d4528), rust: hex(0x8c4a22), metal: hex(0x8a8c88),
@@ -58,7 +60,7 @@ const PAL: Record<Biome, Palette> = {
     wet: 0.28, grain: 0.07, low: 0.08
   },
   desert: {
-    ground: hex(0xc48f54), ground2: hex(0xdcae6e), cover: 0.4,
+    ground: hex(0xc48f54), ground2: hex(0xdcae6e), cover: 0.4, waste: hex(0x8f7259),
     rough: hex(0x8c6d4f), rough2: hex(0x6e5238),
     rockLit: hex(0xc8774a), rock: hex(0x9c5734), rockDark: hex(0x5a2c1a),
     scrap: hex(0x73573e), rust: hex(0x9a4a22), metal: hex(0x9a948a),
@@ -71,7 +73,7 @@ const PAL: Record<Biome, Palette> = {
     wet: 0.3, grain: 0.06, low: 0.07
   },
   arctic: {
-    ground: hex(0xc8d6ee), ground2: hex(0xe6eef9), cover: 0.3,
+    ground: hex(0xc8d6ee), ground2: hex(0xe6eef9), cover: 0.3, waste: hex(0xa8a6a2),
     rough: hex(0x7c7c86), rough2: hex(0xa8b0c0),
     rockLit: hex(0x8a92a0), rock: hex(0x4a505c), rockDark: hex(0x262a34),
     scrap: hex(0x6e707a), rust: hex(0x7a4a34), metal: hex(0x9aa0aa),
@@ -84,7 +86,7 @@ const PAL: Record<Biome, Palette> = {
     wet: 0.12, grain: 0.045, low: 0.05
   },
   volcanic: {
-    ground: hex(0x504b47), ground2: hex(0x413c39), cover: 0.45,
+    ground: hex(0x504b47), ground2: hex(0x413c39), cover: 0.45, waste: hex(0x2f2a27),
     rough: hex(0x6c4232), rough2: hex(0x523228),
     rockLit: hex(0x4a4240), rock: hex(0x2a2423), rockDark: hex(0x141010),
     scrap: hex(0x3f2d24), rust: hex(0x8a3e1c), metal: hex(0x6e6a66),
@@ -98,7 +100,7 @@ const PAL: Record<Biome, Palette> = {
     wet: 0, grain: 0.07, low: 0.06
   },
   tropical: {
-    ground: hex(0x86a056), ground2: hex(0xe2d8b2), cover: 0.12,
+    ground: hex(0x86a056), ground2: hex(0xe2d8b2), cover: 0.12, waste: hex(0x8c7f6c),
     rough: hex(0x6a6650), rough2: hex(0x52503e),
     rockLit: hex(0xc2bcaa), rock: hex(0x8c8778), rockDark: hex(0x4e5048),
     scrap: hex(0x62644d), rust: hex(0x8a5230), metal: hex(0x9a9c94),
@@ -124,6 +126,7 @@ const CRYSTAL = Terrain.Crystal;
 const BRIDGE = Terrain.Bridge;
 const SHALLOWS = Terrain.Shallows;
 const DEEP = Terrain.Deep;
+const WASTELAND = Terrain.Wasteland;
 
 /** Lava's glowing veins, its hot core, and the scorched ground round it. */
 const MOLTEN = hex(0xff5a12);
@@ -506,6 +509,19 @@ export function paintTerrainPixels(
         const t = tt[q]!;
         const memb = mm[q]!;
         switch (t) {
+          case WASTELAND: {
+            // baked crust in plates, darker in the cracks between them (lava ground: the cracks glow)
+            mix3(P.waste, P.waste, 0);
+            mul(0.86 + vn(T, u * 1.3 + 2.9, v * 1.3 + 5.3) * 0.28);
+            const ck = Math.abs(vn(T, u * 1.6 + 6.1, v * 1.6 + 0.7) - 0.5);
+            if (ck < 0.05) {
+              const k = 1 - smooth(0.01, 0.05, ck);
+              if (lava) toward(MOLTEN, k * 0.6);
+              else mul(1 - k * 0.45);
+            }
+            if (g2 > 0.97) mul(0.55);
+            break;
+          }
           case GROUND:
           case CRYSTAL: {
             const lo = vn(T, u * 0.22 + 5.5, v * 0.22 + 9.2) * 0.7 + vn(T, u * 0.9 + 1.3, v * 0.9 + 2.7) * 0.3;
@@ -687,8 +703,10 @@ const gridOf = (def: MapDef): Uint8Array | null => def.random?.terrain ?? null;
 
 /** Paint a whole generated map at `px` per tile into one RGBA buffer (thumbnails, previews). */
 export function paintMapPixels(def: MapDef, px: number): Uint8ClampedArray | null {
-  const grid = gridOf(def);
-  if (!grid) return null;
+  const raw = gridOf(def);
+  if (!raw) return null;
+  // (with the Wasteland the match paints in: the 3D ground's shader draws it, a flat picture has to paint it)
+  const grid = withWasteland(raw, def.size, def.size);
   const n = def.size * px;
   return paintTerrainPixels(grid, def.size, def.biome, def.random!.seed, px, 0, 0, n, n);
 }
@@ -736,4 +754,25 @@ export async function paintTerrainArt(def: MapDef, progress?: (k: number) => voi
     }
   }
   return { chunks, rock: null, pxPerTile: px, chunk: PAINT_CHUNK };
+}
+
+/**
+ * The world's Wasteland as an S×S overlay in its crust colour (soft-edged: a tile per pixel, scaled up
+ * smoothly), for an overview drawn from a painting that predates it: the built-in maps' thumbs.
+ */
+export function wastelandOverlay(w: World, S: number): HTMLCanvasElement {
+  const [r, g, b] = (PAL[w.biome] ?? PAL.temperate).waste;
+  const img = new ImageData(w.width, w.height);
+  for (let i = 0; i < w.terrain.length; i++)
+    if (w.terrain[i] === WASTELAND) img.data.set([r, g, b, 215], i * 4);
+  const tiles = document.createElement("canvas");
+  tiles.width = w.width;
+  tiles.height = w.height;
+  tiles.getContext("2d")!.putImageData(img, 0, 0);
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(tiles, 0, 0, S, S);
+  return cv;
 }

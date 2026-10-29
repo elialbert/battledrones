@@ -1,4 +1,4 @@
-import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { engageable } from "../combat";
 import { canPlaceBuilding } from "../economy";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
@@ -12,7 +12,8 @@ import {
   isAnchored,
   isLifted,
   readyFirepower,
-  weaponsDown
+  weaponsDown,
+  anchorGround
 } from "../goliath";
 import { isInfantry } from "../infantry";
 import { canCarry } from "../lift";
@@ -679,7 +680,7 @@ function openAround(w: World, tx: number, ty: number): boolean {
     for (let dx = -1; dx <= 1; dx++) {
       const x = tx + dx;
       const y = ty + dy;
-      if (!inBounds(w, x, y) || !TERRAIN[terrainAt(w, x, y)].buildable || w.occupancy[tileIndex(w, x, y)] !== 0) return false;
+      if (!inBounds(w, x, y) || !anchorGround(terrainAt(w, x, y)) || w.occupancy[tileIndex(w, x, y)] !== 0) return false;
     }
   return !blocksObjective(w, tx - 1, ty - 1, 3);
 }

@@ -122,6 +122,8 @@ function orderText(w: World, fr: Frame, u: Unit): string {
       return `dropping at ${p(o.x, o.y)}`;
     case "lift":
       return `lifting #${o.goliathId}`;
+    case "found":
+      return `deploying a depot at ${fr.topLeft("depot", o.tx, o.ty).join(",")}`;
   }
 }
 
@@ -332,10 +334,10 @@ export function renderObservation(o: Observation, x: ObserveExtras): string {
 // ------------------------------------------------------------- ASCII maps ---
 
 /** Terrain enum → character (tools/export-maps.ts, with open sea as "_"). */
-export const TERRAIN_CHARS = ".#$~=:T*H,_";
+export const TERRAIN_CHARS = ".#$~=:T*H,_-";
 
 export const TERRAIN_LEGEND =
-  ". ground  # rock  $ scrap field  * crystal field (richer)  ~ water (lava on volcanic maps)  _ open sea  = road  H bridge  , shallows (ford)  : rough ground  T woods";
+  ". ground  - wasteland (open, but nothing can be built on it)  # rock  $ scrap field  * crystal field (richer)  ~ water (lava on volcanic maps)  _ open sea  = road  H bridge  , shallows (ford)  : rough ground  T woods";
 
 /** A column ruler for an ASCII map whose column c shows tile c × scale. */
 function ruler(cols: number, scale: number, pad: number): string[] {
@@ -571,8 +573,8 @@ export function briefing(w: World, side: Faction, opts: BriefingOptions): string
     `FOG OF WAR. You see only what your units and buildings see. Enemy units are listed only while in sight (a Sniper Team hiding in woods stays hidden until something gets within 3 tiles or it fires). Enemy buildings are remembered where you last saw them. You never see the enemy's scrap, queues or orders.`,
     ``,
     `RULES IN BRIEF`,
-    `- Economy: harvesters (${UNITS.harvester.cost}) mine scrap ($) and richer crystal (*) fields and haul it to your HQ, a depot, or an anchored Goliath (${ECONOMY.harvesterCapacity} per trip). ${hq ? `Your HQ also trickles ${rules.hqTrickle ?? ECONOMY.hqTrickle} scrap/s.` : "Without an HQ there is no HQ scrap trickle."} Fields run dry; build a depot near a distant field.`,
-    `- Construction: one building at a time. It costs its price when you start it and takes its build time; when it's ready the arena places it for you: at the "at" tile you gave or, without one, a sensible spot near your base. New buildings must be within ${ECONOMY.buildRadius} tiles of one of your non-outpost buildings, or within ${GOLIATH.buildRing} tiles of an anchored Goliath, on ground (.) or road (=). Buildings outside regular base range use a Goliath's ring and become outposts, which do not extend build range. Selling refunds ${ECONOMY.sellRefund * 100}% of the cost, scaled by health.`,
+    `- Economy: harvesters (${UNITS.harvester.cost}) mine scrap ($) and richer crystal (*) fields and haul it to your HQ, a depot, or an anchored Goliath (${ECONOMY.harvesterCapacity} per trip). ${hq ? `Your HQ also trickles ${rules.hqTrickle ?? ECONOMY.hqTrickle} scrap/s.` : "Without an HQ there is no HQ scrap trickle."} Fields run dry; build a depot near a distant field. Nothing can be built on the wasteland (-) ringing every field. A depot is built like any building (${BUILDINGS.depot.cost}), in build range; past it, ${ECONOMY.expansion.crew} or more harvesters can deploy one with "found" (not "build"): they drive to the spot (anywhere on your land, no build range needed), pay ${ECONOMY.expansion.cost} scrap when ${ECONOMY.expansion.crew} are there, are used up (they become it), and the depot takes ${ECONOMY.expansion.buildTime}s to go up before harvesters can unload there.`,
+    `- Construction: one building at a time. It costs its price when you start it and takes its build time; when it's ready the arena places it for you: at the "at" tile you gave or, without one, a sensible spot near your base. New buildings must be within ${ECONOMY.buildRadius} tiles of your HQ or ${ECONOMY.extendRadius} of one of your other non-outpost buildings, or within ${GOLIATH.buildRing} tiles of an anchored Goliath, on ground (.) or road (=). Buildings outside regular base range use a Goliath's ring and become outposts, which do not extend build range. Selling refunds ${ECONOMY.sellRefund * 100}% of the cost, scaled by health.`,
     `- Production: each building queues up to ${ECONOMY.maxQueue} units, paid when queued; new units roll out next to it, then go to its rally point if it has one (attack-moving there).`,
     `- Combat: units auto-fire at enemies in range. Damage depends on damage type vs armor (table below); woods give ground units cover. Units gain veterancy ranks (★1-★3, +${15}% damage each) from kills. Destroyed combat units leave wrecks worth 30% of their cost for the first ground unit (either side) that drives over them.`,
     w.objectives.uplinks.length
@@ -606,6 +608,7 @@ export function briefing(w: World, side: Faction, opts: BriefingOptions): string
     `  {"board": ["#91", "#133"], "condor": "#103"} infantry squads climb into a Condor`,
     `  {"unload": ["#103"], "at": [11, 11]}         land a carried Goliath or drop a Condor's infantry ("at" optional)`,
     `  {"anchor": ["#97"]}                         anchor a grounded Goliath`,
+    `  {"found": ["#12","#13","#14","#15"], "at": [30, 12]}  harvesters deploy a depot there (past build range)`,
     `  {"pack_up": ["#97"]}                        pack up an anchored Goliath`,
     `  {"lift": ["#103", "#104"], "goliath": "#97"} two empty Condors lift a walking Goliath`,
     `Selector strings: "army" (every combat unit), "all", "stinger" (all stingers), "idle army", "idle stinger", "army near 30,25" (within 6 tiles); they can be mixed with ids: ["#97", "wasp"]. A "to" may also be "enemy-hq" or an id like "#23" (that unit or building's position). Ids of units that have died stop working: use the ids in this round's observation.`,

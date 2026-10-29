@@ -799,13 +799,13 @@ describe("outposts", () => {
     const w = field();
     // blue's HQ covers (1..4, 1..4); the Goliath anchors just outside it
     const g = anchoredAt(w, "blue", 8, 5);
-    expect(canPlaceBuilding(w, "blue", "turret", 12, 3)).toBe(false); // (outside base range and ring)
-    const t = placeNow(w, "blue", "turret", 6, 3); // in base range AND the Goliath's ring
+    expect(canPlaceBuilding(w, "blue", "radar", 10, 1)).toBe(false); // (outside base range and ring; a Radar: a Turret reaches farther)
+    const t = placeNow(w, "blue", "turret", 7, 2); // in base range AND the Goliath's ring
     expect(t).not.toBeNull();
     expect(t!.outpost ?? false).toBe(false);
-    // so it is base: build off it, beyond the HQ's reach and the ring's
+    // so it is base: build off it (ECONOMY.extendRadius), beyond the HQ's reach and the ring's
     run(w, PACK_TICKS + 2, [packCmd(g)]);
-    expect(canPlaceBuilding(w, "blue", "turret", 12, 3)).toBe(true);
+    expect(canPlaceBuilding(w, "blue", "radar", 10, 1)).toBe(true);
   });
 
   it("can't overlap a Goliath's body (anchored or walking, either side)", () => {

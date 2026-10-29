@@ -9,6 +9,7 @@ import type { BuildingKind, Faction, GoliathWeapon, PerSide, QueueItem, Unit, Un
 import { hasBuilding } from "../sim/world";
 import { sfx } from "../game/audio";
 import { mapThumbUrl } from "../game/assets";
+import { wastelandOverlay } from "../game/terrain-paint";
 import type { Controller } from "../game/controller";
 import { PLAYER, isArmyUnit, isProducer, isRooted, pickProducer } from "../game/controller";
 import { onAnnounce, type Announcement } from "../game/announce";
@@ -24,6 +25,7 @@ import { mountHudLayout } from "./layout";
 import { HINTS, HintQueue, type HintOffer } from "../game/hints";
 import { fullscreen } from "./fullscreen";
 import { mapById } from "../sim/maps";
+import { isRandomMapId } from "../sim/mapgen";
 import { TAB_CODES, buildKeyAction, buildKeys, keyLabel } from "./build-keys";
 import { SIDE_NAME, iconUrl } from "../game/side-style";
 import { sidesOf } from "../sim/sides";
@@ -367,6 +369,9 @@ export function createHud(api: HudApi): Hud {
   // (under Uncharted it only ever shows through scouted tiles: drawMinimap)
   const thumb = new Image();
   thumb.src = mapThumbUrl(api.world.mapId);
+  // (the built-in maps' painted thumbs predate the Wasteland round the fields: it's laid over them;
+  // a generated map's thumb is painted with it)
+  const wasteLayer = isRandomMapId(api.world.mapId) ? null : wastelandOverlay(api.world, MINIMAP_PX);
   // the ticker and banner sit under whatever the top band really occupies (src/ui/layout.ts)
   const layout = mountHudLayout(root);
 
@@ -475,6 +480,7 @@ export function createHud(api: HudApi): Hud {
       const p = view.pending;
       if (p?.kind === kind && p.ready) {
         api.ctrl.placing = kind;
+        api.ctrl.foundCrew = null;
         api.ctrl.clearSelection();
         sfx.play("click");
         return;
@@ -726,7 +732,7 @@ export function createHud(api: HudApi): Hud {
   type Chip = { id: string; label: string; cls?: string; on: () => void; active?: boolean };
   /** The key that does what each chip does (src/game/GameScene.ts keydown), for its tooltip. */
   const CHIP_KEYS: Record<string, string> = {
-    stop: "X", move: "F", clear: "Esc", sell: "Delete", unload: "U", anchor: "G", idle: "E",
+    stop: "X", move: "F", clear: "Esc", sell: "Delete", unload: "U", anchor: "G", found: "V", idle: "E",
     place: "Enter", cancel: "Esc", untarget: "Esc"
   };
   let lastChipKey = "";
@@ -1320,7 +1326,7 @@ export function createHud(api: HudApi): Hud {
       // the ghost's spot: build it here, or why not (src/game/placement-view.ts)
       const why = ctrl.placementProblem();
       chips.push({
-        id: "place", label: why ? `⚠ ${why}` : `✓ Place ${BUILDINGS[ctrl.placing].name}`,
+        id: "place", label: why ? `⚠ ${why}` : ctrl.foundCrew ? "✓ Deploy Depot here" : `✓ Place ${BUILDINGS[ctrl.placing].name}`,
         cls: why ? "place bad" : "place go", on: () => ctrl.commitPlacement()
       });
       chips.push({ id: "cancel", label: "✕", cls: "warn", on: () => (ctrl.placing = null) });
@@ -1336,6 +1342,15 @@ export function createHud(api: HudApi): Hud {
       if (unload)
         chips.push({ id: "unload", label: aboard > 0 ? `⇣ Unload ${aboard}` : "⇣ Set down", cls: "unload", on: () => ctrl.unloadSelected() });
       if (anchor) chips.push(anchor);
+      // four harvesters or more: deploy a Depot anywhere on our land (they drive there and become it)
+      if (ctrl.crewSelected()) {
+        const E = ECONOMY.expansion;
+        const poor = w.factions[PLAYER].scrap < E.cost;
+        chips.push({
+          id: "found", label: narrow ? `⛏ Depot ${E.cost}` : `⛏ Deploy Depot ${E.cost}`, cls: poor ? "anchor bad" : "anchor go",
+          on: () => ctrl.startFound()
+        });
+      }
       // (unarmed Condors, lifts and anchored Goliaths have no fights to skip: Move only would
       // change nothing; on a phone the Unload or anchor chip takes its place in a mixed
       // selection, so the row stays one row. A sound duel: as the orders on their way leave them)
@@ -1473,8 +1488,10 @@ export function createHud(api: HudApi): Hud {
     const fogOn = api.ctrl.showFog;
     const vis = w.fog[PLAYER].vis;
     mctx.clearRect(0, 0, S, S);
-    if (thumb.complete && thumb.naturalWidth > 0) mctx.drawImage(thumb, 0, 0, S, S);
-    else {
+    if (thumb.complete && thumb.naturalWidth > 0) {
+      mctx.drawImage(thumb, 0, 0, S, S);
+      if (wasteLayer) mctx.drawImage(wasteLayer, 0, 0);
+    } else {
       mctx.fillStyle = "#26301f";
       mctx.fillRect(0, 0, S, S);
     }
@@ -1742,7 +1759,7 @@ export const HELP_HTML = `
   <h3>Last Stand</h3><p>No enemy base: hold out against endless waves. The top bar shows the next wave's theme (four of Air Raid, Armour Column, Artillery, Mixed and Bot Swarm, then a Boss every 5th) and the minimap arrow where it will enter. Clearing a wave pays scrap; with the field clear, <b>Call wave</b> brings the next one early for a bonus.</p>
   <h3>Ops</h3><p>A short campaign of handcrafted missions with a twist — hold a bridge, deliver scrap under air raids, decapitate a base with a strike group, fight with no income. Each has a goal pill under the clock (tap it for the objectives) and three stars: complete it, plus two harder conditions. The first three are open; every op you complete opens the next.</p>
   <h3>Career, Daily Op and mutators</h3><p>Wins, Last Stand waves and medals earn XP toward ten ranks; each map and difficulty has three stars (win, win under 8:00 — 12:00 on the Archipelago — and win without losing a building). The <b>Daily Op</b> is one seeded match a day, the same for everyone, and keeps a win streak. <b>Mutators</b> twist a skirmish's rules for both sides (no stars). Tap your rank on the menu for medals and records.</p>
-  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ, a Depot or an anchored Goliath. More harvesters, more scrap. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost (a Last Stand wave's only 5%) for a minute: roll any ground unit over one to salvage it.</p>
+  <h3>Economy</h3><p>Harvesters mine scrap piles and glowing crystals (worth more) and haul them to your HQ, a Depot or an anchored Goliath. More harvesters, more scrap. Nothing can be built on the scorched <b>wasteland</b> ringing every field. Build Depots from the build menu, in your base; to <b>expand</b> past it, select ${ECONOMY.expansion.crew} Harvesters and tap <b>⛏ Deploy Depot</b> (${ECONOMY.expansion.cost}): they drive to the spot (anywhere on your land) and unpack their rigs into it, so they're used up, and it takes ${ECONOMY.expansion.buildTime} s to go up. Destroyed units leave glinting <b>wrecks</b> worth 30% of their cost (a Last Stand wave's only 5%) for a minute: roll any ground unit over one to salvage it.</p>
   <h3>Building</h3><p>Open <b>Base</b> and tap a structure to construct it. When it's ready, tap it again: a ghost appears on a free spot near your base. Tap the map (or drag the ghost) to move it, then tap the ghost or <b>✓ Place</b> to build. With a mouse, just click the spot. Build buttons marked ⚔ counter enemies you've seen; a tab marked <b>idle</b> has a factory doing nothing.</p>
   <h3>Army</h3><p>Tap a unit to select it, drag-hold (long-press) to box-select, double-tap to grab all of that type on screen. With a mouse, Shift+click adds a unit to the selection or takes it out. Left-click open terrain to move without stopping to fight. Right-click terrain to attack-move, an enemy to focus attack, or a friendly unit to attack-move to its position. On touch, tap the ground to attack-move, tap an enemy to attack. <b>Move only</b> retreats without stopping to fight. <b>💤 Idle</b> grabs units with no orders.</p>
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
@@ -1754,5 +1771,5 @@ export const HELP_HTML = `
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>
   <h3>Camera</h3><p>Drag to pan, pinch to zoom, tap the minimap to jump. Pulsing arrows at the screen edge point at fights you can't see (red: you're being hit) — tap one to fly there, or tap ⚡ to cycle through them. Watching AI vs AI, the 🎥 cinematic camera (key C) follows the action by itself; pan or zoom and it hands the camera to you, taking it back a few seconds later.</p>
   <h3>Speed</h3><p>Tap the <b>1×</b> chip by the clock for 1.5× or 2×; hold the clock to fast-forward at 3×.</p>
-  <h3>Keyboard</h3><p><b>B</b> opens build mode: each button shows its key, laid out like the buttons (Q W E / A S D / Z X C beside the sidebar, Q W E R T… along the bottom), and <b>1</b>–<b>4</b> switch tabs. It stays open for as much as you like (B Q 2 W W: a Fab Plant, then two Stingers) until <b>B</b>, <b>Esc</b> or a click on the battlefield closes it. Once a building is ready, its key picks it up, and <b>Enter</b> places it where the ghost stands. Elsewhere: <b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>H</b> back to your HQ, <b>J</b> jump to a fight, <b>C</b> cinematic camera. <b>Q</b> is the <b>unassigned army units</b> key: it selects every combat unit not already saved in a squad (⚔ Select army takes the lot). <b>E</b> selects idle units, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save). <b>X</b> stops the selection, <b>F</b> makes the next order <b>Move only</b>, <b>U</b> unloads, <b>G</b> anchors, <b>Delete</b> sells. <b>4</b>–<b>7</b> arm the calldowns (Barrage, EMP, Drop Pod, Sky Hammer), then click the map. <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancels and deselects. <b>Shift</b>+<b>?</b> shows all of these at a glance, here or on the menu.</p>`;
+  <h3>Keyboard</h3><p><b>B</b> opens build mode: each button shows its key, laid out like the buttons (Q W E / A S D / Z X C beside the sidebar, Q W E R T… along the bottom), and <b>1</b>–<b>4</b> switch tabs. It stays open for as much as you like (B Q 2 W W: a Fab Plant, then two Stingers) until <b>B</b>, <b>Esc</b> or a click on the battlefield closes it. Once a building is ready, its key picks it up, and <b>Enter</b> places it where the ghost stands. Elsewhere: <b>WASD</b> or arrows pan, <b>+</b>/<b>−</b> zoom, <b>H</b> back to your HQ, <b>J</b> jump to a fight, <b>C</b> cinematic camera. <b>Q</b> is the <b>unassigned army units</b> key: it selects every combat unit not already saved in a squad (⚔ Select army takes the lot). <b>E</b> selects idle units, <b>1</b>–<b>3</b> squads (Ctrl or Shift to save). <b>X</b> stops the selection, <b>F</b> makes the next order <b>Move only</b>, <b>U</b> unloads, <b>G</b> anchors, <b>V</b> has 4 or more selected Harvesters deploy a Depot, <b>Delete</b> sells. <b>4</b>–<b>7</b> arm the calldowns (Barrage, EMP, Drop Pod, Sky Hammer), then click the map. <b>.</b> speed, <b>P</b> or <b>Space</b> pause, <b>Esc</b> cancels and deselects. <b>Shift</b>+<b>?</b> shows all of these at a glance, here or on the menu.</p>`;
 

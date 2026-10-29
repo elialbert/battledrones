@@ -200,10 +200,14 @@ describe("AI on an action budget (Strategy.spendDown, depotReach: ai/marshal.ts 
     expect(q.reduce((v, x) => v + UNITS[x.kind].cost, 0) / q.length).toBeGreaterThanOrEqual(UNITS.lancer.cost);
   });
 
-  it("puts depots by the fields it mines, one after another", () => {
+  it("puts depots by the fields it mines, one after another (an expansion's crew to spare)", () => {
     const depotsBy = (tweak?: { depotReach: number }) => {
       const w = createMapWorld("riverlands");
-      runWithAi(w, 300, createAiState("balanced", "normal", 1, tweak));
+      // harvesters to spare for an expansion's crew (economy.ts isExpansion), and scrap for it
+      const hq = buildingCenter(hqOf(w, "red")!);
+      for (let i = 0; i < 9; i++) spawnUnit(w, "harvester", "red", hq.x - 3.5 - (i % 2), hq.y - 2 + (i >> 1) * 0.7);
+      w.factions.red.scrap = 1500;
+      runWithAi(w, 180, createAiState("balanced", "normal", 1, tweak));
       return [...w.buildings.values()].filter((b) => b.faction === "red" && b.kind === "depot");
     };
     const stock = depotsBy();
@@ -280,7 +284,7 @@ describe("AI and robot infantry", () => {
     const c = buildingCenter(hqOf(w, "red")!);
     const sniper = spawnUnit(w, "sniper", "red", c.x - 1, c.y + 3);
     const tank = spawnUnit(w, "stinger", "red", c.x, c.y + 3);
-    const intruder = spawnUnit(w, "stinger", "blue", c.x - 6, c.y + 6);
+    const intruder = spawnUnit(w, "lancer", "blue", c.x - 6, c.y + 6); // (medium armour: Snipers do 0.4×)
     w.powers.stunned.set(intruder.id, 1e9);
     step(w, []);
     const cmds = tickAi(w, "red", ai);

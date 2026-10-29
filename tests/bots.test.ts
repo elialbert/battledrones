@@ -220,7 +220,7 @@ describe("Marshal, the bot built for a budget", () => {
       const slow = planStrategy(n);
       const fast = planStrategy(n, true);
       expect(fast.buildOrder.slice(0, 3)).toContain("depot");
-      expect(fast.harvesters).toBe(5);
+      expect(fast.harvesters).toBe(n === "turtle" ? 7 : 5); // (Turtle mines as hard as Rush: RUSH-RPS.md)
       expect([...fast.buildOrder].sort()).toEqual(expect.arrayContaining([...new Set(slow.buildOrder)].sort())); // (the same buildings, sooner)
     }
     expect(planStrategy("rush", true)).toEqual(planStrategy("rush"));

@@ -127,10 +127,10 @@ describe("the island map", () => {
         for (let i = 0; i < w.width * w.height; i++) expect(w.terrain[i]).not.toBe(Terrain.Shallows);
       });
 
-      it("keeps harvesting scarce: one small field by each HQ and a couple of crystals", () => {
+      it("keeps harvesting scarce: one small field by each HQ, a couple of crystals and two small outlying patches", () => {
         let tiles = 0;
         for (let i = 0; i < w.width * w.height; i++) if (w.terrain[i] === Terrain.Scrap || w.terrain[i] === Terrain.Crystal) tiles++;
-        expect(tiles / 2).toBeLessThanOrEqual(12);
+        expect(tiles / 2).toBeLessThanOrEqual(20);
       });
 
       it("starts each side with a free Condor beside its HQ, its Trooper Squad aboard", () => {

@@ -45,13 +45,12 @@ describe("arena observations show only what the side can see", () => {
       for (const ticks of [900, 2400]) {
         const w = aiWorld(def.id, ticks);
         for (const side of SIDES) {
-          const enemy = side === "blue" ? "red" : "blue";
           const fr = frameOf(w, side);
           const obs = observeState(w, side);
           // every enemy unit listed is one the side sees now, where it is
           for (const e of obs.enemies) {
             const u = w.units.get(e.id)!;
-            expect(u.faction).toBe(enemy);
+            expect(u.faction).not.toBe(side); // (on a four-player map every other side is a foe)
             expect(unitSeenBy(w, side, u)).toBe(true);
             expect([e.x, e.y]).toEqual(fr.tile(u.x, u.y));
           }
@@ -189,10 +188,10 @@ describe("orders", () => {
     const a = new Arena({ map: "riverlands", seed: 9, seats: { blue: parseSeat("agent"), red: parseSeat("agent") }, maxTicks: 3000 });
     a.orders("blue", [{ opener: "industry" }]);
     a.resolve();
-    expect(a.orders("blue", [{ build: "turret", at: [10, 44] }])).toMatch(/ok: started building a turret/);
+    expect(a.orders("blue", [{ build: "turret", at: [8, 44] }])).toMatch(/ok: started building a turret/);
     for (let i = 0; i < 3; i++) a.resolve();
     const turret = [...a.w.buildings.values()].find((b) => b.faction === "blue" && b.kind === "turret");
-    expect(turret && [turret.tx, turret.ty]).toEqual([10, 44]);
+    expect(turret && [turret.tx, turret.ty]).toEqual([8, 44]);
     // without a spot: placed somewhere sensible, near the base
     a.orders("blue", [{ build: "airpad" }]);
     for (let i = 0; i < 4; i++) a.resolve();

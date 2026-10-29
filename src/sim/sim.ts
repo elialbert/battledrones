@@ -3,6 +3,8 @@ import { isMulti, otherSide, sidesOf } from "./sides";
 import {
   applyEconomyCommand,
   tickConstruction,
+  tickFoundCrews,
+  tickFounding,
   tickHarvest,
   tickProduction,
   tickTrickle
@@ -32,6 +34,8 @@ export function step(w: World, commands: Command[]): void {
   for (const c of commands) applyCommand(w, c, held);
   const spots = vehicleSpots(w); // (before anything drives: squads step aside only for a vehicle on the move)
   tickConstruction(w);
+  tickFoundCrews(w);
+  tickFounding(w);
   tickProduction(w);
   tickHarvest(w);
   tickTrickle(w);

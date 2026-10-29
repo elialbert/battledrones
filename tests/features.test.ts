@@ -224,7 +224,8 @@ describe("new weapons", () => {
 describe("unit behaviour", () => {
   it("idle units retaliate against an attacker out of their acquire range", () => {
     const w = createWorld(30, 24);
-    const guard = spawnUnit(w, "stinger", "blue", 5.5, 10.5);
+    // (a Lancer: a light-armoured Stinger now loses a lone Mortar's duel by a hair, cost for cost it still wins)
+    const guard = spawnUnit(w, "lancer", "blue", 5.5, 10.5);
     const mortar = spawnUnit(w, "mortar", "red", 12.5, 10.5);
     step(w, [{ type: "attack", faction: "red", unitIds: [mortar.id], targetId: guard.id }]);
     runTicks(w, 4 * TICK_RATE);

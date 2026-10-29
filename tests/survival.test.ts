@@ -304,14 +304,15 @@ describe("Bot Swarm", () => {
     expect(sniper.order).toMatchObject({ type: "attack", targetId: victim.id }); // …but the director points it at the squad
     // nothing to shoot: it rejoins the nearest walking squad instead of wandering off alone
     w.units.delete(victim.id);
-    const lone = spawnUnit(w, "sniper", "red", c.x + 16, c.y);
-    const squad = spawnUnit(w, "trooper", "red", c.x + 16, c.y - 8);
-    spawnUnit(w, "wasp", "red", c.x + 16, c.y + 3); // aircraft are no cover for a walker
+    // (open ground inside Riverlands' ridge)
+    const lone = spawnUnit(w, "sniper", "red", c.x + 12, c.y + 3);
+    const squad = spawnUnit(w, "trooper", "red", c.x + 12, c.y - 5);
+    spawnUnit(w, "wasp", "red", c.x + 12, c.y + 5.5); // aircraft are no cover for a walker
     for (let i = 0; i < SURVIVAL.retaskTicks + 2; i++) {
       shieldHq(w);
       step(w, []);
-      squad.x = c.x + 16;
-      squad.y = c.y - 8;
+      squad.x = c.x + 12;
+      squad.y = c.y - 5;
     }
     expect(lone.order).toMatchObject({ type: "attackMove", x: squad.x, y: squad.y });
   });

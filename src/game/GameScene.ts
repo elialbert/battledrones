@@ -1226,6 +1226,11 @@ export class GameScene {
         }
         break;
       }
+      case "founded":
+        // a harvester of an expansion's crew turned into the Depot going up
+        this.fx.pulse(ev.x, ev.y, 0xffd66e, 0.8);
+        if (ev.faction === PLAYER && !gameMode.spectator) sfx.play("build", 0.5);
+        break;
       case "sold":
         this.entities.markSold(ev.id);
         sfx.play("sell");
@@ -1810,6 +1815,7 @@ export class GameScene {
       else if (/^Digit[4-7]$/.test(e.code) && !this.ctrl.spectator) this.powerUi?.press(Number(e.code.slice(5)) - 4); // calldowns
       else if (e.key === "u") this.ctrl.unloadSelected();
       else if (e.key === "g") this.ctrl.toggleAnchor(); // selected Goliaths anchor, or pack up
+      else if (e.key === "v") this.ctrl.startFound(); // four selected harvesters or more: deploy a Depot
       else if (e.key === "Delete") this.ctrl.sellSelected();
       else if (e.key === "Enter" && this.ctrl.placing) {
         // the ghost where it stands (✓ Place); not also a click on whichever HUD button

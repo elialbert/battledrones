@@ -296,6 +296,13 @@ game take it over its `BotDef.opener`. `Bot.plan` names the plan.
   one push at 3000 scrap of army. The first try (five towers, a radar, the
   usual four harvesters) won 33%: towers cost actions as well as scrap, and
   it mined half what its enemy did while 2000 scrap sat unspent.
+  *Reworked 2026-10-29 (RUSH-RPS.md "Start here"):* it now holds the way
+  into its base (`holdChoke`, ai/choke.ts finds the gate) with turrets
+  (one more per two tanks seen, `turretsVsGround`) and its whole army, techs
+  behind them with Mortars (`mortarShare`), and mines with 6–7 harvesters.
+- **Rush** (reworked 2026-10-29, RUSH-RPS.md): a Depot, three Fab Plants by
+  0:50, seven harvesters, one wave of mass Stingers at 1500, then the rest
+  of the order and an expansion. The numbers below are the old Rush's.
 - **Greed** (on Boom): two depots right after the Fab Plant, six
   harvesters (plus one a depot), no raids, a push at 2400. 78%; with a
   turret and the Tech Lab between the depots, 56%.

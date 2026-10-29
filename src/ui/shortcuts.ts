@@ -20,6 +20,7 @@ export const SHORTCUT_GROUPS: { title: string; rows: Row[] }[] = [
       ["F", "Next order is Move only"],
       ["U", "Unload a Condor"],
       ["G", "Anchor or pack up a Goliath"],
+      ["V", "4+ selected Harvesters deploy a Depot (past your base)"],
       ["Delete", "Sell"],
       ["Esc", "Cancel and deselect"]
     ]

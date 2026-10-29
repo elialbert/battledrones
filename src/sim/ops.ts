@@ -3,9 +3,9 @@ import { createAiState, type AiState, type Difficulty, type Strategy, type Strat
 import { nearestReachableResource } from "./economy";
 import { setupSurvival, wavesSurvived, type SurvivalOptions } from "./modes/survival";
 import { NO_GROUND_COMBAT, makeRules, type MutatorId } from "./rules";
-import type { BuildingKind, Faction, FxEvent, UnitKind, World } from "./types";
+import { Terrain, type BuildingKind, type Faction, type FxEvent, type UnitKind, type World } from "./types";
 import { carrierOf } from "./transport";
-import { buildingCenter, hqOf, inBounds, moveClassOf, passable, spawnBuilding, spawnUnit } from "./world";
+import { buildingCenter, hqOf, inBounds, moveClassOf, passable, setTerrain, spawnBuilding, spawnUnit, terrainAt } from "./world";
 
 /**
  * Ops: a short campaign of handcrafted scenarios on the existing maps, each
@@ -251,15 +251,16 @@ export const OPS: OpDef[] = [
     id: "frozen-assets",
     title: "Frozen Assets",
     icon: "❄",
-    tagline: "3,000 scrap, no income: spend it wisely",
+    tagline: "4,000 scrap, no income: spend it wisely",
     brief:
-      "Our harvesters are frozen solid: the factories stand, but there's 3,000 scrap in the bank and not a crate more — no mining, no HQ salvage. Red's Boom commander is building an economy. Strike before it pays off: destroy their HQ within 6:00.",
+      "Our harvesters are frozen solid: the factories stand, but there's 4,000 scrap in the bank and not a crate more — no mining, no HQ salvage. Red's Boom commander is building an economy. Strike before it pays off: destroy their HQ within 6:00.",
     tip: "Every unit counts. Hit their harvesters to stall the Boom, keep your army together, and don't waste scrap on defences you won't need.",
     map: "frostbite",
     ai: { strategy: "boom", difficulty: "normal" },
     // (no calldowns: free Drop Pod crews would break the fixed budget)
     rules: { playerBans: { units: ["harvester"] }, playerIncome: 0, calldowns: false },
-    scrap: 3000,
+    // (4,000: Frostbite's walled bases, two gates each, made 3,000 a base race the strike lost)
+    scrap: 4000,
     setup(_w, o) {
       o.removeUnits("blue", "harvester");
       o.building("blue", "fab-plant", 8, 39);
@@ -286,7 +287,9 @@ export const OPS: OpDef[] = [
     // (ground units are banned too, so a Drop Pod lands Wasps and a Raptor: it stays an air raid;
     // the starting Trooper Squad stays home — no Condor to fly it — and no more infantry can be raised)
     rules: { playerBans: { units: NO_GROUND_COMBAT, buildings: ["fab-plant", "assembly-bay"] }, enemyIncome: 0.5 },
-    scrap: 800,
+    // (900: fields mine slower since the expansion rework; at 800 its star slipped by seconds. Star at 5:00,
+    // not 4:30: after the Stinger and Turret retune its pilots' first wins came in at 4:40-5:00, RUSH-RPS.md)
+    scrap: 900,
     setup(_w, o) {
       o.building("blue", "airpad", 9, 54);
       o.building("blue", "tech-lab", 4, 51);
@@ -298,7 +301,7 @@ export const OPS: OpDef[] = [
     goals: [{ type: "destroyHq" }, { type: "within", secs: 420 }],
     stars: [
       { type: "maxLosses", n: 12 },
-      { type: "within", secs: 270 }
+      { type: "within", secs: 300 }
     ]
   },
   {
@@ -428,6 +431,10 @@ export function setupOp(w: World, id: string): void {
   };
   const helpers: OpSetup = {
     building(faction, kind, tx, ty, t) {
+      // an op's base was laid out before fields had their Wasteland ring: its footprint stays plain ground
+      const size = BUILDINGS[kind].size;
+      for (let y = ty; y < ty + size; y++)
+        for (let x = tx; x < tx + size; x++) if (terrainAt(w, x, y) === Terrain.Wasteland) setTerrain(w, x, y, Terrain.Ground);
       const b = spawnBuilding(w, kind, faction, tx, ty);
       tag(t, b.id);
       return b.id;

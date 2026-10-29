@@ -18,6 +18,7 @@ import {
   applyEconomyCommand,
   buildingBlocker,
   canPlaceBuilding,
+  foundBlocker,
   nearestReachableResource,
   producerCap,
   producersOf,
@@ -68,7 +69,7 @@ const refuse = (why: string): never => {
 /** Accept "attack_move", "attackMove", "attack-move"… */
 const norm = (k: string) => k.toLowerCase().replace(/[-_\s]/g, "");
 
-const VERBS = ["opener", "attackmove", "move", "attack", "stop", "harvest", "produce", "cancel", "build", "sell", "rally", "calldown", "board", "unload", "anchor", "packup", "pack", "lift"] as const;
+const VERBS = ["opener", "attackmove", "move", "attack", "stop", "harvest", "produce", "cancel", "build", "sell", "rally", "calldown", "board", "unload", "anchor", "packup", "pack", "lift", "found"] as const;
 type Verb = (typeof VERBS)[number];
 
 /** The kind named by a word ("stingers", "Flak Crawler", "flak"). */
@@ -362,6 +363,20 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       if (!accepted.length) refuse(skipped.join("; "));
       out.commands.push({ type, faction, unitIds: accepted.map((u) => u.id) });
       return `${describe(accepted)} ${type === "anchor" ? "anchoring" : "packing up"}${skipped.length ? ` (skipped ${skipped.join("; ")})` : ""}`;
+    }
+    case "found": {
+      const E = ECONOMY.expansion;
+      const crew = selectUnits(w, fr, side, o.found).filter((u) => u.kind === "harvester");
+      if (crew.length < E.crew) refuse(`found needs ${E.crew} or more of your harvesters (${crew.length} picked)`);
+      const xy = coords(o.at);
+      if (!xy) refuse(`"at" must be [x, y]: the depot's top-left tile`);
+      const [tx, ty] = fr.worldTopLeft("depot", xy![0], xy![1]);
+      const why = foundBlocker(w, side, tx, ty);
+      if (why) refuse(`can't deploy a depot at ${xy!.join(",")}: ${why}`);
+      const cmd: Command = { type: "found", faction, unitIds: crew.map((u) => u.id), tx, ty };
+      applyEconomyCommand(w, cmd);
+      out.commands.push(cmd);
+      return `${describe(crew)} going to deploy a depot at ${xy!.join(",")} (${E.cost} scrap when ${E.crew} are there; they are used up, then ${E.buildTime}s to go up)`;
     }
     case "lift": {
       const condors = selectUnits(w, fr, side, o.lift).filter((u) => isTransport(u.kind));

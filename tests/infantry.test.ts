@@ -112,7 +112,7 @@ describe("precision damage (Sniper Teams)", () => {
 
   it("is feeble against vehicles and buildings", () => {
     expect(snipe("mastodon")).toBeCloseTo(shotDamage(UNITS.sniper) * 0.25, 9);
-    expect(snipe("stinger")).toBeCloseTo(shotDamage(UNITS.sniper) * 0.4, 9);
+    expect(snipe("lancer")).toBeCloseTo(shotDamage(UNITS.sniper) * 0.4, 9); // (medium armour)
     const w = createWorld(20, 20);
     spawnUnit(w, "sniper", "blue", 4.5, 5.5);
     const depot = spawnBuilding(w, "depot", "red", 9, 5);

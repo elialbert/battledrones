@@ -115,6 +115,11 @@ export interface GroundUniforms extends EdgeUniforms {
   uDetail: { value: THREE.Vector3 };
   /** The biome's open ground (linear), which the skirt eases into. */
   uFarGround: { value: THREE.Color };
+  /** Wasteland per tile (one texel per tile plus a border, like the fog map): 1 on it, 0 off. */
+  uWaste: { value: THREE.Texture | null };
+  /** Wasteland's crust colour (scaled a little by the ground's brightness) and the glow in its cracks (black: none). */
+  uWasteTint: { value: THREE.Color };
+  uWasteGlow: { value: THREE.Color };
 }
 
 /**
@@ -176,7 +181,7 @@ export function patchGround(s: Shader, u: GroundUniforms, rock: RockUniforms | n
     .replace(FOG_LOOKUP, FOG_MIRRORED)
     .replace(
       "#include <fog_pars_fragment>",
-      `#include <fog_pars_fragment>\n${EDGE_DECL}\n${rock ? `${ROCK_DECL}\nvarying vec4 vStone;\nvarying float vSteep;` : ""}\nuniform vec3 uDetail;\nuniform vec3 uFarGround;`
+      `#include <fog_pars_fragment>\n${EDGE_DECL}\n${rock ? `${ROCK_DECL}\nvarying vec4 vStone;\nvarying float vSteep;` : ""}\nuniform vec3 uDetail;\nuniform vec3 uFarGround;\nuniform sampler2D uWaste;\nuniform vec3 uWasteTint;\nuniform vec3 uWasteGlow;`
     )
     .replace(
       "#include <map_fragment>",
@@ -199,6 +204,34 @@ export function patchGround(s: Shader, u: GroundUniforms, rock: RockUniforms | n
       /* glsl */ `#include <color_fragment>${rock ? CLIFF_WALLS : ""}
       {
         vec2 wp = vFowW.xz;
+        {
+          // Wasteland: the ground round a field baked into a crust of cracked plates (the noise's cells,
+          // warped so their borders wander), strewn with slag and charred toward its frayed edge
+          float ws = texture2D( uWaste, ( bdMirror( wp ) + 1.0 ) / uFowSize ).r;
+          if ( ws > 0.01 ) {
+            float fray = texture2D( uTNoise, wp * 0.21 ).r;
+            ws = smoothstep( 0.32, 0.62, ws + ( fray - 0.5 ) * 0.4 );
+            vec2 warp = ( texture2D( uTNoise, wp * 0.17 + vec2( 0.4, 0.1 ) ).rg - 0.5 ) * 0.9;
+            vec4 big = texture2D( uTNoise, ( wp + warp ) * 0.11 );
+            vec4 fine = texture2D( uTNoise, ( wp - warp ) * 0.29 + vec2( 0.53, 0.21 ) );
+            float l = dot( diffuseColor.rgb, vec3( 0.3, 0.55, 0.15 ) );
+            // the biome's crust colour (a little lighter on light ground), each plate its own tone, lighter toward
+            // its middle (curling up) and dark in the cracks
+            vec3 crust = uWasteTint * ( 0.55 + 0.9 * l ) * ( 0.82 + 0.36 * big.a );
+            crust *= 0.8 + 0.35 * smoothstep( 0.04, 0.4, big.b );
+            float crack = 1.0 - smoothstep( 0.015, 0.06, big.b );
+            float hair = ( 1.0 - smoothstep( 0.01, 0.05, fine.b ) ) * smoothstep( 0.3, 0.7, fine.a );
+            crust *= ( 1.0 - crack * 0.75 ) * ( 1.0 - hair * 0.45 );
+            // slag: dark glassy specks, a few catching the light
+            float slag = smoothstep( 0.82, 0.9, texture2D( uTNoise, wp * 0.9 + vec2( 0.13, 0.71 ) ).g );
+            crust = mix( crust, uWasteTint * 0.1, slag * 0.85 );
+            // charred right at the edge, where the ground gives way to it
+            crust *= 1.0 - 0.35 * ws * ( 1.0 - ws ) * 4.0;
+            diffuseColor.rgb = mix( diffuseColor.rgb, crust, ws );
+            // (lava ground: the cracks glow)
+            diffuseColor.rgb += uWasteGlow * ( crack * ( 0.6 + 0.8 * fine.r ) + hair * 0.25 ) * ws;
+          }
+        }
         if ( od > 0.0 ) {
           // past the edge the land gives way to the biome's open ground, rolling in tone
           float roll = texture2D( uTNoise, wp * 0.045 ).r;

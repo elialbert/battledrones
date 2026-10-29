@@ -400,7 +400,7 @@ export function nearestDropSite(w: World, faction: Faction, x: number, y: number
   const reaches = (tx: number, ty: number, size: number) =>
     !mc || canGetWithin(w, mc, x, y, tx + size / 2, ty + size / 2, DOCK_REACH, (px, py) => distToFootprint(tx, ty, size, px, py), size);
   for (const b of w.buildings.values()) {
-    if (b.faction !== faction || !BUILDINGS[b.kind].dropOff) continue;
+    if (b.faction !== faction || !BUILDINGS[b.kind].dropOff || b.founding !== undefined) continue;
     const size = BUILDINGS[b.kind].size;
     if (b.outpost && !reaches(b.tx, b.ty, size)) continue;
     const d = distToFootprint(b.tx, b.ty, size, x, y);
@@ -439,7 +439,7 @@ export function nearestDropOff(w: World, faction: Faction, x: number, y: number)
   let best: Building | null = null;
   let bestD = Infinity;
   for (const b of w.buildings.values()) {
-    if (b.faction !== faction || !BUILDINGS[b.kind].dropOff) continue;
+    if (b.faction !== faction || !BUILDINGS[b.kind].dropOff || b.founding !== undefined) continue;
     const d = distToBuilding(b, x, y);
     if (d < bestD) {
       bestD = d;

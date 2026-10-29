@@ -22,7 +22,7 @@ export const FEATURES: Record<UnitKind, string[]> = {
     "Cheap and quick to build — losing one is fine if it bought you information."
   ],
   stinger: [
-    "Cheap, fast light tank with a turreted cannon — the backbone of an early army.",
+    "Cheap, fast light tank with a turreted cannon — the backbone of an early army. Light armour: Turrets and Mortar splash hit it hard.",
     "Quick enough to raid harvesters and outrun slower armour.",
     "Wins cost-for-cost against Flak Crawlers, Mortars and Lancers, but cannot shoot at aircraft."
   ],
@@ -309,6 +309,7 @@ const BUILDING_FEATURES: Record<BuildingKind, string[]> = {
   ],
   turret: [
     "Autocannon defence that hits ground and air.",
+    `Shreds light armour (×${BUILDINGS.turret.lightMult} against Stingers, Wasps, Mortars) and goes up ${ECONOMY.turretReach} tiles past the build zone: tower the way into your base.`,
     `Mortars out-range it (${UNITS.mortar.range} tiles to its ${BUILDINGS.turret.range}): crack it with artillery, not tanks.`,
     `Kinetic shells: weaker against heavy armour (×${DAMAGE_VS.kinetic.heavy}), so Mastodons shrug it off.`
   ],

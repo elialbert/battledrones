@@ -133,12 +133,13 @@ function distTo(w: World, id: number, x: number, y: number): number {
  * Armor + cover multiplier for a hit of `dmgType` on entity `id`. Woods give
  * ground units cover; robot infantry use it best (INFANTRY.woodsCover).
  */
-function damageMult(w: World, id: number, dmgType: keyof typeof DAMAGE_VS): number {
+function damageMult(w: World, id: number, dmgType: keyof typeof DAMAGE_VS, lightMult = 1): number {
   const u = w.units.get(id);
   let armor: ArmorClass = "structure";
   let cover = 1;
   if (u) {
     armor = UNITS[u.kind].armor;
+    if (armor === "light") cover *= lightMult;
     if (unitDomain(u) === "ground") {
       const t = terrainAt(w, Math.floor(u.x), Math.floor(u.y));
       cover = t === Terrain.Forest && isInfantry(u.kind) ? INFANTRY.woodsCover : TERRAIN[t].cover;
@@ -296,7 +297,7 @@ function fire(w: World, attacker: Attacker, targetId: number, incidents: Inciden
     splash(w, holder.faction, t.x, t.y, stats.splash, damage, dmgType, stats.targets, holder.id, incidents);
     return;
   }
-  applyDamage(w, targetId, damage * vsAir * damageMult(w, targetId, dmgType), holder.id, incidents);
+  applyDamage(w, targetId, damage * vsAir * damageMult(w, targetId, dmgType, stats.lightMult), holder.id, incidents);
 }
 
 /** Advance in-flight projectiles; detonate on arrival. */

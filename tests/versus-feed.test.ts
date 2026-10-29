@@ -671,9 +671,10 @@ describe("taps that build on your own last order, the world D ticks behind", () 
   /** Blue's Goliath and two empty Condors a few tiles off (riverlands). */
   const liftParty = (ids: { g: number; a: number; b: number }) => (w: World) => {
     const hq = hqOf(w, "blue")!;
-    ids.g = spawnUnit(w, "goliath", "blue", hq.tx + 4, hq.ty - 8).id;
-    ids.a = spawnUnit(w, "condor", "blue", hq.tx + 8, hq.ty - 9).id;
-    ids.b = spawnUnit(w, "condor", "blue", hq.tx + 9, hq.ty - 9).id;
+    // (inside Riverlands' ridge: open ground north of the HQ)
+    ids.g = spawnUnit(w, "goliath", "blue", hq.tx + 1, hq.ty - 5).id;
+    ids.a = spawnUnit(w, "condor", "blue", hq.tx + 5, hq.ty - 6).id;
+    ids.b = spawnUnit(w, "condor", "blue", hq.tx + 6, hq.ty - 6).id;
   };
   /** Open ground north-east of blue's HQ. */
   const away = (w: World) => grid(hqOf(w, "blue")!.tx + 16.3, hqOf(w, "blue")!.ty - 16.3);

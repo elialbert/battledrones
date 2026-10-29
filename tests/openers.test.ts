@@ -207,7 +207,7 @@ describe("Proving Grounds side fields", () => {
     const w = createMapWorld("proving-grounds");
     let total = 0;
     for (let i = 0; i < w.width * w.height; i++) if (isResource(w, i)) total += w.scrap[i]!;
-    expect(total).toBeGreaterThanOrEqual(55000);
+    expect(total).toBeGreaterThanOrEqual(38 * ECONOMY.scrapPerTile); // (38 tiles' worth: fields hold less since the expansion rework)
     for (let ty = 27; ty <= 29; ty++)
       for (let tx = 3; tx <= 5; tx++) {
         expect(terrainAt(w, tx, ty)).toBe(Terrain.Scrap);

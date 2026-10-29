@@ -65,6 +65,7 @@ const TILE_NOISE: Record<number, number> = {
   [Terrain.Rough]: 0.07,
   [Terrain.Forest]: 0.04,
   [Terrain.Ground]: 0.025,
+  [Terrain.Wasteland]: 0.035,
   [Terrain.Water]: 0.08,
   [Terrain.Deep]: 0.12
 };
@@ -74,7 +75,7 @@ const FALLBACK: Record<number, number> = {
   [Terrain.Ground]: 0x5b6b3a, [Terrain.Rock]: 0x55565c, [Terrain.Scrap]: 0x4b4234,
   [Terrain.Water]: 0x1f4f6b, [Terrain.Road]: 0x6b6962, [Terrain.Rough]: 0x5a4a35,
   [Terrain.Forest]: 0x2f4a24, [Terrain.Crystal]: 0x3f5a44, [Terrain.Bridge]: 0x7a6a55,
-  [Terrain.Shallows]: 0x3f7a8a, [Terrain.Deep]: 0x123a55
+  [Terrain.Shallows]: 0x3f7a8a, [Terrain.Deep]: 0x123a55, [Terrain.Wasteland]: 0x4a4a3a
 };
 
 interface BiomeLook {
@@ -93,6 +94,8 @@ interface BiomeLook {
   /** Ground grain contrast, the grain's north-west emboss, sharpening of the paint. */
   detail: [number, number, number];
   stone: StoneLook;
+  /** Wasteland: its crust's colour, and its cracks' glow (none if absent). */
+  waste: { tint: number; glow?: number };
 }
 
 /** How the biome's rock material (art/textures.py) sits on the cliff walls and crags. */
@@ -120,25 +123,30 @@ const ROCK_TINT_LUM = 0.5;
 const LOOK: Record<Biome, BiomeLook> = {
   temperate: {
     shallow: 0x4fa8b8, deep: 0x123f5c, liquid: 0, rock: 0x7c7b77, bridge: 0x8a7a64, steel: false, detail: [0.22, 2.6, 0.55],
-    stone: { wall: 5, crag: 4, contrast: 1.5, lift: 1.15, foot: 0.35, rough: 0.75 }
+    stone: { wall: 5, crag: 4, contrast: 1.5, lift: 1.15, foot: 0.35, rough: 0.75 },
+    waste: { tint: 0x8a7966 }
   },
   desert: {
     shallow: 0x5fd8d0, deep: 0x147a8a, liquid: 0, rock: 0xa45a3a, bridge: 0x9a8058, steel: false, detail: [0.2, 3.4, 0.7],
-    stone: { wall: 4.5, crag: 4, contrast: 2.0, lift: 1.15, foot: 0.35, rough: 0.75 }
+    stone: { wall: 4.5, crag: 4, contrast: 2.0, lift: 1.15, foot: 0.35, rough: 0.75 },
+    waste: { tint: 0x9a7458 }
   },
   arctic: {
     shallow: 0x9fd0ea, deep: 0x0f2a44, liquid: 2, rock: 0x8a929e, bridge: 0x7c8590, steel: false, detail: [0.08, 1.8, 0.45],
-    stone: { wall: 5, crag: 4, contrast: 1.15, lift: 0.8, foot: 0.35, rough: 0.7 }
+    stone: { wall: 5, crag: 4, contrast: 1.15, lift: 0.8, foot: 0.35, rough: 0.7 },
+    waste: { tint: 0x8c8984 }
   },
   volcanic: {
     shallow: 0xffd060, deep: 0xff4a10, liquid: 1, rock: 0x2e2b2a, bridge: 0x6c6660, steel: true, detail: [0.22, 2.6, 0.55],
-    stone: { wall: 5, crag: 4, contrast: 1.8, lift: 0.85, foot: 0.35, rough: 0.45 }
+    stone: { wall: 5, crag: 4, contrast: 1.8, lift: 0.85, foot: 0.35, rough: 0.45 },
+    waste: { tint: 0x5a524c, glow: 0xb03008 }
   },
   // turquoise lagoons over coral sand, falling away past the reef into sapphire open sea
   tropical: {
     shallow: 0x46e0d2, deep: 0x0b6f86, abyss: 0x062a48, farSea: true, liquid: 0, rock: 0xb4b0a2, bridge: 0x8a735a, steel: false,
     detail: [0.2, 2.8, 0.6],
-    stone: { wall: 4.5, crag: 3.5, contrast: 1.4, lift: 1.2, foot: 0.5, rough: 0.85 }
+    stone: { wall: 4.5, crag: 3.5, contrast: 1.4, lift: 1.2, foot: 0.5, rough: 0.85 },
+    waste: { tint: 0x9a8a76 }
   }
 };
 
@@ -393,12 +401,29 @@ export class Terrain3D {
     return out.filter((v, i) => i === 0 || v - out[i - 1]! > 1e-4);
   }
 
+  /** Wasteland per tile for the ground shader (W+2 × H+2, its border repeating the edge like the fog map). */
+  private wasteTexture(): THREE.DataTexture {
+    const fw = this.W + 2;
+    const fh = this.H + 2;
+    const data = new Uint8Array(fw * fh);
+    for (let y = 0; y < fh; y++)
+      for (let x = 0; x < fw; x++) data[y * fw + x] = this.tile(x - 1, y - 1) === Terrain.Wasteland ? 255 : 0;
+    const tex = new THREE.DataTexture(data, fw, fh, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   private buildGround(art: TerrainArt | null, painted: PaintedColors | null): void {
     const L = this.look;
     const uniforms: GroundUniforms = {
       ...this.edge,
       uDetail: { value: new THREE.Vector3(...L.detail) },
-      uFarGround: { value: this.look.farSea ? new THREE.Color(this.look.abyss ?? this.look.deep) : this.openGround(painted) }
+      uFarGround: { value: this.look.farSea ? new THREE.Color(this.look.abyss ?? this.look.deep) : this.openGround(painted) },
+      uWaste: { value: this.wasteTexture() },
+      uWasteTint: { value: new THREE.Color(L.waste.tint) },
+      uWasteGlow: { value: new THREE.Color(L.waste.glow ?? 0) }
     };
     const walls = this.stone?.walls ?? null;
     const groundMat = <T extends THREE.Material>(m: T) =>
@@ -879,7 +904,7 @@ export class Terrain3D {
           kind: k < 0.5 ? 0 : k < 0.82 ? 1 : 2,
           seed: i
         });
-      } else if ((t === Terrain.Rough || t === Terrain.Ground) && hash(i, 8) < 0.012) {
+      } else if ((t === Terrain.Rough || t === Terrain.Ground) && hash(i, 8) < 0.012 || t === Terrain.Wasteland && hash(i, 8) < 0.03) {
         // a few loose boulders: the biome's stone, warmed by the ground they sit in
         const x = tx + 0.5;
         const y = ty + 0.5;

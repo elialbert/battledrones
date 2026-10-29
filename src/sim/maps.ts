@@ -1,4 +1,4 @@
-import { BUILDINGS } from "./balance";
+import { BUILDINGS, ECONOMY } from "./balance";
 import { setupObjectives, type UplinkDef } from "./objectives";
 import { applyOpener, spawnStartUnits, type OpenerId } from "./openers";
 import { Terrain, type Biome, type Faction, type UnitKind, type World } from "./types";
@@ -244,11 +244,17 @@ export const MAPS: MapDef[] = [
       p.stroke([[8, 14], [13, 9]], 3, Terrain.Shallows, 0.1, [Terrain.Water]);
       // roads from each HQ to the bridge
       p.stroke([[6, 49], [11, 46], [16, 40], [21, 35], [23.5, 32]], 2, Terrain.Road, 0, OPEN);
+      // a ridge round the base and the home field (the natural lies outside): one way in, where the road leaves
+      p.stroke([[-1, 40.5], [5, 40.5], [9.5, 39], [13.5, 36]], 2.6, Terrain.Rock, 0.2, OPEN);
+      p.stroke([[19.5, 40.5], [21, 44], [21.5, 49], [22, 56.5]], 2.6, Terrain.Rock, 0.2, OPEN);
       // resources: home field, natural expansion, contested crystals
       p.blob(13, 44, 2.1, Terrain.Scrap, 0.25);
       p.blob(5, 36, 1.7, Terrain.Scrap, 0.25);
       p.blob(19, 30, 1.5, Terrain.Crystal, 0.2);
       p.blob(34, 46, 1.6, Terrain.Scrap, 0.25);
+      // outlying patches, past easy reach of the base: worth an expansion
+      p.blob(27, 53, 1.6, Terrain.Scrap, 0.25);
+      p.blob(5, 26, 1.5, Terrain.Scrap, 0.25);
     }
   },
   {
@@ -276,12 +282,18 @@ export const MAPS: MapDef[] = [
       p.blob(3, 3, 2, Terrain.Water, 0.3);
       // dusty tracks along the central corridor, swinging round the oasis
       p.stroke([[6, 49], [12, 44], [18, 38], [22, 34], [25, 32.5], [31, 31]], 2, Terrain.Road, 0, OPEN);
+      // mesa walls round the base and the home field (the natural lies outside): one way in, where the track leaves
+      p.stroke([[-1, 40.5], [4.5, 40.5], [8, 38.5], [13.5, 36]], 2.6, Terrain.Rock, 0.2, OPEN);
+      p.stroke([[19.5, 42], [23, 44], [24.5, 46.5], [21, 50], [20, 56.5]], 2.6, Terrain.Rock, 0.2, OPEN);
       // resources
       p.blob(13, 44, 2.1, Terrain.Scrap, 0.25);
       p.blob(4, 35, 1.8, Terrain.Scrap, 0.25);
       p.blob(8, 24, 1.5, Terrain.Scrap, 0.25);
       p.blob(22, 35, 1.5, Terrain.Crystal, 0.2);
       p.blob(34, 44, 1.5, Terrain.Crystal, 0.2);
+      // outlying patches, past easy reach of the base: worth an expansion
+      p.blob(25, 52, 1.6, Terrain.Scrap, 0.25);
+      p.blob(14, 30, 1.4, Terrain.Scrap, 0.25);
       // scree fields slow the flanks
       p.scatter(30, 36, 50, 54, 5, 1.6, Terrain.Rough, [G]);
     }
@@ -313,10 +325,19 @@ export const MAPS: MapDef[] = [
       p.blob(20, 42, 2, Terrain.Rough, 0.4, [G]);
       // plowed road
       p.stroke([[6, 41], [11, 42], [18, 43], [24, 44]], 1.8, Terrain.Road, 0, OPEN);
+      // ice ridges round the base, out to the frozen sea: a narrow pass in the west lane, a wider gap on the road
+      const iced = [...OPEN, Terrain.Shallows];
+      p.stroke([[-1, 25], [2.5, 25]], 2.6, Terrain.Rock, 0.15, iced);
+      p.stroke([[8.5, 25], [12, 25], [15.5, 24]], 2.6, Terrain.Rock, 0.15, iced);
+      p.stroke([[22.5, 31.5], [22, 35], [22, 39]], 2.6, Terrain.Rock, 0.15, iced);
+      p.stroke([[24.5, 45.5], [24.5, 48.5]], 2.6, Terrain.Rock, 0.15, iced);
       // resources: home field, contested crystal in each lane
       p.blob(11, 36, 2, Terrain.Scrap, 0.25);
       p.blob(9, 9, 1.6, Terrain.Crystal, 0.2);
       p.blob(3, 31, 1.4, Terrain.Scrap, 0.25);
+      // outlying patches, past easy reach of the base: worth an expansion
+      p.blob(29, 46, 1.4, Terrain.Scrap, 0.25);
+      p.blob(3, 18, 1.4, Terrain.Scrap, 0.25);
     }
   },
   {
@@ -342,6 +363,10 @@ export const MAPS: MapDef[] = [
       // plated roads from the HQ to both bridges
       p.stroke([[7, 56], [10, 48], [11, 36], [11.5, 24]], 2, Terrain.Road, 0, OPEN);
       p.stroke([[8, 57], [18, 53], [28, 50], [32, 45]], 2, Terrain.Road, 0, OPEN);
+      // a ridge of obsidian round the base and the home field: a gap where each road leaves
+      p.stroke([[-1, 43], [8, 43]], 2.6, Terrain.Rock, 0.15, OPEN);
+      p.stroke([[13.5, 43], [16.5, 45], [19.5, 47.5]], 2.6, Terrain.Rock, 0.15, OPEN);
+      p.stroke([[23.5, 54.5], [24, 58], [24, 64.5]], 2.6, Terrain.Rock, 0.15, OPEN);
       // obsidian spires and dead woods
       p.blob(20, 58, 2.2, Terrain.Rock, 0.4, OPEN);
       p.blob(3, 42, 2.4, Terrain.Rock, 0.4, OPEN);
@@ -354,6 +379,9 @@ export const MAPS: MapDef[] = [
       p.blob(4, 32, 1.8, Terrain.Scrap, 0.25);
       p.blob(24, 24, 1.6, Terrain.Crystal, 0.2, LAND);
       p.blob(17, 12, 1.8, Terrain.Scrap, 0.25, LAND);
+      // outlying patches, past easy reach of the base: worth an expansion
+      p.blob(30, 61, 1.6, Terrain.Scrap, 0.25, LAND);
+      p.blob(22, 43, 1.5, Terrain.Scrap, 0.25, LAND);
     }
   },
   {
@@ -403,10 +431,17 @@ export const MAPS: MapDef[] = [
       // plowed roads from the HQ to the bridge and toward the centre
       p.stroke([[8, 63], [12, 56], [16, 47], [18, 39]], 1.8, Terrain.Road, 0, OPEN);
       p.stroke([[9, 65], [18, 57], [25, 49.5], [30.5, 42.5]], 1.8, Terrain.Road, 0, OPEN);
+      // a ridge round the base and the home field: a gap where each road leaves
+      p.stroke([[-1, 51.5], [6, 51.5], [10.5, 51]], 2.6, Terrain.Rock, 0.15, OPEN);
+      p.stroke([[16, 50.5], [18.5, 52]], 2.6, Terrain.Rock, 0.15, OPEN);
+      p.stroke([[25, 54.5], [27, 59], [27, 72.5]], 2.6, Terrain.Rock, 0.15, OPEN);
       // resources: a home field, a second one out by the ford, contested crystals toward the centre
       p.blob(14, 60, 2.1, Terrain.Scrap, 0.25);
       p.blob(6, 45, 1.8, Terrain.Scrap, 0.25);
       p.blob(24.5, 45.5, 1.4, Terrain.Crystal, 0.2);
+      // outlying patches, past easy reach of the base: worth an expansion
+      p.blob(22, 68, 1.5, Terrain.Scrap, 0.25);
+      p.blob(8, 39, 1.4, Terrain.Scrap, 0.25);
     }
   },
   {
@@ -515,9 +550,11 @@ export const MAPS: MapDef[] = [
       p.blob(56, 90, 1.7, Terrain.Rock, 0.4, OPEN);
       p.blob(30, 102, 1.5, Terrain.Rock, 0.4, OPEN);
       p.scatter(22, 60, 40, 72, 4, 1.4, Terrain.Rough, [G]);
-      // resources are scarce: one home field and a crystal patch by bridge 1
-      p.rect(21, 91, 23, 93, Terrain.Scrap); // 9 tiles, 13,500 scrap
+      // resources are scarce: one home field, a crystal patch by bridge 1, and two small outlying patches
+      p.rect(21, 91, 23, 93, Terrain.Scrap); // 9 tiles
       p.rect(29, 58, 30, 58, Terrain.Crystal); // 2 rich tiles out by the bridge
+      p.rect(5, 70, 6, 71, Terrain.Scrap); // out on the west shore
+      p.rect(41, 99, 42, 100, Terrain.Scrap); // down the south coast
     }
   }
 ];
@@ -607,6 +644,7 @@ export function createMapWorld(id: string, opts: MatchOptions = {}): World {
     def.paint(new Painter(w, def.seed, def.players === 4));
     clearBase(w, def);
   }
+  paintWasteland(w);
   const [hx, hy] = def.hq;
   const hs = BUILDINGS.hq.size;
   if (four) return setupFourCorners(w, def, opts);
@@ -723,6 +761,37 @@ function applyMapRules(w: World, def: MapDef): void {
   if (def.hqTrickle !== undefined) r.hqTrickle = def.hqTrickle;
   if (def.lifeline && !bannedBy(w, "condor")) r.lifeline = true;
   if (def.islands) r.islands = true;
+}
+
+/**
+ * Turn the open Ground within ECONOMY.wastelandRing tiles of any scrap or crystal tile into Wasteland
+ * (nothing can be built on it). One pass over the finished grid, so it is exactly as symmetric as the
+ * map is; roads, woods and the rest are left as they are.
+ */
+export function paintWasteland(w: World, ring = ECONOMY.wastelandRing): void {
+  const g = withWasteland(w.terrain, w.width, w.height, ring);
+  for (let i = 0; i < g.length; i++)
+    if (g[i] !== w.terrain[i]) setTerrain(w, i % w.width, Math.floor(i / w.width), g[i] as Terrain);
+}
+
+/** A row-major terrain grid with paintWasteland's ring added (a copy: `grid` is left as it is). */
+export function withWasteland(grid: ArrayLike<number>, width: number, height: number, ring = ECONOMY.wastelandRing): Uint8Array {
+  const r = Math.floor(ring);
+  const out = Uint8Array.from(grid);
+  const near = new Uint8Array(width * height);
+  for (let ty = 0; ty < height; ty++)
+    for (let tx = 0; tx < width; tx++) {
+      const t = grid[ty * width + tx];
+      if (t !== Terrain.Scrap && t !== Terrain.Crystal) continue;
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          const x = tx + dx;
+          const y = ty + dy;
+          if (dx * dx + dy * dy <= ring * ring && x >= 0 && y >= 0 && x < width && y < height) near[y * width + x] = 1;
+        }
+    }
+  for (let i = 0; i < near.length; i++) if (near[i] && out[i] === Terrain.Ground) out[i] = Terrain.Wasteland;
+  return out;
 }
 
 /** Guarantee open, buildable ground around each HQ. */

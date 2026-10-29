@@ -138,7 +138,7 @@ export type GuestMsg =
 
 const COMMAND_TYPES = new Set<Command["type"]>([
   "move", "attackMove", "attack", "harvest", "stop", "produce", "cancelProduce", "startBuilding", "cancelBuilding",
-  "placeBuilding", "sell", "rally", "calldown", "board", "unload", "anchor", "packUp", "lift", "resign"
+  "placeBuilding", "sell", "rally", "calldown", "board", "unload", "anchor", "packUp", "lift", "resign", "found"
 ]);
 const UNIT_KINDS = new Set<string>([
   "harvester", "scout", "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "wasp", "raptor", "hornet", "mender",
@@ -198,6 +198,8 @@ export function sanitizeCommand(raw: unknown, side: Faction): Command | null {
       return num(c.x) && num(c.y) ? { type, ...base, unitIds: c.unitIds.slice(), x: c.x, y: c.y } : null;
     case "lift":
       return ids(c.unitIds, 8) && int(c.goliathId) ? { type, ...base, unitIds: c.unitIds.slice(), goliathId: c.goliathId } : null;
+    case "found":
+      return ids(c.unitIds) && int(c.tx) && int(c.ty) ? { type, ...base, unitIds: c.unitIds.slice(), tx: c.tx, ty: c.ty } : null;
     default:
       return null;
   }

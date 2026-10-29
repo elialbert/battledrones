@@ -104,7 +104,7 @@ export function aaStrengthAt(sources: AaSource[], x: number, y: number): number 
 export function effectivenessVs(attacker: UnitKind, armor: ArmorClass, domain: Domain): number {
   const st = UNITS[attacker];
   if (st.targets === "none" || (st.targets !== "both" && st.targets !== domain)) return 0;
-  return DAMAGE_VS[st.dmgType ?? "kinetic"][armor] * (domain === "air" ? st.airMult ?? 1 : 1);
+  return DAMAGE_VS[st.dmgType ?? "kinetic"][armor] * (domain === "air" ? st.airMult ?? 1 : 1) * (armor === "light" ? st.lightMult ?? 1 : 1);
 }
 
 /** effectivenessVs against a unit kind. */

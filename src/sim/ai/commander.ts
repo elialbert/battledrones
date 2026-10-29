@@ -1,7 +1,9 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
-import { buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { isVisible, knownBuildings } from "../fog";
+import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
+import { expansionSite, tendExpansion, type ExpansionPlan } from "./expansion";
+import { baseEntrances } from "./choke";
+import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import { isOut } from "../combat";
 import { QUARTER, isMulti, rivalsOf, turnPoint } from "../sides";
 import { isInfantry } from "../infantry";
@@ -53,6 +55,7 @@ import type {
   UnitKind,
   World
 } from "../types";
+import { Terrain } from "../types";
 import {
   buildingCenter,
   canGetWithin,
@@ -110,6 +113,14 @@ export interface Strategy {
   depotReach?: number;
   /** Seconds of peace: no raids or assaults before this (it still defends). */
   holdUntil?: number;
+  /** Hold the way into the base (ai/choke.ts), not the mining line: the guard, and the whole army while it builds up, stand there, and the turrets go up toward it. */
+  holdChoke?: boolean;
+  /** Share of its Fab Plants' orders that are Mortars once the Tech Lab stands (up to 4 at a time): splash for a tank flood at the gate. */
+  mortarShare?: number;
+  /** A turret more for every this many enemy ground units seen (up to 4): Turtle digs in against a tank rush. */
+  turretsVsGround?: number;
+  /** Seconds before its first raid may leave, instead of OPENING_GRACE (Rush: the Blitz opener's Stingers go at once). */
+  raidFrom?: number;
   /** Changes to SPEND for this personality. */
   spend?: Partial<typeof SPEND>;
   /** Scrap piling up adds factories even before the build order is through, and they come next, not last. */
@@ -268,6 +279,10 @@ export interface AiState {
   extraProduction: number;
   /** Depot build order entries we gave up on (no useful spot). */
   skippedDepots: number;
+  /** An expansion Depot's crew on its way to found it (ai/expansion.ts). */
+  expansion?: ExpansionPlan | null;
+  /** Harass raids launched: every other one looks in on where the enemy would expand. */
+  raids?: number;
   /** Army value when the current wave launched (for retreat decisions). */
   waveValue: number;
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
@@ -341,6 +356,7 @@ const OPENING_GRACE = 45 * TICK_RATE;
 const HOME_ALARM_VALUE = 400;
 /** Visible armed enemies this close to our buildings/harvesters are threats. */
 const DEFENSE_RADIUS = 11;
+
 const GUARD_RADIUS = 5;
 const STAGE_RADIUS = 6;
 /** The army (the Condor is transport, not a combat unit: ai/condor.ts flies it). */
@@ -487,8 +503,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
   const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
   const activeField = nearestField && (!islandMap || ourSide(nearestField.x, nearestField.y)) ? nearestField : null;
-  /** Where the economy needs defending: the mined field, shaded toward home. */
-  const guardPoint = activeField
+  /** Where the economy needs defending: the way into the base (Strategy.holdChoke), else the mined field, shaded toward home. */
+  const [entrance] = s.strategy.holdChoke && hq && !baseGoliath ? baseEntrances(w, faction) : [];
+  const guardPoint = entrance
+    ? entrance.hold
+    : activeField
     ? {
         x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x - 0.5) * 1.5,
         y: activeField.y + 0.5 + Math.sign(hqC.y - activeField.y - 0.5) * 1.5
@@ -519,7 +538,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (!ok) roomless = true;
     return ok;
   };
-  const wanted = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits);
+  const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits);
+  // a Depot past the build zone is deployed by a crew: it goes up alongside the rest of the order, once
+  // the crew is trained (ai/expansion.ts)
+  const expansionNext = next === "depot" && !!hq && depotByCrew(w, faction, buildingCenter(hq), s.strategy.depotReach);
+  const wanted = expansionNext ? nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, true) : next;
   if (roomless) noteNoRoom(w, s); // (the base Goliath may move on to build more: ai/goliath.ts)
   if (f.pending?.ready) {
     const kind = f.pending.kind;
@@ -569,13 +592,18 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     return at ? { x: at.x + 0.5, y: at.y + 0.5 } : null;
   });
   cmds.push(...goliathFields.cmds);
-  const wantHarvesters = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots + goliathFields.extra);
+  // an expansion Depot: its crew of harvesters walks to the site, and it's started there (ai/expansion.ts)
+  const mining = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots + goliathFields.extra);
+  // (an expansion is next: its crew is trained on top of the miners, and it's never started under attack)
+  const expanding = !!s.expansion || (expansionNext && !threatened);
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, mining, s.strategy.depotReach ?? 9, cmds);
+  const wantHarvesters = mining + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
   // (Nomads: no HQ ever — the dug-in Goliath builds them, goliath.ts trainableAt)
   const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
   if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
     cmds.push({ type: "produce", faction, buildingId: yard.id, unit: "harvester" });
   for (const h of harvesters) {
-    if (goliathFields.keep.has(h.id)) continue; // (working a Goliath's field)
+    if (goliathFields.keep.has(h.id) || crew.has(h.id)) continue; // (working a Goliath's field, or founding a Depot)
     const o = h.order;
     // (a dry field sends a harvester to the nearest one it can reach: never across the bridges)
     const astray = islandMap && o.type === "harvest" && !ourSide(o.fieldX, o.fieldY);
@@ -590,8 +618,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // --- production: adaptive counters to the enemy composition -------------
   // reserve scrap while an important building is still wanted
-  const reserve =
-    f.pending || wanted === null ? 0 : wanted === "turret" || wanted === "radar" ? 0 : Math.min(400, BUILDINGS[wanted].cost);
+  // (an expansion's crew trained or on its way: its price)
+  const crewReady = expansionNext && !threatened && harvesters.length >= mining + ECONOMY.expansion.crew;
+  const reserve = ((s.expansion && s.expansion.depotId === undefined) || crewReady) && !f.pending
+    ? ECONOMY.expansion.cost
+    : f.pending || wanted === null ? 0 : wanted === "turret" || wanted === "radar" ? 0 : Math.min(400, BUILDINGS[wanted].cost);
   // the Goliath savings: a share of income set aside while the Gantry waits for one (ai/goliath.ts)
   const gantry = myBuildings.find((b) => b.kind === "gantry") ?? null;
   const fundCtx = { gantry: !!gantry || f.pending?.kind === "gantry", armyValue, threatened };
@@ -687,6 +718,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = tech && r < 0.35 ? "lancer" : "flak-crawler";
       else if (tech && have("mortar") < Math.min(3, 1 + enemyDefenses) && (enemyDefenses > 0 || r < 0.2))
         kind = "mortar";
+      else if (tech && s.strategy.mortarShare && have("mortar") < 4 && r < s.strategy.mortarShare) kind = "mortar";
       else if (infantryHeavy && r < 0.65)
         // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
         kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
@@ -787,6 +819,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- …and turrets when robot infantry pours in --------------------------
   if (s.seenInfantry >= 5 && s.extraTurrets < 1) s.extraTurrets = 1;
   if (s.seenInfantry >= 9 && s.extraTurrets < 2) s.extraTurrets = 2;
+  // …and, for a plan that digs in, when tanks pour in
+  if (s.strategy.turretsVsGround) s.extraTurrets = Math.max(s.extraTurrets, Math.min(4, Math.floor(s.seenGround / s.strategy.turretsVsGround)));
 
   // --- mode transitions ----------------------------------------------------
   // the longer the match drags on (from 7:00, 6% a minute, down to half), the lower the bar for an all-in push
@@ -801,7 +835,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   );
   if (
     s.mode === "buildup" && diff.harass && raiders.length >= s.strategy.harassGroup &&
-    s.seenAA <= raiders.length / 2 && w.tick >= Math.max(OPENING_GRACE, (s.strategy.holdUntil ?? 0) * TICK_RATE)
+    s.seenAA <= raiders.length / 2 && w.tick >= Math.max(s.strategy.raidFrom !== undefined ? s.strategy.raidFrom * TICK_RATE : OPENING_GRACE, (s.strategy.holdUntil ?? 0) * TICK_RATE)
   )
     s.mode = "harass";
   if (armyValue >= assaultAt && s.mode !== "assault" && w.tick >= (s.strategy.holdUntil ?? 0) * TICK_RATE) {
@@ -890,7 +924,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   else cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened, skip }));
 
   // --- 2. economy guard: a share of the army holds the mining line --------
-  const guardShare = s.mode === "assault" ? 0.15 : 0.35;
+  const guardShare = s.mode === "assault" ? 0.15 : entrance ? 1 : 0.35;
   const guardValue = value(army.filter((u) => dist(u.x, u.y, guardPoint.x, guardPoint.y) <= GUARD_RADIUS));
   if (guardValue < guardShare * armyValue) {
     let need = guardShare * armyValue - guardValue;
@@ -923,7 +957,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   if (s.mode === "harass") {
     const group = raiders.filter((u) => !used.has(u.id));
-    const raid = enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus);
+    const raid = enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus, s.raids ?? 0);
     const flying = group.filter((u) => UNITS[u.kind].domain === "air").length;
     // raiders don't fly into flak (seen now, or remembered): they wait for
     // the main assault instead
@@ -932,6 +966,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     else if (group.length >= s.strategy.harassGroup) {
       const ids = group.map((u) => u.id);
       ids.forEach((id) => used.add(id));
+      s.raids = (s.raids ?? 0) + 1;
       if (raid.targetId !== undefined)
         cmds.push({ type: "attack", faction, unitIds: ids, targetId: raid.targetId });
       else cmds.push({ type: "attackMove", faction, unitIds: ids, x: raid.x, y: raid.y });
@@ -1052,6 +1087,9 @@ function pickPriorityTarget(w: World, faction: Faction, seen: Unit[], fallback: 
     (a, b) => dist(a.x, a.y, fallback.x, fallback.y) - dist(b.x, b.y, fallback.x, fallback.y) || a.id - b.id
   )[0];
   if (building) return { id: building.id, x: building.x, y: building.y, domain: "ground", armor: "structure" };
+  // an expansion Depot going up (frail: catch it before it's done)
+  const [rising] = enemyExpansions(w, faction, fallback, null, true);
+  if (rising) return { id: rising.id, x: rising.x, y: rising.y, domain: "ground", armor: "structure" };
   const enemyGoliaths = seen
     .filter((u) => !!u.goliath)
     .sort((a, b) => dist(a.x, a.y, fallback.x, fallback.y) - dist(b.x, b.y, fallback.x, fallback.y) || a.id - b.id);
@@ -1196,7 +1234,9 @@ function nextBuilding(
   myBuildings: Building[],
   s: AiState,
   gantry = false,
-  fits?: (kind: BuildingKind) => boolean
+  fits?: (kind: BuildingKind) => boolean,
+  /** Pass over an expansion Depot (it goes up alongside the order: ai/expansion.ts). */
+  skipExpansion = false
 ): BuildingKind | null {
   const have = new Map<BuildingKind, number>();
   // (with no HQ every building is an outpost: then they're the base)
@@ -1248,14 +1288,20 @@ function nextBuilding(
   for (const kind of order) {
     wanted.set(kind, (wanted.get(kind) ?? 0) + 1);
     if ((have.get(kind) ?? 0) >= wanted.get(kind)!) continue;
+    let expansion = false;
     if (kind === "depot" && depotsSkipped < 3) {
-      // only worth it if there's a distant field we can actually reach
+      // only worth it if there's a distant field we can actually reach: a spot in range, or one past it
+      // that a crew deploys to (ai/expansion.ts)
       const hq = hqOf(w, faction);
-      if (!hq || !depotSite(w, faction, buildingCenter(hq), s.strategy.depotReach)) {
+      const c = hq ? buildingCenter(hq) : null;
+      expansion = !!c && depotByCrew(w, faction, c, s.strategy.depotReach);
+      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach))) {
         depotsSkipped++;
         continue;
       }
     }
+    if (skipExpansion && expansion) continue;
+    if (expansion) return kind; // (deployed by a crew: ai/expansion.ts)
     if (buildingBlocker(w, faction, kind)) continue;
     if (fits && !fits(kind)) continue; // (no room for it in any ring: the next thing that fits)
     return kind;
@@ -1263,7 +1309,48 @@ function nextBuilding(
   return null;
 }
 
-/** A spot for a forward depot next to a field far from existing drop-offs. */
+/** Is the Depot it wants one a crew deploys past the build zone (no spot in range, but one out there)? */
+function depotByCrew(w: World, faction: Faction, hqC: { x: number; y: number }, reach?: number): boolean {
+  return !depotSite(w, faction, hqC, reach) && !!expansionSite(w, faction, hqC, reach ?? 9);
+}
+
+/** Tiles of one field are at most this far apart (a gap in a field's piles doesn't split it). */
+const FIELD_GAP = 2;
+/**
+ * Which field each scrap or crystal tile belongs to (-1: none), from the map
+ * as it is now. (Not memoised: every page of a lockstep match must agree, and
+ * a world rebuilt from a checkpoint would remember a different map.)
+ */
+function fieldIds(w: World): Int32Array {
+  const ids = new Int32Array(w.width * w.height).fill(-1);
+  const isField = (i: number) => w.terrain[i] === Terrain.Scrap || w.terrain[i] === Terrain.Crystal;
+  let next = 0;
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i] !== -1 || !isField(i)) continue;
+    const stack = [i];
+    ids[i] = next;
+    while (stack.length) {
+      const k = stack.pop()!;
+      const x = k % w.width;
+      const y = Math.floor(k / w.width);
+      for (let dy = -FIELD_GAP; dy <= FIELD_GAP; dy++)
+        for (let dx = -FIELD_GAP; dx <= FIELD_GAP; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w.width || ny >= w.height) continue;
+          const j = ny * w.width + nx;
+          if (ids[j] === -1 && isField(j)) {
+            ids[j] = next;
+            stack.push(j);
+          }
+        }
+    }
+    next++;
+  }
+  return ids;
+}
+
+/** A spot for a forward depot next to a field no drop-off serves yet. */
 function depotSite(
   w: World,
   faction: Faction,
@@ -1271,15 +1358,24 @@ function depotSite(
   reach = 9
 ): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
+  // (a field with a drop-off in reach of any of its tiles is served: one depot to a field, not a ring of them)
+  const ids = fieldIds(w);
+  const served = new Set<number>();
+  for (let i = 0; i < ids.length; i++) {
+    if (ids[i]! < 0 || served.has(ids[i]!) || !isResource(w, i)) continue;
+    const drop = nearestDropOff(w, faction, (i % w.width) + 0.5, Math.floor(i / w.width) + 0.5);
+    if (drop) {
+      const dc = buildingCenter(drop);
+      if (dist((i % w.width) + 0.5, Math.floor(i / w.width) + 0.5, dc.x, dc.y) < reach) served.add(ids[i]!);
+    }
+  }
   let best: { x: number; y: number; d: number } | null = null;
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
-      if (!isResource(w, tileIndex(w, tx, ty))) continue;
-      const drop = nearestDropOff(w, faction, tx + 0.5, ty + 0.5);
-      if (!drop) continue;
-      const dc = buildingCenter(drop);
-      if (dist(tx + 0.5, ty + 0.5, dc.x, dc.y) < reach) continue; // already served
+      const i = tileIndex(w, tx, ty);
+      if (!isResource(w, i) || served.has(ids[i]!)) continue;
+      if (!nearestDropOff(w, faction, tx + 0.5, ty + 0.5)) continue;
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
       if (!best || d < best.d) best = { x: tx + 0.5, y: ty + 0.5, d };
     }
@@ -1309,7 +1405,7 @@ function findPlacementSpot(
   // round every building of the base (outposts never give build range) and every dug-in Goliath's ring
   const centres: { c: { x: number; y: number }; r: number }[] = [];
   for (const b of w.buildings.values())
-    if (b.faction === faction && !b.outpost) centres.push({ c: buildingCenter(b), r: ECONOMY.buildRadius + 2 });
+    if (b.faction === faction && !b.outpost) centres.push({ c: buildingCenter(b), r: buildRadiusOf(b, kind) + 2 });
   const dugIn = goliathsOf(w, faction).filter(isAnchored);
   if (kind !== "hq") for (const g of dugIn) centres.push({ c: g, r: Math.ceil(GOLIATH.buildRing + size) });
   /** A tile's lane round a dug-in Goliath's feet stays open (it walks out again once packed up). */
@@ -1362,22 +1458,83 @@ function scoutSweep(w: World, c: { x: number; y: number }, leg: number): { x: nu
   return stops[leg % stops.length]!;
 }
 
+/** Fields this far from an HQ (tiles) count as its home field, not an expansion. */
+const HOME_FIELD = 10;
+
+/**
+ * Our side's fields an expansion would go to, nearest the HQ first (one
+ * point per field, past the home field and within reach): mirrored, where
+ * the enemy would expand.
+ */
+function expansionFields(w: World, faction: Faction, hqC: { x: number; y: number }): { x: number; y: number }[] {
+  const tiles: { x: number; y: number; d: number }[] = [];
+  const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
+  for (let fy = 0; fy < w.height; fy++)
+    for (let fx = 0; fx < w.width; fx++) {
+      const [tx, ty] = fr.tile(fx, fy, 1);
+      if (!isResource(w, tileIndex(w, tx, ty))) continue;
+      const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
+      if (d > HOME_FIELD && d <= 36) tiles.push({ x: tx + 0.5, y: ty + 0.5, d });
+    }
+  tiles.sort((a, b) => a.d - b.d); // (stable: ties keep the frame's scan order)
+  const out: { x: number; y: number }[] = [];
+  for (const t of tiles) if (out.length < 3 && !out.some((o) => dist(o.x, o.y, t.x, t.y) < 8)) out.push({ x: t.x, y: t.y });
+  return out;
+}
+
+/** Tiles from their HQ past which a known Depot of theirs counts as an expansion. */
+const EXPANSION_OFF_HQ = 12;
+
+/**
+ * Known enemy expansion Depots, nearest `from` first: with `rising`, only
+ * those still going up (economy.ts tickFounding), else the finished ones.
+ */
+function enemyExpansions(
+  w: World, faction: Faction, from: { x: number; y: number }, focus: Faction | null, rising: boolean
+): { id: number; x: number; y: number }[] {
+  const known = knownBuildings(w, faction).filter((kb) => !focus || kb.faction === focus);
+  const centre = (kb: KnownBuilding) => ({ x: kb.tx + BUILDINGS[kb.kind].size / 2, y: kb.ty + BUILDINGS[kb.kind].size / 2 });
+  const hqs = known.filter((kb) => kb.kind === "hq").map(centre);
+  const out: { id: number; x: number; y: number }[] = [];
+  for (const kb of known) {
+    if (kb.kind !== "depot") continue;
+    const c = centre(kb);
+    const up = w.buildings.get(kb.id)?.founding !== undefined;
+    if (rising ? !up : up || hqs.some((h) => dist(h.x, h.y, c.x, c.y) < EXPANSION_OFF_HQ) || !hqs.length) continue;
+    out.push({ id: kb.id, ...c });
+  }
+  return out.sort((a, b) => dist(a.x, a.y, from.x, from.y) - dist(b.x, b.y, from.x, from.y) || a.id - b.id);
+}
+
 /** Where the enemy probably mines: their side's scrap, or mirror of ours. */
 function enemyHarvestArea(
   w: World,
   faction: Faction,
   hqC: { x: number; y: number },
   seen: Unit[],
-  focus: Faction | null = null
+  focus: Faction | null = null,
+  /** Raids launched so far: an odd one looks in on a field they'd expand to, not their home field. */
+  leg = 0
 ): { x: number; y: number; targetId?: number } {
   // a Gantry with a Goliath on the cradle beats anything (killed mid-build, the build is lost)
   const gantry = enemyGantryBuilds(w, faction).sort((a, b) => dist(a.x, a.y, hqC.x, hqC.y) - dist(b.x, b.y, hqC.x, hqC.y) || a.id - b.id)[0];
   if (gantry) return { x: gantry.x, y: gantry.y, targetId: gantry.id };
+  // an expansion Depot going up: frail, undefended, and its crew already spent on it
+  const [rising] = enemyExpansions(w, faction, hqC, focus, true);
+  if (rising) return { x: rising.x, y: rising.y, targetId: rising.id };
   // a visible enemy harvester is the best target
   for (const u of seen) if (u.kind === "harvester") return { x: u.x, y: u.y, targetId: u.id };
+  // the harvesters at an expansion: further from their HQ's guns than the home field's
+  const [outpost] = enemyExpansions(w, faction, hqC, focus, false);
+  if (outpost) return { x: outpost.x, y: outpost.y };
   const own = nearestScrapTile(w, hqC.x, hqC.y, faction);
   // (a free-for-all: the focus rival's field, ours turned onto its corner)
   if (focus) return homeOf(w, faction, focus, own ? { x: own.x + 0.5, y: own.y + 0.5 } : hqC);
+  if (leg % 2 === 1) {
+    const out = expansionFields(w, faction, hqC);
+    const f = out[(leg >> 1) % Math.max(1, out.length)];
+    if (f) return mirror(w, f.x, f.y);
+  }
   if (own) return mirror(w, own.x + 0.5, own.y + 0.5);
   return mirror(w, hqC.x, hqC.y);
 }

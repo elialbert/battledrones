@@ -276,6 +276,10 @@ describe("four-player protocol", () => {
       type: "move", faction: "green", unitIds: [1, 2], x: 3.5, y: 4
     });
     expect(sanitizeCommand({ type: "resign", faction: "blue" }, "purple")).toEqual({ type: "resign", faction: "purple" });
+    // (harvesters deploying a Depot cross the wire too)
+    expect(sanitizeCommand({ type: "found", faction: "blue", unitIds: [4, 5, 6, 7], tx: 20, ty: 9 }, "green")).toEqual({
+      type: "found", faction: "green", unitIds: [4, 5, 6, 7], tx: 20, ty: 9
+    });
     expect(sanitizeCommand({ type: "move", unitIds: "all", x: 1, y: 1 }, "red")).toBeNull();
     expect(sanitizeCommand({ type: "produce", buildingId: 3, unit: "deathstar" }, "red")).toBeNull();
     expect(sanitizeCommand({ type: "teleport" }, "red")).toBeNull();

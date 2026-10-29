@@ -50,7 +50,7 @@
  */
 import type { BuildingKind, Command, Faction, PowerKind, UnitKind } from "../sim/types";
 
-export const CODEC_VERSION = 1;
+export const CODEC_VERSION = 2;
 
 /** A split piece is at most this many bits, so any command fits in an empty turn. */
 export const C_MAX = 96;
@@ -62,7 +62,8 @@ const UE_MAX = 2 ** (UE_ZEROS_MAX + 1) - 2;
 
 export const COMMAND_TYPES = [
   "move", "attackMove", "attack", "harvest", "stop", "produce", "cancelProduce", "startBuilding", "cancelBuilding",
-  "placeBuilding", "sell", "rally", "callWave", "calldown", "board", "unload", "anchor", "packUp", "lift", "resign"
+  "placeBuilding", "sell", "rally", "callWave", "calldown", "board", "unload", "anchor", "packUp", "lift", "resign",
+  "found"
 ] as const satisfies readonly Command["type"][];
 
 export const UNIT_KINDS = [
@@ -314,6 +315,12 @@ function canonical(c: Command, ctx: CanonContext): Command | null {
       const goliathId = idOf(c.goliathId);
       return unitIds && goliathId !== null ? { type: c.type, faction, unitIds, goliathId } : null;
     }
+    case "found": {
+      const unitIds = unitList(c.unitIds);
+      const tx = tile(c.tx, W);
+      const ty = tile(c.ty, H);
+      return unitIds && tx !== null && ty !== null ? { type: c.type, faction, unitIds, tx, ty } : null;
+    }
     default:
       return null; // (a type that isn't in the table)
   }
@@ -449,6 +456,12 @@ export function encodeCommand(wr: BitWriter, c: Command, map: MapSize, prev: rea
     case "lift":
       writeUnits(wr, c.unitIds, prev);
       writeId(wr, c.goliathId);
+      return c.unitIds;
+    case "found":
+      if (tile(c.tx, map.width) === null || tile(c.ty, map.height) === null) throw new CodecError("a tile off the map");
+      writeUnits(wr, c.unitIds, prev);
+      wr.bits(c.tx, bitsFor(map.width));
+      wr.bits(c.ty, bitsFor(map.height));
       return c.unitIds;
     default: {
       const never: never = c;
@@ -587,6 +600,11 @@ export function decodeCommand(
     case "lift": {
       const unitIds = readUnits(rd, prev);
       return { command: { type, faction, unitIds, goliathId: readId(rd) }, units: unitIds };
+    }
+    case "found": {
+      const unitIds = readUnits(rd, prev);
+      const tx = readTile(rd, map.width);
+      return { command: { type, faction, unitIds, tx, ty: readTile(rd, map.height) }, units: unitIds };
     }
   }
 }

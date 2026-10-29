@@ -96,6 +96,143 @@ export function cancelBuilding(w: World, faction: Faction): void {
   f.pending = null;
 }
 
+// ----------------------------------------------------------- expansions ----
+
+/**
+ * Send a crew of harvesters to deploy a Depot (an expansion) with its top-left at
+ * (tx, ty): anywhere on the side's land a building could stand, build range
+ * or not. Needs at least ECONOMY.expansion.crew of them; scrap is paid when
+ * they're all there (tickFoundCrews).
+ */
+export function orderFound(w: World, faction: Faction, unitIds: number[], tx: number, ty: number): void {
+  const crew = unitIds
+    .map((id) => w.units.get(id))
+    .filter((u): u is Unit => !!u && u.faction === faction && u.kind === "harvester");
+  if (crew.length < ECONOMY.expansion.crew || foundBlocker(w, faction, tx, ty)) return;
+  for (const u of crew) {
+    u.order = { type: "found", tx, ty };
+    u.path = null;
+  }
+}
+
+/**
+ * Why an expansion Depot can't be founded at top-left (tx, ty) (the ground,
+ * not the crew), or null. Units in the way don't count: they may move off.
+ */
+export function foundBlocker(w: World, faction: Faction, tx: number, ty: number): string | null {
+  const size = BUILDINGS.depot.size;
+  const banned = bannedBy(w, "depot", faction);
+  if (banned) return banned;
+  for (let dy = 0; dy < size; dy++)
+    for (let dx = 0; dx < size; dx++) {
+      const x = tx + dx;
+      const y = ty + dy;
+      if (!inBounds(w, x, y)) return "Off the map";
+      if (buildingAtTile(w, x, y)) return "Blocked";
+      const t = terrainAt(w, x, y);
+      if (t === Terrain.Wasteland) return "Can't build on wasteland";
+      if (!TERRAIN[t].buildable) return "Can't build there";
+      if (!onHomeLand(w, faction, x, y)) return "Not on your land";
+    }
+  if (overlapsGoliath(w, tx, ty, size) || blocksObjective(w, tx, ty, size)) return "Blocked";
+  return null;
+}
+
+/**
+ * Crews on their way to found an expansion: they walk to the site; once
+ * ECONOMY.expansion.crew of them stand round it (and the scrap is there) the
+ * Depot is founded on the spot, its crew used up, and goes up (tickFounding).
+ * A site that's lost, or a crew cut below strength, calls it off.
+ */
+export function tickFoundCrews(w: World): void {
+  const E = ECONOMY.expansion;
+  const size = BUILDINGS.depot.size;
+  const crews = new Map<string, Unit[]>();
+  for (const u of w.units.values())
+    if (u.order.type === "found") {
+      const key = `${u.faction}:${u.order.tx}:${u.order.ty}`;
+      const c = crews.get(key);
+      if (c) c.push(u);
+      else crews.set(key, [u]);
+    }
+  for (const crew of crews.values()) {
+    const { faction } = crew[0]!;
+    const o = crew[0]!.order as { type: "found"; tx: number; ty: number };
+    const { tx, ty } = o;
+    const cx = tx + size / 2;
+    const cy = ty + size / 2;
+    if (crew.length < E.crew || foundBlocker(w, faction, tx, ty)) {
+      for (const u of crew) u.order = { type: "idle" };
+      continue;
+    }
+    // nearest the middle first (ties: id): they're the ones used up
+    const near = crew
+      .map((u) => ({ u, d: hypot(u.x - cx, u.y - cy) }))
+      .sort((a, b) => a.d - b.d || a.u.id - b.u.id);
+    const there = near.filter((n) => n.d <= E.crewRadius).length;
+    const f = w.factions[faction];
+    if (there >= E.crew && f.scrap >= E.cost && foundable(w, faction, tx, ty)) {
+      f.scrap -= E.cost;
+      const back: Unit[] = near.slice(E.crew).map((n) => n.u);
+      for (const { u } of near.slice(0, E.crew)) {
+        if (E.consume) {
+          w.units.delete(u.id);
+          w.fx.push({ type: "founded", faction, id: u.id, x: u.x, y: u.y });
+        } else back.push(u);
+      }
+      const b = spawnBuilding(w, "depot", faction, tx, ty);
+      b.founding = E.buildTime * TICK_RATE;
+      b.hp = BUILDINGS.depot.hp * E.siteHp;
+      invalidatePathsThrough(w, b);
+      // the rest of the crew (more were sent than it takes) back to work, on the field it's by
+      for (const u of back) {
+        const f = nearestReachableResource(w, u.x, u.y, faction);
+        u.order = f ? { type: "harvest", fieldX: f.x, fieldY: f.y, phase: "toField" } : { type: "idle" };
+      }
+      continue;
+    }
+    // walk up, each to its own side of the site
+    near.forEach(({ u, d }, i) => {
+      if (d <= E.crewRadius - 0.6) return;
+      const [ox, oy] = CREW_SPOTS[i % CREW_SPOTS.length]!;
+      moveUnitToward(w, u, cx + ox * (size / 2 + 0.5), cy + oy * (size / 2 + 0.5));
+    });
+  }
+}
+
+/** Where a crew stands round its site (unit offsets from the middle: the corners, then the sides). */
+const CREW_SPOTS: readonly (readonly [number, number])[] = [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1.3], [0, 1.3], [-1.3, 0], [1.3, 0]];
+
+/** Nothing else of anyone's standing on the site (the crew may: they're used up, or step aside). */
+function foundable(w: World, faction: Faction, tx: number, ty: number): boolean {
+  const size = BUILDINGS.depot.size;
+  for (const u of w.units.values())
+    if (
+      domainOf(u) === "ground" &&
+      !(u.faction === faction && u.kind === "harvester") &&
+      u.x >= tx && u.x < tx + size && u.y >= ty && u.y < ty + size
+    )
+      return false;
+  return true;
+}
+
+/** Expansion Depots going up: hp climbs to full, and when done it takes loads and gives build range. */
+export function tickFounding(w: World): void {
+  const total = ECONOMY.expansion.buildTime * TICK_RATE;
+  for (const b of w.buildings.values()) {
+    if (b.founding === undefined) continue;
+    const step = rulesOf(w).buildSpeed;
+    const left = Math.max(0, b.founding - step);
+    b.hp = Math.min(BUILDINGS[b.kind].hp, b.hp + (BUILDINGS[b.kind].hp * (1 - ECONOMY.expansion.siteHp) * (b.founding - left)) / total);
+    b.founding = left;
+    if (left <= 0) {
+      delete b.founding;
+      if (BUILDINGS[b.kind].hp - b.hp < 1) b.hp = BUILDINGS[b.kind].hp; // (the climb's rounding)
+      w.fx.push({ type: "built", faction: b.faction, id: b.id });
+    }
+  }
+}
+
 export function canPlaceBuilding(
   w: World,
   faction: Faction,
@@ -126,16 +263,20 @@ export function canPlaceBuilding(
   if (overlapsGoliath(w, tx, ty, size)) return false;
   if (blocksObjective(w, tx, ty, size)) return false; // Uplink platforms and crates stay open ground
   // within build radius of a friendly building (outposts don't count), or in a Goliath's ring
-  return ring || inBaseRange(w, faction, tx + size / 2, ty + size / 2);
+  return ring || inBaseRange(w, faction, tx + size / 2, ty + size / 2, kind);
 }
 
 /**
  * Is a footprint centred at (cx, cy) within build radius of `faction`'s base:
  * any of its buildings except outposts (which never count as base)?
  */
-export function inBaseRange(w: World, faction: Faction, cx: number, cy: number): boolean {
+/** How far round a building of the base new ones (of `kind`, if known) may go: the HQ's zone, or the shorter reach of the rest; a Turret's a little farther. */
+export const buildRadiusOf = (b: { kind: BuildingKind }, kind?: BuildingKind): number =>
+  (b.kind === "hq" ? ECONOMY.buildRadius : ECONOMY.extendRadius) + (kind === "turret" ? ECONOMY.turretReach : 0);
+
+export function inBaseRange(w: World, faction: Faction, cx: number, cy: number, kind?: BuildingKind): boolean {
   for (const b of w.buildings.values())
-    if (b.faction === faction && !b.outpost && distToBuilding(b, cx, cy) <= ECONOMY.buildRadius) return true;
+    if (b.faction === faction && !b.outpost && b.founding === undefined && distToBuilding(b, cx, cy) <= buildRadiusOf(b, kind)) return true;
   return false;
 }
 
@@ -145,7 +286,7 @@ export function placeBuilding(w: World, faction: Faction, tx: number, ty: number
   if (!canPlaceBuilding(w, faction, f.pending.kind, tx, ty)) return;
   const size = BUILDINGS[f.pending.kind].size;
   // out of base range, so in a Goliath's build ring: an outpost (decided now, for good)
-  const outpost = !inBaseRange(w, faction, tx + size / 2, ty + size / 2);
+  const outpost = !inBaseRange(w, faction, tx + size / 2, ty + size / 2, f.pending.kind);
   const b = spawnBuilding(w, f.pending.kind, faction, tx, ty);
   if (outpost) b.outpost = true;
   f.pending = null;
@@ -642,6 +783,9 @@ export function applyEconomyCommand(w: World, c: Command): void {
       break;
     case "placeBuilding":
       placeBuilding(w, c.faction, c.tx, c.ty);
+      break;
+    case "found":
+      orderFound(w, c.faction, c.unitIds, c.tx, c.ty);
       break;
     case "sell":
       sellBuilding(w, c.faction, c.buildingId);

@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
-import { paidFor, producerCap, producersOf, queuesOf, unitBlocker, type Producer } from "../sim/economy";
+import { foundBlocker, paidFor, producerCap, producersOf, queuesOf, unitBlocker, type Producer } from "../sim/economy";
 import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
@@ -410,6 +410,8 @@ export class Controller {
   selectedBuilding: number | null = null;
   /** When set, taps place this building instead of commanding. */
   placing: BuildingKind | null = null;
+  /** Placing an expansion Depot for these harvesters to found (economy.ts `found`), not one from the sidebar. */
+  foundCrew: number[] | null = null;
   /** Next ground tap issues a plain move (retreat) instead of attack-move. */
   forceMove = false;
   /** Debug: render fog of war (display-only — the sim always keeps fog). */
@@ -586,9 +588,16 @@ export class Controller {
       this.selectedBuilding = null;
     this.firePendingDrop();
     this.firePendingLifts();
-    if (this.placing && this.world.factions[PLAYER].pending?.kind !== this.placing)
+    if (this.foundCrew) {
+      // (an expansion's crew: placing lasts while enough of them are left)
+      this.foundCrew = this.foundCrew.filter((id) => this.world.units.has(id));
+      if (this.foundCrew.length < ECONOMY.expansion.crew) this.placing = null;
+    } else if (this.placing && this.world.factions[PLAYER].pending?.kind !== this.placing)
       this.placing = null;
-    if (!this.placing) this.placeAt = null;
+    if (!this.placing) {
+      this.placeAt = null;
+      this.foundCrew = null;
+    }
     this.squads.prune(this.world);
   }
 
@@ -676,13 +685,32 @@ export class Controller {
   /** Why the ghost can't be built where it sits, or null when it can. */
   placementProblem(): string | null {
     if (!this.placing || !this.placeAt) return null;
+    if (this.foundCrew) return foundBlocker(this.world, PLAYER, this.placeAt.tx, this.placeAt.ty);
     return placementBlocker(this.world, PLAYER, this.placing, this.placeAt.tx, this.placeAt.ty);
+  }
+
+  /** The selected harvesters, when there are enough of them to deploy a Depot (else null). */
+  crewSelected(): number[] | null {
+    const ids = [...this.selectedUnits].filter((id) => {
+      const u = this.world.units.get(id);
+      return !!u && u.faction === PLAYER && u.kind === "harvester";
+    });
+    return ids.length >= ECONOMY.expansion.crew ? ids.sort((a, b) => a - b) : null;
+  }
+
+  /** Place an expansion Depot for the selected harvesters to found (they walk there and become it). */
+  startFound(): void {
+    const crew = this.crewSelected();
+    if (!crew || this.spectator) return;
+    this.foundCrew = crew;
+    this.placing = "depot";
+    this.placeAt = null;
   }
 
   /** Move the ghost to (tx, ty), nudged onto a valid spot a tile away if that's all it takes. */
   movePlacement(tx: number, ty: number, snap = true): void {
     if (!this.placing) return;
-    this.placeAt = snap ? snapPlacement(this.world, PLAYER, this.placing, tx, ty) : { tx, ty };
+    this.placeAt = snap && !this.foundCrew ? snapPlacement(this.world, PLAYER, this.placing, tx, ty) : { tx, ty };
   }
 
   /** Build the ghost where it sits. On failure, records why in `denied`. */
@@ -690,14 +718,16 @@ export class Controller {
     const kind = this.placing;
     const at = this.placeAt;
     if (!kind || !at || this.spectator) return false;
-    const why = placementBlocker(this.world, PLAYER, kind, at.tx, at.ty);
+    const why = this.placementProblem();
     if (why) {
       this.denied = { reason: why, tx: at.tx, ty: at.ty };
       return false;
     }
     const size = BUILDINGS[kind].size;
-    this.enqueue({ type: "placeBuilding", faction: PLAYER, tx: at.tx, ty: at.ty });
+    if (this.foundCrew) this.enqueue({ type: "found", faction: PLAYER, unitIds: this.foundCrew, tx: at.tx, ty: at.ty });
+    else this.enqueue({ type: "placeBuilding", faction: PLAYER, tx: at.tx, ty: at.ty });
     this.placing = null;
+    this.foundCrew = null;
     this.placeAt = null;
     this.lastFeedback = { kind: "place", x: at.tx + size / 2, y: at.ty + size / 2 };
     return true;

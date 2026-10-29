@@ -59,7 +59,7 @@ SOFTEN = 0.8                             # px blur on ground-level textures (big
 THUMB = 256
 PREVIEW = 1200
 
-GROUND, ROCK, SCRAP, WATER, ROAD, ROUGH, FOREST, CRYSTAL, BRIDGE, SHALLOWS, DEEP = range(11)
+GROUND, ROCK, SCRAP, WATER, ROAD, ROUGH, FOREST, CRYSTAL, BRIDGE, SHALLOWS, DEEP, WASTELAND = range(12)
 
 # Light comes from the upper left; shadows fall toward +x, +y.
 SUN_SLOPE = 0.85  # tan(sun elevation): shadow length == occluder height / SUN_SLOPE
@@ -510,6 +510,8 @@ def paste(img: np.ndarray, Hf: np.ndarray | None, spr: np.ndarray, cx: float, cy
 def load_map(mid: str) -> dict:
     d = json.loads((MAPS_DIR / f"{mid}.json").read_text())
     d["grid"] = np.array([[int(c, 36) for c in row] for row in d["terrain"]], np.int8)  # base-36: Deep is "a"
+    # Wasteland ("b") is painted as plain ground: the game's ground shader scorches it at runtime
+    d["grid"][d["grid"] == WASTELAND] = GROUND
     return d
 
 

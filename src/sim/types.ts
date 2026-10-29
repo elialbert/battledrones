@@ -89,7 +89,9 @@ export const enum Terrain {
   /** Shallow ford: slow for ground units, open to hover. */
   Shallows = 9,
   /** Open sea: too deep and rough for anything but aircraft (hover included). */
-  Deep = 10
+  Deep = 10,
+  /** Scorched ground ringing every scrap and crystal field: open to everyone, but nothing can be built on it. */
+  Wasteland = 11
 }
 
 /** Harvester internal cycle state. */
@@ -101,6 +103,8 @@ export type UnitOrder =
   | { type: "attackMove"; x: number; y: number }
   | { type: "attack"; targetId: number }
   | { type: "harvest"; fieldX: number; fieldY: number; phase: HarvestPhase }
+  /** A harvester of a crew going to found an expansion Depot at top-left (tx, ty) (economy.ts tickFoundCrews). */
+  | { type: "found"; tx: number; ty: number }
   /**
    * Infantry: walk to Condor `carrierId` and climb aboard (transport.ts).
    * `ticks` counts up while the squad is within boarding range; at
@@ -257,6 +261,11 @@ export interface Building {
    * for build range: nothing can be built off it. Decided when it is placed.
    */
   outpost?: boolean;
+  /**
+   * An expansion Depot still going up (ticks left; economy.ts tickFounding): no drop-off and no build
+   * range until it's done, its hp climbing from ECONOMY.expansion.siteHp of full.
+   */
+  founding?: number;
 }
 
 /** A building being constructed C&C-style (timer in the "sidebar"). */
@@ -326,6 +335,8 @@ export type FxEvent =
   | { type: "explosion"; x: number; y: number; size: number; air: boolean; kind: "unit" | "building" | "impact" }
   | { type: "heal"; x: number; y: number; tx: number; ty: number; sourceId: number; targetId: number }
   | { type: "built"; faction: Faction; id: number }
+  /** A harvester of an expansion Depot's crew was used up founding it (economy.ts placeBuilding). */
+  | { type: "founded"; faction: Faction; id: number; x: number; y: number }
   | { type: "sold"; id: number }
   | {
       type: "hit";
@@ -842,6 +853,8 @@ export type Command =
   | { type: "startBuilding"; faction: Faction; building: BuildingKind }
   | { type: "cancelBuilding"; faction: Faction }
   | { type: "placeBuilding"; faction: Faction; tx: number; ty: number }
+  /** Harvesters (at least ECONOMY.expansion.crew) found an expansion Depot at top-left (tx, ty). */
+  | { type: "found"; faction: Faction; unitIds: number[]; tx: number; ty: number }
   | { type: "sell"; faction: Faction; buildingId: number }
   | { type: "rally"; faction: Faction; buildingId: number; x: number; y: number }
   /** Last Stand: bring the next wave in now for a scrap bonus. */
