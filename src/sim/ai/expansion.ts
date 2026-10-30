@@ -28,6 +28,8 @@ const STALE = 60 * TICK_RATE;
 const MAX_FIELD = 36;
 /** A field tile this close to a drop-off is served already: an expansion goes to a field of its own. */
 const SERVED = 10;
+/** Fields this close to the HQ (tiles) are its home field (as ai/commander.ts HOME_FIELD). */
+const HOME_FIELD = 10;
 
 /**
  * The nearest field to the HQ that no drop-off within `reach` serves (a
@@ -91,6 +93,92 @@ function scanExpansionSite(w: World, faction: Faction, hqC: { x: number; y: numb
   const [bx, by] = fr.vec(0, 2.5);
   if (!findPath(w, hqC.x + bx, hqC.y + by, best.tx + size / 2, best.ty + size / 2, "ground", faction)) return null;
   return best;
+}
+
+/**
+ * Harvesters a Depot by a field of its own is kept staffed with: about where one field's
+ * miners start getting in each other's way (a 4–12 tile field by a Depot, measured).
+ */
+export const EXPANSION_MINERS = 5;
+/** Harvesters left on the home field however many Depots want staffing. */
+const HOME_MINERS = 3;
+/** Armed enemies this close to a Depot (tiles): no more harvesters fed in till they're gone. */
+const UNSAFE = 8;
+
+/** The field tile nearest a Depot's middle, within SERVED (scanned in the side's own frame: mirror-fair ties), or null. */
+function fieldBy(w: World, faction: Faction, cx: number, cy: number): { x: number; y: number } | null {
+  const fr = sideFrame(w, faction);
+  const c = fr.toFrame({ x: cx, y: cy });
+  let best: { x: number; y: number } | null = null;
+  let bestD = SERVED;
+  for (let fy = Math.floor(c.y - SERVED); fy <= c.y + SERVED; fy++)
+    for (let fx = Math.floor(c.x - SERVED); fx <= c.x + SERVED; fx++) {
+      const d = dist(fx + 0.5, fy + 0.5, c.x, c.y);
+      if (d > bestD || (best && d === bestD)) continue;
+      const [tx, ty] = fr.tile(fx, fy, 1);
+      if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height || !isResource(w, tileIndex(w, tx, ty))) continue;
+      best = { x: tx, y: ty };
+      bestD = d;
+    }
+  return best;
+}
+
+/**
+ * Keep each finished Depot that serves a field of its own (past the home
+ * field: an expansion, or a sidebar Depot out by one) worked by
+ * EXPANSION_MINERS harvesters. Left alone, harvesters only ever mine the
+ * field nearest where they stand, so an expansion's field sat untouched while
+ * they walked out to the contested middle. Short ones are made up from the
+ * home field's miners, nearest first, as soon as the Depot is up. Returns the
+ * harvesters sent this think (the commander leaves them be) and how many the
+ * Depots want on top of the one each already counts for.
+ */
+export function staffExpansions(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number },
+  harvesters: Unit[],
+  skip: Set<number>,
+  enemies: Unit[],
+  cmds: Command[]
+): { sent: Set<number>; extra: number } {
+  const sent = new Set<number>();
+  let extra = 0;
+  const sites: { cx: number; cy: number; field: { x: number; y: number } }[] = [];
+  for (const b of w.buildings.values()) {
+    if (b.faction !== faction || b.kind !== "depot" || b.founding !== undefined) continue;
+    const size = BUILDINGS.depot.size;
+    const cx = b.tx + size / 2;
+    const cy = b.ty + size / 2;
+    const field = perTick(w, `depot field ${b.id}`, () => fieldBy(w, faction, cx, cy));
+    if (!field || dist(field.x + 0.5, field.y + 0.5, hqC.x, hqC.y) <= HOME_FIELD) continue;
+    sites.push({ cx, cy, field });
+  }
+  if (!sites.length) return { sent, extra };
+  const servedBy = (h: Unit) => {
+    const o = h.order;
+    if (o.type !== "harvest") return -1;
+    return sites.findIndex((s) => dist(o.fieldX + 0.5, o.fieldY + 0.5, s.cx, s.cy) <= SERVED);
+  };
+  const free = harvesters.filter((h) => !skip.has(h.id) && (h.order.type === "idle" || h.order.type === "harvest"));
+  let home = free.filter((h) => servedBy(h) < 0);
+  for (const [i, s] of sites.entries()) {
+    extra += EXPANSION_MINERS - 1;
+    const have = harvesters.filter((h) => servedBy(h) === i).length;
+    if (have >= EXPANSION_MINERS) continue;
+    if (enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, s.cx, s.cy) <= UNSAFE)) continue;
+    const take = Math.min(EXPANSION_MINERS - have, home.length - HOME_MINERS);
+    if (take <= 0) continue;
+    const picks = home
+      .map((h) => ({ h, d: dist(h.x, h.y, s.cx, s.cy) }))
+      .sort((a, b) => a.d - b.d || a.h.id - b.h.id)
+      .slice(0, take)
+      .map((p) => p.h);
+    for (const h of picks) sent.add(h.id);
+    home = home.filter((h) => !sent.has(h.id));
+    cmds.push({ type: "harvest", faction, unitIds: picks.map((h) => h.id), x: s.field.x + 0.5, y: s.field.y + 0.5 });
+  }
+  return { sent, extra };
 }
 
 /**

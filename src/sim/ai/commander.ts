@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { expansionSite, perTick, tendExpansion, type ExpansionPlan } from "./expansion";
+import { expansionSite, perTick, staffExpansions, tendExpansion, type ExpansionPlan } from "./expansion";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import { isOut } from "../combat";
@@ -605,13 +605,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (an expansion is next: its crew is trained on top of the miners, and it's never started under attack)
   const expanding = !!s.expansion || (expansionNext && !threatened);
   const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, mining, s.strategy.depotReach ?? 9, cmds);
-  const wantHarvesters = mining + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
+  // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
+  const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
+  const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
   // (Nomads: no HQ ever — the dug-in Goliath builds them, goliath.ts trainableAt)
   const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
   if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
     cmds.push({ type: "produce", faction, buildingId: yard.id, unit: "harvester" });
   for (const h of harvesters) {
-    if (goliathFields.keep.has(h.id) || crew.has(h.id)) continue; // (working a Goliath's field, or founding a Depot)
+    if (goliathFields.keep.has(h.id) || crew.has(h.id) || staffed.sent.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one)
     const o = h.order;
     // (a dry field sends a harvester to the nearest one it can reach: never across the bridges)
     const astray = islandMap && o.type === "harvest" && !ourSide(o.fieldX, o.fieldY);

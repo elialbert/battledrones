@@ -198,4 +198,44 @@ describe("expansion Depots", () => {
     }
     expect(hit).toBe(true);
   });
+
+  it("a full hold sent to a new field unloads at the Depot by it, not back at the old one", () => {
+    // (a played game: 18 loaded harvesters by the old expansion turned round and went back to it)
+    const w = createMapWorld("riverlands");
+    const old = spawnBuilding(w, "depot", "blue", 16, 24);
+    const near = spawnBuilding(w, "depot", "blue", 30, 48);
+    const h = spawnUnit(w, "harvester", "blue", 14.5, 31.5);
+    h.cargo = ECONOMY.harvesterCapacity;
+    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 33.5, y: 45.5 }]);
+    let at: number | null = null;
+    for (let i = 0; i < 90 * TICK_RATE && at === null; i++) {
+      step(w, []);
+      if (h.order.type === "harvest" && h.order.phase === "unloading") at = nearestDropOff(w, "blue", h.x, h.y)!.id;
+    }
+    expect(at).toBe(near.id);
+    expect(at).not.toBe(old.id);
+  });
+
+  it("Marshal sends a shift of harvesters to a finished expansion, keeping some on the home field", async () => {
+    const { EXPANSION_MINERS, staffExpansions } = await import("../src/sim/ai/expansion");
+    const w = createMapWorld("riverlands");
+    const hq = hqOf(w, "blue")!;
+    const depot = spawnBuilding(w, "depot", "blue", 30, 48);
+    const home = Array.from({ length: 6 }, (_, i) => spawnUnit(w, "harvester", "blue", 11 + (i % 3), 43 + Math.floor(i / 3)));
+    step(w, [{ type: "harvest", faction: "blue", unitIds: home.map((u) => u.id), x: 12.5, y: 44.5 }]);
+    const hqC = { x: hq.tx + 1.5, y: hq.ty + 1.5 };
+    const cmds: any[] = [];
+    const { sent, extra } = staffExpansions(w, "blue", hqC, home, new Set(), [], cmds);
+    expect(extra).toBe(EXPANSION_MINERS - 1);
+    expect(sent.size).toBe(3); // (six harvesters: three stay home)
+    expect(cmds).toHaveLength(1);
+    const c = cmds[0];
+    expect(c.type).toBe("harvest");
+    expect(Math.hypot(c.x - depot.tx - 1, c.y - depot.ty - 1)).toBeLessThanOrEqual(10);
+    // none fed into a fight
+    const again: any[] = [];
+    const more = Array.from({ length: 8 }, (_, i) => spawnUnit(w, "harvester", "blue", 11 + (i % 3), 45 + Math.floor(i / 3)));
+    const foe = spawnUnit(w, "stinger", "red", depot.tx + 1, depot.ty - 3);
+    expect(staffExpansions(w, "blue", hqC, more, new Set(), [foe], again).sent.size).toBe(0);
+  });
 });

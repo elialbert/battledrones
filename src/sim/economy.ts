@@ -641,6 +641,22 @@ function distToSite(s: DropSite, x: number, y: number): number {
   return hypot(dx, dy);
 }
 
+/**
+ * Where a loaded harvester unloads: the drop site that makes the shortest
+ * trip there and on to its field. At its field that's the nearest one; a full
+ * hold sent off to a new field unloads by the new field, not back at the old.
+ * (The choice holds as it drives: closing on its pick can't make another shorter.)
+ */
+function dropSiteFor(w: World, u: Unit, fieldX: number, fieldY: number): DropSite | null {
+  const near = nearestDropSite(w, u.faction, u.x, u.y, "ground");
+  const fx = fieldX + 0.5;
+  const fy = fieldY + 0.5;
+  const byField = nearestDropSite(w, u.faction, fx, fy, "ground");
+  if (!near || !byField || byField.id === near.id) return near;
+  const trip = (s: DropSite) => distToSite(s, u.x, u.y) + distToSite(s, fx, fy);
+  return trip(byField) < trip(near) ? byField : near;
+}
+
 /** Ticks a harvester keeps running for home after being shot. */
 const FLEE_TICKS = 4 * TICK_RATE;
 
@@ -745,7 +761,7 @@ export function tickHarvest(w: World): void {
       }
     } else if (o.phase === "toBase") {
       // (an anchored Goliath counts; once it starts packing up it doesn't, and this reroutes)
-      const home = nearestDropSite(w, u.faction, u.x, u.y, "ground");
+      const home = dropSiteFor(w, u, o.fieldX, o.fieldY);
       if (!home) {
         // a base on the move (a Goliath packing up, walking or on a lift) will dig in again: wait for it, loaded
         if (!hasGoliath(w, u.faction)) u.order = { type: "idle" };
