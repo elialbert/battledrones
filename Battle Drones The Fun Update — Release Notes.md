@@ -64,7 +64,7 @@ Each side now has four strikes, fired from the round buttons on the right of the
 2. Tap the map to fire. Where the strike can't go, the preview turns grey with a red ✕. An invalid tap tells you why and keeps the power armed.
 3. To cancel, tap the button again, tap ✕, press Esc or right-click.
 
-- You can target any explored ground, including ground under fog. A Drop Pod needs open ground that you can see right now.
+- You can only target ground you can see right now (not ground under fog). A Drop Pod also needs open ground.
 - Long-press or right-click a button for its details. A button that isn't ready says why, for example "Barrage recharging: 12 s" or "Sky Hammer comes online at 6:00".
 - Every power needs your HQ standing.
 

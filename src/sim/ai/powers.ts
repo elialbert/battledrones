@@ -324,7 +324,12 @@ function hammerTarget(w: World, faction: Faction, visibleEnemies: Unit[]): { x: 
   const R = POWERS.hammer.radius;
   const clump = bestClump(visibleEnemies, R * 0.8, (u) => UNITS[u.kind].cost * (isStunned(w, u.id) ? 1.3 : 1));
   if (clump && clump.value >= HAMMER_CLUMP) return clump;
-  const known = knownBuildings(w, faction);
+  // (only buildings in sight: a calldown needs eyes on its target)
+  const known = knownBuildings(w, faction).filter((kb) => {
+    const size = BUILDINGS[kb.kind].size;
+    for (let dy = 0; dy < size; dy++) for (let dx = 0; dx < size; dx++) if (isVisible(w, faction, kb.tx + dx, kb.ty + dy)) return true;
+    return false;
+  });
   const centre = (kb: (typeof known)[number]) => ({
     x: kb.tx + BUILDINGS[kb.kind].size / 2,
     y: kb.ty + BUILDINGS[kb.kind].size / 2
@@ -351,10 +356,12 @@ function hammerTarget(w: World, faction: Faction, visibleEnemies: Unit[]): { x: 
       const ddx = Math.max(kb.tx - x, 0, x - (kb.tx + size));
       const ddy = Math.max(kb.ty - y, 0, y - (kb.ty + size));
       if (hypot(ddx, ddy) > R - 0.2) continue;
+      if (!isVisible(w, faction, Math.floor(x), Math.floor(y))) continue;
       if (!best || v > best.v) best = { x, y, v };
     }
   }
   if (best) return best;
   const hq = known.find((kb) => kb.kind === "hq");
-  return hq ? centre(hq) : null;
+  const at = hq && centre(hq);
+  return at && isVisible(w, faction, Math.floor(at.x), Math.floor(at.y)) ? at : null;
 }

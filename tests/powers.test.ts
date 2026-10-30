@@ -5,7 +5,7 @@ import { BUILDINGS, POWERS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
 import { pickAiOpener } from "../src/sim/openers";
-import { calldownBlocker, isStunned, powerStatus, telegraphTicks } from "../src/sim/powers";
+import { calldownBlocker, isStunned, powerStatus, targetBlocker, telegraphTicks } from "../src/sim/powers";
 import { step } from "../src/sim/sim";
 import { Terrain, type Command, type Faction, type FxEvent, type PowerKind, type World } from "../src/sim/types";
 import { createWorld, setTerrain, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -20,11 +20,13 @@ function arena(size = 40): World {
   return w;
 }
 
-/** Let `f` see the whole map (calldowns need explored / visible ground). */
+/** Let `f` see the whole map (calldowns need visible ground). */
 function reveal(w: World, f: Faction): void {
   tickFog(w);
   w.fog[f].vis.fill(2);
+  if (f === "blue") revealed.add(w);
 }
+const revealed = new WeakSet<World>();
 
 const call = (faction: Faction, power: PowerKind, x: number, y: number): Command => ({ type: "calldown", faction, power, x, y });
 
@@ -34,7 +36,7 @@ function run(w: World, n: number, cmds: Command[] = []): FxEvent[] {
   for (let i = 0; i < n; i++) {
     step(w, i === 0 ? cmds : []);
     out.push(...w.fx);
-    if (w.fog.blue.vis[0] !== 2) w.fog.blue.vis.fill(2); // keep the test field revealed
+    if (revealed.has(w)) w.fog.blue.vis.fill(2); // keep the test field revealed
   }
   return out;
 }
@@ -68,7 +70,7 @@ describe("command meter", () => {
 });
 
 describe("calldown validation", () => {
-  it("needs charge, an off-cooldown power and explored ground — for every side alike", () => {
+  it("needs charge, an off-cooldown power and visible ground — for every side alike", () => {
     const w = arena();
     tickFog(w);
     w.powers.meter.blue = POWERS.barrage.cost - 1;
@@ -79,9 +81,13 @@ describe("calldown validation", () => {
 
     w.powers.meter.blue = 100;
     // the far corner is unexplored
-    expect(calldownBlocker(w, "blue", "barrage", 35, 35)).toMatch(/unexplored/);
+    expect(calldownBlocker(w, "blue", "barrage", 35, 35)).toMatch(/eyes/);
     run(w, 1, [call("blue", "barrage", 35, 35)]);
     expect(w.powers.active).toHaveLength(0);
+    // explored (remembered) but not visible right now: no Barrage, no Sky Hammer either
+    w.fog.blue.vis[20 * w.width + 20] = 1;
+    expect(calldownBlocker(w, "blue", "barrage", 20.5, 20.5)).toMatch(/eyes/);
+    expect(targetBlocker(w, "blue", "hammer", 20.5, 20.5)).toMatch(/eyes/);
 
     // a legal call spends the charge and starts the cooldown
     expect(calldownBlocker(w, "blue", "barrage", 6, 6)).toBeNull();

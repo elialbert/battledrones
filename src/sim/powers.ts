@@ -1,7 +1,7 @@
 import { POWERS, TICK_RATE, UNITS } from "./balance";
 import { hasGoliath } from "./goliath";
 import { areaBlast, strikeDamage } from "./combat";
-import { isExplored, isVisible } from "./fog";
+import { isVisible } from "./fog";
 import { worldRandom } from "./rand";
 import { applySpawnRank, bannedBy, rulesOf } from "./rules";
 import type { Calldown, Command, Faction, PowerKind, PowerState, UnitKind, World } from "./types";
@@ -16,6 +16,8 @@ import { QUARTER, isMulti, otherSide, perSide, rivalsOf, sidesOf, turnVec } from
  * Hammer is separate: it comes online for both sides at 6:00 and recharges
  * every two and a half minutes, the late-game pressure that ends stalemates.
  *
+ * Every calldown needs eyes on its target (ground the side can see right
+ * now, not just remembers), so a base is only shelled where it is scouted.
  * Every calldown is telegraphed: `World.powers.active` (and the "calldown"
  * FxEvent) is public, so both sides see the reticle through the fog and can
  * get out of the way. The player and the AI fire them with the same
@@ -120,9 +122,9 @@ export function targetBlocker(w: World, faction: Faction, power: PowerKind, x: n
   const tx = Math.floor(x);
   const ty = Math.floor(y);
   if (!inBounds(w, tx, ty)) return "Off the map";
-  if (!isExplored(w, faction, tx, ty)) return "Can't target unexplored ground";
+  // (eyes on the target: no shelling a remembered HQ deep in the fog)
+  if (!isVisible(w, faction, tx, ty)) return "Calldowns need eyes on the target";
   if (power === "droppod") {
-    if (!isVisible(w, faction, tx, ty)) return "Drop Pods need eyes on the landing zone";
     if (!passable(w, tx, ty, "ground")) return "Drop Pods need open ground to land on";
     if (!onHomeLand(w, faction, tx, ty)) return "Drop Pods can't land on islands: fly troops in by Condor";
   }
