@@ -1,9 +1,10 @@
-import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../balance";
+import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { foundBlocker } from "../economy";
 import { findPath } from "../movement";
 import type { Command, Faction, Unit, World } from "../types";
-import { dist, isResource, sideFrame, tileIndex } from "../world";
+import { dist, isResource, passable, sideFrame, tileIndex } from "../world";
 import { sealsOff } from "../placement";
+import { anchorFootprint } from "../goliath";
 
 /**
  * Expansion Depots for the AI: a Depot it wants by a field out of build
@@ -32,12 +33,16 @@ const SERVED = 10;
 /** Fields this close to the HQ (tiles) are its home field (as ai/commander.ts HOME_FIELD). */
 const HOME_FIELD = 10;
 
+/** A field in a drop-off's reach is served if a harvester walks there in at most this many times `reach` steps. */
+const WALK_SLACK = 1.5;
+
 /**
  * The nearest field to the HQ that no drop-off within `reach` serves (a
  * Depot still going up counts: it will), or null.
  */
 export function unservedField(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { x: number; y: number; d: number } | null {
   const drops = [...w.buildings.values()].filter((b) => b.faction === faction && BUILDINGS[b.kind].dropOff);
+  const walk = walkFromDrops(w, faction);
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   let best: { x: number; y: number; d: number } | null = null;
   for (let fy = 0; fy < w.height; fy++)
@@ -46,7 +51,12 @@ export function unservedField(w: World, faction: Faction, hqC: { x: number; y: n
       if (!isResource(w, tileIndex(w, tx, ty))) continue;
       const x = tx + 0.5;
       const y = ty + 0.5;
-      if (drops.some((b) => dist(x, y, b.tx + BUILDINGS[b.kind].size / 2, b.ty + BUILDINGS[b.kind].size / 2) < reach)) continue;
+      if (drops.some((b) => dist(x, y, b.tx + BUILDINGS[b.kind].size / 2, b.ty + BUILDINGS[b.kind].size / 2) < reach)) {
+        // (in reach as the crow flies, but not on foot — a field behind rocks, every load walked round
+        // them, past whatever waits out there — isn't served: Riverlands' south field, -marshal-brutal)
+        const steps = walk[tileIndex(w, tx, ty)]!;
+        if (steps >= 0 && steps <= reach * WALK_SLACK) continue;
+      }
       const d = dist(x, y, hqC.x, hqC.y);
       if (!best || d < best.d) best = { x, y, d };
     }
@@ -65,6 +75,59 @@ export function perTick<T>(w: World, key: string, fn: () => T): T {
   return m.v.get(key) as T;
 }
 const tickMemo = new WeakMap<World, { tick: number; v: Map<string, unknown> }>();
+
+/**
+ * Steps from our nearest drop-off to every tile (8-way, no corner cutting, as
+ * nearestReachableResource walks), -1 where none reach. `avoid`: tiles not to
+ * walk through (ai/fields.ts: where an enemy army waits).
+ */
+export function walkFromDrops(w: World, faction: Faction, avoid?: Uint8Array): Int32Array {
+  if (!avoid) return perTick(w, `drop walk ${faction}`, () => walkFrom(w, faction));
+  return walkFrom(w, faction, avoid);
+}
+function walkFrom(w: World, faction: Faction, avoid?: Uint8Array): Int32Array {
+  const W = w.width;
+  const d = new Int32Array(W * w.height).fill(-1);
+  const queue = new Int32Array(W * w.height);
+  let head = 0;
+  let tail = 0;
+  const source = (tx: number, ty: number, size: number) => {
+    for (let y = ty; y < ty + size; y++)
+      for (let x = tx; x < tx + size; x++) {
+        const i = y * W + x;
+        if (x < 0 || y < 0 || x >= W || y >= w.height || d[i]! >= 0) continue;
+        d[i] = 0;
+        queue[tail++] = i;
+      }
+  };
+  for (const b of w.buildings.values())
+    if (b.faction === faction && BUILDINGS[b.kind].dropOff) source(b.tx, b.ty, BUILDINGS[b.kind].size); // (one going up counts: it will be)
+  // (and a dug-in Goliath: harvesters unload at it, world.ts nearestDropSite)
+  for (const u of w.units.values())
+    if (u.faction === faction && u.goliath?.mode === "anchored" && !u.goliath.lift) {
+      const foot = u.goliath.foot ?? anchorFootprint(w, faction, u.x, u.y);
+      source(foot.tx, foot.ty, GOLIATH.footprint);
+    }
+  const open = (x: number, y: number) => passable(w, x, y, "ground") && !avoid?.[y * W + x];
+  while (head < tail) {
+    const cur = queue[head++]!;
+    const cx = cur % W;
+    const cy = Math.floor(cur / W);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (!open(nx, ny)) continue;
+        if (dx !== 0 && dy !== 0 && (!open(cx + dx, cy) || !open(cx, cy + dy))) continue;
+        const ni = ny * W + nx;
+        if (d[ni]! >= 0) continue;
+        d[ni] = d[cur]! + 1;
+        queue[tail++] = ni;
+      }
+  }
+  return d;
+}
 
 /** Where an expansion Depot would go: the open spot nearest the nearest unserved field, reachable from home. */
 export function expansionSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { tx: number; ty: number } | null {

@@ -2,6 +2,7 @@ import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { expansionSite, perTick, staffExpansions, tendExpansion, type ExpansionPlan } from "./expansion";
+import { tendFields } from "./fields";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import { isOut } from "../combat";
@@ -635,8 +636,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
   if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
     cmds.push({ type: "produce", faction, buildingId: yard.id, unit: "harvester" });
+  // the rest mine the best field going: near a drop-off, on our side, none with an enemy army by it (ai/fields.ts)
+  const busy = new Set([...goliathFields.keep, ...crew, ...staffed.sent]);
+  const tended = fieldsLeft
+    ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds)
+    : { sent: new Set<number>(), held: new Set<number>() };
   for (const h of harvesters) {
-    if (goliathFields.keep.has(h.id) || crew.has(h.id) || staffed.sent.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one)
+    if (busy.has(h.id) || tended.sent.has(h.id) || tended.held.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one; sent to a field)
     const o = h.order;
     // (a dry field sends a harvester to the nearest one it can reach: never across the bridges)
     const astray = islandMap && o.type === "harvest" && !ourSide(o.fieldX, o.fieldY);

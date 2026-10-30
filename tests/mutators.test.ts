@@ -342,7 +342,9 @@ describe("infantry mutators", () => {
 
   it("under Airborne every personality keeps its Condor busy: an Assembly Bay for squads, and drop after drop", () => {
     // (how many drops one side gets in swings with the run: a base under attack keeps its
-    // squads busy at home. So: both fly, every match, and drop after drop between them)
+    // squads busy at home. So: both fly, every match, and drop after drop between them. Three:
+    // since harvesters leave a field an army comes to, ai/fields.ts, Skyforce often gets one
+    // drop, not two — 37 drops in seeds 1–10, not 41, none under three)
     for (const seed of [3, 4]) {
       const w = createMapWorld("frostbite", { seed, mutators: ["airborne"] });
       const ai = { blue: createAiState("skyforce", "normal", 1), red: createAiState("airswarm", "normal", 2) };
@@ -360,7 +362,7 @@ describe("infantry mutators", () => {
       expect(bays).toEqual({ blue: 1, red: 1 });
       expect(drops.blue, `seed ${seed}`).toBeGreaterThanOrEqual(1);
       expect(drops.red, `seed ${seed}`).toBeGreaterThanOrEqual(1);
-      expect(drops.blue + drops.red, `seed ${seed}`).toBeGreaterThanOrEqual(4);
+      expect(drops.blue + drops.red, `seed ${seed}`).toBeGreaterThanOrEqual(3);
     }
   }, 90_000);
 
