@@ -14,6 +14,7 @@ import { planMenders } from "./menders";
 import { bannedBy, infantryArmy } from "../rules";
 import { planSalvage } from "./salvage";
 import { planStrike, strikeHolds, strikeWants } from "./hornets";
+import { planSorties, sortieHolds, type SortieKind } from "./harass";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
@@ -310,6 +311,8 @@ export interface AiState {
    * the army's.
    */
   hornetStyle?: "strike";
+  /** Harassment sorties it flies (ai/harass.ts: Marshal's plans pick them). */
+  sorties?: readonly SortieKind[];
   /**
    * A free-for-all: the rival this commander is out to beat (pickFocus), and
    * the tick it looks again. Absent in a duel: there is only one.
@@ -468,8 +471,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const harvesters = mine.filter((u) => u.kind === "harvester");
   // (island maps: squads holding an island relay, or stranded on one, are the airlift's — ai/airlift.ts —
   // never counted toward a wave they can't walk to)
-  // (nor are the Hornets of a strike wing: ai/hornets.ts flies them)
-  const wing = strikeHolds(w, faction, s);
+  // (nor are the Hornets of a strike wing, ai/hornets.ts, nor a sortie out harassing, ai/harass.ts)
+  const wing = new Set([...strikeHolds(w, faction, s), ...sortieHolds(s)]);
   const army = mine.filter((u) => COMBAT_KINDS.includes(u.kind) && !offHomeLand(w, faction, u) && !wing.has(u.id));
   const airlifts = airliftActive(w, faction, s);
   const armyValue = value(army);
@@ -918,6 +921,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- 1c'. the Hornet strike: gather, hide, bomb their HQ when their army is out (ai/hornets.ts)
   const intruder = threatened ? atHome[0] : undefined;
   cmds.push(...planStrike(w, faction, s, { hqC, enemyHqPos, seen, defend: intruder ? { x: intruder.x, y: intruder.y } : null }));
+  // --- 1c''. harassment sorties: a few units at their mining, and home before they're lost (ai/harass.ts)
+  cmds.push(
+    ...planSorties(w, faction, s, {
+      hqC, army, used, seen, armyValue, threatened,
+      target: (leg) => enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus, leg)
+    })
+  );
 
   // Uplink garrisons, capture squads and crate runners stay on task (ai/objectives.ts)
   for (const id of objectiveHolds(w, faction, s)) used.add(id);

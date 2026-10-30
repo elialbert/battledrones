@@ -759,6 +759,48 @@ Not done: the commander's unit choice doesn't know about kiting yet. Against
 infantry it builds Stingers and Mortars, but kiting Lancers now beat Troopers
 +0.69 instead of −0.28.
 
+### Harassment sorties (2026-10-30)
+
+Every plan now harasses (`src/sim/ai/harass.ts`). This isn't a plan of its own. Each plan
+picks which **sorties** it flies (`MARSHAL_PLANS[…].sorties`). The first poke
+is always on. Each of the others is left out of one game in four, from the seed. Marshal
+no longer uses the stock commander's raids (`harassGroup: Infinity` in
+`marshalStrategy`). Sorties replace them, and they come home.
+
+| Sortie | When | Group | Plans |
+|---|---|---|---|
+| poke | 0:40–2:00 | first 2 Stingers/Wasps/Raptors | all |
+| pressure | 1:00–2:30 | 5 of one kind (Stinger, Wasp, Raptor, Lancer, Trooper) | Balanced, Rush, Air Swarm |
+| air | from 6:00, every 2 min, army ≥ 1500 | 4–6 Wasps/Raptors | Balanced, Air Swarm, Boom, Skyforce, Ironclad, Hornet Strike |
+
+A sortie draws from idle units, or from units standing guard within 14 tiles of
+home. While it's out, nothing else gives its units orders: not the plan's
+waves, the fight micro, or the finishing push. It goes after harvesters it can
+see, but never ones under a gun it knows of that can hit it. It turns home when
+it drops below 80% HP or is outgunned (0.8× its strength), when aircraft meet
+flak, after its time runs out (50–60 s), or when it reaches the field with
+nothing safe to hit. A spot it was driven off is skipped for 150 s, and the
+next sortie tries the other field. What it sees feeds the counters like
+anything else seen. Easy and Casual wait out their peace, so they only fly
+air sorties.
+
+From traces (Hard): pokes leave at about 0:42 and usually turn back within
+10–20 s, once they meet the opener's guard. A Balanced air raid at 6:00 killed
+four harvesters, lost one Wasp and left when the flak came. Pressure costs the
+most: chased home by Stingers as fast as it is, it lost four of five, even
+with the leash at 80%.
+
+Full games (Hard, each plan against itself with no sorties, the `nosort`
+variant, 6 maps × 3 seeds × both sides): Balanced 47% and 39%, Rush 56%,
+Skyforce 53%, Boom 49%. Air Swarm scored 28% and 32% on seeds 1–3 (even with
+only the poke), then 46–47% on seeds 4–6. Pooled, that's 38% ±11: probably a
+small cost, and noisy. Air Swarm mirrors end at about 6:30 and are swingy. The
+point is fun, not win rate (as with Hornet Strike), so it wasn't tuned further.
+Covered by tests/ai-harass.test.ts. The variants `sPoke`, `sPokeAir` and
+`sPokePress` in tools/rps/variants.ts fly one sortie mix.
+
+Not done: pressure could check how big a guard it has seen before it goes.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
@@ -788,6 +830,7 @@ infantry it builds Stingers and Mortars, but kiting Lancers now beat Troopers
 | `src/sim/ai/marshal.ts` | Marshal; `MARSHAL` (each difficulty's speeds and caps), `MARSHAL_PLANS`, `MARSHAL_POOL` |
 | `src/sim/ai/commander.ts` | The stock commander: `tickAi`, `DIFFICULTY`, `STRATEGIES` |
 | `src/sim/ai/kite.ts` | Kiting: `KITE`, `kiteStep` (Marshal's fight micro calls it) |
+| `src/sim/ai/harass.ts` | Harassment sorties: `SORTIE`, `planSorties`, `sortieHolds` (the commander calls it; each Marshal plan picks its sorties) |
 | `src/sim/ai/hornets.ts` | The Hornet Strike plan's wing: `STRIKE`, `planStrike`, `strikeHolds`, `strikeWants` |
 | `src/sim/ai/player.ts` | The scripted players |
 | `src/arena/match.ts` | `parseSeat`, `seatName`, bot seats ticking every tick |

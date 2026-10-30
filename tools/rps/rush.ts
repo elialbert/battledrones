@@ -21,9 +21,9 @@ function seat(f: string, spec: string) {
   const [plan, v] = spec.split("+");
   const V = v ? VARIANTS[v] : {};
   if (v && !V) throw new Error("no variant " + v);
-  const { fast, fight, ...tweak } = V as any;
+  const { fast, fight, sorties, ...tweak } = V as any;
   a.seats[f].bot = capApm(
-    marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, ...(fast !== undefined ? { fast } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } }),
+    marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, ...(fast !== undefined ? { fast } : {}), ...(sorties ? { sorties } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } }),
     M.apm, M.burst);
 }
 seat(side, ours);

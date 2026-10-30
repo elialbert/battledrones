@@ -25,6 +25,10 @@
  *    switched for a much better target; hurt expensive units step back;
  *    what outranges the enemy closing on it kites (ai/kite.ts, Normal and
  *    up); and a fight that's lost, away from home, is broken off.
+ *  - **It harasses on a leash.** Each plan flies its own sorties (ai/harass.ts):
+ *    a poke at their mining at 0:40, maybe a bigger bite after it, raids on
+ *    their far fields late on, every one home when it's hurt or outgunned.
+ *    They replace the stock commander's raids, which never came back.
  *  - **It finishes a won game.** Once its army is twice the enemy army it
  *    has seen lately, everything attack-moves on the enemy's buildings, one
  *    order every few seconds; a capped commander otherwise sits on a won game
@@ -43,6 +47,7 @@ import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
 import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
+import { sortieHolds, type SortieKind } from "./harass";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
 import { capApm } from "./apm";
@@ -74,6 +79,8 @@ export interface MarshalOptions {
   assaultValue?: number;
   /** Changes to how it fights (FIGHT). */
   fight?: Partial<Fight>;
+  /** The harassment sorties it flies instead of its plan's (ai/harass.ts): experiments. */
+  sorties?: SortieKind[];
 }
 
 export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike";
@@ -87,9 +94,12 @@ export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strik
  */
 export const MARSHAL_PLANS: Record<
   PlanName,
-  { base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush"; hornets?: "strike" }
+  {
+    base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush"; hornets?: "strike";
+    sorties: SortieKind[];
+  }
 > = {
-  balanced: { base: "balanced", label: "Balanced", fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
+  balanced: { base: "balanced", label: "Balanced", sorties: ["poke", "pressure", "air"], fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
   /**
    * A flood of Stingers (RUSH-RPS.md): a Depot, three Fab Plants by 0:50,
    * seven harvesters, one big wave instead of raids, then the rest of the
@@ -99,6 +109,7 @@ export const MARSHAL_PLANS: Record<
   rush: {
     base: "rush",
     label: "Rush",
+    sorties: ["poke", "pressure"],
     tweak: {
       buildOrder: ["fab-plant", "depot", "fab-plant", "fab-plant", "assembly-bay", "turret", "airpad", "tech-lab", "depot"],
       harvesters: 7,
@@ -108,10 +119,10 @@ export const MARSHAL_PLANS: Record<
       spend: { maxDepots: 2 }
     }
   },
-  airswarm: { base: "airswarm", label: "Air Swarm", fast: fastDepot(["airpad", "depot", "fab-plant", "turret", "tech-lab", "airpad"]) },
-  boom: { base: "boom", label: "Boom", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "airpad", "turret", "radar", "sam-site"]) },
-  skyforce: { base: "skyforce", label: "Skyforce" },
-  ironclad: { base: "ironclad", label: "Ironclad", fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "assembly-bay", "airpad", "fab-plant", "sam-site"]) },
+  airswarm: { base: "airswarm", label: "Air Swarm", sorties: ["poke", "pressure", "air"], fast: fastDepot(["airpad", "depot", "fab-plant", "turret", "tech-lab", "airpad"]) },
+  boom: { base: "boom", label: "Boom", sorties: ["poke", "air"], fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "airpad", "turret", "radar", "sam-site"]) },
+  skyforce: { base: "skyforce", label: "Skyforce", sorties: ["poke", "air"] },
+  ironclad: { base: "ironclad", label: "Ironclad", sorties: ["poke", "air"], fast: fastDepot(["fab-plant", "depot", "turret", "tech-lab", "assembly-bay", "airpad", "fab-plant", "sam-site"]) },
   /**
    * Holds the way into its base (ai/choke.ts) with turrets and the whole
    * army, a turret more for every two tanks it sees, techs up behind them
@@ -123,6 +134,7 @@ export const MARSHAL_PLANS: Record<
   turtle: {
     base: "ironclad",
     label: "Turtle",
+    sorties: ["poke"],
     tweak: {
       buildOrder: ["fab-plant", "turret", "turret", "tech-lab", "depot", "fab-plant", "turret", "sam-site", "radar"],
       harvesters: 6,
@@ -141,6 +153,7 @@ export const MARSHAL_PLANS: Record<
   greed: {
     base: "boom",
     label: "Greed",
+    sorties: ["poke"],
     tweak: {
       buildOrder: ["fab-plant", "depot", "depot", "turret", "tech-lab", "fab-plant", "airpad", "sam-site"],
       harvesters: 6,
@@ -158,6 +171,7 @@ export const MARSHAL_PLANS: Record<
   juggernaut: {
     base: "ironclad",
     label: "Juggernaut",
+    sorties: ["poke"],
     goliath: "rush",
     tweak: {
       buildOrder: ["fab-plant", "tech-lab", "airpad", "assembly-bay", "depot", "turret"],
@@ -176,6 +190,7 @@ export const MARSHAL_PLANS: Record<
   strike: {
     base: "airswarm",
     label: "Hornet Strike",
+    sorties: ["poke", "air"],
     hornets: "strike",
     tweak: {
       buildOrder: ["airpad", "tech-lab", "fab-plant", "airpad", "turret", "depot"],
@@ -416,7 +431,8 @@ function alreadyDoing(u: Unit, c: Command): boolean {
 export function marshalStrategy(opts: MarshalOptions): Partial<Strategy> {
   const own = MARSHAL_PLANS[opts.strategy].tweak?.assaultValue !== undefined;
   const assault = opts.assaultValue !== undefined && !own ? { assaultValue: opts.assaultValue } : {};
-  return { ...planStrategy(opts.strategy, opts.fast), ...assault, holdUntil: opts.holdUntil, ...opts.tweak };
+  // (no stock harass raids: its sorties harass, on a leash, ai/harass.ts)
+  return { ...planStrategy(opts.strategy, opts.fast), ...assault, holdUntil: opts.holdUntil, harassGroup: Infinity, ...opts.tweak };
 }
 
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {
@@ -428,6 +444,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
   s.goliathStyle = plan.goliath ?? "expand";
   s.hornetStyle = plan.hornets;
+  // its plan's sorties, each but the first poke left out of one game in four (ai/harass.ts)
+  s.sorties = opts.sorties ?? plan.sorties.filter((k, i) => k === "poke" || hash32(seed, 0x6861 + i) % 4 !== 0);
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
 
   /** The plan's orders not yet sent. */
@@ -560,8 +578,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       if (w.tick - x.tick > SIGHTING_TTL) sighted.delete(id);
       else enemy += x.value;
     }
-    // (a Hornet strike's wing flies its own plan: ai/hornets.ts)
-    const wing = strikeHolds(w, side, s);
+    // (a Hornet strike's wing, and a sortie out harassing, fly their own plans: ai/hornets.ts, ai/harass.ts)
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
@@ -591,7 +609,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const hq = hqOf(w, side);
     const home = hq ? buildingCenter(hq) : null;
     const enemies = seenEnemies(w, side).filter((e) => !e.goliath && (UNITS[e.kind].dps > 0 || UNITS[e.kind].heal));
-    const wing = strikeHolds(w, side, s);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&

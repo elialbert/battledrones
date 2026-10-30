@@ -1,6 +1,11 @@
 export const VARIANTS: Record<string, any> = {
   // fight micro without kiting (ai/kite.ts): A/B a plan against itself
   nokite: { fight: { kite: false } },
+  // no harassment sorties (ai/harass.ts)
+  nosort: { sorties: [] },
+  sPoke: { sorties: ["poke"] },
+  sPokeAir: { sorties: ["poke", "air"] },
+  sPokePress: { sorties: ["poke", "pressure"] },
   // turtle: the all-in goes once this much tier-2 value is out (Strategy.techAssault, TECH-TIER.md)
   // (alone they change nothing on Hard: its army passes 3000 × 0.9 at ~3:00, mostly Stingers; the tb ones
   // move that bar out of the way so the tier-2 value times the push)
