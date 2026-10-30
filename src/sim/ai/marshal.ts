@@ -66,6 +66,8 @@ export interface MarshalOptions {
    * fight, apart from how well it runs its base. Unlimited if left out.
    */
   microApm?: number;
+  /** Weighs its waves, aircraft and Gantry against the enemy it remembers (AiState.weighs). */
+  weighs?: boolean;
   /** Play the plan's fast-expanding version, if it has one (MARSHAL_PLANS). */
   fast?: boolean;
   /** Seconds of peace: no raids, waves or finishing push before this. */
@@ -261,7 +263,7 @@ export const MARSHAL: Record<
   Difficulty,
   {
     think: number; react: number; apm: number; burst?: number; microApm: number; fast: boolean; holdUntil: number;
-    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>;
+    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>; weighs?: boolean;
   }
 > = {
   // (Easy and Casual don't kite, ai/kite.ts: a step back every 20 s is no kiting, and lost Easy fights it would win)
@@ -270,10 +272,12 @@ export const MARSHAL: Record<
   casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180, fight: { kite: false } },
   normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
   // (Hard before Brutal took its place, at 80 actions a minute: at 120 it beat Normal 99%, and lost only 39% to Brutal)
-  hard: { think: 1.5, react: 0.5, apm: 80, microApm: 60, fast: true, holdUntil: 0 },
+  // (`weighs`, Hard and Brutal: waves weighed against the enemy army it remembers, no aircraft into
+  // massed flak, no Gantry while behind — AiState.weighs)
+  hard: { think: 1.5, react: 0.5, apm: 80, microApm: 60, fast: true, holdUntil: 0, weighs: true },
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
-    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 120, fast: true, holdUntil: 0,
+    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 120, fast: true, holdUntil: 0, weighs: true,
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
     tweak: { harvesters: 12, expandEarly: true },
@@ -441,6 +445,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   const K: Fight = { ...FIGHT, ...opts.fight };
   const s = createAiState(plan.base, difficulty, seed, marshalStrategy(opts));
   s.fair = true;
+  s.weighs = opts.weighs;
   s.interval = opts.think;
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
   s.goliathStyle = plan.goliath ?? "expand";
@@ -675,7 +680,10 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       if (home)
         for (const u of c) {
           if (UNITS[u.kind].cost < K.precious || u.hp > K.hurt * UNITS[u.kind].hp || leaving.has(u.id)) continue;
-          const back = toward(u.x, u.y, home, 7);
+          // (back as far as the HQ's side, never into it: a spot it can't reach had it ordered there every pass)
+          const d = dist(u.x, u.y, home.x, home.y);
+          if (d <= HOME_SIDE + 1) continue;
+          const back = toward(u.x, u.y, home, Math.min(7, d - HOME_SIDE));
           leaving.add(u.id);
           held.set(u.id, w.tick + 6 * TICK_RATE);
           res.push({ rank: Rank.Retreat, cmd: { type: "move", faction: side, unitIds: [u.id], x: back.x, y: back.y }, planned: false });
@@ -755,6 +763,9 @@ function strength(a: Unit[], b: Unit[], vsStructures: boolean): number {
   }
   return dps * a.reduce((n, u) => n + u.hp, 0);
 }
+
+/** How far from the HQ's centre a unit stepping back home stops (it's a 3×3 footprint). */
+const HOME_SIDE = 3;
 
 function toward(x: number, y: number, to: { x: number; y: number }, d: number) {
   const len = Math.max(1, dist(x, y, to.x, to.y));

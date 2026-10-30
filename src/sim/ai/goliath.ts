@@ -520,7 +520,7 @@ export function wantGantry(
   w: World,
   faction: Faction,
   s: AiState,
-  ctx: { armyValue: number; threatened: boolean; home: P; enemyHome: P }
+  ctx: { armyValue: number; threatened: boolean; home: P; enemyHome: P; behind?: boolean }
 ): boolean {
   if (w.survival || w.ops) return false;
   if (bannedBy(w, "gantry", faction) || bannedBy(w, "goliath", faction)) return false;
@@ -544,7 +544,8 @@ export function wantGantry(
   if (!Number.isFinite(from)) return false;
   if (knownBuildings(w, faction).some((kb) => kb.kind === "gantry")) from *= GOLIATH_AI.answerGantry;
   if (w.tick < from * TICK_RATE) return false;
-  if (ctx.threatened || ctx.armyValue < GOLIATH_AI.armyFloor || !roomForGoliath(w, faction, s)) return false;
+  // (`behind`: our army smaller than the enemy's we remember, AiState.weighs — the army first)
+  if (ctx.threatened || ctx.behind || ctx.armyValue < GOLIATH_AI.armyFloor || !roomForGoliath(w, faction, s)) return false;
   // a mobile base pays only with fields left to work: not on a map already mined out
   // (the island maps' relays are what a Goliath goes for there)
   if (!w.rules?.islands && fieldsOurSide(w, faction, m, ctx.home, ctx.enemyHome) < GOLIATH_AI.gantryFields) return false;

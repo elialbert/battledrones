@@ -801,6 +801,30 @@ Covered by tests/ai-harass.test.ts. The variants `sPoke`, `sPokeAir` and
 
 Not done: pressure could check how big a guard it has seen before it goes.
 
+## Weighing (Hard and Brutal)
+
+From a lost Hard game (Balanced, Riverlands, 2026-10-30): Marshal led on army and mining until
+2:30, then threw it away. Its waves went out as soon as 75% of the assault bar had gathered, about
+half its army each time, whatever it had seen of the enemy (2:01: 1450 of 2820 into 1910; 100 came
+back). Its Airpads kept making Wasps and Hornets into 7 Flak Crawlers (about 6.8k of aircraft and
+Menders lost for 1.2k killed), and it started a Gantry at 4:24 with 1.5k of army against 5.8k.
+Harvesters were not the limit: both HQs trained one every ~10 s all game. Marshal's ran short
+from founding crews and the ones killed in its base once the army was gone.
+
+`AiState.weighs` (MARSHAL `weighs: true`, Hard and Brutal) remembers every armed enemy unit seen in
+the last 90 s (`sightings`; dropped when its last spot is seen empty), and then:
+- a wave launches only at 1.2× that army (WAVE_EDGE), after waiting up to 15 s for 80% of the army
+  to reach the staging point (WAVE_GATHER);
+- at 3+ Flak of enemy anti-air seen, the Airpads make no Wasps or Hornets unless those outnumber
+  the flak 2:1 (Raptors, Menders, Scouts and Condors still come), and extra production is Fab Plants;
+- no Gantry while our army is smaller than theirs (`wantGantry` `behind`).
+A hurt unit stepping back now stops 3 tiles from the HQ centre. It used to be ordered into the
+footprint every pass.
+
+New Hard against committed Hard, same plan both sides, all ten plans, both sides: 35–15–10 on
+Riverlands, Dune Sea and Frostbite, and 35–15–10 again on Ashlands, Dune Sea and Proving Grounds
+(old against old: 24–24–12). Every plan came out ahead but Turtle (4–7–1).
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap

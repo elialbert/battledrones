@@ -291,6 +291,17 @@ export interface AiState {
   raids?: number;
   /** Army value when the current wave launched (for retreat decisions). */
   waveValue: number;
+  /**
+   * Weighs its moves against the enemy army it remembers (ai/marshal.ts):
+   * a wave launches only when it outweighs that army (WAVE_EDGE), and the
+   * whole army gathers for it; no Wasps or Hornets into massed flak, nor
+   * more Airpads; no Gantry while behind. `sightings`: each armed enemy
+   * unit seen lately, its worth and where (SIGHTING_TTL); `waveReady`: the
+   * tick a wave was first ready to go.
+   */
+  weighs?: boolean;
+  sightings?: Map<number, { value: number; tick: number; x: number; y: number; faction: Faction }>;
+  waveReady?: number | null;
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
   fair?: boolean;
   /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
@@ -358,6 +369,16 @@ const RETREAT_ARMY_VALUE = 350;
  * and the side ahead at 4:00 won 87–90%).
  */
 const WAVE_LAUNCH = 0.75;
+/** A weighing commander's wave must be worth this many times the enemy army it remembers. */
+const WAVE_EDGE = 1.2;
+/** …and waits this long for the rest of the army to reach the staging point, once it's enough. */
+const WAVE_GATHER = 15 * TICK_RATE;
+/** How long an enemy unit seen stays in the remembered army (unless its spot is seen empty). */
+const SIGHTING_TTL = 90 * TICK_RATE;
+/** Enemy anti-air (in Flak, AiState.seenAA) past which a weighing commander's Airpads build no Wasps or Hornets… */
+const FLAK_WALL = 3;
+/** …unless its strike aircraft outnumber that flak this many times over. */
+const FLAK_OUTNUMBER = 2;
 /** No raids before this: an opener's starting units guard home while both sides settle in. */
 const OPENING_GRACE = 45 * TICK_RATE;
 /** Enemy army value at the HQ that, if it outguns the home guard, recalls everyone. */
@@ -507,6 +528,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a free-for-all: who we're out to beat this pass (a raid on our base turns us on the raider)
   const focus = multi ? pickFocus(w, faction, s, origin, raidersAt(w, threats, home0)) : null;
   const enemyHome = focus ? homeOf(w, faction, focus, origin) : mirror(w, origin.x, origin.y);
+  const enemyArmy = s.weighs ? rememberEnemyArmy(w, faction, s, seen, focus) : 0;
   const ourSide = (tx: number, ty: number) =>
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
   const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
@@ -533,7 +555,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- construction: place a ready building, or start the next one -------
   // (late in a match, rich and with an army: a Gantry and whatever it needs first, ai/goliath.ts)
   // (with no HQ, lost or Nomads, there's a Gantry only while a Goliath is dug in to build round)
-  const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened, home: origin, enemyHome });
+  const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened, home: origin, enemyHome, behind: armyValue < enemyArmy });
   /** Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the HQ (it is big, and always seen), the rest by the HQ. */
   const anchorFor = (kind: BuildingKind) =>
     kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
@@ -780,6 +802,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         (have("mender") < 1 && army.some(isWoundedVeteran))
       )
         kind = "mender";
+      // (weighing: no Wasps or Hornets fed into massed flak, unless there are plenty of them; the scrap goes to the Fab Plants)
+      else if (s.weighs && !airOnly && s.seenAA >= FLAK_WALL && FLAK_OUTNUMBER * s.seenAA > have("wasp") + have("hornet")) continue;
       else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < (rich ? 0.6 : 0.25) + s.seenHeavy * 0.08))
         kind = "hornet";
       else if (s.strategy.heavy && !airlifts && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks (not with islands to clear)
@@ -1006,8 +1030,22 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     // Air War: fragile aircraft trickling in just feed the defences, so launch one big wave
     const airWar = bannedBy(w, "fab-plant", faction) !== null && !infantryWar;
     const launchAt = airWar ? assaultAt : Math.max(450, assaultAt * WAVE_LAUNCH);
+    // (weighing: a wave that outweighs the army we remember, with the rest of ours gathered for it —
+    // or after WAVE_GATHER, what has gathered; half an army sent at a bigger one only feeds it)
+    let go = stagedValue >= launchAt;
+    if (go && s.weighs) {
+      const coming = value(army.filter((u) => !used.has(u.id) && u.kind !== "mender"));
+      if (stagedValue < WAVE_EDGE * enemyArmy) {
+        go = false;
+        s.waveReady = null;
+      } else if (stagedValue < 0.8 * coming) {
+        s.waveReady ??= w.tick;
+        go = w.tick - s.waveReady >= WAVE_GATHER;
+      }
+    }
+    if (go) s.waveReady = null;
 
-    if (stagedValue >= launchAt) {
+    if (go) {
       const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
       // robot infantry still marching up (1.6–1.8 tiles/s) goes with the wave, not left for the next one
       const marching = army.filter(
@@ -1242,6 +1280,29 @@ function observeEnemy(s: AiState, seen: Unit[], gantryBuilds = 0): void {
 }
 
 /**
+ * The enemy army a weighing commander remembers (AiState.sightings): every
+ * armed unit (or Mender) seen in the last SIGHTING_TTL, at its price, but
+ * not one whose last spot we can see now with it gone from there (it died,
+ * or moved off: we know it isn't there). In a free-for-all, the focus
+ * rival's only. Goliaths count for what they can still fire.
+ */
+function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[], focus: Faction | null): number {
+  const memo = (s.sightings ??= new Map());
+  const now = new Set<number>();
+  for (const u of seen) {
+    if (u.kind === "harvester" || (UNITS[u.kind].dps <= 0 && !UNITS[u.kind].heal)) continue;
+    now.add(u.id);
+    memo.set(u.id, { value: u.goliath ? threatValue(u) : UNITS[u.kind].cost, tick: w.tick, x: u.x, y: u.y, faction: u.faction });
+  }
+  let v = 0;
+  for (const [id, e] of memo) {
+    if (w.tick - e.tick > SIGHTING_TTL || (!now.has(id) && isVisible(w, faction, Math.floor(e.x), Math.floor(e.y)))) memo.delete(id);
+    else if (!focus || e.faction === focus) v += e.value;
+  }
+  return v;
+}
+
+/**
  * First entry of the build order (plus reactive SAMs) not yet satisfied.
  * `gantry` (ai/goliath.ts wantGantry): a Gantry after the build order, with
  * whatever it still needs of its four prerequisites first. Outposts (built
@@ -1307,7 +1368,9 @@ function nextBuilding(
   // would otherwise buy factory after factory in front of it)
   const lab = (have.get("tech-lab") ?? 0) > 0 ? -1 : order.indexOf("tech-lab");
   for (let i = 0; i < s.extraProduction; i++) {
-    const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
+    // (weighing: no more Airpads into massed flak)
+    const flak = !!s.weighs && s.seenAA >= FLAK_WALL;
+    const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && !flak && pads + (i % 2) <= fabs);
     const k = infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant";
     if (s.strategy.expandEarly) order.splice(Math.min(order.length, Math.max(2 + i, lab + 1 + i)), 0, k);
     else order.push(k);
