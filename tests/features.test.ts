@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
-import { canPlaceBuilding } from "../src/sim/economy";
+import { buildingBlocker, canPlaceBuilding } from "../src/sim/economy";
 import { MAPS, createMapWorld } from "../src/sim/maps";
 import { findPath } from "../src/sim/movement";
 import { step } from "../src/sim/sim";
@@ -75,7 +75,7 @@ describe("terrain", () => {
 });
 
 describe("tech tree and buildings", () => {
-  it("the Tech Lab needs a Fab Plant or Airpad, and gates advanced units", () => {
+  it("the Tech Lab needs a Fab Plant, an Airpad and an Assembly Bay, and gates advanced units", () => {
     const w = createWorld(24, 24);
     const hq = spawnBuilding(w, "hq", "blue", 2, 2);
     void hq;
@@ -85,6 +85,9 @@ describe("tech tree and buildings", () => {
     const fab = spawnBuilding(w, "fab-plant", "blue", 8, 2);
     step(w, [{ type: "produce", faction: "blue", buildingId: fab.id, unit: "mastodon" }]);
     expect(fab.queue).toHaveLength(0);
+    expect(buildingBlocker(w, "blue", "tech-lab")).toBe("Needs Airpad and Assembly Bay");
+    spawnBuilding(w, "airpad", "blue", 2, 8);
+    spawnBuilding(w, "assembly-bay", "blue", 8, 8);
     step(w, [{ type: "startBuilding", faction: "blue", building: "tech-lab" }]);
     expect(w.factions.blue.pending?.kind).toBe("tech-lab");
     spawnBuilding(w, "tech-lab", "blue", 12, 2);

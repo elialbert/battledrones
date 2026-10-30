@@ -9,6 +9,7 @@ import { canPlaceBuilding, nearestReachableResource, unitBlocker } from "../econ
 import { hypot } from "../fmath";
 import { isVisible, knownBuildings } from "../fog";
 import type { BuildingKind, Command, Faction, Unit, UnitKind, World } from "../types";
+import { bannedBy } from "../rules";
 import { buildingCenter, dist, hqOf } from "../world";
 
 export interface PlayerProfile {
@@ -25,7 +26,7 @@ export interface PlayerProfile {
   attackUnits: number;
 }
 
-const FULL_BUILD: BuildingKind[] = ["fab-plant", "airpad", "turret", "tech-lab", "turret"];
+const FULL_BUILD: BuildingKind[] = ["fab-plant", "airpad", "turret", "assembly-bay", "tech-lab", "turret"];
 
 export type ProfileName = "novice" | "beginner" | "decent";
 
@@ -78,8 +79,9 @@ export function scriptedPlayer(p: PlayerProfile, side: Faction = "blue"): (w: Wo
       while (bi < BUILD.length && myB.some((b) => b.kind === BUILD[bi]) && BUILD.indexOf(BUILD[bi]!) === bi) bi++; // opener gave it
       const next = BUILD[bi];
       if (next) {
-        const req = BUILDINGS[next].requires;
-        if (scrap >= BUILDINGS[next].cost && (!req || req.some((r) => myB.some((b) => b.kind === r)))) {
+        const { requires: any, requiresAll: all } = BUILDINGS[next];
+        const has = (k: BuildingKind) => myB.some((b) => b.kind === k);
+        if (scrap >= BUILDINGS[next].cost && (!any || any.some(has)) && (all ?? []).every((k) => has(k) || bannedBy(w, k, faction))) {
           cmds.push({ type: "startBuilding", faction, building: next });
           scrap -= BUILDINGS[next].cost;
           bi++;

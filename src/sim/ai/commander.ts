@@ -84,6 +84,11 @@ export interface Strategy {
   harvesters: number;
   /** Army value (scrap cost) that triggers the all-in assault. */
   assaultValue: number;
+  /**
+   * The all-in also goes once this much of the army's value is tier 2 (units
+   * the Tech Lab unlocks), whatever the rest: Turtle's mid-game push.
+   */
+  techAssault?: number;
   /** Idle raiders required before a harass raid launches. */
   harassGroup: number;
   /** Air force first: the Fab Plant only makes anti-air and a small home guard. */
@@ -838,7 +843,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     s.seenAA <= raiders.length / 2 && w.tick >= Math.max(s.strategy.raidFrom !== undefined ? s.strategy.raidFrom * TICK_RATE : OPENING_GRACE, (s.strategy.holdUntil ?? 0) * TICK_RATE)
   )
     s.mode = "harass";
-  if (armyValue >= assaultAt && s.mode !== "assault" && w.tick >= (s.strategy.holdUntil ?? 0) * TICK_RATE) {
+  const techAt = (s.strategy.techAssault ?? Infinity) * diff.assaultMult * lateGame;
+  const techReady = techAt < Infinity && value(army.filter((u) => UNITS[u.kind].requires === "tech-lab")) >= techAt;
+  if ((armyValue >= assaultAt || techReady) && s.mode !== "assault" && w.tick >= (s.strategy.holdUntil ?? 0) * TICK_RATE) {
     s.mode = "assault";
     s.waveValue = armyValue;
   }
@@ -1264,11 +1271,18 @@ function nextBuilding(
     });
     if (order.filter((k) => k === "airpad").length < 2) order.splice(Math.min(order.length, 5), 0, "airpad");
   }
-  // the Gantry (and the prerequisites it lacks, all four needed) once the order is through
-  if (gantry) {
-    for (const k of BUILDINGS.gantry.requiresAll ?? []) if (!order.includes(k)) order.push(k);
-    order.push("gantry");
-  }
+  // the Gantry once the order is through (the prerequisites it lacks go in just ahead of it, below)
+  if (gantry) order.push("gantry");
+  // a building that needs one of each (BuildingStats.requiresAll: the Tech Lab, the Gantry) comes after
+  // them all: one the order has later moves up to just before it, one it lacks goes in there (not
+  // for one that's up already)
+  for (let i = 0; i < order.length; i++)
+    for (const k of BUILDINGS[order[i]!].requiresAll ?? []) {
+      if (have.has(order[i]!) || order.slice(0, i).includes(k) || bannedBy(w, k, faction)) continue;
+      const later = order.indexOf(k, i + 1);
+      if (later > i) order.splice(later, 1);
+      order.splice(i++, 0, k);
+    }
   // depots follow the mining (Strategy.depotReach): one more, early, while there's a field for it
   if (s.strategy.depotReach !== undefined) {
     const depots = Math.min(s.strategy.spend?.maxDepots ?? SPEND.maxDepots, Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
@@ -1277,10 +1291,13 @@ function nextBuilding(
   const fabs = order.filter((k) => k === "fab-plant").length;
   const pads = order.filter((k) => k === "airpad").length;
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
+  // (early, but not ahead of a Tech Lab still to come: scrap banked while its prerequisites go up
+  // would otherwise buy factory after factory in front of it)
+  const lab = (have.get("tech-lab") ?? 0) > 0 ? -1 : order.indexOf("tech-lab");
   for (let i = 0; i < s.extraProduction; i++) {
     const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && pads + (i % 2) <= fabs);
     const k = infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant";
-    if (s.strategy.expandEarly) order.splice(Math.min(order.length, 2 + i), 0, k);
+    if (s.strategy.expandEarly) order.splice(Math.min(order.length, Math.max(2 + i, lab + 1 + i)), 0, k);
     else order.push(k);
   }
   const wanted = new Map<BuildingKind, number>();

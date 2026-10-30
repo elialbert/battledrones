@@ -1,4 +1,12 @@
 export const VARIANTS: Record<string, any> = {
+  // turtle: the all-in goes once this much tier-2 value is out (Strategy.techAssault, TECH-TIER.md)
+  // (alone they change nothing on Hard: its army passes 3000 × 0.9 at ~3:00, mostly Stingers; the tb ones
+  // move that bar out of the way so the tier-2 value times the push)
+  ta12: { techAssault: 1200 },
+  tb12: { techAssault: 1200, assaultValue: 6000 },
+  tb18: { techAssault: 1800, assaultValue: 6000 },
+  tb24: { techAssault: 2400, assaultValue: 6000 },
+  tb18m: { techAssault: 1800, assaultValue: 6000, mortarShare: 0.15 },
   // stock Marshal rush, its auto depot removed
   nodepot: { spend: { maxDepots: 0 } },
   // two Fab Plants first, 4 harvesters, no depot, small early waves
@@ -25,6 +33,14 @@ export const VARIANTS: Record<string, any> = {
   // greed: two expansions in the order (each goes up alongside it, once its crew is trained)
   g1: { buildOrder: ["fab-plant", "depot", "depot", "depot", "turret", "tech-lab", "fab-plant", "airpad", "sam-site"] },
   g2: { buildOrder: ["fab-plant", "depot", "depot", "depot", "turret", "tech-lab", "fab-plant", "airpad", "sam-site"], harvesters: 8 },
+  // greed: three expansions and no early turret (thin when the rush lands)
+  // rush: the all-in at a smaller army (earlier, before Greed's Airpad and Bay are producing)
+  ra10: { assaultValue: 1000 },
+  ra8: { assaultValue: 800 },
+  ra6: { assaultValue: 600 },
+  // greed with the Airpad and Assembly Bay before its Lab (what the all-three rule makes of its order)
+  gab: { buildOrder: ["fab-plant", "depot", "depot", "turret", "airpad", "assembly-bay", "tech-lab", "fab-plant", "sam-site"] },
+  g1n: { buildOrder: ["fab-plant", "depot", "depot", "depot", "tech-lab", "fab-plant", "turret", "sam-site"] },
   // greed: economy before tech (the Tech Lab late)
   g3: { buildOrder: ["fab-plant", "depot", "depot", "fab-plant", "depot", "airpad", "turret", "tech-lab", "sam-site"] },
   // rush: no trickle of raids, one massed push

@@ -9,7 +9,11 @@ The game connects to it when built with `RELAY_URL` set (`vite.config.ts`
 `__RELAY_URL__`, `src/net/relay-socket.ts`); `npm run deploy:cf` does that.
 Without it, a build uses the upstream Fly relay.
 
-From the repo root:
+A push to `main` on the fork deploys it through Cloudflare Workers Builds
+(trigger "battledrones-relay main"), but only when something under
+`deploy/cloudflare-relay/` changed: a deploy restarts the rooms, so live
+matches drop and reconnect. The site has its own trigger and deploys on every
+push. By hand, from the repo root:
 
 ```bash
 npm run deploy:relay   # deploy this Worker

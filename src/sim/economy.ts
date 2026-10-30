@@ -55,7 +55,8 @@ export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind):
   if (stats.unique && (hasBuilding(w, faction, kind) || w.factions[faction].pending?.kind === kind)) return "One per side";
   if (stats.requires && !stats.requires.some((k) => hasBuilding(w, faction, k)))
     return `Needs ${stats.requires.map((k) => BUILDINGS[k].name).join(" or ")}`;
-  const missing = (stats.requiresAll ?? []).filter((k) => !hasBuilding(w, faction, k));
+  // (one this side may not build doesn't count: Air War's Tech Lab needs only the Airpad)
+  const missing = (stats.requiresAll ?? []).filter((k) => !hasBuilding(w, faction, k) && !bannedBy(w, k, faction));
   if (missing.length > 0) return `Needs ${andList(missing.map((k) => BUILDINGS[k].name))}`;
   return null;
 }

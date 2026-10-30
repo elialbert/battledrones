@@ -167,7 +167,7 @@ describe("orders", () => {
     const r = (o: unknown, side: Faction = "blue") => parseOrders(structuredClone(w), side, [o], "play").results[0]!;
     expect(r({ produce: "mortar" })).toMatch(/refused: Needs Tech Lab/);
     expect(r({ produce: "wasp" })).toMatch(/refused: Needs Airpad/);
-    expect(r({ build: "tech-lab" })).toMatch(/refused: Not enough scrap \(have 500, need 750\)|ok/);
+    expect(r({ build: "tech-lab" })).toMatch(/refused: Needs Airpad and Assembly Bay/);
     expect(r({ build: "turret", at: [40, 10] })).toMatch(/refused: can't put a turret at 40,10: Too far from base/);
     expect(r({ calldown: "barrage", at: [10, 10] })).toMatch(/refused: Barrage needs 60 charge/);
     expect(r({ attack: "army", target: 999 })).toMatch(/refused: #999 is not an enemy you can see or remember/);

@@ -56,6 +56,8 @@ const harv = (f: string) => [...a.w.units.values()].filter((u: any) => u.faction
 const snap: string[] = [];
 const firsts: Record<string, string> = {};
 let firstHit = "";
+let hitSnap = "", at2 = "";
+const mined: [number, number][] = []; // [tick, foe scrap harvested so far], the last 30 s
 // when each side's depots go up (a new one standing, founded or built)
 const depotAt: Record<string, string[]> = { blue: [], red: [] };
 const depotSeen = new Set<number>();
@@ -104,6 +106,24 @@ a.onRound = () => {
   for (const [id, e] of Object.entries(exps)) if (!e.x && e.lastHp !== undefined && !w.buildings.has(+id)) e.x = true;
   for (const b of w.buildings.values()) if (b.faction === foe && b.kind === "depot" && !firsts["foeDepot"]) firsts["foeDepot"] = clock(w.tick);
   if (!firstHit && w.factions[foe].stats.unitsLost > 1) firstHit = clock(w.tick);
+  // HIT=1: the first time 6+ of our combat units stand within 12 tiles of the foe's HQ, what each side has
+  // (TECH-TIER.md "defence that barely holds"): turrets, units, the building going up and how far, scrap, 30 s income
+  mined.push([w.tick, w.factions[foe].stats.scrapHarvested]);
+  while (mined[0]![0] < w.tick - 30 * TICK_RATE) mined.shift();
+  if (process.env.HIT && w.tick === 120 * TICK_RATE) {
+    const p = w.factions[foe].pending;
+    at2 = `foe@2:00 turrets${count(foe, "turret")} lab${count(foe, "tech-lab")} pending ${p ? p.kind + Math.round(100 * (1 - p.remaining / (BAL.BUILDINGS[p.kind as "turret"].buildTime * TICK_RATE))) + "%" : "-"} army${army(foe)} | ours army${army(side)}`;
+  }
+  if (process.env.HIT && !hitSnap) {
+    const hq: any = [...w.buildings.values()].find((b: any) => b.faction === foe && b.kind === "hq");
+    const near = hq && [...w.units.values()].filter((u: any) => u.faction === side && u.kind !== "harvester" && UNITS[u.kind as "stinger"].dps > 0 && Math.hypot(u.x - hq.tx - 1.5, u.y - hq.ty - 1.5) < 12);
+    if (near && near.length >= 6) {
+      const kinds = (f: string) => { const o: Record<string, number> = {}; for (const u of w.units.values() as any) if (u.faction === f && u.kind !== "harvester" && UNITS[u.kind as "stinger"].dps > 0) o[u.kind] = (o[u.kind] ?? 0) + 1; return JSON.stringify(o); };
+      const p = w.factions[foe].pending;
+      const pend = p ? `${p.kind}${Math.round(100 * (1 - p.remaining / (BAL.BUILDINGS[p.kind as "turret"].buildTime * TICK_RATE)))}%` : "-";
+      hitSnap = `HIT ${clock(w.tick)} near${near.length} ours${kinds(side)} | foe turrets${count(foe, "turret")} lab${count(foe, "tech-lab")} pending ${pend} scrap${Math.round(w.factions[foe].scrap)} inc/s${((mined.at(-1)![1] - mined[0]![1]) / Math.max(1, (mined.at(-1)![0] - mined[0]![0]) / TICK_RATE)).toFixed(1)} units${kinds(foe)}`;
+    }
+  }
   for (const m of [3, 4, 5, 6, 8]) if (w.tick === m * 60 * TICK_RATE) {
     const s = (f: string) => `h${harv(f)} d${count(f, "depot")} mined${Math.round(w.factions[f].stats.scrapHarvested)} army${army(f)} lost${w.factions[f].stats.unitsLost}`;
     snap.push(`${m}m us[${s(side)}] foe[${s(foe)}]`);
@@ -121,5 +141,6 @@ if (process.env.DEPOTS) {
 const e = a.record.end;
 const res = e.winner === side ? "W" : e.winner === foe ? "L" : "D";
 if (!quiet) { console.log(firsts, "foeLost2+", firstHit); for (const s of snap) console.log(s); }
+if (process.env.HIT) console.log(hitSnap || "HIT none", "|", at2);
 console.log("END", res, map, seed, side, ours, "vs", theirs, clock(e.tick), "depots", depotAt[side]!.join(","), "|", depotAt[foe]!.join(","), "exp", Object.values(exps).map((e: any) => e.at + (e.k ? "k" : "") + (e.h ? "h" : "") + (e.x ? "x" : "")).join(","),
   "t2", [side, foe].map((f) => `lab${lab[f] ?? "-"} first${t2[f] ?? "-"} share${t2share[f]!.join("/") || "-"}`).join(" | "));

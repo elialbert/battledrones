@@ -362,7 +362,7 @@ re-run with it in (see *Infantry pass* under Balance & pacing).
 | **Fab Plant** | Builds ground vehicles. 2×2. | — |
 | **Airpad** | Builds aircraft (and the Condor dropship). 2×2. | — |
 | **Assembly Bay** | Builds robot infantry: Trooper Squads, Rocket Squads, Sniper Teams. 2×2. | — |
-| **Tech Lab** | Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper Team. 2×2. | Fab Plant, Airpad or Assembly Bay |
+| **Tech Lab** | Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper Team. 2×2. | Fab Plant, Airpad and Assembly Bay (one of each the match allows) |
 | **Depot** | Forward scrap drop-off for distant fields. 2×2. | — |
 | **Turret** | Autocannon, hits ground and air. 1×1. | — |
 | **SAM Site** | Long-range anti-air missiles. 1×1. | — |

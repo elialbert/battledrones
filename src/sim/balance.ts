@@ -230,7 +230,8 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
   },
   "tech-lab": {
     name: "Tech Lab", role: "Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper.",
-    cost: 750, hp: 800, sight: 4, size: 2, buildTime: 35, requires: ["fab-plant", "airpad", "assembly-bay"],
+    // (all three, not any one: TECH-TIER.md, a tier-1 phase long enough to defend or punish)
+    cost: 750, hp: 800, sight: 4, size: 2, buildTime: 35, requiresAll: ["fab-plant", "airpad", "assembly-bay"],
     targets: "none", dps: 0, range: 0
   },
   depot: {

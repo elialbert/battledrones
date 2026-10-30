@@ -113,9 +113,10 @@ export const MARSHAL_PLANS: Record<
   /**
    * Holds the way into its base (ai/choke.ts) with turrets and the whole
    * army, a turret more for every two tanks it sees, techs up behind them
-   * (Mortars for a Stinger flood, then heavy armour), no raids, and one army
-   * big enough to end it. (RUSH-RPS.md: about even with Rush, loses to
-   * Greed; on open maps it has no gate and loses more.)
+   * (Mortars for a Stinger flood, then heavy armour), no raids, and a
+   * mid-game push once 1800 of the army is tier 2 (~3:30–4:00; TECH-TIER.md:
+   * the 3000 bar it had was passed at ~3:00 by Stingers alone, and Rush won
+   * 69%; with the push 52%). Greed still beats it.
    */
   turtle: {
     base: "ironclad",
@@ -123,7 +124,9 @@ export const MARSHAL_PLANS: Record<
     tweak: {
       buildOrder: ["fab-plant", "turret", "turret", "tech-lab", "depot", "fab-plant", "turret", "sam-site", "radar"],
       harvesters: 6,
-      assaultValue: 3000,
+      // (6000: out of the way, the tier-2 push times it)
+      assaultValue: 6000,
+      techAssault: 1800,
       harassGroup: Infinity,
       holdChoke: true,
       turretsVsGround: 2,

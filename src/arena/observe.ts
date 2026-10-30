@@ -525,7 +525,7 @@ export function buildingTable(): string {
   const rows = (Object.keys(BUILDINGS) as BuildingKind[]).map((k) => {
     const b = BUILDINGS[k];
     const weapon = b.dps ? `${b.dps} dps vs ${b.targets}, range ${b.range}` : "-";
-    return [k, b.cost || "-", b.hp, `${b.size}x${b.size}`, b.buildTime || "-", b.requires?.join(" or ") ?? "-", weapon, `${yes(b.dropOff) ? "harvesters unload here; " : ""}${b.role}`].join(" | ");
+    return [k, b.cost || "-", b.hp, `${b.size}x${b.size}`, b.buildTime || "-", b.requires?.join(" or ") ?? b.requiresAll?.join(" and ") ?? "-", weapon, `${yes(b.dropOff) ? "harvesters unload here; " : ""}${b.role}`].join(" | ");
   });
   return [head, ...rows].join("\n");
 }

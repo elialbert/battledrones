@@ -15,8 +15,9 @@ these changes have to keep working, and how the harness works.
 
 ## Start here
 
-**Status (session 2, 2026-10-29; ready to commit 2026-10-30):** Part 1 done, Part 2's first
-pass applied to `balance.ts`. All tests pass.
+**Status (session 3, 2026-10-30, committed):** the Tech Lab needs all three
+factories and Turtle times a tier-2 push (below, "Applied in session 3").
+All tests pass. Earlier: session 2 (committed 8702c16).
 
 *Part 1, built:* `tools/rps/sweep.mjs` (bundle once, one queue, `P=12`,
 result cache, longest games first, W–L–D + 95% table, tier-2 table);
@@ -83,6 +84,118 @@ timer, a defender that reacts) swept over Turret stats and Lab cost/time,
 reading hold rate, the margin it holds by, and the Lab's progress afterwards;
 then confirm on the triangle with `sweep.mjs`. Deferred until then: a
 Hornet dps 54–60 / splash 1.3 sweep, a later Lab (~1000 / 45 s), kiting.
+
+*Session 3 (2026-10-30), first measurements* (nothing in `src/` changed):
+- `HIT=1` on `rush.ts` prints, the first time 6+ of our combat units are within
+  12 tiles of the foe's HQ, what both sides have (Turrets, Lab, the building
+  going up and how far, scrap, income/s), plus the foe's base at 2:00.
+- **Real Rush waves** (Hard, 5 maps × 2 seeds): 12–18 Stingers at 1:35–2:10.
+  **Greed** has 1 Turret, ~5 Stingers, and its **Lab already standing**
+  (1:15–1:30). **Turtle** has 3–5 Turrets at 2:00, and Rush mostly **never
+  commits** (no hit in 7 of 12). Income at the hit: 70–95 scrap/s, so the
+  Lab's price is ~9 s of mining; it gates little.
+- **`tools/rps/hold.ts`**: the scripted defence (each map's real blue base,
+  Turrets in an arc at the entrance, Lab part-built, red Stingers attack-moving
+  in, blue reinforcing from its Fab Plants on steady income). 15 runs a policy
+  in ~3 s. With stock Turrets:
+
+  | red Stingers | 4T + 5S, Lab kept | 4T + 5S, Lab cancelled for a 5th Turret | 0T + 11S (same scrap) |
+  |---|---|---|---|
+  | 15 | 15/15 held | 15/15 | 11/15 |
+  | **18** | **11/15** | **13/15** | **1/15** |
+  | 21 | 1/15 | 7/15 | 0/15 |
+
+  At 18 the Turret defence just holds and the same scrap in Stingers breaks:
+  the wanted property, inside the real wave range, with no Turret change.
+  Turret **HP** matters far more than its dps (dps 26 → 16 barely moves it;
+  Turrets that can't shoot still hold 5/15 by soaking fire: kinetic does 0.65×
+  to structures). Weaker Turrets flip the result rather than thin the margin.
+- **The one-build-slot rule** means a defender can't add a Turret while the
+  Lab goes up without cancelling it (refunded, progress lost), and Marshal
+  never cancels. Cancelling holds better (13 vs 11 of 15) but the Lab stands
+  17 s later: a real choice, worth keeping.
+- **Lab timing in real games barely moves:** Greed starts its Lab ~0:40–1:00
+  whatever it costs. Lab standing (Greed): 750/35 → 1:15–1:30; 1200/35 →
+  1:25–1:45; 750/60 → 1:40–1:55; 1100/50 → 1:40–1:55. Only on the fastest
+  hits (1:35, dune-sea, proving-grounds) is the Lab still going up (70–96%).
+  For ~25% at a ~1:50 hit the Lab would have to stand ~2:20–2:45.
+- **Open for the user:** (1) no Marshal plan plays the "4 Turrets + Lab" hybrid
+  (Greed: tech, no static D; Turtle: Turrets, and Rush declines to attack it),
+  so the moment needs a plan or tweak that does, and Rush willing to hit it;
+  (2) how to push the Lab start later: price barely works, so the levers
+  are prerequisites (e.g. a Depot or a second Fab Plant) or build time ~60 s+.
+  Driver for the real-game screen: `HIT=1 BAL=… rush.ts <map> <seed> hard blue rush greed q`.
+- **Lab needs all three factories** (it needed any one: `requires` is an
+  any-of list; `requiresAll` is all-of, as the Gantry's). Uncommitted code,
+  no-ops under today's data: a banned prerequisite doesn't count (Air War,
+  Infantry War keep tier 2); `nextBuilding` moves a missing prerequisite up
+  ahead of what needs it (the Gantry's old special case, generalised);
+  `player.ts` pilots check `requiresAll`. Also a **Turtle fix** that is not a
+  no-op: `expandEarly` factories no longer go in ahead of a Lab still to come
+  (without it, banked scrap during the prerequisites bought Fab Plant after
+  Fab Plant ahead of the Lab: Turtle's Lab at 3:35–5:45). 48 games/matchup:
+
+  | | R–G | R–T | G–T | Lab Greed / Turtle |
+  |---|---|---|---|---|
+  | today (committed) | 56% | 57% | 66% | 1:30 / 1:55 |
+  | today + Turtle fix | 56% | 70% | 59% | 1:30 / 1:40 |
+  | all-three, no fix | 44% | 65% | 58% | 1:55 / 4:15 |
+  | all-three + fix | 44% | 69% | 64% | 1:55 / 2:40 |
+  | all-three + fix + Lab 45 s | 43% | 75% | 46% | 2:05 / 2:50 |
+
+  Turtle's early extra factories are part of its strength (the fix alone
+  costs it ~13 points vs Rush). Rush beats Turtle *without* hitting it early
+  (no hit in most games): it out-builds it later.
+
+*Applied in session 3:* Tech Lab `requiresAll` (all three) with the Turtle
+fix. Turtle (marshal.ts) times a **mid-game tier-2 push**: new
+`Strategy.techAssault` (the all-in also goes once that much of the army's
+value is tier 2), Turtle 1800, its `assaultValue` 3000 → 6000 so the Stinger
+mass no longer sets it off (on Hard 3000 × 0.9 was passed at ~3:00 by
+Stingers alone, so a tier-2 bar alone changed nothing). First wave: 1:56–3:36
+before, 3:27–3:59 after (one ashlands game still goes on army value at 2:42).
+Variants tried (48 games each; `ta*`/`tb*` in `variants.ts`): push at
+1200 / 1800 / 2400 → R–T 49 / 52 / 48%, G–T 61 / 60 / 65%; 1800 with
+mortarShare 0.15 → R–T 54%, G–T 42% (Turtle over Greed: dropped).
+Final triangle (48 games/matchup), vs session 2's committed numbers:
+
+| | R–G | R–T | G–T | Lab Rush / Greed / Turtle |
+|---|---|---|---|---|
+| session 2 (8702c16) | 56% | 57% | 66% | 2:15 / 1:30 / 1:55 |
+| **session 3** | **44%** | **52%** | **60%** | **2:20 / 1:55 / 2:40** |
+
+Also: tests for the new rule (features: the Lab needs all three; arena's
+refusal now "Needs Airpad and Assembly Bay"; versus-session's five-minute
+match is Balanced vs Ironclad (Balanced vs Boom now ends at 4:47); Nomads ashlands on
+seeds 5/6: 1 of 10 seed pairs stalls past 25:00, 3/4 among them, 0 of 10
+before); `player.ts` pilots build an Assembly Bay before the Lab;
+`arena/observe.ts`'s building table shows all-of prerequisites (it showed
+"-" for the Gantry too). DESIGN.md's tech table updated.
+
+*Why Rush now loses to Greed:* not the rule but what it does to Greed's order.
+Under the old any-one rule, Greed given the Airpad and Assembly Bay before its
+Lab by hand (`greed+gab`) scores exactly the same, 44% (20–26–2). Its
+expansions are untouched (2nd depot 1:45 → 1:50, 3rd 2:50 → 2:40, 3.4 → 3.6
+by 5:00). A greedier Greed doesn't help Rush: `g1` (three depots first) plays
+the same games as stock (the depot count comes from its mining, not the
+order); `g1n` (no early Turret) R–G 43%, G–T 44%.
+Rush's all-in earlier, smaller (48 games each; Rush's wave already launches
+~1:05 at ~1450 and doesn't break off; `HIT=1` misses waves that fight at the
+expansions, 12+ tiles from the HQ):
+
+| Rush assaultValue | R–G | R–T |
+|---|---|---|
+| 1400 (stock) | 44% | 52% |
+| 1000 | 53% | 65% |
+| 800 | 55% | 59% |
+| 600 | 50% | 53% |
+
+None separates Greed from Turtle: an earlier wave helps Rush against both.
+
+**Next:** Rush now loses to Greed (44%): if Rush should beat Greed, look
+there first (Greed gets Airpad + Bay production on the way to its Lab).
+Hand-play the Turtle push; check `hold.ts`'s knife edge still reads the
+same (it fixes the Lab at 25%, so the rule change doesn't touch it).
 
 **Next:** hand-play (does the glass Hornet feel right, or oppressive? only
 Raptors, Flak and SAMs answer it); the Hornet Strike plan still loses a lot
