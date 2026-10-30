@@ -591,8 +591,15 @@ income and two more harvesters), and so do the tables keyed by difficulty
 | Easy | 4 s / 3 s | 10 / 3 | Balanced, Boom, Turtle | 5 min |
 | Casual | 3 s / 2 s | 18 / 8 | Balanced, Boom, Turtle, Air Swarm | 3 min |
 | Normal | 2 s / 1 s | 30 / 20 | all but Skyforce, fast | none |
-| Hard | 1.5 s / 0.5 s | 80 / 60 | Balanced, Air Swarm, Ironclad, Greed, fast | none |
-| Brutal | 2 s / 0.5 s | 115 + 5 / 120 | the same, 12 harvesters, early factories, waves at 2500 (since 2026-10-29 only for plans that don't time their own: Rush, Turtle, Greed and Juggernaut keep theirs) | none |
+| Hard | 1.5 s / 0.5 s | 100 / 60 | Balanced, Air Swarm, Ironclad, Greed, fast | none |
+| Brutal | 2 s / 0.5 s | 175 + 5 / 180 | the same, 12 harvesters, early factories, waves at 2500 (since 2026-10-29 only for plans that don't time their own: Rush, Turtle, Greed and Juggernaut keep theirs) | none |
+
+2026-10-30, more actions: Brutal sat pinned at its 115 cap (busiest minute 115). Against that Brutal
+(60 games, all ten plans, Riverlands, Dune Sea, Archipelago, both sides): 175 + 5 with 180 for
+fight micro won 40–5–15, 235 won 40–7–13, uncapped 40–3–17, and 235 against 175 went 25–17–18.
+So Brutal is now 175 / 180, and the 120-a-minute ceiling is gone. Hard went from 80 to 100 a minute
+(untested). Most draws were Archipelago stalemates at 15:00.
+
 
 60 games each, all five maps: Casual beat Easy 98%, Normal beat Casual 92%,
 Hard beat Normal 99%, Brutal beat Hard 87%. Against stock Hard (1.3×

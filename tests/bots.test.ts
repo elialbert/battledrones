@@ -179,7 +179,7 @@ describe("Marshal, the bot built for a budget", () => {
       }
       expect([...drawn].sort()).toEqual([...MARSHAL_POOL[d]].sort()); // (every plan comes up)
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm + (MARSHAL[d].burst ?? APM_BURST));
-      expect(MARSHAL[d].microApm).toBeLessThanOrEqual(120); // (fight orders at most 2 a second)
+      expect(MARSHAL[d].microApm).toBeLessThanOrEqual(180); // (fight orders at most 3 a second)
     }
     for (const d of ["easy", "casual", "normal", "hard", "brutal"] as const)
       expect([...MARSHAL_POOL[d]].sort()).toEqual(Object.keys(MARSHAL_PLANS).sort()); // (every level, every plan)
@@ -208,8 +208,8 @@ describe("Marshal, the bot built for a budget", () => {
     expect(planStrategy("greed").harvesters).toBeGreaterThan(STRATEGIES.boom.harvesters);
   });
 
-  it("never goes over 120 actions in any minute on Brutal, its burst included", () => {
-    expect(MARSHAL.brutal.apm + (MARSHAL.brutal.burst ?? APM_BURST)).toBeLessThanOrEqual(120);
+  it("never goes over 180 actions in any minute on Brutal, its burst included", () => {
+    expect(MARSHAL.brutal.apm + (MARSHAL.brutal.burst ?? APM_BURST)).toBeLessThanOrEqual(180);
     const a = new Arena({ map: "riverlands", seed: 4, seats: { blue: parseSeat("bot:marshal:brutal"), red: parseSeat("bot:balanced:hard") }, maxTicks: 6 * 600 });
     while (!a.over) a.advance();
     const ts = a.record.turns.filter(([, s]) => s === "blue").flatMap(([t, , c]) => c.map(() => t));
@@ -219,7 +219,7 @@ describe("Marshal, the bot built for a budget", () => {
       most = Math.max(most, i - j + 1);
     }
     expect(most).toBeGreaterThan(60); // (it uses its budget)
-    expect(most).toBeLessThanOrEqual(120);
+    expect(most).toBeLessThanOrEqual(180);
   });
 
   it("plays fast-expanding plans on Normal and Hard: a depot after the first factory", () => {

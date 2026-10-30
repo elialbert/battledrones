@@ -250,9 +250,11 @@ export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly
  * Each difficulty: how fast it thinks and acts, fight micro's share of its
  * actions, whether it plays the fast-expanding plans, and its seconds of
  * peace. `burst` is how many actions its cap banks (ai/apm.ts; APM_BURST if
- * left out): Brutal's `apm` plus `burst` is 120, so no minute of a game sees
- * more than 120 actions. Fight micro never gives more than one order at a
- * time (MICRO_BURST), so even Brutal's is at most 2 a second, a human's pace.
+ * left out): Brutal's `apm` plus `burst` is 180, so no minute of a game sees
+ * more than 180 actions (it was 120: at 175, with 180 for fight micro, it beat
+ * that Brutal 40–5 of 60, 15 drawn; more bought little, APM-BOTS.md "Five
+ * levels"). Fight micro never gives more than one order at a time
+ * (MICRO_BURST), so even Brutal's is at most 3 a second, a quick human's pace.
  * Brutal also plays every plan with a bigger economy (`tweak`), waves at a
  * bigger army unless the plan times its own (`assaultValue`), and
  * fights its own way (`fight`). Each level beats the one below it 87–99% of
@@ -271,13 +273,13 @@ export const MARSHAL: Record<
   // (between Easy and Normal: three minutes' peace, the slow plans and Air Swarm)
   casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180, fight: { kite: false } },
   normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
-  // (Hard before Brutal took its place, at 80 actions a minute: at 120 it beat Normal 99%, and lost only 39% to Brutal)
+  // (Hard before Brutal took its place, at 80 actions a minute, 100 since 2026-10-30: at 120 it beat Normal 99%, and lost only 39% to Brutal)
   // (`weighs`, Hard and Brutal: waves weighed against the enemy army it remembers, no aircraft into
   // massed flak, no Gantry while behind — AiState.weighs)
-  hard: { think: 1.5, react: 0.5, apm: 80, microApm: 60, fast: true, holdUntil: 0, weighs: true },
+  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true },
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
-    think: 2, react: 0.5, apm: 115, burst: 5, microApm: 120, fast: true, holdUntil: 0, weighs: true,
+    think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true,
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
     tweak: { harvesters: 12, expandEarly: true },
