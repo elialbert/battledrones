@@ -1,7 +1,6 @@
 import { BUILDINGS, UNITS } from "./balance";
 import { canPlaceBuilding, inBaseRange } from "./economy";
 import { anchoredGoliaths } from "./goliath";
-import { hash32, saltOf } from "./rand";
 import { MUTATORS, applySpawnRank, bannedBy, rulesOf } from "./rules";
 import { Terrain, type BuildingKind, type Faction, type UnitKind, type World } from "./types";
 import {
@@ -17,10 +16,7 @@ import {
   terrainAt,
   type SideFrame
 } from "./world";
-// type-only: the AI module imports the sim, never the other way round at runtime
-import type { StrategyName } from "./ai/commander";
 import { atan2, hypot } from "./fmath";
-import { FACTIONS } from "./sides";
 
 /**
  * Quick-start openers. Instead of the classic "HQ + one harvester, now wait"
@@ -99,27 +95,8 @@ export function openerValue(id: OpenerId): number {
   );
 }
 
-/**
- * The AI's pick, by personality: Rush blitzes, Boom booms, the air
- * commanders take the Air Wing; Balanced picks any of the three and
- * Ironclad either ground opener, seeded so a match replays identically.
- */
-export function pickAiOpener(strategy: StrategyName, seed: number, faction: Faction): OpenerId {
-  const roll = hash32(seed, saltOf("opener"), FACTIONS.indexOf(faction));
-  switch (strategy) {
-    case "rush":
-      return "blitz";
-    case "boom":
-      return "industry";
-    case "airswarm":
-    case "skyforce":
-      return "airwing";
-    case "ironclad":
-      return roll % 2 === 0 ? "blitz" : "industry";
-    default:
-      return OPENER_IDS[roll % OPENER_IDS.length]!;
-  }
-}
+/** Every AI opens with Industry (the player still picks). */
+export const AI_OPENER: OpenerId = "industry";
 
 /** Why this side can't take this opener under the match rules (a banned factory or crew), or null. */
 export function openerBlocked(w: World, faction: Faction, id: OpenerId): string | null {

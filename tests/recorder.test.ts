@@ -6,7 +6,7 @@ import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
 import { worldHash } from "../src/sim/checksum";
 import { createMapWorld, type MatchOptions } from "../src/sim/maps";
 import { OPS, opAiState, opById } from "../src/sim/ops";
-import { allowedOpener, pickAiOpener } from "../src/sim/openers";
+import { allowedOpener, AI_OPENER } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { Faction } from "../src/sim/types";
 
@@ -22,9 +22,9 @@ function play(map: string, opts: MatchOptions, ticks: number, o: { blue?: AiStat
   const red = o.red ?? null;
   const rec = new MatchRecorder(w.mapId, opts, { blue: { player: blue ? "ai" : "none" }, red: { player: red ? "ai" : "none" } });
   if (o.openers) {
-    const picks: Partial<Record<Faction, ReturnType<typeof pickAiOpener>>> = {};
+    const picks: Partial<Record<Faction, typeof AI_OPENER>> = {};
     for (const [f, s] of [["blue", blue], ["red", red]] as const) {
-      const pick = s && allowedOpener(w, f, pickAiOpener(s.strategy.name, w.seed, f));
+      const pick = s && allowedOpener(w, f, AI_OPENER);
       if (pick) picks[f] = pick;
     }
     applyOpenersCanonical(w, picks);

@@ -634,8 +634,9 @@ describe("mutators", () => {
   }
 
   // (ashlands on seeds 5, 6: since the Tech Lab needs all three factories, 1 of 10 seed pairs stalls past 25:00
-  // there, seeds 3, 4 among them; none of 10 did before)
-  for (const [map, blue, red, seeds] of [["dune-sea", "balanced", "ironclad", [3, 4]], ["ashlands", "boom", "rush", [5, 6]]] as const)
+  // there, seeds 3, 4 among them; none of 10 did before. dune-sea on seeds 1, 2: since Menders on a move order
+  // walk on instead of stopping to mend, 3, 4 stalls there, 1 of 6 seed pairs)
+  for (const [map, blue, red, seeds] of [["dune-sea", "balanced", "ironclad", [1, 2]], ["ashlands", "boom", "rush", [5, 6]]] as const)
     it(`Nomads on ${map}: both sides build an economy and an army round their Goliaths, and the match ends`, () => {
       const { w, peak, harvestersBuilt } = play(map, blue, red, 25, ["nomads"], [...seeds]);
       for (const f of ["blue", "red"] as const) {

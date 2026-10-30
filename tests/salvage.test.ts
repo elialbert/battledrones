@@ -6,7 +6,7 @@ import { canPlaceBuilding, nearestScrapTile } from "../src/sim/economy";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
 import { isInfantry } from "../src/sim/infantry";
-import { pickAiOpener } from "../src/sim/openers";
+import { AI_OPENER } from "../src/sim/openers";
 import { wreckRestingSpot, wreckValue } from "../src/sim/salvage";
 import { step } from "../src/sim/sim";
 import { Terrain, type FxEvent, type Unit, type UnitKind, type World } from "../src/sim/types";
@@ -185,7 +185,7 @@ describe("salvage pickup", () => {
     const run = () => {
       const w = createMapWorld("frostbite", {
         seed: 77,
-        openers: { blue: pickAiOpener("rush", 77, "blue"), red: pickAiOpener("ironclad", 77, "red") }
+        openers: { blue: AI_OPENER, red: AI_OPENER }
       });
       const a = createAiState("rush", "normal", 5);
       const b = createAiState("ironclad", "normal", 6);

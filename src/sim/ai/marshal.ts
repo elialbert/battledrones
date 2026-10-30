@@ -49,7 +49,7 @@ import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
 import { sortieHolds, type SortieKind } from "./harass";
 import { hash32 } from "../rand";
-import { pickAiOpener } from "../openers";
+import { AI_OPENER } from "../openers";
 import { capApm } from "./apm";
 import { kiteStep } from "./kite";
 
@@ -87,7 +87,7 @@ export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strik
 
 /**
  * The game plans Marshal picks from: the stock personalities, and four of
- * its own built on one of them (`base`: its opener and the tables keyed by
+ * its own built on one of them (`base`: the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
  * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
  * Hornets do (AiState.hornetStyle).
@@ -493,7 +493,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     });
 
   return {
-    opener: pickAiOpener(plan.base, seed, side),
+    opener: AI_OPENER,
     plan: plan.label,
     tick(w: World): Command[] {
       for (const [id, until] of held) if (until <= w.tick) held.delete(id);

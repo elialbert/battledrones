@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BOTS } from "../src/sim/ai/bots";
 import { STRATEGIES, createAiState, tickAi, type StrategyName } from "../src/sim/ai/commander";
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
 import { nearestReachableResource, nearestScrapTile } from "../src/sim/economy";
@@ -8,9 +9,8 @@ import {
   OPENER_IDS,
   applyOpener,
   openerValue,
-  pickAiOpener,
-  predictOpenerSite,
-  type OpenerId
+  AI_OPENER,
+  predictOpenerSite
 } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import { Terrain, type Faction, type UnitKind, type World } from "../src/sim/types";
@@ -107,20 +107,9 @@ describe("quick-start openers", () => {
     }
   });
 
-  it("the AI picks by personality, deterministically from the seed", () => {
-    expect(pickAiOpener("rush", 1, "red")).toBe("blitz");
-    expect(pickAiOpener("boom", 1, "red")).toBe("industry");
-    expect(pickAiOpener("airswarm", 1, "red")).toBe("airwing");
-    expect(pickAiOpener("skyforce", 1, "blue")).toBe("airwing");
-    const balanced = new Set<OpenerId>();
-    const ironclad = new Set<OpenerId>();
-    for (let seed = 0; seed < 40; seed++) {
-      expect(pickAiOpener("balanced", seed, "red")).toBe(pickAiOpener("balanced", seed, "red"));
-      balanced.add(pickAiOpener("balanced", seed, "red"));
-      ironclad.add(pickAiOpener("ironclad", seed, "blue"));
-    }
-    expect(balanced.size).toBe(3);
-    expect([...ironclad].sort()).toEqual(["blitz", "industry"]);
+  it("the AI always opens with Industry", () => {
+    expect(AI_OPENER).toBe("industry");
+    for (const def of Object.values(BOTS)) expect(def.opener(7, "red")).toBe("industry");
   });
 
   it("replays identically from the same seed and openers", () => {
@@ -138,7 +127,7 @@ describe("quick-start openers", () => {
 describe("the AI with an opener", () => {
   for (const name of Object.keys(STRATEGIES) as StrategyName[])
     it(`${STRATEGIES[name].label} builds on its opener without duplicating it`, () => {
-      const id = pickAiOpener(name, 7, "red");
+      const id = AI_OPENER;
       const w = createMapWorld("riverlands", { seed: 7, openers: { blue: "industry", red: id } });
       const ai = createAiState(name, "normal", 11);
       for (let i = 0; i < 100 * TICK_RATE && !w.winner; i++) step(w, tickAi(w, "red", ai));

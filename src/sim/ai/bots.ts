@@ -17,7 +17,7 @@
 import { createAiState, tickAi, STRATEGIES, type Difficulty, type StrategyName } from "./commander";
 import { MARSHAL, marshal, marshalPlan } from "./marshal";
 import { PROFILES, scriptedPlayer, type ProfileName } from "./player";
-import { pickAiOpener, type OpenerId } from "../openers";
+import { AI_OPENER, type OpenerId } from "../openers";
 import type { Command, Faction, World } from "../types";
 
 /** A bot playing one side of one match. */
@@ -74,7 +74,7 @@ function commanderBot(name: StrategyName): BotDef {
     about: ABOUT[name],
     group: "Commander",
     difficulties: true,
-    opener: (seed, side) => pickAiOpener(name, seed, side),
+    opener: () => AI_OPENER,
     create(side, seed, difficulty) {
       const s = createAiState(name, difficulty, seed);
       s.fair = true;
@@ -96,8 +96,7 @@ function playerBot(name: ProfileName): BotDef {
     about: PLAYER_ABOUT[name],
     group: "Scripted player",
     difficulties: false,
-    // any of the three, seeded (as the Balanced commander picks)
-    opener: (seed, side) => pickAiOpener("balanced", seed, side),
+    opener: () => AI_OPENER,
     create(side) {
       return { tick: scriptedPlayer(PROFILES[name], side) };
     }
@@ -115,7 +114,7 @@ const ALL: BotDef[] = [
     group: "Commander",
     difficulties: true,
     opponent: true,
-    opener: (seed, side) => pickAiOpener("balanced", seed, side), // (each bot's own: its plan's)
+    opener: () => AI_OPENER,
     create: (side, seed, difficulty) => marshal(side, seed, difficulty, { ...MARSHAL[difficulty], strategy: marshalPlan(seed, difficulty) }),
     apm: (difficulty) => MARSHAL[difficulty].apm,
     burst: (difficulty) => MARSHAL[difficulty].burst

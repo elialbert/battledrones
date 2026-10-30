@@ -4,7 +4,7 @@ import { replay, type BattleRecord } from "../src/arena/record";
 import { APM_BURST, capApm } from "../src/sim/ai/apm";
 import { BOTS, BOT_IDS, OPPONENT_IDS, isOpponentId, type Bot } from "../src/sim/ai/bots";
 import { MARSHAL, MARSHAL_PLANS, MARSHAL_POOL, marshalPlan, marshalStrategy, planStrategy, type PlanName } from "../src/sim/ai/marshal";
-import { pickAiOpener } from "../src/sim/openers";
+import { AI_OPENER } from "../src/sim/openers";
 import { makeRules, strategyFits } from "../src/sim/rules";
 import { STRATEGIES } from "../src/sim/ai/commander";
 import { PROFILES } from "../src/sim/ai/player";
@@ -175,7 +175,7 @@ describe("Marshal, the bot built for a budget", () => {
         drawn.add(plan);
         const bot = BOTS.marshal!.create("red", seed, d);
         expect(bot.plan).toBe(MARSHAL_PLANS[plan].label);
-        expect(bot.opener).toBe(pickAiOpener(MARSHAL_PLANS[plan].base, seed, "red"));
+        expect(bot.opener).toBe(AI_OPENER);
       }
       expect([...drawn].sort()).toEqual([...MARSHAL_POOL[d]].sort()); // (every plan comes up)
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm + (MARSHAL[d].burst ?? APM_BURST));

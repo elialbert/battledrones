@@ -354,7 +354,8 @@ function tickHealer(w: World, u: Unit, engaged: Set<number>): void {
     }
     return;
   }
-  engaged.add(u.id);
+  // (a plain move order wins: mend in passing, but keep walking)
+  if (u.order.type === "idle" || u.order.type === "attackMove") engaged.add(u.id);
   u.aim = atan2(best.x - u.x, -(best.y - u.y));
   const amount = (stats.heal ?? 0) / TICK_RATE;
   if (best.unit) {

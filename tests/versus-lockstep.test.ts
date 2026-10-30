@@ -5,7 +5,7 @@ import { PacketAir, type PacketAirOptions } from "../src/link/packet-air";
 import { nextFrameIndex, type LinkTransport, type ModemMode, type OutFrame } from "../src/link/transport";
 import { createAiState, tickAi, type AiState, type StrategyName } from "../src/sim/ai/commander";
 import { worldHash } from "../src/sim/checksum";
-import { allowedOpener, pickAiOpener, type OpenerId } from "../src/sim/openers";
+import { allowedOpener, AI_OPENER, type OpenerId } from "../src/sim/openers";
 import { hash32 } from "../src/sim/rand";
 import type { MutatorId } from "../src/sim/rules";
 import { setupWorld, type MatchSetup } from "../src/sim/setup";
@@ -1316,8 +1316,8 @@ function duel(s: Scenario): Run {
   const mutators = s.mutators ?? [];
   const probe = setupWorld({ map: s.map, seed: s.seed, mutators, openers: {} });
   const openers: Partial<Record<Faction, OpenerId>> = {};
-  for (const [side, strat] of [["blue", bs], ["red", rs]] as const) {
-    const o = allowedOpener(probe, side, pickAiOpener(strat ?? "balanced", s.seed, side));
+  for (const side of ["blue", "red"] as const) {
+    const o = allowedOpener(probe, side, AI_OPENER);
     if (o) openers[side] = o;
   }
   const setup: MatchSetup = { map: s.map, seed: s.seed, mutators, openers };

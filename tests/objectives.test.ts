@@ -16,7 +16,7 @@ import {
   rollReward,
   setupObjectives
 } from "../src/sim/objectives";
-import { pickAiOpener } from "../src/sim/openers";
+import { AI_OPENER } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import type { Crate, CrateReward, Faction, FxEvent, Unit, UnitKind, World } from "../src/sim/types";
 import { createWorld, passable, spawnBuilding, spawnUnit } from "../src/sim/world";
@@ -436,7 +436,7 @@ describe("crate rewards", () => {
 describe("AI and objectives", () => {
   function match(map: string, a: StrategyName, b: StrategyName, mins: number, seed = 3): World {
     const w = createMapWorld(map, {
-      seed, objectives: true, openers: { blue: pickAiOpener(a, seed, "blue"), red: pickAiOpener(b, seed, "red") }
+      seed, objectives: true, openers: { blue: AI_OPENER, red: AI_OPENER }
     });
     const sa = createAiState(a, "normal", 11);
     const sb = createAiState(b, "normal", 12);

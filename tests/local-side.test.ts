@@ -5,7 +5,7 @@ import { canPlaceBuilding } from "../src/sim/economy";
 import { tickFog } from "../src/sim/fog";
 import { randomMapId } from "../src/sim/mapgen";
 import { createMapWorld } from "../src/sim/maps";
-import { allowedOpener, applyOpener, pickAiOpener, type OpenerId } from "../src/sim/openers";
+import { allowedOpener, applyOpener, AI_OPENER, type OpenerId } from "../src/sim/openers";
 import type { MutatorId } from "../src/sim/rules";
 import { setupWorld, type MatchSetup } from "../src/sim/setup";
 import { step } from "../src/sim/sim";
@@ -143,13 +143,13 @@ describe("applyOpenersCanonical", () => {
       // the old GameScene.startWithOpener, step by step
       const before = preview(c.map, c.seed, c.mutators);
       applyOpener(before, "blue", c.pick);
-      const red = allowedOpener(before, "red", pickAiOpener(c.ai, before.seed, "red"));
+      const red = allowedOpener(before, "red", AI_OPENER);
       if (red) applyOpener(before, "red", red);
       tickFog(before);
       // and the new one
       const after = preview(c.map, c.seed, c.mutators);
       const picks: Partial<Record<Faction, OpenerId>> = { [PLAYER]: c.pick };
-      const theirs = allowedOpener(after, ENEMY, pickAiOpener(c.ai, after.seed, ENEMY));
+      const theirs = allowedOpener(after, ENEMY, AI_OPENER);
       if (theirs) picks[ENEMY] = theirs;
       applyOpenersCanonical(after, picks);
       expect(worldHash(after)).toBe(worldHash(before));

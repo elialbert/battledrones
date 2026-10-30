@@ -4,7 +4,7 @@ import { dodgeCalldowns } from "../src/sim/ai/powers";
 import { BUILDINGS, POWERS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
 import { createMapWorld } from "../src/sim/maps";
-import { pickAiOpener } from "../src/sim/openers";
+import { AI_OPENER } from "../src/sim/openers";
 import { calldownBlocker, isStunned, powerStatus, targetBlocker, telegraphTicks } from "../src/sim/powers";
 import { step } from "../src/sim/sim";
 import { Terrain, type Command, type Faction, type FxEvent, type PowerKind, type World } from "../src/sim/types";
@@ -367,7 +367,7 @@ describe("AI and calldowns", () => {
     const seed = 1002;
     const w = createMapWorld("riverlands", {
       seed,
-      openers: { blue: pickAiOpener("rush", seed, "blue"), red: pickAiOpener("balanced", seed, "red") }
+      openers: { blue: AI_OPENER, red: AI_OPENER }
     });
     const blue = createAiState("rush", "easy", 1);
     const red = createAiState("balanced", "normal", 2);

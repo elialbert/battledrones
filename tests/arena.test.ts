@@ -4,7 +4,7 @@ import { seenEnemies } from "../src/sim/ai/intel";
 import { knownBuildings } from "../src/sim/fog";
 import { unitSeenBy } from "../src/sim/infantry";
 import { MAPS, createMapWorld } from "../src/sim/maps";
-import { applyOpener, pickAiOpener } from "../src/sim/openers";
+import { applyOpener, AI_OPENER } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
 import { tickFog } from "../src/sim/fog";
 import type { Faction, World } from "../src/sim/types";
@@ -29,7 +29,7 @@ function aiWorld(map: string, ticks: number, seed = 7): World {
   const w = createMapWorld(map, {
     seed,
     objectives: true,
-    openers: { blue: pickAiOpener("balanced", seed, "blue"), red: pickAiOpener("rush", seed, "red") }
+    openers: { blue: AI_OPENER, red: AI_OPENER }
   });
   const ai = { blue: createAiState("balanced", "normal", 1), red: createAiState("rush", "normal", 2) };
   while (w.tick < ticks && !w.winner) step(w, [...tickAi(w, "blue", ai.blue), ...tickAi(w, "red", ai.red)]);
@@ -213,7 +213,7 @@ describe("a whole match with no model", () => {
     const r1 = play();
     const r2 = play();
     expect(r1.end).not.toBeNull();
-    expect(r1.openers).toEqual({ blue: "blitz", red: "blitz" });
+    expect(r1.openers).toEqual({ blue: "blitz", red: "industry" });
     expect(r1.turns).toEqual(r2.turns);
     expect(r1.hashes).toEqual(r2.hashes);
     expect(r1.hashes.length).toBeGreaterThan(10);

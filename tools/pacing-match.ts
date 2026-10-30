@@ -3,7 +3,7 @@
 import { createAiState, tickAi, type Difficulty, type StrategyName } from "../src/sim/ai/commander";
 import { BUILDINGS, OBJECTIVES, TICK_RATE, UNITS } from "../src/sim/balance";
 import { createMapWorld } from "../src/sim/maps";
-import { pickAiOpener } from "../src/sim/openers";
+import { AI_OPENER } from "../src/sim/openers";
 import { rulesOf } from "../src/sim/rules";
 import { step } from "../src/sim/sim";
 import type { Faction, FxEvent, PerSide, UnitKind } from "../src/sim/types";
@@ -86,7 +86,7 @@ export interface PlayOptions {
 }
 
 export function playMatch(map: string, blue: StrategyName, red: StrategyName, seed: number, aiSeed: number, opts: PlayOptions = {}): Match {
-  const openers = { blue: pickAiOpener(blue, seed, "blue"), red: pickAiOpener(red, seed, "red") };
+  const openers = { blue: AI_OPENER, red: AI_OPENER };
   const w = createMapWorld(map, { seed, objectives: true, openers });
   if (opts.noGoliath) {
     const r = rulesOf(w);

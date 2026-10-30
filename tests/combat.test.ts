@@ -176,3 +176,27 @@ describe("Menders are shot first", () => {
     expect(flak.order).toMatchObject({ type: "attack", targetId: wasp.id });
   });
 });
+
+describe("Menders and move orders", () => {
+  it("a Mender with a move order walks on past wounded friends, mending in passing", () => {
+    const w = createWorld(24, 24);
+    const mender = spawnUnit(w, "mender", "blue", 5.5, 5.5);
+    const hurt = spawnUnit(w, "stinger", "blue", 6.5, 5.5);
+    hurt.hp = 1;
+    step(w, [{ type: "move", faction: "blue", unitIds: [mender.id], x: 15.5, y: 15.5 }]);
+    runTicks(w, 5);
+    expect(hurt.hp).toBeGreaterThan(1);
+    expect(Math.hypot(mender.x - 5.5, mender.y - 5.5)).toBeGreaterThan(0.3);
+  });
+
+  it("an idle Mender stays put to mend", () => {
+    const w = createWorld(24, 24);
+    const mender = spawnUnit(w, "mender", "blue", 5.5, 5.5);
+    const hurt = spawnUnit(w, "stinger", "blue", 6.5, 5.5);
+    hurt.hp = 1;
+    runTicks(w, 5);
+    expect(hurt.hp).toBeGreaterThan(1);
+    expect(mender.x).toBe(5.5);
+    expect(mender.y).toBe(5.5);
+  });
+});
