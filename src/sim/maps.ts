@@ -205,7 +205,7 @@ export const MAPS: MapDef[] = [
     biome: "temperate",
     size: 48,
     blurb: "The classic: rock ridges, one contested field. Learn the ropes here.",
-    hq: [4, 40],
+    hq: [7, 40],
     seed: 5,
     uplinks: [[35.5, 35.5]], // the open corners either side of the ridge
     dropSites: [[20.5, 28.5], [30.5, 30.5], [8.5, 22.5]], // below the ridge gap, the south shoulder, the west flank
@@ -219,7 +219,7 @@ export const MAPS: MapDef[] = [
     biome: "temperate",
     size: 56,
     blurb: "A wide river splits the valley. One bridge, two muddy fords.",
-    hq: [4, 48],
+    hq: [7, 48],
     seed: 11,
     uplinks: [[28, 28], [45.5, 45.5]], // the bridge at the centre and the two fords
     dropSites: [[24.5, 33.5], [16.5, 21.5], [34.5, 44.5]], // the bridgehead, the west bank by the ford, the south expansion
@@ -243,12 +243,12 @@ export const MAPS: MapDef[] = [
       p.stroke([[23, 32], [32, 23]], 2.2, Terrain.Road, 0, [G, Terrain.Rough, Terrain.Forest]);
       p.stroke([[8, 14], [13, 9]], 3, Terrain.Shallows, 0.1, [Terrain.Water]);
       // roads from each HQ to the bridge
-      p.stroke([[6, 49], [11, 46], [16, 40], [21, 35], [23.5, 32]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[10, 48.5], [11, 46], [16, 40], [21, 35], [23.5, 32]], 2, Terrain.Road, 0, OPEN);
       // a ridge round the base and the home field (the natural lies outside): one way in, where the road leaves
       p.stroke([[-1, 40.5], [5, 40.5], [9.5, 39], [13.5, 36]], 2.6, Terrain.Rock, 0.2, OPEN);
       p.stroke([[19.5, 40.5], [21, 44], [21.5, 49], [22, 56.5]], 2.6, Terrain.Rock, 0.2, OPEN);
-      // resources: home field, natural expansion, contested crystals
-      p.blob(13, 44, 2.1, Terrain.Scrap, 0.25);
+      // resources: home field (in the corner behind the HQ), natural expansion, contested crystals
+      p.blob(2.7, 53, 2.1, Terrain.Scrap, 0.25);
       p.blob(5, 36, 1.7, Terrain.Scrap, 0.25);
       p.blob(19, 30, 1.5, Terrain.Crystal, 0.2);
       p.blob(34, 46, 1.6, Terrain.Scrap, 0.25);
@@ -263,7 +263,7 @@ export const MAPS: MapDef[] = [
     biome: "desert",
     size: 56,
     blurb: "Open sands between towering mesas. Three lanes, rich wrecks.",
-    hq: [4, 48],
+    hq: [7, 48],
     seed: 23,
     uplinks: [[41.5, 41.5]], // out on the two open flanks (the oasis holds the centre)
     dropSites: [[24.5, 31.5], [31.5, 36.5], [22.5, 35.5]], // the oasis approaches and the near crystals
@@ -281,12 +281,12 @@ export const MAPS: MapDef[] = [
       p.blob(4, 4, 3.2, Terrain.Forest, 0.35, [G]);
       p.blob(3, 3, 2, Terrain.Water, 0.3);
       // dusty tracks along the central corridor, swinging round the oasis
-      p.stroke([[6, 49], [12, 44], [18, 38], [22, 34], [25, 32.5], [31, 31]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[10, 48.5], [12, 44], [18, 38], [22, 34], [25, 32.5], [31, 31]], 2, Terrain.Road, 0, OPEN);
       // mesa walls round the base and the home field (the natural lies outside): one way in, where the track leaves
       p.stroke([[-1, 40.5], [4.5, 40.5], [8, 38.5], [13.5, 36]], 2.6, Terrain.Rock, 0.2, OPEN);
       p.stroke([[19.5, 42], [23, 44], [24.5, 46.5], [21, 50], [20, 56.5]], 2.6, Terrain.Rock, 0.2, OPEN);
-      // resources
-      p.blob(13, 44, 2.1, Terrain.Scrap, 0.25);
+      // resources: the home field in the corner behind the HQ, the rest out past the walls
+      p.blob(2.7, 53, 2.1, Terrain.Scrap, 0.25);
       p.blob(4, 35, 1.8, Terrain.Scrap, 0.25);
       p.blob(8, 24, 1.5, Terrain.Scrap, 0.25);
       p.blob(22, 35, 1.5, Terrain.Crystal, 0.2);
@@ -304,7 +304,7 @@ export const MAPS: MapDef[] = [
     biome: "arctic",
     size: 48,
     blurb: "A frozen sea in the middle. Short, brutal and hover-friendly.",
-    hq: [4, 40],
+    hq: [7, 40],
     seed: 37,
     uplinks: [[35.5, 35.5]], // the two lanes around the frozen sea, by the lane crystals
     dropSites: [[9.5, 13.5], [29.5, 35.5], [12.5, 22.5]], // a lane crystal, the south lane, the western shallows
@@ -324,15 +324,15 @@ export const MAPS: MapDef[] = [
       p.blob(8, 8, 3, Terrain.Rough, 0.4, [G]);
       p.blob(20, 42, 2, Terrain.Rough, 0.4, [G]);
       // plowed road
-      p.stroke([[6, 41], [11, 42], [18, 43], [24, 44]], 1.8, Terrain.Road, 0, OPEN);
+      p.stroke([[10, 41.5], [11, 42], [18, 43], [24, 44]], 1.8, Terrain.Road, 0, OPEN);
       // ice ridges round the base, out to the frozen sea: a narrow pass in the west lane, a wider gap on the road
       const iced = [...OPEN, Terrain.Shallows];
       p.stroke([[-1, 25], [2.5, 25]], 2.6, Terrain.Rock, 0.15, iced);
       p.stroke([[8.5, 25], [12, 25], [15.5, 24]], 2.6, Terrain.Rock, 0.15, iced);
       p.stroke([[22.5, 31.5], [22, 35], [22, 39]], 2.6, Terrain.Rock, 0.15, iced);
       p.stroke([[24.5, 45.5], [24.5, 48.5]], 2.6, Terrain.Rock, 0.15, iced);
-      // resources: home field, contested crystal in each lane
-      p.blob(11, 36, 2, Terrain.Scrap, 0.25);
+      // resources: home field (in the corner behind the HQ), contested crystal in each lane
+      p.blob(2.6, 45.2, 1.8, Terrain.Scrap, 0.25);
       p.blob(9, 9, 1.6, Terrain.Crystal, 0.2);
       p.blob(3, 31, 1.4, Terrain.Scrap, 0.25);
       // outlying patches, past easy reach of the base: worth an expansion
@@ -346,7 +346,7 @@ export const MAPS: MapDef[] = [
     biome: "volcanic",
     size: 64,
     blurb: "Lava rivers carve three plateaus. Bridges are choke points; air rules.",
-    hq: [5, 55],
+    hq: [8, 55],
     seed: 53,
     uplinks: [[44.5, 44.5]], // the outer plateaus, past the bridges
     dropSites: [[27.5, 33.5], [12.5, 30.5], [32.5, 40.5]], // the central plateau, the west plateau, below the south bridge
@@ -361,8 +361,8 @@ export const MAPS: MapDef[] = [
       p.stroke([[30, 47], [35, 42]], 2.2, Terrain.Bridge, 0, [Terrain.Water]);
       p.stroke([[30, 47], [35, 42]], 2.2, Terrain.Road, 0, OPEN);
       // plated roads from the HQ to both bridges
-      p.stroke([[7, 56], [10, 48], [11, 36], [11.5, 24]], 2, Terrain.Road, 0, OPEN);
-      p.stroke([[8, 57], [18, 53], [28, 50], [32, 45]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[10, 54], [10, 48], [11, 36], [11.5, 24]], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[11.5, 56.5], [18, 53], [28, 50], [32, 45]], 2, Terrain.Road, 0, OPEN);
       // a ridge of obsidian round the base and the home field: a gap where each road leaves
       p.stroke([[-1, 43], [8, 43]], 2.6, Terrain.Rock, 0.15, OPEN);
       p.stroke([[13.5, 43], [16.5, 45], [19.5, 47.5]], 2.6, Terrain.Rock, 0.15, OPEN);
@@ -374,8 +374,8 @@ export const MAPS: MapDef[] = [
       p.blob(22, 31, 2.4, Terrain.Forest, 0.45, OPEN);
       p.blob(16, 44, 2.8, Terrain.Forest, 0.45, OPEN);
       p.blob(4, 5, 3, Terrain.Forest, 0.45, OPEN);
-      // resources: home, safe expansion, contested crystal on the centre plateau
-      p.blob(14, 51, 2.2, Terrain.Scrap, 0.25);
+      // resources: home (in the corner behind the HQ), safe expansion, contested crystal on the centre plateau
+      p.blob(3.2, 60.2, 2.2, Terrain.Scrap, 0.25);
       p.blob(4, 32, 1.8, Terrain.Scrap, 0.25);
       p.blob(24, 24, 1.6, Terrain.Crystal, 0.2, LAND);
       p.blob(17, 12, 1.8, Terrain.Scrap, 0.25, LAND);
@@ -391,7 +391,7 @@ export const MAPS: MapDef[] = [
     size: 72,
     blurb: "Four players, one in each corner. Frozen streams split the quadrants: every side for itself.",
     // blue's corner, bottom left; green's top left, red's top right, purple's bottom right (sides.ts)
-    hq: [5, 64],
+    hq: [8, 64],
     players: 4,
     seed: 89,
     // painted in blue's quarter (bottom left); the Painter turns every stroke onto the other three.
@@ -429,14 +429,14 @@ export const MAPS: MapDef[] = [
       p.blob(13.5, 68.5, 1.3, Terrain.Rock, 0.4, OPEN);
       p.scatter(20, 44, 32, 52, 3, 1.3, Terrain.Rough, [G]);
       // plowed roads from the HQ to the bridge and toward the centre
-      p.stroke([[8, 63], [12, 56], [16, 47], [18, 39]], 1.8, Terrain.Road, 0, OPEN);
-      p.stroke([[9, 65], [18, 57], [25, 49.5], [30.5, 42.5]], 1.8, Terrain.Road, 0, OPEN);
+      p.stroke([[10, 62.5], [12, 56], [16, 47], [18, 39]], 1.8, Terrain.Road, 0, OPEN);
+      p.stroke([[11.5, 64.5], [18, 57], [25, 49.5], [30.5, 42.5]], 1.8, Terrain.Road, 0, OPEN);
       // a ridge round the base and the home field: a gap where each road leaves
       p.stroke([[-1, 51.5], [6, 51.5], [10.5, 51]], 2.6, Terrain.Rock, 0.15, OPEN);
       p.stroke([[16, 50.5], [18.5, 52]], 2.6, Terrain.Rock, 0.15, OPEN);
       p.stroke([[25, 54.5], [27, 59], [27, 72.5]], 2.6, Terrain.Rock, 0.15, OPEN);
-      // resources: a home field, a second one out by the ford, contested crystals toward the centre
-      p.blob(14, 60, 2.1, Terrain.Scrap, 0.25);
+      // resources: a home field in the corner behind the HQ, a second one out by the ford, contested crystals toward the centre
+      p.blob(2.8, 69.2, 2.1, Terrain.Scrap, 0.25);
       p.blob(6, 45, 1.8, Terrain.Scrap, 0.25);
       p.blob(24.5, 45.5, 1.4, Terrain.Crystal, 0.2);
       // outlying patches, past easy reach of the base: worth an expansion
@@ -551,7 +551,7 @@ export const MAPS: MapDef[] = [
       p.blob(30, 102, 1.5, Terrain.Rock, 0.4, OPEN);
       p.scatter(22, 60, 40, 72, 4, 1.4, Terrain.Rough, [G]);
       // resources are scarce: one home field, a crystal patch by bridge 1, and two small outlying patches
-      p.rect(21, 91, 23, 93, Terrain.Scrap); // 9 tiles
+      p.rect(8, 92, 10, 94, Terrain.Scrap); // 9 tiles, behind the HQ
       p.rect(29, 58, 30, 58, Terrain.Crystal); // 2 rich tiles out by the bridge
       p.rect(5, 70, 6, 71, Terrain.Scrap); // out on the west shore
       p.rect(41, 99, 42, 100, Terrain.Scrap); // down the south coast
@@ -591,8 +591,8 @@ function createClassicTerrain(w: World): void {
     for (let dy = -1; dy <= 1; dy++)
       for (let dx = -1; dx <= 1; dx++)
         if (Math.abs(dx) + Math.abs(dy) < 2) both(cx + dx, cy + dy, Terrain.Rock);
-  // Home scrap field near the blue base (mirrored for red).
-  for (let ty = 36; ty <= 38; ty++) for (let tx = 12; tx <= 14; tx++) both(tx, ty, Terrain.Scrap);
+  // Home scrap field in the corner behind the blue HQ, away from the enemy (mirrored for red).
+  for (let ty = 44; ty <= 46; ty++) for (let tx = 1; tx <= 3; tx++) both(tx, ty, Terrain.Scrap);
   // Contested central field (self-mirroring around the centre).
   for (let ty = 22; ty <= 25; ty++)
     for (let tx = 22; tx <= 25; tx++)

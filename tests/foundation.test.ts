@@ -89,7 +89,7 @@ describe("deposit events", () => {
   it("fires once per load when a harvester starts unloading", () => {
     const w = createMapWorld("proving-grounds");
     const h = [...w.units.values()].find((u) => u.faction === "blue" && u.kind === "harvester")!;
-    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 13.5, y: 37.5 }]);
+    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 2.5, y: 45.5 }]);
     const deposits: FxEvent[] = [];
     for (let i = 0; i < 60 * 10; i++) {
       step(w, []);

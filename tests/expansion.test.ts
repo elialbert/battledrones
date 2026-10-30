@@ -158,12 +158,14 @@ describe("expansion Depots", () => {
   });
 
   it("Marshal founds one: a crew walks out, and the Depot goes up by a field it hadn't served", async () => {
-    const { MARSHAL, marshal } = await import("../src/sim/ai/marshal");
+    const { MARSHAL, marshal, seatMarshal } = await import("../src/sim/ai/marshal");
     const w = createMapWorld("riverlands", { seed: 3 });
     const bot = marshal("blue", 3, "hard", { ...MARSHAL.hard, strategy: "greed" });
+    // (someone home on red: an empty base falls to blue's raids before the crew gets there)
+    const red = seatMarshal("red", 4, "easy", "turtle");
     let founded = false;
     for (let i = 0; i < 4 * 60 * TICK_RATE && !founded; i++) {
-      step(w, bot.tick(w));
+      step(w, [...bot.tick(w), ...red.tick(w)]);
       founded = [...w.buildings.values()].some((b) => b.faction === "blue" && b.kind === "depot" && b.founding !== undefined);
     }
     expect(founded).toBe(true);

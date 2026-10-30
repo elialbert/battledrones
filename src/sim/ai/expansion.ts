@@ -3,6 +3,7 @@ import { foundBlocker } from "../economy";
 import { findPath } from "../movement";
 import type { Command, Faction, Unit, World } from "../types";
 import { dist, isResource, sideFrame, tileIndex } from "../world";
+import { sealsOff } from "../placement";
 
 /**
  * Expansion Depots for the AI: a Depot it wants by a field out of build
@@ -86,6 +87,7 @@ function scanExpansionSite(w: World, faction: Faction, hqC: { x: number; y: numb
       if (d >= bestD) continue;
       const [tx, ty] = fr.tile(fx, fy, size);
       if (foundBlocker(w, faction, tx, ty)) continue;
+      if (sealsOff(w, tx, ty, size)) continue; // (no pocket boxed in, placement.ts)
       best = { tx, ty };
       bestD = d;
     }

@@ -121,7 +121,7 @@ describe("each side's own frame", () => {
   it("both briefings read the same map, from their own corner", () => {
     const a = new Arena({ map: "dune-sea", seed: 1, seats: { blue: parseSeat("agent"), red: parseSeat("agent") } });
     expect(a.briefing("red").replace(/RED/g, "BLUE")).toBe(a.briefing("blue"));
-    expect(a.briefing("blue")).toContain("Your HQ is in the lower left at 4,48");
+    expect(a.briefing("blue")).toContain("Your HQ is in the lower left at 7,48");
   });
 });
 
@@ -271,7 +271,7 @@ describe("rounds", () => {
     a.wait("blue", 10);
     // enemies turn up beside the base
     const hq = hqOf(a.w, "blue")!;
-    for (let i = 0; i < 3; i++) spawnUnit(a.w, "stinger", "red", hq.tx + 4 + i * 0.6, hq.ty - 3);
+    for (let i = 0; i < 3; i++) spawnUnit(a.w, "stinger", "red", hq.tx + 4 + i * 0.6, hq.ty - 6);
     while (!a.turnOpen("blue")) tick();
     expect(a.round).toBe(5);
     expect(a.observe("blue")).toMatch(/Your wait was cut short: enemies are near your base/);
@@ -314,7 +314,7 @@ describe("the loopback seat server", () => {
       expect((await rpc("initialize", { protocolVersion: "2025-06-18" })).result.capabilities).toEqual({ tools: {} });
       expect((await rpc("tools/list")).result.tools.map((t: { name: string }) => t.name)).toEqual(["briefing", "observe", "look", "orders", "end_round", "wait"]);
       const call = await rpc("tools/call", { name: "orders", arguments: { orders: [{ attack_move: "wasp", to: "enemy-hq" }] } });
-      expect(call.result.content[0].text).toMatch(/ok: wasp ×3 attack-move to 50,6/);
+      expect(call.result.content[0].text).toMatch(/ok: wasp ×3 attack-move to 47,6/);
       // play the rest out with end_round (wait: false) and sync
       while (!a.over) {
         await post(`${srv.urls.blue}/end_round`, { notes: "", wait: false });

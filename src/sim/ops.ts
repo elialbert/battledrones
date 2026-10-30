@@ -196,8 +196,8 @@ export const OPS: OpDef[] = [
     map: "dune-sea",
     ai: { strategy: "airswarm", difficulty: "hard" },
     setup(_w, o) {
-      o.units("blue", "harvester", 1, 9.5, 46.5);
-      o.building("blue", "turret", 10, 41);
+      o.units("blue", "harvester", 1, 6.5, 51.5);
+      o.building("blue", "turret", 7, 51);
       o.units("red", "wasp", 3, 46, 12);
     },
     goals: [
@@ -219,26 +219,26 @@ export const OPS: OpDef[] = [
     tip: "Move as one group — whatever arrives alone dies alone. Stingers kill the Flak, Raptors the fighters, Hornets flatten SAM sites; then everything on the HQ.",
     map: "proving-grounds",
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
-    focus: { x: 10, y: 39 },
+    focus: { x: 13, y: 39 },
     // (no calldowns: a Drop Pod or Barrage would make the fixed strike group moot, and Red's pods would reinforce it)
     rules: { playerBans: { units: ALL_UNITS, buildings: ALL_BUILDINGS }, playerIncome: 0, calldowns: false },
     scrap: 0,
     setup(w, o) {
       o.removeUnits("blue", "harvester");
-      o.units("blue", "mastodon", 2, 10, 36);
-      o.units("blue", "stinger", 3, 10, 37.8);
-      o.units("blue", "hornet", 2, 10, 39.6);
-      o.units("blue", "raptor", 2, 10, 41.4);
-      o.units("blue", "mender", 1, 10, 43.2);
-      o.building("red", "fab-plant", 37, 2);
-      o.building("red", "airpad", 44, 10);
-      o.building("red", "sam-site", 39, 9);
-      o.building("red", "sam-site", 45, 4);
-      o.building("red", "turret", 40, 8);
-      o.building("red", "turret", 44, 8);
-      o.building("red", "turret", 38, 7);
-      o.units("red", "flak-crawler", 2, 42, 10.5);
-      o.units("red", "raptor", 3, 38, 4);
+      o.units("blue", "mastodon", 2, 13, 36);
+      o.units("blue", "stinger", 3, 13, 37.8);
+      o.units("blue", "hornet", 2, 13, 39.6);
+      o.units("blue", "raptor", 2, 13, 41.4);
+      o.units("blue", "mender", 1, 13, 43.2);
+      o.building("red", "fab-plant", 34, 2);
+      o.building("red", "airpad", 41, 10);
+      o.building("red", "sam-site", 36, 9);
+      o.building("red", "sam-site", 42, 4);
+      o.building("red", "turret", 37, 8);
+      o.building("red", "turret", 41, 8);
+      o.building("red", "turret", 35, 7);
+      o.units("red", "flak-crawler", 2, 39, 10.5);
+      o.units("red", "raptor", 3, 35, 4);
       w.factions.red.scrap = 400;
     },
     goals: [{ type: "destroyHq" }, { type: "within", secs: 180 }],
@@ -263,9 +263,9 @@ export const OPS: OpDef[] = [
     scrap: 4000,
     setup(_w, o) {
       o.removeUnits("blue", "harvester");
-      o.building("blue", "fab-plant", 8, 39);
-      o.building("blue", "airpad", 4, 36);
-      o.building("blue", "tech-lab", 8, 43);
+      o.building("blue", "fab-plant", 11, 39);
+      o.building("blue", "airpad", 7, 36);
+      o.building("blue", "tech-lab", 11, 43);
     },
     goals: [{ type: "destroyHq" }, { type: "within", secs: 360 }],
     stars: [
@@ -293,9 +293,9 @@ export const OPS: OpDef[] = [
     // air harder; at 1400 no pilot won, at 1500 the raider wins at 3:42)
     scrap: 1500,
     setup(_w, o) {
-      o.building("blue", "airpad", 9, 54);
-      o.building("blue", "tech-lab", 4, 51);
-      o.units("blue", "harvester", 1, 9.5, 57.5);
+      o.building("blue", "airpad", 12, 54);
+      o.building("blue", "tech-lab", 7, 51);
+      o.units("blue", "harvester", 1, 12.5, 57.5);
       o.building("red", "sam-site", 52, 10);
       o.building("red", "sam-site", 59, 12);
       o.building("red", "turret", 55, 10);
@@ -335,9 +335,9 @@ export const OPS: OpDef[] = [
     map: "frostbite",
     ai: { strategy: "ironclad", difficulty: "hard" },
     setup(_w, o) {
-      o.building("blue", "fab-plant", 8, 39);
-      o.building("blue", "tech-lab", 4, 36);
-      o.units("blue", "harvester", 1, 8.5, 42.5);
+      o.building("blue", "fab-plant", 11, 39);
+      o.building("blue", "tech-lab", 7, 36);
+      o.units("blue", "harvester", 1, 11.5, 42.5);
     },
     goals: [{ type: "survive", secs: 360 }],
     stars: [
@@ -358,11 +358,11 @@ export const OPS: OpDef[] = [
     survival: { difficulty: "easy", firstWave: 45, interval: 40 },
     scrap: 1200,
     setup(_w, o) {
-      o.building("blue", "fab-plant", 4, 44);
-      o.building("blue", "airpad", 9, 45);
-      o.building("blue", "turret", 10, 49);
-      o.building("blue", "turret", 8, 43);
-      o.units("blue", "harvester", 2, 9.5, 51.5);
+      o.building("blue", "fab-plant", 7, 44);
+      o.building("blue", "airpad", 12, 45);
+      o.building("blue", "turret", 13, 49);
+      o.building("blue", "turret", 11, 43);
+      o.units("blue", "harvester", 2, 6.5, 51.5);
     },
     goals: [{ type: "waves", count: 10 }],
     stars: [

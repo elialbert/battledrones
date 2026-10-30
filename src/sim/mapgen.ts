@@ -550,8 +550,10 @@ function grow(def: MapDef, layout: Layout, sub: number, force: boolean): Grown {
     fields.push(at);
   };
   const band = (v: number, lo: number, hi: number) => (v < lo ? (v - lo) / 4 : v > hi ? (hi - v) / 4 : 0);
-  // home: 6–9 tiles from the HQ
-  field(pick((x, y) => band(hypot(x - bc[0], y - bc[1]), 6.5, 8.5) * 3 + openness(x, y, 2.8) * 4), 2.1, Terrain.Scrap);
+  // home: 6–9 tiles from the HQ, behind it (away from red's), so raiders must get past the base to reach the harvesters
+  const toRed = hypot(rc[0] - bc[0], rc[1] - bc[1]);
+  const ahead = (x: number, y: number) => ((x - bc[0]) * (rc[0] - bc[0]) + (y - bc[1]) * (rc[1] - bc[1])) / toRed;
+  field(pick((x, y) => band(hypot(x - bc[0], y - bc[1]), 6.5, 8.5) * 3 + band(-ahead(x, y), 4, 999) * 3 + openness(x, y, 2.8) * 4), 2.1, Terrain.Scrap);
   // the natural expansion: well inside blue's half
   field(pick((x, y, i) => band(dB[i]!, 17, 30) + band(dR[i]! - dB[i]!, 22, 999) * 2 + openness(x, y, 2.4) * 4 + (fromBase(x, y) < 13 ? -4 : 0)), 1.8, Terrain.Scrap);
   // contested scrap: about as far from both HQs

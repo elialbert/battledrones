@@ -8,7 +8,7 @@ import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN } from "./balance";
 import { buildRadiusOf, canPlaceBuilding, inBaseRange } from "./economy";
 import { anchoredGoliaths, inGoliathRing, overlapsGoliath } from "./goliath";
 import { Terrain, type BuildingKind, type Faction, type World } from "./types";
-import { buildingAtTile, buildingCenter, domainOf, inBounds, terrainAt } from "./world";
+import { buildingAtTile, buildingCenter, domainOf, inBounds, passable, terrainAt } from "./world";
 import { hypot } from "./fmath";
 
 /** Short names for unbuildable ground, per biome where it differs. */
@@ -106,6 +106,66 @@ function cramped(w: World, tx: number, ty: number, size: number): boolean {
       if (w.occupancy[y * w.width + x] === 0 && TERRAIN[terrainAt(w, x, y)].ground) free++;
     }
   return free < (size + 2) * 2;
+}
+
+/** Flood scratch for sealsOff: a generation stamp per tile, and the queue. */
+let sealSeen = new Int32Array(0);
+let sealQueue = new Int32Array(0);
+let sealGen = 0;
+
+/**
+ * Would a footprint here cut the ground in two: some open tile beside it that
+ * can reach the rest now (through the footprint) but couldn't with the
+ * building there? That boxes ground in between buildings, rock, water and the
+ * map edge, or shuts a base's only way out, and units rolling out into it, or
+ * wandering in, are stuck for good. Only tiles along its four sides need
+ * checking: any ground the footprint cuts off had a path through it, so it
+ * touches one of them, and they all reach each other across it today.
+ */
+export function sealsOff(w: World, tx: number, ty: number, size: number): boolean {
+  const W = w.width;
+  const n = W * w.height;
+  if (sealSeen.length !== n) {
+    sealSeen = new Int32Array(n);
+    sealQueue = new Int32Array(n);
+    sealGen = 0;
+  }
+  const inFoot = (x: number, y: number) => x >= tx && x < tx + size && y >= ty && y < ty + size;
+  const open = (x: number, y: number) => !inFoot(x, y) && passable(w, x, y, "ground");
+  const sides: number[] = [];
+  for (let i = 0; i < size; i++)
+    for (const [x, y] of [
+      [tx + i, ty - 1],
+      [tx + i, ty + size],
+      [tx - 1, ty + i],
+      [tx + size, ty + i]
+    ] as [number, number][])
+      if (open(x, y)) sides.push(y * W + x);
+  if (sides.length < 2) return false;
+  const gen = ++sealGen;
+  let head = 0;
+  let tail = 0;
+  sealSeen[sides[0]!] = gen;
+  sealQueue[tail++] = sides[0]!;
+  let left = sides.length - 1;
+  while (head < tail && left > 0) {
+    const cur = sealQueue[head++]!;
+    const cx = cur % W;
+    const cy = (cur / W) | 0;
+    for (const [x, y] of [
+      [cx + 1, cy],
+      [cx - 1, cy],
+      [cx, cy + 1],
+      [cx, cy - 1]
+    ] as [number, number][]) {
+      const i = y * W + x;
+      if (!open(x, y) || sealSeen[i] === gen) continue;
+      sealSeen[i] = gen;
+      sealQueue[tail++] = i;
+      if (sides.includes(i)) left--;
+    }
+  }
+  return left > 0;
 }
 
 /**

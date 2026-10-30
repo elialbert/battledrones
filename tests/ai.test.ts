@@ -159,9 +159,9 @@ describe("AI commander", () => {
       (b) => b.faction === "red" && b.kind === "turret"
     );
     expect(turrets.length).toBeGreaterThanOrEqual(1);
-    // red home field centres around (34, 10); turrets should lean that way
+    // red home field centres around (45.5, 2.5), in the corner behind its HQ; turrets should lean that way
     const nearField = turrets.some(
-      (t) => Math.hypot(t.tx + 0.5 - 34, t.ty + 0.5 - 10) < 8
+      (t) => Math.hypot(t.tx + 0.5 - 45.5, t.ty + 0.5 - 2.5) < 8
     );
     expect(nearField).toBe(true);
   }, 30000);

@@ -9,6 +9,7 @@ import { QUARTER, isMulti, rivalsOf, turnPoint } from "../sides";
 import { isInfantry } from "../infantry";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
+import { sealsOff } from "../placement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import { planMenders } from "./menders";
 import { bannedBy, infantryArmy } from "../rules";
@@ -1518,6 +1519,8 @@ function findPlacementSpot(
         // keep a lane open: don't wall the HQ in with production buildings
         if (size > 1 && tooCramped(w, tx, ty, size)) continue;
         if (dugIn.length > 0 && atFeet(tx, ty)) continue;
+        // and never box ground in: a pocket our own units roll out into and can't leave, or the base's way out shut
+        if (sealsOff(w, tx, ty, size)) continue;
         best = { tx, ty };
         bestD = d;
       }

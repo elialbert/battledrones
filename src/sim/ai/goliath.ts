@@ -1,6 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { engageable } from "../combat";
 import { canPlaceBuilding } from "../economy";
+import { sealsOff } from "../placement";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import {
   anchorBlockedAt,
@@ -1146,6 +1147,7 @@ function outpostSpotFor(w: World, faction: Faction, g: Unit, site: Site, kind: B
       if (gap > GOLIATH.buildRing || gap < GOLIATH.footprint / 2 + 1) continue; // (a lane round its feet)
       if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
       if (size > 1 && cramped(w, tx, ty, size)) continue;
+      if (sealsOff(w, tx, ty, size)) continue; // (no pocket boxed in, placement.ts)
       best = { tx, ty };
       bestD = d;
     }

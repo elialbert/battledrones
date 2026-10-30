@@ -204,7 +204,7 @@ describe("economy pops", () => {
     const w = createMapWorld("proving-grounds");
     const hq = [...w.buildings.values()].find((b) => b.faction === "blue" && b.kind === "hq")!;
     const h = [...w.units.values()].find((u) => u.faction === "blue" && u.kind === "harvester")!;
-    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 13.5, y: 37.5 }]);
+    step(w, [{ type: "harvest", faction: "blue", unitIds: [h.id], x: 2.5, y: 45.5 }]);
     const pops = new DepositPops();
     let shown = 0;
     for (let i = 0; i < 60 * 10; i++) {
