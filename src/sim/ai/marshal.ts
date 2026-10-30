@@ -380,6 +380,7 @@ function rankOf(c: Command, dodging: Set<number>, goliaths: Set<number>): Rank {
     case "calldown":
       return Rank.Retreat;
     case "harvest":
+    case "found":
     case "placeBuilding":
     case "cancelBuilding":
       return Rank.Economy;
