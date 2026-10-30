@@ -126,22 +126,22 @@ export const UNITS: Record<UnitKind, UnitStats> = {
   },
   mortar: {
     name: "Mortar", role: "Long-range splash artillery. Razes bases. Fragile up close.",
-    cost: 275, hp: 195, speed: 1.5, sight: 6, domain: "ground", armor: "light",
+    cost: 300, hp: 195, speed: 1.5, sight: 6, domain: "ground", armor: "light",
     targets: "ground", dps: 18, range: 8, minRange: 2.5, shotInterval: 3,
     splash: 1.1, projectileSpeed: 5.5, dmgType: "explosive", fx: "shell",
     buildTime: 10, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
   mastodon: {
-    name: "Mastodon", role: "Super-heavy tank. Crushes light armies. Can't hit air.",
-    cost: 475, hp: 1050, speed: 1.2, sight: 6, domain: "ground", armor: "heavy",
+    name: "Mastodon", role: "Slow super-heavy tank. Crushes light armies. Can't hit air.",
+    cost: 525, hp: 1250, speed: 1.0, sight: 6, domain: "ground", armor: "heavy",
     targets: "ground", dps: 46, range: 4, shotInterval: 1.2, dmgType: "cannon", fx: "heavy-cannon",
     buildTime: 15, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.55
   },
   lancer: {
     name: "Lancer", role: "Hover laser tank. Burns through armour, hits air too. Crosses water.",
-    cost: 275, hp: 405, speed: 2.5, sight: 6, domain: "ground", armor: "medium",
+    cost: 300, hp: 450, speed: 2.5, sight: 6, domain: "ground", armor: "medium",
     hover: true,
-    targets: "both", dps: 28, range: 4.5, shotInterval: 0.8, dmgType: "laser", fx: "laser", airMult: 0.65,
+    targets: "both", dps: 31, range: 5.5, shotInterval: 0.8, dmgType: "laser", fx: "laser", airMult: 0.65,
     buildTime: 11, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
   wasp: {
@@ -157,9 +157,9 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     buildTime: 9, builtAt: "airpad", radius: 0.38
   },
   hornet: {
-    name: "Hornet", role: "Heavy bomber. Carpet-bombs ground and bases. Needs escort.",
-    cost: 375, hp: 505, speed: 2.1, sight: 6, domain: "air", armor: "heavy",
-    targets: "ground", dps: 36, range: 1.6, shotInterval: 2, splash: 1.1,
+    name: "Hornet", role: "Glass-cannon bomber. Flattens ground armies and bases, but fragile: dies to anti-air without escort.",
+    cost: 400, hp: 280, speed: 2.4, sight: 6, domain: "air", armor: "light",
+    targets: "ground", dps: 72, range: 1.6, shotInterval: 2, splash: 1.5,
     projectileSpeed: 5, dmgType: "explosive", fx: "bomb",
     buildTime: 14, builtAt: "airpad", requires: "tech-lab", radius: 0.5
   },
@@ -179,16 +179,17 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     buildTime: 6, builtAt: "assembly-bay", radius: 0.4, squad: 5
   },
   // (the spec's 180 HP and 0.8× vs air lost to Hornets by 0.59 cost for cost — their bombs
-  // splash whole clumps of squads; 210 HP and 1.5× vs air kill them, as the role says)
+  // splash whole clumps of squads; 210 HP and 1.5× vs air killed them. The glass-cannon Hornet,
+  // TECH-TIER.md, beats them again, by 0.52: anti-air is Flak, Raptors and SAMs)
   "rocket-squad": {
-    name: "Rocket Squad", role: "Anti-armour rockets. Kill Mastodons and Hornets. Weak vs infantry.",
+    name: "Rocket Squad", role: "Anti-armour rockets. Kill Mastodons, hit air too. Weak vs infantry.",
     cost: 175, hp: 210, speed: 1.6, sight: 6, domain: "ground", armor: "infantry",
     targets: "both", dps: 26, range: 4, shotInterval: 1.5, dmgType: "cannon", fx: "rockets", airMult: 1.5,
     buildTime: 9, builtAt: "assembly-bay", radius: 0.4, squad: 3
   },
   sniper: {
     name: "Sniper Team", role: "Long-range marksmen. Delete infantry. Useless vs vehicles.",
-    cost: 200, hp: 120, speed: 1.7, sight: 8, domain: "ground", armor: "infantry",
+    cost: 220, hp: 120, speed: 1.7, sight: 8, domain: "ground", armor: "infantry",
     // 50 per shot; precision ×3 vs infantry = 150 (about three Trooper robots)
     targets: "ground", dps: 20, range: 7, shotInterval: 2.5, dmgType: "precision", fx: "snipe",
     buildTime: 10, builtAt: "assembly-bay", requires: "tech-lab", radius: 0.35, squad: 2
@@ -229,7 +230,7 @@ export const BUILDINGS: Record<BuildingKind, BuildingStats> = {
   },
   "tech-lab": {
     name: "Tech Lab", role: "Unlocks Mortar, Mastodon, Lancer, Hornet and Sniper.",
-    cost: 450, hp: 800, sight: 4, size: 2, buildTime: 20, requires: ["fab-plant", "airpad", "assembly-bay"],
+    cost: 750, hp: 800, sight: 4, size: 2, buildTime: 35, requires: ["fab-plant", "airpad", "assembly-bay"],
     targets: "none", dps: 0, range: 0
   },
   depot: {

@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { expansionSite, tendExpansion, type ExpansionPlan } from "./expansion";
+import { expansionSite, perTick, tendExpansion, type ExpansionPlan } from "./expansion";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import { isOut } from "../combat";
@@ -1357,6 +1357,9 @@ function depotSite(
   hqC: { x: number; y: number },
   reach = 9
 ): { spot: { tx: number; ty: number } } | null {
+  return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach}`, () => scanDepotSite(w, faction, hqC, reach));
+}
+function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   // (a field with a drop-off in reach of any of its tiles is served: one depot to a field, not a ring of them)
   const ids = fieldIds(w);

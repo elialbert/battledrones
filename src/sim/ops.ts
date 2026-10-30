@@ -280,7 +280,7 @@ export const OPS: OpDef[] = [
     tagline: "Air only: sink their HQ before 7:00",
     brief:
       "Fab Plants and the Condor are off-limits: this is an air raid. Red is digging in behind SAM sites you haven't seen yet, and every Wasp you show it teaches it to build more Flak. Scout first, then sink their HQ before 7:00.",
-    tip: "A Scout finds the SAM sites. Raptors beat their fighters, Hornets flatten SAMs and the HQ. Don't feed bombers into anti-air one at a time.",
+    tip: "A Scout finds the SAM sites. Raptors beat their fighters, Hornets flatten SAMs and the HQ, but they're fragile: don't feed bombers into anti-air one at a time.",
     map: "ashlands",
     // a commander that digs in (never attacks) on half income: the clock is the enemy
     ai: { strategy: "balanced", difficulty: "easy", tweak: DEFENSIVE },
@@ -288,8 +288,10 @@ export const OPS: OpDef[] = [
     // the starting Trooper Squad stays home — no Condor to fly it — and no more infantry can be raised)
     rules: { playerBans: { units: NO_GROUND_COMBAT, buildings: ["fab-plant", "assembly-bay"] }, enemyIncome: 0.5 },
     // (900: fields mine slower since the expansion rework; at 800 its star slipped by seconds. Star at 5:00,
-    // not 4:30: after the Stinger and Turret retune its pilots' first wins came in at 4:40-5:00, RUSH-RPS.md)
-    scrap: 900,
+    // not 4:30: after the Stinger and Turret retune its pilots' first wins came in at 4:40-5:00, RUSH-RPS.md.
+    // 1500 since the tier-2 rework, TECH-TIER.md: glass-cannon Hornets, and red's Lancers reach 5.5 and hit
+    // air harder; at 1400 no pilot won, at 1500 the raider wins at 3:42)
+    scrap: 1500,
     setup(_w, o) {
       o.building("blue", "airpad", 9, 54);
       o.building("blue", "tech-lab", 4, 51);

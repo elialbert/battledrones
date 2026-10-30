@@ -502,12 +502,24 @@ It's in `tools/rps/` (untracked: commit it or not, as you like):
   losses every 30 s (consumed crews show up as lost harvesters).
   `BAL='{"ECONOMY.expansion.cost":450,"BUILDINGS.turret.cost":175}'`
   patches any balance constant for that run.
+- **`sweep.mjs [name=BALjson …]`** (TECH-TIER.md Part 1) is the main
+  driver: every config × `PAIRS` (default the stock triangle
+  `rush:greed rush:turtle greed:turtle`) × maps × `SEEDS` × both sides, in
+  one queue, `P` (12) at a time. It bundles `rush.ts` once with esbuild
+  (about 3 s a game instead of 6.6), so `src` can be edited mid-run; caches
+  each finished game by bundle hash + BAL + args in `$OUT/cache`, so `base`
+  and repeats are free; plays the longest games first. It ends with a table:
+  each config × matchup W–L–D, the left plan's score (W + D/2)/N, the change
+  against `base` with a 95% interval (`*` = outside it), and a tier-2 table
+  per plan (median Lab time, median first tier-2 unit, mean tier-2 share of
+  army value at 3/5 min). Results in `$OUT/<RUN>/results.txt`, `table.txt`.
+  The full triangle (72 games) takes about 45 s; screen on `SEEDS=1`,
+  confirm on `SEEDS="1 2 3 4"`.
 - `xbatch.sh <diff> <ours> <theirs>` runs 24 games (6 maps × `SEEDS` × both
-  sides), one process each, 24 in parallel, `timeout 180` each.
-- `matrix.sh <tag>` runs each `PAIRS` matchup (`"a:b c:d"`; the default is
-  the five above) and prints W–L–D; results go to `$OUT` (default
-  `/tmp/rps`). One game takes about 5–8 s, a matchup about 30 s, the
-  five-pair matrix about 2.5 min.
+  sides) from a bundle, `P` (12) in parallel, `timeout 180` each.
+- `matrix.sh <tag>` runs each `PAIRS` matchup under `BAL` through
+  `sweep.mjs` (default: the stock triangle); results go to `$OUT` (default
+  `/tmp/rps`).
 - `rush.ts`'s END line also lists each side's depot times and, for the
   foe's expansions, `k` (we saw it going up), `h` (hit), `x` (killed).
 - `chain.ts [maps]` (`EXTEND=3`): turrets needed to chain the build zone to
@@ -518,8 +530,8 @@ It's in `tools/rps/` (untracked: commit it or not, as you like):
   field, fog off.
 - `econ.ts <map> <n> [d]`: per-harvester income, `n` harvesters on the field
   nearest the HQ, optionally a depot beside it (30 s warm-up, 60 s measured).
-- **Don't edit `src` while a batch runs**: each game loads `src` as it
-  starts. To keep editing during a run, make a worktree
-  (`git worktree add --detach /tmp/rps-tree HEAD`, symlink `node_modules`,
-  rsync `src/` and `tools/rps/` into it) and run with `RPS_TREE=/tmp/rps-tree`.
+- Batches run from a bundle made at the start, so editing `src` mid-run is
+  safe. `RPS_TREE=/path` still bundles from another tree (a git worktree of
+  a commit to compare against: `git worktree add --detach /tmp/rps-tree
+  HEAD`, symlink `node_modules`).
 - zsh: `${=var}` to word-split.

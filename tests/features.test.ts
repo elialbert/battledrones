@@ -226,7 +226,8 @@ describe("unit behaviour", () => {
     const w = createWorld(30, 24);
     // (a Lancer: a light-armoured Stinger now loses a lone Mortar's duel by a hair, cost for cost it still wins)
     const guard = spawnUnit(w, "lancer", "blue", 5.5, 10.5);
-    const mortar = spawnUnit(w, "mortar", "red", 12.5, 10.5);
+    // (7.9 tiles: in the Mortar's range, out of the Lancer's acquire range, 5.5 + 1.5)
+    const mortar = spawnUnit(w, "mortar", "red", 13.4, 10.5);
     step(w, [{ type: "attack", faction: "red", unitIds: [mortar.id], targetId: guard.id }]);
     runTicks(w, 4 * TICK_RATE);
     expect(guard.order).toEqual({ type: "attack", targetId: mortar.id });

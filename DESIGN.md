@@ -266,7 +266,7 @@ broad headlands and coves, and which leaves the necks as they are.
 ### Battlefield salvage
 
 Every destroyed combat unit leaves a burning wreck worth **30% of its
-cost** (Stinger 45, Mastodon 143, Hornet 113 …; harvesters and robot infantry
+cost** (Stinger 45, Mastodon 158, Hornet 120 …; harvesters and robot infantry
 squads leave none; Last
 Stand's wave units only 5%, see Last Stand) for **60 s**. After 2.5 s it
 has cooled enough to touch, and the first ground
@@ -386,14 +386,14 @@ cost).
 | **Stinger** | Fab | Ground | Ground | Cheap fast light tank |
 | **Flak Crawler** | Fab | Ground | Air | The anti-air answer |
 | **Mortar** ⚗ | Fab | Ground | Ground | Long-range splash artillery with a minimum range; shells are real projectiles and can be dodged |
-| **Mastodon** ⚗ | Fab | Ground | Ground | Super-heavy twin-cannon tank |
+| **Mastodon** ⚗ | Fab | Ground | Ground | Slow super-heavy twin-cannon tank |
 | **Lancer** ⚗ | Fab | Hover | Both | Anti-armour laser that also hits air (at reduced effect) and crosses water |
 | **Wasp** | Airpad | Air | Ground | Rocket strike drone |
 | **Raptor** | Airpad | Air | Air | Interceptor |
-| **Hornet** ⚗ | Airpad | Air | Ground | Heavy bomber: splash vs ground and bases |
+| **Hornet** ⚗ | Airpad | Air | Ground | Glass-cannon bomber: big splash vs ground and bases, light armour, dies to anti-air without escort |
 | **Mender** | Airpad | Air | — | Repair drone: heals units and buildings |
 | **Trooper Squad** | Assembly Bay | Foot | Both | Cheap rifle robots; half damage vs air; best in woods |
-| **Rocket Squad** | Assembly Bay | Foot | Both | Anti-armour rockets: kills Mastodons and Hornets, weak vs infantry |
+| **Rocket Squad** | Assembly Bay | Foot | Both | Anti-armour rockets: kills Mastodons, weak vs infantry |
 | **Sniper Team** ⚗ | Assembly Bay | Foot | Ground | Long-range marksmen: deletes infantry, useless vs vehicles; hides in woods |
 | **Condor** | Airpad | Air | — | Unarmed dropship: carries two squads over anything |
 | **Goliath** | Gantry | Ground | Both | Giant walking mech and mobile base; loses its weapons as it is hurt |
@@ -573,12 +573,13 @@ The counter web (verified by the cost-equal duel matrix in
 `tools/balance.ts duels`): **Stingers** beat Flak, Mortars and Lancers ·
 **Lancers** burn through Mastodons · **Mastodons** crush Stingers, Flak and
 Mortars · **Flak** beats all aircraft · **Wasps** beat tanks and artillery ·
-**Raptors** beat aircraft · **Hornets** smash bases and armour but die to
+**Raptors** beat aircraft · **Hornets** (a glass cannon since the tier-2
+rework, TECH-TIER.md) smash bases and every ground army but die to
 Flak/Raptors/SAMs. Stinger › Lancer › Mastodon › Stinger is the ground
 triangle; air vs anti-air sits across it.
 
 Robot infantry adds a web on foot (duel margins from the *Infantry pass*):
-**Rocket Squads** kill Mastodons (+0.69) and Hornets (+0.31) and beat Flak,
+**Rocket Squads** kill Mastodons (+0.69; Hornets beat them since the tier-2 rework) and beat Flak,
 Lancers, Wasps and Raptors too, but lose to Stingers, Mortars, Troopers and
 Snipers · **Troopers** beat Rocket Squads (+0.79) and Lancers (+0.43) ·
 **Sniper Teams** delete Troopers (+0.37) and Rocket Squads (+0.87) and lose

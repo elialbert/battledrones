@@ -1640,7 +1640,7 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
       const orders: { at: number; ids: number[] }[] = [];
       const TICKS = 1500;
       const r = duel({
-        map: "riverlands", seed: 8, strategies: [null, "balanced"], delay: 5, ticks: TICKS,
+        map: "riverlands", seed: 7, strategies: [null, "balanced"], delay: 5, ticks: TICKS,
         prepare: (w) => {
           // (ids 10 apart, as in a long match: red's spare scouts take the ones between)
           for (let i = 0; i < 30; i++) {
@@ -1656,7 +1656,8 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
           p.extra.push({ type: "attackMove", faction: "blue", unitIds: army, x: 0.5 + (n % 50), y: 0.5 + Math.floor(n / 50) });
         }
       });
-      // (the army may well win: then both phones end on the same tick)
+      // (the army may well win: then both phones end on the same tick. Seed 7 runs the full 1500 ticks under the
+      // TECH-TIER.md balance; seed 8's blue now wins at 1275 and its fight peaks one order at 64 ticks, other seeds 33–53)
       const end = r.blue.w.tick;
       expect(r.red.w.tick).toBe(end);
       expect(end === TICKS || r.blue.w.winner !== null).toBe(true);

@@ -207,6 +207,8 @@ describe("AI on an action budget (Strategy.spendDown, depotReach: ai/marshal.ts 
       const hq = buildingCenter(hqOf(w, "red")!);
       for (let i = 0; i < 9; i++) spawnUnit(w, "harvester", "red", hq.x - 3.5 - (i % 2), hq.y - 2 + (i >> 1) * 0.7);
       w.factions.red.scrap = 1500;
+      // (its Tech Lab already up: the Lab holds the one build slot ~35 s, and the idle blue side falls by ~1:50)
+      spawnBuilding(w, "tech-lab", "red", hqOf(w, "red")!.tx + 4, hqOf(w, "red")!.ty);
       runWithAi(w, 180, createAiState("balanced", "normal", 1, tweak));
       return [...w.buildings.values()].filter((b) => b.faction === "red" && b.kind === "depot");
     };
@@ -223,7 +225,7 @@ describe("AI and robot infantry", () => {
   it("weighs anti-air by what it does to aircraft: a lone rifle squad is not flak", () => {
     expect(aaWeight(UNITS["flak-crawler"])).toBe(1);
     expect(aaWeight(UNITS.raptor)).toBe(1);
-    expect(aaWeight(UNITS.lancer)).toBeCloseTo(0.6, 9);
+    expect(aaWeight(UNITS.lancer)).toBeCloseTo(0.7, 9);
     expect(aaWeight(UNITS.stinger)).toBe(0);
     expect(aaWeight(UNITS.trooper)).toBeLessThan(AA_COVER);
     expect(aaWeight(UNITS["rocket-squad"])).toBeGreaterThanOrEqual(AA_COVER);

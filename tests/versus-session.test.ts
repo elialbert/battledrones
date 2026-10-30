@@ -304,7 +304,7 @@ const FIVE_MINUTES = 3000;
 
 describe("a session from the lobby to the end of the match", () => {
   it("pairs, keys the link at GO, loads and plays five minutes in lockstep at 0% loss", { timeout: 120_000 }, () => {
-    const r = duel({ seed: 1, ticks: FIVE_MINUTES, air: { latencyMs: 250, phaseMs: [30, 170] } });
+    const r = duel({ seed: 1, ticks: FIVE_MINUTES, air: { latencyMs: 250, phaseMs: [30, 170] }, strategies: ["balanced", "boom"] }); // (a match still going at five minutes: "rush" can win by then)
     expectSameMatch(r, FIVE_MINUTES);
     const h = r.host.s.result()!;
     expect(h.fast).toBe(true); // (30 dB both ways)

@@ -50,8 +50,24 @@ export function unservedField(w: World, faction: Faction, hqC: { x: number; y: n
   return best && best.d <= MAX_FIELD ? best : null;
 }
 
+/**
+ * `fn()` once per tick for the same `key` (a site scan: the AI asks several
+ * times a think, both sides, and the world can't change between thinks of one
+ * tick). Per world object, so a world rebuilt from a checkpoint starts fresh.
+ */
+export function perTick<T>(w: World, key: string, fn: () => T): T {
+  let m = tickMemo.get(w);
+  if (!m || m.tick !== w.tick) tickMemo.set(w, (m = { tick: w.tick, v: new Map() }));
+  if (!m.v.has(key)) m.v.set(key, fn());
+  return m.v.get(key) as T;
+}
+const tickMemo = new WeakMap<World, { tick: number; v: Map<string, unknown> }>();
+
 /** Where an expansion Depot would go: the open spot nearest the nearest unserved field, reachable from home. */
 export function expansionSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { tx: number; ty: number } | null {
+  return perTick(w, `exp ${faction} ${hqC.x} ${hqC.y} ${reach}`, () => scanExpansionSite(w, faction, hqC, reach));
+}
+function scanExpansionSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { tx: number; ty: number } | null {
   const field = unservedField(w, faction, hqC, Math.max(reach, SERVED));
   if (!field) return null;
   const size = BUILDINGS.depot.size;

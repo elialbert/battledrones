@@ -62,8 +62,17 @@ const depotSeen = new Set<number>();
 const exps: Record<number, any> = {};
 const lostKinds: Record<string, Record<string, number>> = { blue: {}, red: {} };
 const seenU = new Map<number, any>();
+// tier 2 (units the Tech Lab unlocks): when each side's Lab stands, its first tier-2 unit, tier-2 share of army value at 3/5 min
+const T2 = new Set(Object.entries(UNITS).filter(([, u]: any) => u.requires === "tech-lab").map(([k]) => k));
+const lab: Record<string, string> = {}, t2: Record<string, string> = {}, t2share: Record<string, string[]> = { blue: [], red: [] };
 a.onRound = () => {
   const w = a.w;
+  for (const b of w.buildings.values()) if (b.kind === "tech-lab" && !lab[b.faction]) lab[b.faction] = clock(w.tick);
+  for (const u of w.units.values()) if (T2.has(u.kind) && !t2[u.faction]) t2[u.faction] = clock(w.tick);
+  if (w.tick === 180 * TICK_RATE || w.tick === 300 * TICK_RATE) for (const f of [side, foe]) {
+    const all = army(f), hi = [...w.units.values()].filter((u: any) => u.faction === f && T2.has(u.kind)).reduce((v: number, u: any) => v + UNITS[u.kind as "stinger"].cost, 0);
+    t2share[f]!.push(all ? Math.round(100 * hi / all) + "%" : "-");
+  }
   if (process.env.COMP) {
     const alive = new Set(w.units.keys());
     for (const [id, u] of seenU) if (!alive.has(id)) { lostKinds[u.faction][u.kind] = (lostKinds[u.faction][u.kind] ?? 0) + 1; seenU.delete(id); }
@@ -112,4 +121,5 @@ if (process.env.DEPOTS) {
 const e = a.record.end;
 const res = e.winner === side ? "W" : e.winner === foe ? "L" : "D";
 if (!quiet) { console.log(firsts, "foeLost2+", firstHit); for (const s of snap) console.log(s); }
-console.log("END", res, map, seed, side, ours, "vs", theirs, clock(e.tick), "depots", depotAt[side]!.join(","), "|", depotAt[foe]!.join(","), "exp", Object.values(exps).map((e: any) => e.at + (e.k ? "k" : "") + (e.h ? "h" : "") + (e.x ? "x" : "")).join(","));
+console.log("END", res, map, seed, side, ours, "vs", theirs, clock(e.tick), "depots", depotAt[side]!.join(","), "|", depotAt[foe]!.join(","), "exp", Object.values(exps).map((e: any) => e.at + (e.k ? "k" : "") + (e.h ? "h" : "") + (e.x ? "x" : "")).join(","),
+  "t2", [side, foe].map((f) => `lab${lab[f] ?? "-"} first${t2[f] ?? "-"} share${t2share[f]!.join("/") || "-"}`).join(" | "));
