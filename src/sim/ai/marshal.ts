@@ -22,8 +22,9 @@
  *    action to spare isn't lost.
  *  - **Fights are re-planned while they happen.** Focus fire on what dies
  *    fastest for the harm it does, spread so it doesn't overkill and only
- *    switched for a much better target; hurt expensive units step back; and
- *    a fight that's lost, away from home, is broken off.
+ *    switched for a much better target; hurt expensive units step back;
+ *    what outranges the enemy closing on it kites (ai/kite.ts, Normal and
+ *    up); and a fight that's lost, away from home, is broken off.
  *  - **It finishes a won game.** Once its army is twice the enemy army it
  *    has seen lately, everything attack-moves on the enemy's buildings, one
  *    order every few seconds; a capped commander otherwise sits on a won game
@@ -45,6 +46,7 @@ import { strikeHolds } from "./hornets";
 import { hash32 } from "../rand";
 import { pickAiOpener } from "../openers";
 import { capApm } from "./apm";
+import { kiteStep } from "./kite";
 
 export interface MarshalOptions {
   /** Seconds between the commander's planning passes. */
@@ -247,9 +249,10 @@ export const MARSHAL: Record<
     tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>;
   }
 > = {
-  easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300 },
+  // (Easy and Casual don't kite, ai/kite.ts: a step back every 20 s is no kiting, and lost Easy fights it would win)
+  easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300, fight: { kite: false } },
   // (between Easy and Normal: three minutes' peace, the slow plans and Air Swarm)
-  casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180 },
+  casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180, fight: { kite: false } },
   normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
   // (Hard before Brutal took its place, at 80 actions a minute: at 120 it beat Normal 99%, and lost only 39% to Brutal)
   hard: { think: 1.5, react: 0.5, apm: 80, microApm: 60, fast: true, holdUntil: 0 },
@@ -280,6 +283,7 @@ export function seatMarshal(side: Faction, seed: number, difficulty: Difficulty,
 const enum Rank {
   Dodge,
   Retreat,
+  Kite,
   Economy,
   Push,
   Production,
@@ -338,7 +342,9 @@ const FIGHT = {
   switch: SWITCH,
   finish: FINISH,
   finishMin: FINISH_MIN,
-  finishEvery: FINISH_EVERY
+  finishEvery: FINISH_EVERY,
+  /** Units that outrange what's coming at them step back and keep shooting (ai/kite.ts). */
+  kite: true
 };
 export type Fight = typeof FIGHT;
 
@@ -655,6 +661,17 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
           held.set(u.id, w.tick + 6 * TICK_RATE);
           res.push({ rank: Rank.Retreat, cmd: { type: "move", faction: side, unitIds: [u.id], x: back.x, y: back.y }, planned: false });
         }
+      // --- kiting: what outranges the enemy closing on it steps back out of its reach (ai/kite.ts)
+      if (K.kite) {
+        const step = kiteStep(w, c.filter((u) => !leaving.has(u.id)), theirs, home);
+        if (step) {
+          for (const id of step.ids) {
+            leaving.add(id);
+            held.set(id, w.tick + 2 * reactTicks + TICK_RATE);
+          }
+          res.push({ rank: Rank.Kite, cmd: { type: "move", faction: side, unitIds: step.ids, x: step.x, y: step.y }, planned: false });
+        }
+      }
       // --- focus fire: each shooter on what dies fastest for the harm it does, no overkill
       const aimed = new Map<number, number>(); // damage a second already on each target
       const shooters = c.filter((u) => !leaving.has(u.id));

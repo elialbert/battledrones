@@ -703,6 +703,62 @@ dies, and the HQ repairs that. When it loses, it's mostly to an early push
 on a base that spent everything on bombers, or anti-air finding the wing
 (Archipelago). It is in every pool but Easy's.
 
+### Kiting (2026-10-30)
+
+Marshal's fight micro now kites (`src/sim/ai/kite.ts`, `kiteStep`, called
+from `fights()` in marshal.ts). A unit can't fire on the move, so kiting is a
+stutter step: a unit that outranges what's closing on it (by at least 1 tile)
+steps back until it's just inside its own range again, stops, shoots, and
+steps back again on a later look. That's one move order for a fight's kiters
+together, with its own rank (`Rank.Kite`, after Retreat and ahead of focus
+fire; swapping the two changed nothing). The rules:
+
+- It kites only what it can hurt and what can hurt it, and never when
+  something near it that can hit it outranges it or nearly does.
+- It ignores threats more than 1.25× its speed: Lancers don't run from Wasps,
+  and Mortars don't run from Stingers.
+- It steps back once a threat is 1.2 tiles from having it in range. It stops
+  stepping back once a threat that is at least as fast is already 0.6 tiles
+  inside its range, because running then only stops it shooting.
+- It leaves a threat alone when something of ours that can't kite, or one of
+  our buildings, is clearly nearer to it: the threat is busy with our front
+  line. This rule turned the mixed-army result from −0.16 to about even.
+- Kiters within 3 tiles of a unit that steps back go with it. The step leans
+  toward home when home is behind.
+- Easy and Casual don't kite (`fight: { kite: false }`). With one fight order
+  every 20 s, Easy lost some fights by kiting (Mortar vs Mastodon −0.31).
+
+Duels: `tools/rps/kite-marshal.ts` seats Hard Marshal on blue (kiting or not)
+against a cost-equal attack-move, with 4 seeds. `tools/rps/kite.ts` runs the
+bare `kiteStep` with a token budget and takes `KITE='{…}'` overrides. Score
+gain (+1 = a wipe with nothing lost):
+
+| blue : red | Normal | Hard | Brutal |
+|---|---|---|---|
+| Lancer : Stinger | +0.03 | +0.89 | +1.06 |
+| Lancer : Mastodon | +0.08 | +0.37 | +0.47 |
+| Lancer : Trooper | +0.92 | +1.20 | +1.38 |
+| Lancer : Rocket Squad | −0.11 | +0.78 | +0.87 |
+| Mortar : Mastodon | +0.23 | +0.47 | +0.63 |
+| Sniper : Trooper | +0.38 | +0.54 | +0.28 |
+| 3 Lancer + 4 Stinger : Stinger | +0.17 | +0.45 | +0.21 |
+| 4 Lancer + 2 Mastodon : 4 Stinger + 2 Mastodon | +0.11 | +0.18 | +0.06 |
+| 3 Lancer + 2 Mortar + 3 Stinger : 5 Stinger + 2 Mastodon | +0.21 | +0.25 | +0.53 |
+
+On Hard, six kiting Lancers now beat twelve Stingers. Without kiting they
+lose −0.58. That is covered in tests/ai-kite.test.ts.
+
+Full games (Hard, each plan against itself without kiting, the `nokite`
+variant, 6 maps × 10 seeds × both sides): Greed 50%, Turtle 53%, Rush 55%,
+Ironclad 50%, Balanced 57%. Pooled, that's 296–260–44, **53% ±4**. Kiting
+triggers 20–60 times a game, mostly Lancers and Mortars against Rocket Squads,
+Mastodons and Stingers. The full-game edge is small because most fights are
+big mixed brawls.
+
+Not done: the commander's unit choice doesn't know about kiting yet. Against
+infantry it builds Stingers and Mortars, but kiting Lancers now beat Troopers
++0.69 instead of −0.28.
+
 ## Open questions
 
 - **Drop or queue over-budget commands?** Answered for Marshal: the cap
@@ -731,6 +787,7 @@ on a base that spent everything on bombers, or anti-air finding the wing
 | `src/sim/ai/apm.ts` | `capApm`, the token bucket |
 | `src/sim/ai/marshal.ts` | Marshal; `MARSHAL` (each difficulty's speeds and caps), `MARSHAL_PLANS`, `MARSHAL_POOL` |
 | `src/sim/ai/commander.ts` | The stock commander: `tickAi`, `DIFFICULTY`, `STRATEGIES` |
+| `src/sim/ai/kite.ts` | Kiting: `KITE`, `kiteStep` (Marshal's fight micro calls it) |
 | `src/sim/ai/hornets.ts` | The Hornet Strike plan's wing: `STRIKE`, `planStrike`, `strikeHolds`, `strikeWants` |
 | `src/sim/ai/player.ts` | The scripted players |
 | `src/arena/match.ts` | `parseSeat`, `seatName`, bot seats ticking every tick |

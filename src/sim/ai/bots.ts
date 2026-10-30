@@ -111,7 +111,7 @@ const ALL: BotDef[] = [
   {
     id: "marshal",
     label: "Marshal",
-    about: "The commander's plans on a human's budget (at most 10/18/30/80/120 actions a minute from Easy to Brutal, fight orders at most 2 a second), Turtle, Greed, the Juggernaut and the Hornet Strike among them, its Goliaths expanding the economy and backing the army up: no wasted orders, focus fire, knows when to quit a fight and when to finish one",
+    about: "The commander's plans on a human's budget (at most 10/18/30/80/120 actions a minute from Easy to Brutal, fight orders at most 2 a second), Turtle, Greed, the Juggernaut and the Hornet Strike among them, its Goliaths expanding the economy and backing the army up: no wasted orders, focus fire, kites with what outranges the enemy, knows when to quit a fight and when to finish one",
     group: "Commander",
     difficulties: true,
     opponent: true,
