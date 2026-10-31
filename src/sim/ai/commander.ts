@@ -10,7 +10,7 @@ import { QUARTER, isMulti, rivalsOf, turnPoint } from "../sides";
 import { isInfantry } from "../infantry";
 import { earlyCallBonus, survivalHoldPoint, waveBudget } from "../modes/survival";
 import { findPath } from "../movement";
-import { sealsOff } from "../placement";
+import { isCramped, sealsOff } from "../placement";
 import { isWoundedVeteran, veteranRetreats } from "./veterans";
 import { planMenders } from "./menders";
 import { bannedBy, infantryArmy } from "../rules";
@@ -1540,7 +1540,7 @@ function findPlacementSpot(
         const [tx, ty] = fr.tile(fx, fy, size);
         if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
         // keep a lane open: don't wall the HQ in with production buildings
-        if (size > 1 && tooCramped(w, tx, ty, size)) continue;
+        if (size > 1 && isCramped(w, tx, ty, size)) continue;
         if (dugIn.length > 0 && atFeet(tx, ty)) continue;
         // and never box ground in: a pocket our own units roll out into and can't leave, or the base's way out shut
         if (sealsOff(w, tx, ty, size)) continue;
@@ -1549,22 +1549,6 @@ function findPlacementSpot(
       }
   }
   return best;
-}
-
-/** Would a building here leave no free tile along any side (walling in)? */
-function tooCramped(w: World, tx: number, ty: number, size: number): boolean {
-  let free = 0;
-  for (let i = -1; i <= size; i++)
-    for (const [x, y] of [
-      [tx + i, ty - 1],
-      [tx + i, ty + size],
-      [tx - 1, ty + i],
-      [tx + size, ty + i]
-    ] as [number, number][]) {
-      if (x < 0 || y < 0 || x >= w.width || y >= w.height) continue;
-      if (w.occupancy[y * w.width + x] === 0) free++;
-    }
-  return free < (size + 2) * 2;
 }
 
 /** Corner-sweep waypoints for scouts, biased toward the far half. */

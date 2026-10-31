@@ -31,11 +31,11 @@ import { anchorBlocker, anchoredGoliaths, applyGoliathCommand, goliathReachAt, o
 import { unitSeenBy, isInfantry, isTransport } from "../sim/infantry";
 import { applyLiftCommand, liftBlocker, liftedBy, routeLiftCommand } from "../sim/lift";
 import { OPENER_IDS, isOpenerId, openerBlocked, type OpenerId } from "../sim/openers";
-import { placementBlocker } from "../sim/placement";
+import { isCramped, placementBlocker } from "../sim/placement";
 import { POWER_KINDS, applyCalldown, calldownBlocker } from "../sim/powers";
 import { applyTransportCommand, freeSeats, isLoaded } from "../sim/transport";
 import type { Building, BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
-import { buildingCenter, distToBuilding, domainOf, hqOf, inBounds, isResource, tileIndex } from "../sim/world";
+import { buildingCenter, distToBuilding, domainOf, hqOf, isResource, tileIndex } from "../sim/world";
 import { enemyOf, frameOf, type Frame } from "./frame";
 
 export const UNIT_KINDS = Object.keys(UNITS) as UnitKind[];
@@ -590,22 +590,6 @@ function selector(w: World, fr: Frame, side: Faction, s: string): Unit[] {
 
 // -------------------------------------------------------------- placement ---
 
-/** Would this footprint leave no free tile along any side (walling in)? (ai/commander.ts tooCramped) */
-function tooCramped(w: World, tx: number, ty: number, size: number): boolean {
-  let free = 0;
-  for (let i = -1; i <= size; i++)
-    for (const [x, y] of [
-      [tx + i, ty - 1],
-      [tx + i, ty + size],
-      [tx - 1, ty + i],
-      [tx + size, ty + i]
-    ] as [number, number][]) {
-      if (!inBounds(w, x, y)) continue;
-      if (w.occupancy[y * w.width + x] === 0) free++;
-    }
-  return free < (size + 2) * 2;
-}
-
 /**
  * Where to put a building nobody chose a spot for (world top-left), the way
  * the built-in commander picks: production by the HQ, defences and radar
@@ -667,7 +651,7 @@ export function suggestSpot(w: World, side: Faction, kind: BuildingKind, near?: 
         if (score >= bestScore) continue;
         const [tx, ty] = fr.worldTopLeft(kind, fx, fy);
         if (!canPlaceBuilding(w, side, kind, tx, ty)) continue;
-        if (size > 1 && tooCramped(w, tx, ty, size)) continue;
+        if (size > 1 && isCramped(w, tx, ty, size)) continue;
         spot = [tx, ty];
         bestScore = score;
       }

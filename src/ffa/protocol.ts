@@ -27,6 +27,8 @@ import { MARSHAL_PLANS, type PlanName } from "../sim/ai/marshal";
 import { FACTIONS, isFaction } from "../sim/sides";
 import type { BuildingKind, Command, Faction, PowerKind, UnitKind } from "../sim/types";
 import { isKnownMapId } from "../sim/maps";
+import { BUILDINGS, UNITS } from "../sim/balance";
+import { POWER_KINDS } from "../sim/powers";
 
 /** Bump when the messages or the turn log change meaning. */
 export const FFA_PROTO = 2;
@@ -136,16 +138,9 @@ export type GuestMsg =
 
 // ------------------------------------------------------------ validation ---
 
-const COMMAND_TYPES = new Set<Command["type"]>([
-  "move", "attackMove", "attack", "harvest", "stop", "produce", "cancelProduce", "startBuilding", "cancelBuilding",
-  "placeBuilding", "sell", "rally", "calldown", "board", "unload", "anchor", "packUp", "lift", "resign", "found"
-]);
-const UNIT_KINDS = new Set<string>([
-  "harvester", "scout", "stinger", "flak-crawler", "mortar", "mastodon", "lancer", "wasp", "raptor", "hornet", "mender",
-  "trooper", "rocket-squad", "sniper", "condor", "goliath"
-]);
-const BUILDING_KINDS = new Set<string>(["hq", "fab-plant", "airpad", "tech-lab", "depot", "turret", "sam-site", "radar", "assembly-bay", "gantry"]);
-const POWERS = new Set<string>(["barrage", "emp", "droppod", "hammer"]);
+const UNIT_KINDS = new Set(Object.keys(UNITS));
+const BUILDING_KINDS = new Set(Object.keys(BUILDINGS));
+const POWERS = new Set<string>(POWER_KINDS);
 
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && Math.abs(x) < 1e6;
 /** An integer as the wire carries them: ids, ticks, seqs and 32-bit seeds. */
@@ -160,8 +155,7 @@ const ids = (x: unknown, max = 200): x is number[] => Array.isArray(x) && x.leng
 export function sanitizeCommand(raw: unknown, side: Faction): Command | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;
-  const type = c.type as Command["type"];
-  if (!COMMAND_TYPES.has(type)) return null;
+  const type = c.type;
   const base = { faction: side };
   switch (type) {
     case "move":

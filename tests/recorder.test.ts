@@ -8,7 +8,7 @@ import { createMapWorld, type MatchOptions } from "../src/sim/maps";
 import { OPS, opAiState, opById } from "../src/sim/ops";
 import { allowedOpener, AI_OPENER } from "../src/sim/openers";
 import { step } from "../src/sim/sim";
-import type { Faction } from "../src/sim/types";
+import type { Command, Faction } from "../src/sim/types";
 
 /**
  * A match the way GameScene plays one it set up itself: the world from its
@@ -49,6 +49,39 @@ function replaysExactly({ w, record }: ReturnType<typeof play>) {
 }
 
 describe("a match played here, as a battle record (Copy replay JSON)", () => {
+  it("exports independent snapshots: editing one cannot corrupt later exports or their replays", () => {
+    const opts = { seed: 5, objectives: true };
+    const w = createMapWorld("riverlands", opts);
+    const rec = new MatchRecorder(w.mapId, opts, {
+      blue: { player: "player", settings: { labels: ["original"] } }, red: { player: "ai" }
+    });
+    const unit = [...w.units.values()].find((u) => u.faction === "blue")!;
+    const command: Command = { type: "move", faction: "blue", unitIds: [unit.id], x: 15, y: 15 };
+    step(w, [command]);
+    rec.stepped(w, [command]);
+    // The controller is also allowed to reuse and change its command arrays.
+    command.unitIds.length = 0;
+    while (w.tick < 100) {
+      step(w, []);
+      rec.stepped(w, []);
+    }
+    const expected = structuredClone(rec.record(w));
+    expect(expected.turns[0]![2][0]).toMatchObject({ unitIds: [unit.id] });
+    const edited = rec.record(w);
+    const move = edited.turns[0]![2][0]!;
+    if (move.type !== "move") throw new Error("Expected the recorded move");
+    move.unitIds.length = 0;
+    edited.turns[0]![2].push({ type: "resign", faction: "blue" });
+    edited.hashes[0]![1] = "tampered";
+    (edited.seats.blue.settings!.labels as string[]).push("edited");
+
+    expect(rec.record(w)).toEqual(expected);
+    const result = replay(rec.record(w));
+    expect(result.checked).toBe(1);
+    expect(result.divergedAt).toBeNull();
+    expect(worldHash(result.world)).toBe(worldHash(w));
+  });
+
   it("a skirmish against a Hard AI: openers, the AI's income handicap, mutators", () => {
     const m = play("riverlands", { seed: 1234, objectives: true, mutators: ["rapidfab"] }, 1200, {
       blue: createAiState("rush", "normal", 7),

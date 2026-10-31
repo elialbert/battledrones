@@ -90,10 +90,12 @@ export function inBuildRange(w: World, faction: Faction, cx: number, cy: number,
 }
 
 /**
- * Would a footprint here leave no free tile along some side, walling in
- * what's next to it? (Mirrors the AI's own lane-keeping rule.)
+ * Is there too little clearance around a footprint? Counts unoccupied tiles
+ * along its perimeter, with corners counted twice, against half the perimeter.
+ * AI and arena placement use occupancy alone; touch suggestions also check
+ * ground terrain so they can steer players away from rock and water pockets.
  */
-function cramped(w: World, tx: number, ty: number, size: number): boolean {
+export function isCramped(w: World, tx: number, ty: number, size: number, { groundOnly = false } = {}): boolean {
   let free = 0;
   for (let i = -1; i <= size; i++)
     for (const [x, y] of [
@@ -103,7 +105,7 @@ function cramped(w: World, tx: number, ty: number, size: number): boolean {
       [tx + size, ty + i]
     ] as [number, number][]) {
       if (!inBounds(w, x, y)) continue;
-      if (w.occupancy[y * w.width + x] === 0 && TERRAIN[terrainAt(w, x, y)].ground) free++;
+      if (w.occupancy[y * w.width + x] === 0 && (!groundOnly || TERRAIN[terrainAt(w, x, y)].ground)) free++;
     }
   return free < (size + 2) * 2;
 }
@@ -199,7 +201,7 @@ export function suggestPlacement(
         const d = hypot(tx + size / 2 - anchor.x, ty + size / 2 - anchor.y);
         if (d >= bestScore) continue;
         if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
-        const score = d + (size > 1 && cramped(w, tx, ty, size) ? 4 : 0);
+        const score = d + (size > 1 && isCramped(w, tx, ty, size, { groundOnly: true }) ? 4 : 0);
         if (score < bestScore || (score === bestScore && best && (ty < best.ty || (ty === best.ty && tx < best.tx)))) {
           best = { tx, ty };
           bestScore = score;

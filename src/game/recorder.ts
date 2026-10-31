@@ -77,35 +77,35 @@ export class MatchRecorder {
     if (w.tick % HASH_EVERY === 0) this.hashes.push([w.tick, worldHash(w)]);
   }
 
-  /** The record of the match so far. */
+  /** An independent snapshot of the match so far, safe for callers to edit. */
   record(w: World): BattleRecord {
     const income: Partial<Record<Faction, number>> = {};
     for (const f of sidesOf(w)) if (w.factions[f].incomeMult !== 1) income[f] = w.factions[f].incomeMult;
     const end = w.winner ? recordEnd(w.tick, w.winner, w.resigned) : null;
     const o = this.opts;
-    return {
+    return structuredClone<BattleRecord>({
       v: 1,
       commit: null,
       sim: BUILD_SIM,
       created: this.created,
       map: this.map,
-      mutators: o.mutators?.slice() ?? [],
+      mutators: o.mutators ?? [],
       seed: w.seed,
       round: 1,
       maxTicks: w.tick,
-      openers: { ...this.openers },
+      openers: this.openers,
       ...(Object.keys(income).length ? { income } : {}),
-      ...(o.survival ? { survival: { ...o.survival } } : {}),
+      ...(o.survival ? { survival: o.survival } : {}),
       ...(o.op ? { op: o.op } : {}),
-      seats: Object.fromEntries(sidesOf(w).map((f) => [f, { ...this.seats[f] }])) as BattleRecord["seats"],
+      seats: Object.fromEntries(sidesOf(w).map((f) => [f, this.seats[f] ?? {}])) as BattleRecord["seats"],
       frames: "own",
-      turns: this.turns.map(([t, f, c]) => [t, f, c]),
+      turns: this.turns,
       radio: [],
-      hashes: this.hashes.slice(),
+      hashes: this.hashes,
       log: [],
       tick: w.tick,
       end,
       usage: {}
-    };
+    });
   }
 }

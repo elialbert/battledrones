@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { engageable } from "../combat";
 import { canPlaceBuilding } from "../economy";
-import { sealsOff } from "../placement";
+import { isCramped, sealsOff } from "../placement";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import {
   anchorBlockedAt,
@@ -1121,7 +1121,7 @@ export function outpostSpot(w: World, faction: Faction, s: AiState, kind: Buildi
 /**
  * A spot for outpost `kind` in anchored Goliath `g`'s ring: a tile's lane
  * left all round its footprint (it walks out again), lanes round the
- * building too (tooCramped), the Depot nearest the field, defences toward
+ * building too (isCramped), the Depot nearest the field, defences toward
  * the enemy. Searched in the side's own frame.
  */
 function outpostSpotFor(w: World, faction: Faction, g: Unit, site: Site, kind: BuildingKind, enemyHq?: P): { tx: number; ty: number } | null {
@@ -1146,28 +1146,12 @@ function outpostSpotFor(w: World, faction: Faction, g: Unit, site: Site, kind: B
       const gap = distToFootprint(tx, ty, size, g.x, g.y);
       if (gap > GOLIATH.buildRing || gap < GOLIATH.footprint / 2 + 1) continue; // (a lane round its feet)
       if (!canPlaceBuilding(w, faction, kind, tx, ty)) continue;
-      if (size > 1 && cramped(w, tx, ty, size)) continue;
+      if (size > 1 && isCramped(w, tx, ty, size)) continue;
       if (sealsOff(w, tx, ty, size)) continue; // (no pocket boxed in, placement.ts)
       best = { tx, ty };
       bestD = d;
     }
   return best;
-}
-
-/** Would a building here leave no free tile along any side (walling in)? (ai/commander's tooCramped.) */
-function cramped(w: World, tx: number, ty: number, size: number): boolean {
-  let free = 0;
-  for (let i = -1; i <= size; i++)
-    for (const [x, y] of [
-      [tx + i, ty - 1],
-      [tx + i, ty + size],
-      [tx - 1, ty + i],
-      [tx + size, ty + i]
-    ] as [number, number][]) {
-      if (x < 0 || y < 0 || x >= w.width || y >= w.height) continue;
-      if (w.occupancy[y * w.width + x] === 0) free++;
-    }
-  return free < (size + 2) * 2;
 }
 
 // --- training ------------------------------------------------------------
