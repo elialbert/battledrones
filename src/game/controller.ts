@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
-import { foundBlocker, producerCap, producersOf, queuesOf, unitBlocker, type Producer } from "../sim/economy";
+import { foundBlocker, producerCap, producersOf, unitBlocker, type Producer } from "../sim/economy";
 import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker } from "../sim/lift";
@@ -141,18 +141,55 @@ export class Controller {
     if (!this.autoBuild.delete(kind)) this.autoBuild.add(kind);
   }
 
-  /** Keep one of each enabled kind queued, behind existing orders, including orders still in flight. */
+  /**
+   * Autobuild fills every slot: each producer that builds an enabled kind is
+   * kept queued to its cap, split as evenly as it can be between the enabled
+   * kinds it builds (variety). A free slot takes the enabled kind that queue
+   * holds fewest of (ties: the kind with fewest in the field). A full queue
+   * that is lopsided, one enabled kind 2+ ahead of another (say one just
+   * switched on), gives back its newest surplus unit (refunded; never the one
+   * in production) so the slot can go to the other. Other kinds' orders are
+   * left alone and just take slots. Orders still in flight count as queued.
+   */
   private queueAutoBuild(): void {
-    if (this.spectator || this.locked || this.paused || this.world.winner) return;
+    if (this.spectator || this.locked || this.paused || this.world.winner || this.autoBuild.size === 0) return;
+    const w = this.world;
+    const lines = new Map<number, { p: Producer; kinds: UnitKind[] }>();
     for (const kind of this.autoBuild) {
-      if (unitBlocker(this.world, PLAYER, kind)) continue;
-      const view = buildView(this.world, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
-      const queued = queuesOf(this.world, PLAYER, kind).some((p) =>
-        !view.closed(p.id) && p.queue.filter((q) => q.kind === kind).length + view.extra(p.id, kind) > 0
-      );
-      if (queued || view.scrap < unitCost(this.world, PLAYER, kind)) continue;
-      const at = pickProducer(this.world, kind, this.selectedUnits, view);
-      if (at) this.enqueue({ type: "produce", faction: PLAYER, buildingId: at.id, unit: kind });
+      if (unitBlocker(w, PLAYER, kind)) continue;
+      for (const p of producersOf(w, PLAYER, kind)) {
+        const line = lines.get(p.id);
+        if (line) line.kinds.push(kind);
+        else lines.set(p.id, { p, kinds: [kind] });
+      }
+    }
+    if (lines.size === 0) return;
+    const fielded = new Map<UnitKind, number>();
+    for (const u of w.units.values()) if (u.faction === PLAYER) fielded.set(u.kind, (fielded.get(u.kind) ?? 0) + 1);
+    // one order per producer per pass, so scrap short of filling everything spreads across producers
+    for (let pass = 0; pass < ECONOMY.maxQueue * 2; pass++) {
+      let ordered = false;
+      for (const { p, kinds } of lines.values()) {
+        const view = buildView(w, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
+        if (view.closed(p.id)) continue;
+        const held = (k: UnitKind) => p.queue.filter((q) => q.kind === k).length + view.extra(p.id, k);
+        const ranked = [...kinds].sort((a, b) => held(a) - held(b) || (fielded.get(a) ?? 0) - (fielded.get(b) ?? 0));
+        const fewest = ranked[0]!;
+        const most = ranked[ranked.length - 1]!;
+        if (p.queue.length + view.extra(p.id) < producerCap(fewest)) {
+          if (view.scrap < unitCost(w, PLAYER, fewest)) continue;
+          this.enqueue({ type: "produce", faction: PLAYER, buildingId: p.id, unit: fewest });
+          ordered = true;
+        } else if (held(most) - held(fewest) >= 2) {
+          // (a cancel takes an order still in flight first, else the newest queued: not the head in production)
+          let last = -1;
+          for (let i = p.queue.length - 1; i >= 0 && last < 0; i--) if (p.queue[i]!.kind === most) last = i;
+          if (view.extra(p.id, most) <= 0 && last <= 0) continue;
+          this.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: most });
+          ordered = true;
+        }
+      }
+      if (!ordered) break;
     }
   }
 

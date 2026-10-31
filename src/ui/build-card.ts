@@ -94,7 +94,7 @@ export function createBuildCard(cardEl: HTMLElement, api: BuildCardApi, ui: { re
       ${weapons ? `<table>${rows.slice(0, 2).join("")}</table>${weapons}<table>${rows.slice(2).join("")}</table>` : `<table>${rows.join("")}</table>`}
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
       ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
-      ${isUnit && !api.ctrl.spectator ? `<button class="cta small" id="card-auto" aria-pressed="${api.ctrl.isAutoBuilding(kind as UnitKind)}">Autobuild: ${api.ctrl.isAutoBuilding(kind as UnitKind) ? "ON" : "OFF"}</button><p>Queues another when this type finishes, behind existing orders. Waits for scrap and queue space.</p>` : ""}
+      ${isUnit && !api.ctrl.spectator ? `<button class="cta small" id="card-auto" aria-pressed="${api.ctrl.isAutoBuilding(kind as UnitKind)}">Autobuild: ${api.ctrl.isAutoBuilding(kind as UnitKind) ? "ON" : "OFF"}</button><p class="note">Keeps every queue that builds it full, split evenly with your other autobuild units.</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
       ${!isUnit && view.pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;

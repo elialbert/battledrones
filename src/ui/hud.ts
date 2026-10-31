@@ -515,14 +515,38 @@ export function createHud(api: HudApi): Hud {
     powersEl ??= root.querySelector<HTMLElement>(".powers");
     if (powersEl && powersEl.parentElement !== (desk ? pwSlot : root)) (desk ? pwSlot : root).appendChild(powersEl);
     labelKeys();
+    placeCard();
     layout.refresh(true);
   }
   deskQuery.addEventListener("change", syncDesk);
-  syncDesk();
-  renderGrid();
 
   // ------------------------------------------------------------ info card ---
-  const { show: showCard } = createBuildCard(cardEl, api, { refresh: () => layout.refresh(true), toast });
+  // On a desk with room to spare, the info card sits in the sidebar under the build
+  // grid; when the sidebar can't take it without scrolling (a short screen, a big
+  // selection panel), it floats beside the sidebar as before.
+  const cardHome = $("#pause");
+  function placeCard(): void {
+    if (cardEl.hidden) return;
+    const float = () => {
+      cardEl.classList.remove("docked");
+      if (cardEl.parentElement !== root) root.insertBefore(cardEl, cardHome);
+    };
+    if (!root.classList.contains("desk")) return float();
+    if (cardEl.parentElement !== dockEl) dockEl.insertBefore(cardEl, pwSlot);
+    cardEl.classList.add("docked");
+    if (dockEl.scrollHeight > dockEl.clientHeight + 1) float();
+  }
+  const onResize = () => placeCard();
+  window.addEventListener("resize", onResize);
+  syncDesk();
+  renderGrid();
+  const { show: showCard } = createBuildCard(cardEl, api, {
+    refresh: () => {
+      placeCard();
+      layout.refresh(true);
+    },
+    toast
+  });
 
   // --------------------------------------------------------------- chips ---
   const { render: renderChips, nope } = createActionChips(chipsEl);
@@ -1030,6 +1054,7 @@ export function createHud(api: HudApi): Hud {
     destroy() {
       window.removeEventListener("pointerdown", closeOutside, { capture: true });
       deskQuery.removeEventListener("change", syncDesk);
+      window.removeEventListener("resize", onResize);
       messages.destroy();
       offMute();
       layout.destroy();
