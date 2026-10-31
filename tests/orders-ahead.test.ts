@@ -192,6 +192,105 @@ describe("orders in flight come off", () => {
     expect(c.inFlight).toEqual([]);
   });
 
+  it("lands the oldest repeated unit order and settles its remainder at the original drain tick", () => {
+    const w = field();
+    const c = duel(w);
+    const a = spawnUnit(w, "stinger", "blue", 10, 10).id;
+    const b = spawnUnit(w, "stinger", "blue", 11, 10).id;
+    c.enqueue(move([a, b]));
+    c.drainCommands();
+    w.tick = 3;
+    c.enqueue(move([a]));
+    c.drainCommands();
+    c.landed([move([a])]);
+    expect(c.inFlight).toEqual([move([b]), move([a])]);
+    c.settled(0);
+    expect(c.inFlight).toEqual([move([a])]);
+    c.settled(2);
+    expect(c.inFlight).toEqual([move([a])]);
+    c.settled(3);
+    expect(c.inFlight).toEqual([]);
+  });
+
+  it("lands only the oldest repeated production order", () => {
+    const w = field();
+    const c = duel(w);
+    const produce: Command = { type: "produce", faction: "blue", buildingId: 1, unit: "harvester" };
+    c.enqueue(produce);
+    c.drainCommands();
+    w.tick = 3;
+    c.enqueue({ ...produce });
+    c.drainCommands();
+    c.landed([produce]);
+    c.settled(0);
+    expect(c.inFlight).toEqual([produce]);
+  });
+
+  it.each([
+    [1 / 16, 0, true],
+    [0, 1 / 16, true],
+    [1 / 16 + 0.001, 0, false],
+    [0, 1 / 16 + 0.001, false]
+  ])("matches codec points with offsets (%s, %s): %s", (dx, dy, matches) => {
+    const c = duel(field());
+    const order = move([1]);
+    c.enqueue(order);
+    c.drainCommands();
+    c.landed([{ ...order, x: order.x + dx, y: order.y + dy }]);
+    expect(c.inFlight).toEqual(matches ? [] : [order]);
+  });
+
+  it("distinguishes unloading here from unloading at a point", () => {
+    const c = duel(field());
+    const here: Command = { type: "unload", faction: "blue", unitIds: [1] };
+    const there: Command = { ...here, x: 20.5, y: 20.5 };
+    c.enqueue(there);
+    c.enqueue(here);
+    c.drainCommands();
+    c.landed([here]);
+    expect(c.inFlight).toEqual([there]);
+    c.landed([{ ...there, x: 20.53125, y: 20.53125 }]);
+    expect(c.inFlight).toEqual([]);
+  });
+
+  it("refreshes the same-tick preview after partial landings, settlement and drops", () => {
+    const w = field();
+    const c = duel(w);
+    const a = spawnUnit(w, "stinger", "blue", 10, 10);
+    const b = spawnUnit(w, "stinger", "blue", 11, 10);
+    const before = c.ahead();
+    expect(c.ahead()).toBe(before);
+    c.enqueue(move([a.id, b.id]));
+    expect(c.ahead().unit(a).order.type).toBe("move");
+    c.drainCommands();
+    expect(c.ahead().unit(b).order.type).toBe("move");
+    c.landed([move([a.id])]);
+    expect(c.ahead().unit(a)).toBe(a);
+    expect(c.ahead().unit(b).order.type).toBe("move");
+    c.settled(w.tick);
+    expect(c.ahead().unit(b)).toBe(b);
+    c.enqueue(move([a.id]));
+    c.drainCommands();
+    expect(c.ahead().unit(a).order.type).toBe("move");
+    c.dropInFlight();
+    expect(c.ahead().unit(a)).toBe(a);
+    expect(c.inFlight).toEqual([]);
+  });
+
+  it("keeps tracking opt-in and repeated activation preserves pending orders", () => {
+    const c = new Controller(field());
+    c.landed([move([1])]);
+    c.settled(0);
+    c.dropInFlight();
+    expect(c.inFlight).toBeNull();
+    c.trackInFlight();
+    expect(c.inFlight).toEqual([]);
+    c.enqueue(move([1]));
+    c.drainCommands();
+    c.trackInFlight();
+    expect(c.inFlight).toEqual([move([1])]);
+  });
+
   it("all at once when the match ends with no result", () => {
     const w = field();
     const c = duel(w);

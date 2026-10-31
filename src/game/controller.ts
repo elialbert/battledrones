@@ -10,6 +10,7 @@ import type { BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World }
 import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { buildView, type BuildView } from "./build-view";
+import { InFlight } from "./in-flight";
 import { ordersAhead, type OrdersAhead } from "./orders-ahead";
 import { Squads } from "./squads";
 
@@ -90,43 +91,6 @@ export type TapFeedback = {
   y: number;
 } | null;
 
-/** The same point, as the codec gives it back (snapped to the centre of its 1/16-tile cell); both missing counts too. */
-const samePoint = (a: { x?: number; y?: number }, b: { x?: number; y?: number }): boolean =>
-  a.x === undefined || b.x === undefined ? a.x === b.x : Math.abs(a.x - b.x) <= 1 / 16 && Math.abs(a.y! - b.y!) <= 1 / 16;
-
-/** The same order, its unit list aside (its faction too: the codec stamps the sender's side). */
-function sameOrder(a: Command, b: Command): boolean {
-  if (a.type !== b.type) return false;
-  switch (a.type) {
-    case "startBuilding":
-      return b.type === a.type && a.building === b.building;
-    case "placeBuilding":
-      return b.type === a.type && a.tx === b.tx && a.ty === b.ty;
-    case "produce":
-    case "cancelProduce":
-      return (b.type === "produce" || b.type === "cancelProduce") && a.buildingId === b.buildingId && a.unit === b.unit;
-    case "move":
-    case "attackMove":
-    case "harvest":
-    case "unload":
-      return samePoint(a, b as typeof a);
-    case "attack":
-      return b.type === a.type && a.targetId === b.targetId;
-    case "board":
-      return b.type === a.type && a.carrierId === b.carrierId;
-    case "lift":
-      return b.type === a.type && a.goliathId === b.goliathId;
-    case "sell":
-      return b.type === a.type && a.buildingId === b.buildingId;
-    case "rally":
-      return b.type === a.type && a.buildingId === b.buildingId && samePoint(a, b);
-    case "calldown":
-      return b.type === a.type && a.power === b.power && samePoint(a, b);
-    default:
-      return true;
-  }
-}
-
 /**
  * Bridges input/HUD and the sim: owns the player's selection, the command
  * queue drained each sim tick, and building-placement mode.
@@ -154,16 +118,8 @@ export class Controller {
   tip: string | null = null;
   /** Three saved control groups (squad chips, keys 1–3). */
   readonly squads = new Squads(PLAYER);
-  /**
-   * Orders drained but not applied yet, oldest first, each with the tick it
-   * was drained on, while an interactive feed (a sound duel) carries them:
-   * they land D ticks after the tap, or later while the link holds them up.
-   * Null where orders apply at the next tick (single player, replays). The
-   * build bar counts them as applied (view()), and so do the Controller's own
-   * reads (ahead()); the feed takes each off as the tick it lands in is
-   * stepped (landed()), and those it knows can no longer land (settled()).
-   */
-  private flights: { c: Command; at: number }[] | null = null;
+  /** Orders carried by an interactive feed; null when orders apply at the next tick (single player, replays). */
+  private flights: InFlight | null = null;
   /** No new orders (a sound duel's resign is on its way). */
   locked = false;
   private queue: Command[] = [];
@@ -204,7 +160,7 @@ export class Controller {
     this.queueAutoBuild();
     const cmds = this.queue;
     this.queue = [];
-    if (this.flights) for (const c of cmds) this.flights.push({ c, at: this.world.tick });
+    this.flights?.add(cmds, this.world.tick);
     this.version++;
     return cmds;
   }
@@ -217,64 +173,35 @@ export class Controller {
 
   /** Track orders in flight from now on (an interactive feed). */
   trackInFlight(): void {
-    this.flights ??= [];
+    this.flights ??= new InFlight();
   }
 
   /** The orders on their way, oldest first (null without an interactive feed). */
   get inFlight(): Command[] | null {
-    return this.flights?.map((f) => f.c) ?? null;
+    return this.flights?.commands ?? null;
   }
 
-  /**
-   * This side's commands that a step just applied: their in-flight copies
-   * come off, the oldest of each that matches, as the lockstep keeps their
-   * order. The codec splits a long unit list into pieces the lockstep may
-   * seal into turns of their own: each piece takes just its units off.
-   */
+  /** Remove the oldest matching copies of applied commands, including pieces of split unit lists. */
   landed(applied: readonly Command[]): void {
-    const fl = this.flights;
-    if (!fl?.length) return;
-    for (const c of applied) {
-      if (!("unitIds" in c)) {
-        const i = fl.findIndex((f) => sameOrder(f.c, c));
-        if (i >= 0) fl.splice(i, 1);
-        continue;
-      }
-      let left: readonly number[] = c.unitIds;
-      for (let i = 0; i < fl.length && left.length > 0; i++) {
-        const f = fl[i]!.c;
-        if (!("unitIds" in f) || !sameOrder(f, c) || !f.unitIds.some((id) => left.includes(id))) continue;
-        const rest = f.unitIds.filter((id) => !left.includes(id));
-        left = left.filter((id) => !f.unitIds.includes(id));
-        if (rest.length > 0) fl[i] = { c: { ...f, unitIds: rest }, at: fl[i]!.at };
-        else fl.splice(i--, 1);
-      }
-    }
+    if (!this.flights?.length) return;
+    this.flights.landed(applied);
     this.version++;
   }
 
-  /**
-   * Everything drained on tick `through` or before has landed or never will
-   * (the feed knows: the lockstep had none of it waiting, and its turn is
-   * stepped): what is still in flight from then was replaced in the
-   * lockstep's queue before it went out, and comes off.
-   */
+  /** Remove orders drained through this tick: the feed knows they have landed or never will. */
   settled(through: number): void {
-    const fl = this.flights;
-    if (!fl?.length || fl[0]!.at > through) return;
-    this.flights = fl.filter((f) => f.at > through);
-    this.version++;
+    if (this.flights?.settled(through)) this.version++;
   }
 
   /** No order on its way will land (the match ended without a result). */
   dropInFlight(): void {
-    this.flights?.splice(0);
+    this.flights?.drop();
     this.version++;
   }
 
   /** The orders not applied yet: those in flight, then those not drained yet (a stall drains nothing). */
   private unapplied(): Command[] | null {
-    return this.flights && [...this.flights.map((f) => f.c), ...this.queue];
+    return this.flights && [...this.flights.commands, ...this.queue];
   }
 
   /** The player's construction, scrap and queues as the build bar shows them (BuildView). */
