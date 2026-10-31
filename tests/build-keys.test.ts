@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildKeyAction, buildKeys, keyLabel } from "../src/ui/build-keys";
 
 const press = (code: string, more: Partial<KeyboardEvent> = {}) => ({
-  code, key: code.replace(/^(Key|Digit)/, "").toLowerCase(), repeat: false, ctrlKey: false, metaKey: false, altKey: false, ...more
+  code, key: code.replace(/^(Key|Digit)/, "").toLowerCase(), repeat: false, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...more
 });
 const labels = (keys: (string | null)[]) => keys.map((k) => (k ? keyLabel(k) : "·")).join("");
 
@@ -57,5 +57,12 @@ describe("build mode: what a key does", () => {
     expect(buildKeyAction(true, press("KeyA"), buildKeys(3, 3))).toBeNull();
     expect(buildKeyAction(true, { ...press("ArrowLeft"), key: "ArrowLeft" }, keys)).toBeNull();
     expect(buildKeyAction(true, press("Digit5"), keys)).toBeNull();
+  });
+  it("open: Shift + a button's letter toggles autobuild; Shift + a tab is still the tab", () => {
+    expect(buildKeyAction(true, press("KeyW", { shiftKey: true }), keys)).toEqual({ type: "auto", index: 1 });
+    expect(buildKeyAction(true, press("KeyW", { shiftKey: true, repeat: true }), keys)).toEqual({ type: "swallow" });
+    expect(buildKeyAction(true, press("Digit2", { shiftKey: true }), keys)).toEqual({ type: "tab", index: 1 });
+    // closed, Shift + a letter is the game's (it never opens build mode)
+    expect(buildKeyAction(false, press("KeyW", { shiftKey: true }), keys)).toBeNull();
   });
 });

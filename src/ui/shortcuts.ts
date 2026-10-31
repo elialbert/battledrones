@@ -31,6 +31,7 @@ export const SHORTCUT_GROUPS: { title: string; rows: Row[] }[] = [
       ["B", "Build mode (B or Esc closes)"],
       ["1 – 4", "Build tabs, in build mode"],
       ["Q W E | A S D | Z X C", "The build buttons, in build mode (laid out like them)"],
+      ["Shift + Q W E…", "Toggle a unit's autobuild, in build mode"],
       ["Enter", "Place the ghost where it stands"]
     ]
   },

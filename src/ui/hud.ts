@@ -491,6 +491,21 @@ export function createHud(api: HudApi): Hud {
       // build mode stays open whatever is pressed (start a Fab Plant, then 2 W W for two
       // Stingers): only B, Esc or a click on the battlefield closes it
       taps.get(key)!();
+    } else if (act.type === "auto") {
+      const key = (gridEl.children[act.index] as HTMLElement).dataset.key!;
+      if (!key.startsWith("u:")) return toast("Autobuild is for units"), true;
+      if (api.ctrl.locked) return true;
+      const unit = key.slice(2) as UnitKind;
+      const on = !api.ctrl.isAutoBuilding(unit);
+      if (on) {
+        const why = unitBlocker(w, PLAYER, unit);
+        if (why) return toast(why), true;
+      }
+      api.ctrl.toggleAutoBuild(unit);
+      sfx.play("click");
+      toast(`Autobuild ${on ? "on" : "off"}: ${parts.get(key)!.name}`);
+      // (an open info card shows the old state: close it rather than leave it wrong)
+      cardEl.hidden = true;
     }
     return true;
   }

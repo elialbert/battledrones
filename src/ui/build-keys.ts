@@ -9,6 +9,8 @@
  *   won't fit three keyboard rows, so the grid turns sideways: the left
  *   column is Q W E R T, the right one A S D F G.
  *
+ * Shift + a unit's letter toggles its autobuild instead of queueing one.
+ *
  * Keys are physical (`KeyboardEvent.code`), like the camera's WASD, so the
  * block keeps its shape on AZERTY; the labels name the layout's own letters
  * when the browser can say (`navigator.keyboard.getLayoutMap`).
@@ -58,6 +60,8 @@ export type BuildKeyAction =
   | { type: "close" }
   | { type: "tab"; index: number }
   | { type: "press"; index: number }
+  /** Shift + a button's letter: toggle its autobuild (units; the HUD turns buildings away). */
+  | { type: "auto"; index: number }
   /** Eaten without doing anything (a held key's repeats). */
   | { type: "swallow" };
 
@@ -68,7 +72,7 @@ export type BuildKeyAction =
  */
 export function buildKeyAction(
   open: boolean,
-  e: Pick<KeyboardEvent, "code" | "key" | "repeat" | "ctrlKey" | "metaKey" | "altKey">,
+  e: Pick<KeyboardEvent, "code" | "key" | "repeat" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">,
   keys: readonly (string | null)[]
 ): BuildKeyAction | null {
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
@@ -79,5 +83,6 @@ export function buildKeyAction(
   if (tab < 0 && index < 0) return null;
   // a held key queues one, not twenty
   if (e.repeat) return { type: "swallow" };
-  return tab >= 0 ? { type: "tab", index: tab } : { type: "press", index };
+  if (tab >= 0) return { type: "tab", index: tab };
+  return e.shiftKey ? { type: "auto", index } : { type: "press", index };
 }
