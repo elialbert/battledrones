@@ -710,6 +710,41 @@ dies, and the HQ repairs that. When it loses, it's mostly to an early push
 on a base that spent everything on bombers, or anti-air finding the wing
 (Archipelago). It is in every pool but Easy's.
 
+### The Wall: turret creep (2026-10-31)
+
+A plan for fun, and weaker than the rest (`wall`, on Boom, `Strategy.wall`
+in commander.ts). It opens with a Fab Plant, four turrets, a Depot, an
+Airpad and an Assembly Bay. After that the order is turrets to 32, with a
+SAM Site after every fourth. It founds no Depots. When the next Depot has no
+spot in the build zone and there's a field nothing serves on our side of the
+map, a turret toward that field comes next, ahead of the rest of the order.
+Each turret carries the build zone (2 tiles more for turrets, economy.ts
+`buildRadiusOf`) until a Depot fits by the field, at up to 36 tiles from the
+HQ and 8 Depots. Each drop-off gets two turrets and a SAM Site on the
+enemy's side of it (`wallAnchor`) before the wall moves on. The anti-air and
+anti-infantry turret responses are folded into that order, not put in front
+of it. The Tech Lab waits for the 15th turret.
+
+The army is tier 1 from all three factories: Stingers, Wasps, and a quarter
+in Troopers and Rocket Squads. The factories stop at an army worth 1200 plus
+90 per turret standing. The turrets go up one at a time, though, slower than
+the Wall mines, so scrap past 600 lifts that cap for every factory. The
+factories it adds then come next, a Fab Plant, an Airpad and an Assembly Bay
+in turn, up to 4. Its army holds at home, and it waves only once 2400 of the
+army is tier 2.
+
+It is in every pool but Brutal's. It can still be picked by name there.
+
+Normal, playing blue against Normal Marshal Balanced, Rush, Boom and Turtle
+on six maps, seeds 3 and 5 (48 games): 11–35 with 2 draws. Juggernaut went
+11–13 on the seed-3 half. It mostly loses at 5:00–7:00 to a tier-2 push.
+Building out to the next field ahead of the rest of the order is what helped
+most: the same plan without that went 7–40–1, with four extra factories or
+with two. An earlier, turret-only version (Stingers alone, a
+smaller cap) went 5–18–1 on seed 3. Starting the Tech Lab at the 10th turret
+instead of the 15th made little difference (6–17–1), because the Tech Lab
+still went up at about 5:00.
+
 ### Kiting (2026-10-30)
 
 Marshal's fight micro now kites (`src/sim/ai/kite.ts`, `kiteStep`, called

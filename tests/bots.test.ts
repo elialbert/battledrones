@@ -181,8 +181,10 @@ describe("Marshal, the bot built for a budget", () => {
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(MARSHAL[d].apm + (MARSHAL[d].burst ?? APM_BURST));
       expect(MARSHAL[d].microApm).toBeLessThanOrEqual(180); // (fight orders at most 3 a second)
     }
-    for (const d of ["easy", "casual", "normal", "hard", "brutal"] as const)
+    for (const d of ["easy", "casual", "normal", "hard"] as const)
       expect([...MARSHAL_POOL[d]].sort()).toEqual(Object.keys(MARSHAL_PLANS).sort()); // (every level, every plan)
+    // (…but Brutal never draws The Wall)
+    expect([...MARSHAL_POOL.brutal].sort()).toEqual(Object.keys(MARSHAL_PLANS).filter((p) => p !== "wall").sort());
     expect(MARSHAL.easy.holdUntil).toBeGreaterThan(0);
   });
 

@@ -85,10 +85,10 @@ export interface MarshalOptions {
   sorties?: SortieKind[];
 }
 
-export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and four of
+ * The game plans Marshal picks from: the stock personalities, and five of
  * its own built on one of them (`base`: the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
  * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
@@ -198,6 +198,33 @@ export const MARSHAL_PLANS: Record<
       buildOrder: ["airpad", "tech-lab", "fab-plant", "airpad", "turret", "depot"],
       harassGroup: Infinity
     }
+  },
+  /**
+   * For fun, and never Brutal's (MARSHAL_POOL): turrets, a SAM Site after
+   * every fourth, and a tier-1 army from all three factories. It expands by
+   * building turrets out to each new field until a Depot fits by it (no
+   * crews), guards each drop-off with two before moving on, and leaves the
+   * Tech Lab till the fifteenth turret (commander.ts Strategy.wall).
+   */
+  wall: {
+    base: "boom",
+    label: "The Wall",
+    sorties: ["poke"],
+    tweak: {
+      buildOrder: ["fab-plant", "turret", "depot", "turret", "airpad", "turret", "assembly-bay", "turret", "fab-plant"],
+      harvesters: 6,
+      // (the army holds at the wall: Stingers waved at 4500 walked into tier 2 and the base fell behind
+      // them; it goes once 2400 of it is tier 2)
+      assaultValue: 9000,
+      techAssault: 2400,
+      harassGroup: Infinity,
+      // (a share of Troopers and Rocket Squads from the Assembly Bay, as from the others)
+      infantry: 0.25,
+      // (factories for scrap piling up go up next, the turrets going up one at a time)
+      expandEarly: true,
+      spend: { maxDepots: 8, maxExtra: 4 },
+      wall: { max: 32, samEvery: 4, guard: 2, tech: 15, army: 1200, armyPerTurret: 90 }
+    }
   }
 };
 
@@ -213,8 +240,9 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
 
 /**
  * The plans each difficulty picks from, at random for each game: every plan,
- * at every level (a player at any level can meet any of them). The level is
- * in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
+ * at every level (a player at any level can meet any of them), but for The
+ * Wall on Brutal (it's there to be weird, not hard; it can still be picked
+ * by name). The level is in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
  * Rush's wave till 5:00; Hornet Strike's bombers and Juggernaut's Goliath
  * don't wait for it (they never did on Casual).
  */
@@ -224,7 +252,7 @@ export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   casual: ALL_PLANS,
   normal: ALL_PLANS,
   hard: ALL_PLANS,
-  brutal: ALL_PLANS
+  brutal: ALL_PLANS.filter((p) => p !== "wall")
 };
 
 /**

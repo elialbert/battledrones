@@ -29,7 +29,7 @@ const STALE = 60 * TICK_RATE;
 /** Fields this close to the HQ (tiles) are worth an expansion; past it, too far to hold. */
 const MAX_FIELD = 36;
 /** A field tile this close to a drop-off is served already: an expansion goes to a field of its own. */
-const SERVED = 10;
+export const SERVED = 10;
 /** Fields this close to the HQ (tiles) are its home field (as ai/commander.ts HOME_FIELD). */
 const HOME_FIELD = 10;
 

@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { expansionSite, perTick, staffExpansions, tendExpansion, type ExpansionPlan } from "./expansion";
+import { SERVED, expansionSite, perTick, staffExpansions, tendExpansion, unservedField, type ExpansionPlan } from "./expansion";
 import { tendFields } from "./fields";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
@@ -133,6 +133,18 @@ export interface Strategy {
   spend?: Partial<typeof SPEND>;
   /** Scrap piling up adds factories even before the build order is through, and they come next, not last. */
   expandEarly?: boolean;
+  /**
+   * The Wall (ai/marshal.ts): turrets are the plan. After the build order it
+   * keeps putting turrets up (a SAM Site after every `samEvery`th) to `max`.
+   * No crew founds a Depot past the build zone: turrets are built out toward
+   * the field one after another, each carrying the zone on (economy.ts
+   * buildRadiusOf), until a Depot fits by it, a turret out there coming
+   * ahead of the rest of the order; and each drop-off gets `guard` turrets on
+   * the enemy's side before the wall moves on (wallAnchor). The Tech Lab
+   * waits for the `tech`th turret; the factories stop at an army worth
+   * `army`, plus `armyPerTurret` a turret standing, unless scrap piles up.
+   */
+  wall?: { max: number; samEvery: number; guard: number; tech: number; army: number; armyPerTurret: number };
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -576,7 +588,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened, home: origin, enemyHome, behind: armyValue < enemyArmy });
   /** Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the HQ (it is big, and always seen), the rest by the HQ. */
   const anchorFor = (kind: BuildingKind) =>
-    kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
+    s.strategy.wall && hq && (kind === "turret" || kind === "sam-site")
+      ? wallAnchor(w, faction, s.strategy, kind, myBuildings, hqC, enemyHome)
+      : kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
       ? guardPoint
       : kind === "radar" ? towardEnemy(w, hqC, 4) : kind === "gantry" ? towardEnemy(w, hqC, -5) : hqC;
   // (no HQ: every building goes up in a Goliath's ring, and a full ring is skipped, not started and refunded)
@@ -589,7 +603,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits);
   // a Depot past the build zone is deployed by a crew: it goes up alongside the rest of the order, once
   // the crew is trained (ai/expansion.ts)
-  const expansionNext = next === "depot" && !!hq && depotByCrew(w, faction, buildingCenter(hq), s.strategy.depotReach);
+  const expansionNext = next === "depot" && !!hq && !s.strategy.wall && depotByCrew(w, faction, buildingCenter(hq), s.strategy.depotReach);
   const wanted = expansionNext ? nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, true) : next;
   if (roomless) noteNoRoom(w, s); // (the base Goliath may move on to build more: ai/goliath.ts)
   if (f.pending?.ready) {
@@ -598,7 +612,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const outpost = outpostSpot(w, faction, s, kind, enemyHqPos);
     let spot = outpost === "wait" ? null : outpost;
     if (!spot && outpost !== "wait" && kind === "depot" && hq) {
-      const site = depotSite(w, faction, hqC, s.strategy.depotReach);
+      const site = depotSite(w, faction, hqC, s.strategy.depotReach, depotFar(s.strategy));
       spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
     } else if (!spot && outpost !== "wait") spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
     if (outpost === "wait") {
@@ -679,7 +693,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const crewReady = expansionNext && (!threatened || !!diff.boldExpand) && harvesters.length >= crewKeep + ECONOMY.expansion.crew;
   const reserve = ((s.expansion && s.expansion.depotId === undefined) || crewReady) && !f.pending
     ? ECONOMY.expansion.cost
-    : f.pending || wanted === null ? 0 : wanted === "turret" || wanted === "radar" ? 0 : Math.min(400, BUILDINGS[wanted].cost);
+    : f.pending || wanted === null ? 0 : (wanted === "turret" && !s.strategy.wall) || wanted === "radar" ? 0 : Math.min(400, BUILDINGS[wanted].cost);
   // the Goliath savings: a share of income set aside while the Gantry waits for one (ai/goliath.ts)
   const gantry = myBuildings.find((b) => b.kind === "gantry") ?? null;
   const fundCtx = { gantry: !!gantry || f.pending?.kind === "gantry", armyValue, threatened };
@@ -731,7 +745,13 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (the whole force, island garrisons included: the share is of everything we field)
   const forceValue = airlifts ? value(mine.filter((u) => COMBAT_KINDS.includes(u.kind))) : armyValue;
   /** Robot infantry for the Bays' queues: everything (`liftOnly` false), or only the squads the airlift is waiting for. */
+  // (the Wall: an army that grows with the turrets — the scrap is the turrets'; but they go up one
+  // at a time, slower than it mines, so what piles up past `rich` buys tier 1 from every factory)
+  const wall = s.strategy.wall;
+  const armyFull = !!wall && !rich && armyValue >= wall.army + wall.armyPerTurret * myBuildings.filter((b) => b.kind === "turret").length;
+  const wallSpends = !!wall && rich;
   const runBays = (liftOnly = false) => {
+    if (armyFull && !liftOnly) return;
     let liftWants = airlifts ? airliftSquadsWanted(s) - INFANTRY_KINDS.reduce((n, k) => n + queued(k), 0) : 0;
     for (const bay of myBuildings.filter((b) => b.kind === "assembly-bay")) {
       if (bay.queue.length >= depth || (liftOnly && liftWants <= 0)) continue;
@@ -746,7 +766,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       let kind: UnitKind;
       if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
       else if (have("sniper") < wantSnipers) kind = "sniper";
-      else if (liftWants > 0 || (!liftOnly && infantryValue < infantryShare * Math.max(500, forceValue)))
+      else if (liftWants > 0 || (!liftOnly && (wallSpends || infantryValue < infantryShare * Math.max(500, forceValue))))
         // (island garrisons face the enemy's drones alone: Rocket Squads once they fly)
         kind = ownAA < Math.ceil(s.seenAir * 0.6) || r < 0.2 || (airlifts && s.seenAir >= 2 && r < 0.5) ? "rocket-squad" : "trooper";
       else continue;
@@ -763,6 +783,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     ? (["stinger", "flak-crawler", "mortar", "mastodon", "lancer"] as const).reduce((v, k) => v + have(k) * UNITS[k].cost, 0)
     : 0;
   const runFabs = () => {
+    if (armyFull) return;
     for (const fab of myBuildings.filter((b) => b.kind === "fab-plant")) {
       if (fab.queue.length >= depth) continue;
       let kind: UnitKind = "stinger";
@@ -788,6 +809,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a strike wing still to build (ai/hornets.ts): the Airpads build Hornets first, and the rest waits for them
   let wingShort = unitBlocker(w, faction, "hornet") ? 0 : strikeWants(w, faction, s, queued("hornet"));
   const runPads = () => {
+    if (armyFull && wingShort <= 0) return;
     for (const pad of myBuildings.filter((b) => b.kind === "airpad")) {
       if (wingShort > 0 && pad.queue.length < depth) {
         if (spendable < unitCost(w, faction, "hornet")) break;
@@ -1385,10 +1407,14 @@ function nextBuilding(
   // Infantry War: an Assembly Bay wherever the plan says Fab Plant
   const infantryWar = infantryArmy(w, faction);
   const order = s.strategy.buildOrder.map((k): BuildingKind => (infantryWar && k === "fab-plant" ? "assembly-bay" : k));
+  const wall = s.strategy.wall;
+  if (wall) order.push(...wallOrder(wall, order));
   // Last Stand: static defences earn their keep against endless waves
   if (w.survival) order.push("turret", "sam-site", "turret", "turret", "sam-site", "turret");
-  for (let i = 0; i < s.extraSams; i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
-  for (let i = 0; i < s.extraTurrets; i++) order.splice(Math.min(order.length, 2 + i), 0, "turret");
+  // (not for the Wall: its order is turrets and SAM Sites already, and these ahead of it slowed the
+  // turrets it techs at)
+  for (let i = 0; i < (wall ? 0 : s.extraSams); i++) order.splice(Math.min(order.length, 2 + i), 0, "sam-site");
+  for (let i = 0; i < (wall ? 0 : s.extraTurrets); i++) order.splice(Math.min(order.length, 2 + i), 0, "turret");
   // Mastodons (or Hornets) seen, or a Condor to fill (Airborne): an Assembly Bay, early in the queue
   if (((s.strategy.bayVsArmour && s.seenHeavy >= 2) || flysGivenCondor(w, faction, s)) && !order.includes("assembly-bay"))
     order.splice(Math.min(order.length, 3), 0, "assembly-bay");
@@ -1405,7 +1431,7 @@ function nextBuilding(
     if (order.filter((k) => k === "airpad").length < 2) order.splice(Math.min(order.length, 5), 0, "airpad");
   }
   // the Gantry once the order is through (the prerequisites it lacks go in just ahead of it, below)
-  if (gantry) order.push("gantry");
+  if (gantry && (!wall || have.has("tech-lab"))) order.push("gantry"); // (the Wall: no Tech Lab, no Gantry)
   // a building that needs one of each (BuildingStats.requiresAll: the Tech Lab, the Gantry) comes after
   // them all: one the order has later moves up to just before it, one it lacks goes in there (not
   // for one that's up already)
@@ -1426,12 +1452,14 @@ function nextBuilding(
   const noFab = bannedBy(w, "fab-plant", faction) !== null; // Air War mutator (or an op)
   // (early, but not ahead of a Tech Lab still to come: scrap banked while its prerequisites go up
   // would otherwise buy factory after factory in front of it)
-  const lab = (have.get("tech-lab") ?? 0) > 0 ? -1 : order.indexOf("tech-lab");
+  // (the Wall's Tech Lab waits for its turrets, so the factories don't wait for it)
+  const lab = wall || (have.get("tech-lab") ?? 0) > 0 ? -1 : order.indexOf("tech-lab");
   for (let i = 0; i < s.extraProduction; i++) {
     // (weighing: no more Airpads into massed flak)
     const flak = !!s.weighs && s.seenAA >= FLAK_WALL;
     const air = s.strategy.airOnly || noFab || (!s.strategy.heavy && !flak && pads + (i % 2) <= fabs);
-    const k = infantryWar ? "assembly-bay" : air ? "airpad" : "fab-plant";
+    // (the Wall: the three factories in turn, its tier 1 from each)
+    const k = infantryWar ? "assembly-bay" : wall ? WALL_FACTORIES[i % 3]! : air ? "airpad" : "fab-plant";
     if (s.strategy.expandEarly) order.splice(Math.min(order.length, Math.max(2 + i, lab + 1 + i)), 0, k);
     else order.push(k);
   }
@@ -1463,8 +1491,11 @@ function nextBuilding(
       // that a crew deploys to (ai/expansion.ts)
       const hq = hqOf(w, faction);
       const c = hq ? buildingCenter(hq) : null;
-      expansion = !!c && depotByCrew(w, faction, c, s.strategy.depotReach);
-      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach))) {
+      // (the Wall founds none: with no spot in range, the turrets build out toward the field instead)
+      expansion = !!c && !wall && depotByCrew(w, faction, c, s.strategy.depotReach);
+      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach, depotFar(s.strategy)))) {
+        // (the Wall expands hard: with a field out there to reach, the next turret builds out to it, ahead of the rest)
+        if (wall && c && wallFrontier(w, faction, s.strategy, c, mirror(w, c.x, c.y)) && !buildingBlocker(w, faction, "turret")) return "turret";
         depotsSkipped++;
         continue;
       }
@@ -1477,6 +1508,79 @@ function nextBuilding(
   }
   return null;
 }
+
+/**
+ * The Wall's buildings after its build order (Strategy.wall): turrets to `max`,
+ * a SAM Site after every `samEvery`th, and the Tech Lab after the `tech`th.
+ */
+function wallOrder(wall: NonNullable<Strategy["wall"]>, order: readonly BuildingKind[]): BuildingKind[] {
+  const out: BuildingKind[] = [];
+  for (let n = order.filter((k) => k === "turret").length + 1; n <= wall.max; n++) {
+    out.push("turret");
+    if (n % wall.samEvery === 0) out.push("sam-site");
+    if (n === wall.tech) out.push("tech-lab"); // (what it needs is in the build order, nextBuilding puts it in if not)
+  }
+  return out;
+}
+
+/** The factories the Wall adds when scrap piles up, in turn. */
+const WALL_FACTORIES = ["fab-plant", "airpad", "assembly-bay"] as const;
+/** The Wall's guard round a drop-off counts its turrets (or SAM Sites) this close (tiles). */
+const WALL_GUARD = 6;
+/** …and stands this far out from it, toward the enemy. */
+const WALL_OUT = 3;
+
+/**
+ * Where the Wall's next turret or SAM Site goes (Strategy.wall): by a
+ * drop-off (the HQ or a Depot) with fewer than `guard` turrets (one SAM
+ * Site) by it, on the enemy's side of it; else, a turret, out toward the
+ * nearest field on our side of the map nothing serves, carrying the build
+ * zone till a Depot fits by it; else by the least guarded drop-off.
+ */
+function wallAnchor(
+  w: World,
+  faction: Faction,
+  strategy: Strategy,
+  kind: "turret" | "sam-site",
+  myBuildings: readonly Building[],
+  hqC: { x: number; y: number },
+  enemyHome: { x: number; y: number }
+): { x: number; y: number } {
+  const wall = strategy.wall!;
+  const guards = myBuildings.filter((b) => b.kind === kind).map(buildingCenter);
+  let weakest: { c: { x: number; y: number }; n: number; d: number } | null = null;
+  for (const b of myBuildings) {
+    if (!BUILDINGS[b.kind].dropOff || b.outpost || b.founding !== undefined) continue;
+    const c = buildingCenter(b);
+    const n = guards.filter((g) => dist(g.x, g.y, c.x, c.y) <= WALL_GUARD).length;
+    const d = dist(c.x, c.y, enemyHome.x, enemyHome.y);
+    // (ties: the one nearer the enemy)
+    if (!weakest || n < weakest.n || (n === weakest.n && d < weakest.d)) weakest = { c, n, d };
+  }
+  const out = (c: { x: number; y: number }) => {
+    const d = dist(c.x, c.y, enemyHome.x, enemyHome.y);
+    return d < 1 ? c : { x: c.x + ((enemyHome.x - c.x) / d) * WALL_OUT, y: c.y + ((enemyHome.y - c.y) / d) * WALL_OUT };
+  };
+  if (weakest && weakest.n < (kind === "turret" ? wall.guard : 1)) return out(weakest.c);
+  const field = kind === "turret" ? wallFrontier(w, faction, strategy, hqC, enemyHome) : null;
+  if (field) return field;
+  return weakest ? out(weakest.c) : hqC;
+}
+
+/**
+ * The field the Wall builds out to next (Strategy.wall): the nearest to the HQ that nothing
+ * serves, on our side of the map (nearer us than `enemyHome`), while it has Depots to go.
+ */
+function wallFrontier(w: World, faction: Faction, strategy: Strategy, hqC: { x: number; y: number }, enemyHome: { x: number; y: number }): { x: number; y: number } | null {
+  let depots = 0;
+  for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
+  if (depots >= (strategy.spend?.maxDepots ?? SPEND.maxDepots)) return null;
+  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED));
+  return field && dist(field.x, field.y, hqC.x, hqC.y) <= dist(field.x, field.y, enemyHome.x, enemyHome.y) ? field : null;
+}
+
+/** How far from the HQ a field may be for a Depot in the build zone: the Wall builds its zone out to far ones. */
+const depotFar = (s: Strategy): number => (s.wall ? 36 : 24);
 
 /** Is the Depot it wants one a crew deploys past the build zone (no spot in range, but one out there)? */
 function depotByCrew(w: World, faction: Faction, hqC: { x: number; y: number }, reach?: number): boolean {
@@ -1524,11 +1628,13 @@ function depotSite(
   w: World,
   faction: Faction,
   hqC: { x: number; y: number },
-  reach = 9
+  reach = 9,
+  /** Fields farther than this from the HQ are left out. */
+  far = 24
 ): { spot: { tx: number; ty: number } } | null {
-  return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach}`, () => scanDepotSite(w, faction, hqC, reach));
+  return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach} ${far}`, () => scanDepotSite(w, faction, hqC, reach, far));
 }
-function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { spot: { tx: number; ty: number } } | null {
+function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number, far: number): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   // (a field with a drop-off in reach of any of its tiles is served: one depot to a field, not a ring of them)
   const ids = fieldIds(w);
@@ -1551,7 +1657,7 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
       if (!best || d < best.d) best = { x: tx + 0.5, y: ty + 0.5, d };
     }
-  if (!best || best.d > 24) return null;
+  if (!best || best.d > far) return null;
   const spot = findPlacementSpot(w, faction, "depot", best);
   if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) return null;
   // reachable by ground from just behind the HQ (in the side's own frame)
