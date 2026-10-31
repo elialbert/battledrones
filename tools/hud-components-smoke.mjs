@@ -36,7 +36,8 @@ try {
   await page.evaluate(async () => {
     const m = Object.assign({},
       await import("/src/sim/world.ts"), await import("/src/sim/balance.ts"),
-      await import("/src/game/controller.ts"), await import("/src/ui/selection-panel.ts")
+      await import("/src/game/controller.ts"), await import("/src/ui/selection-panel.ts"),
+      await import("/src/ui/build-card.ts")
     );
     window.hudModules = m;
     window.selectionFixture = (side = "blue") => {
@@ -150,6 +151,102 @@ try {
     assert.equal(result.group, "21");
     assert.equal(result.aboard, "1");
     assert.equal(result.hidden, true);
+  });
+
+  await test("build cards show current Goliath pricing, weapon order, prerequisites and side paint", async () => {
+    const result = await page.evaluate(() => {
+      const { world, ctrl, el, spawnBuilding, spawnUnit, createBuildCard, UNITS, GOLIATH } = window.selectionFixture("red");
+      const ui = { refresh() {}, toast() {} };
+      const card = createBuildCard(el, { world, ctrl, cardNote: () => "Watch for air raids" }, ui);
+      spawnUnit(world, "goliath", "red", 30, 30);
+      card.show("goliath");
+      const price = el.querySelector("tr td:nth-child(2)").textContent;
+      const expectedPrice = Math.round(UNITS.goliath.cost * (1 + GOLIATH.costStep));
+      const weapons = [...el.querySelectorAll(".gwt tr:not(.gw-head) td:first-child")].map((e) => e.textContent);
+      const note = el.querySelector(".ctr").textContent;
+      const icon = el.querySelector(".ch img").getAttribute("src");
+      spawnBuilding(world, "fab-plant", "red", 2, 2);
+      spawnBuilding(world, "airpad", "red", 10, 2);
+      card.show("gantry");
+      const needs = el.querySelectorAll(".needs > span").length;
+      const have = el.querySelectorAll(".needs > .have").length;
+      el.querySelector("#card-x").click();
+      return { price, expectedPrice, weapons, note, icon, needs, have, hidden: el.hidden };
+    });
+    assert.equal(result.price, String(result.expectedPrice));
+    assert.equal(result.weapons.length, 4);
+    assert.match(result.weapons[0], /mortar/i);
+    assert.match(result.weapons.at(-1), /machine gun/i);
+    assert.equal(result.note, "⚔ Watch for air raids");
+    assert.equal(result.icon, "assets/icons/red/goliath.webp");
+    assert.equal(result.needs, 4);
+    assert.equal(result.have, 2);
+    assert.equal(result.hidden, true);
+  });
+
+  await test("autobuild explains missing prerequisites, refreshes after toggles, and respects input locks", async () => {
+    const result = await page.evaluate(() => {
+      const { world, ctrl, el, spawnBuilding, createBuildCard } = window.selectionFixture();
+      const notices = [];
+      let refreshes = 0;
+      const card = createBuildCard(el, { world, ctrl }, { refresh: () => refreshes++, toast: (s) => notices.push(s) });
+      card.show("stinger");
+      el.querySelector("#card-auto").click();
+      const refused = !ctrl.isAutoBuilding("stinger");
+      const fab = spawnBuilding(world, "fab-plant", "blue", 4, 4);
+      el.querySelector("#card-auto").click();
+      const pressed = el.querySelector("#card-auto").getAttribute("aria-pressed");
+      ctrl.locked = true;
+      el.querySelector("#card-auto").click();
+      const locked = ctrl.isAutoBuilding("stinger");
+      ctrl.locked = false;
+      world.buildings.delete(fab.id);
+      el.querySelector("#card-auto").click();
+      return { notices, refused, pressed, locked, stopped: !ctrl.isAutoBuilding("stinger"), refreshes };
+    });
+    assert.match(result.notices[0], /Fab Plant/);
+    assert.equal(result.refused, true);
+    assert.equal(result.pressed, "true");
+    assert.equal(result.locked, true);
+    assert.equal(result.stopped, true);
+    assert.equal(result.refreshes, 3);
+  });
+
+  await test("build cards count and cancel production still in flight from the red seat", async () => {
+    const result = await page.evaluate(() => {
+      const { world, ctrl, el, spawnBuilding, createBuildCard } = window.selectionFixture("red");
+      const fab = spawnBuilding(world, "fab-plant", "red", 4, 4);
+      world.factions.red.scrap = 10_000;
+      ctrl.trackInFlight();
+      ctrl.enqueue({ type: "produce", faction: "red", buildingId: fab.id, unit: "stinger" });
+      ctrl.drainCommands();
+      const card = createBuildCard(el, { world, ctrl }, { refresh() {}, toast() {} });
+      card.show("stinger");
+      const label = el.querySelector("#card-cancel").textContent;
+      el.querySelector("#card-cancel").click();
+      const commands = ctrl.drainCommands();
+      ctrl.spectator = true;
+      card.show("stinger");
+      return { label, commands, id: fab.id, auto: !!el.querySelector("#card-auto") };
+    });
+    assert.equal(result.label, "Cancel one (1 queued)");
+    assert.deepEqual(result.commands, [{ type: "cancelProduce", faction: "red", buildingId: result.id, unit: "stinger" }]);
+    assert.equal(result.auto, false);
+  });
+
+  await test("cancelling a pending building also clears placement and closes the card", async () => {
+    const result = await page.evaluate(() => {
+      const { world, ctrl, el, createBuildCard } = window.selectionFixture("red");
+      world.factions.red.pending = { kind: "turret", remaining: 10, ready: false };
+      ctrl.placing = "turret";
+      const card = createBuildCard(el, { world, ctrl }, { refresh() {}, toast() {} });
+      card.show("turret");
+      el.querySelector("#card-cancel-b").click();
+      return { hidden: el.hidden, placing: ctrl.placing, commands: ctrl.drainCommands() };
+    });
+    assert.equal(result.hidden, true);
+    assert.equal(result.placing, null);
+    assert.deepEqual(result.commands, [{ type: "cancelBuilding", faction: "red" }]);
   });
 
   await test("HUD components raise no browser exceptions", () => assert.deepEqual(errors, []));
