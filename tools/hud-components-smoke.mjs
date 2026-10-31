@@ -37,7 +37,7 @@ try {
     const m = Object.assign({},
       await import("/src/sim/world.ts"), await import("/src/sim/balance.ts"),
       await import("/src/game/controller.ts"), await import("/src/ui/selection-panel.ts"),
-      await import("/src/ui/build-card.ts")
+      await import("/src/ui/build-card.ts"), await import("/src/ui/action-chips.ts")
     );
     window.hudModules = m;
     window.selectionFixture = (side = "blue") => {
@@ -247,6 +247,66 @@ try {
     assert.equal(result.hidden, true);
     assert.equal(result.placing, null);
     assert.deepEqual(result.commands, [{ type: "cancelBuilding", faction: "red" }]);
+  });
+
+  await test("chip label ticks keep buttons and route clicks to the latest action, even with identical labels", async () => {
+    const result = await page.evaluate(() => {
+      const el = document.createElement("div");
+      document.body.replaceChildren(el);
+      const { render } = window.hudModules.createActionChips(el);
+      const calls = [];
+      render([{ id: "place", label: "Place", on: () => calls.push("old") }]);
+      const button = el.firstChild;
+      render([{ id: "place", label: "Place here", on: () => calls.push("new") }]);
+      const sameAfterLabel = button === el.firstChild;
+      button.click();
+      render([{ id: "place", label: "Place here", on: () => calls.push("newest") }]);
+      button.click();
+      return { sameAfterLabel, sameAfterAction: button === el.firstChild, calls, title: button.title };
+    });
+    assert.equal(result.sameAfterLabel, true);
+    assert.equal(result.sameAfterAction, true);
+    assert.deepEqual(result.calls, ["new", "newest"]);
+    assert.equal(result.title, "Key: Enter");
+  });
+
+  await test("a refused chip keeps its shake through label ticks, and style changes update it in place", async () => {
+    const result = await page.evaluate(() => {
+      const el = document.createElement("div");
+      document.body.replaceChildren(el);
+      const { render, nope } = window.hudModules.createActionChips(el);
+      render([{ id: "anchor", label: "Blocked", cls: "anchor bad", on() {} }]);
+      const button = el.firstChild;
+      nope("anchor");
+      render([{ id: "anchor", label: "Still blocked", cls: "anchor bad", on() {} }]);
+      const shook = button.classList.contains("nope");
+      render([{ id: "anchor", label: "Anchor", cls: "anchor go", on() {} }]);
+      const same = button === el.firstChild;
+      nope("absent");
+      return { shook, same, good: button.classList.contains("go"), bad: button.classList.contains("bad") };
+    });
+    assert.deepEqual(result, { shook: true, same: true, good: true, bad: false });
+  });
+
+  await test("chip insertion, removal and active-state changes rebuild with the right actions", async () => {
+    const result = await page.evaluate(() => {
+      const el = document.createElement("div");
+      document.body.replaceChildren(el);
+      const { render } = window.hudModules.createActionChips(el);
+      const calls = [];
+      render([{ id: "move", label: "Move", on() {} }]);
+      const first = el.firstChild;
+      render([
+        { id: "stop", label: "Stop", on: () => calls.push("stop") },
+        { id: "move", label: "Move", active: true, on: () => calls.push("move") }
+      ]);
+      const rebuilt = first !== el.firstChild;
+      const active = el.children[1].classList.contains("active");
+      el.children[0].click(); el.children[1].click();
+      render([]);
+      return { rebuilt, active, calls, remaining: el.children.length };
+    });
+    assert.deepEqual(result, { rebuilt: true, active: true, calls: ["stop", "move"], remaining: 0 });
   });
 
   await test("HUD components raise no browser exceptions", () => assert.deepEqual(errors, []));

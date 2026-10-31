@@ -156,7 +156,12 @@ await btn("Stinger").tap();
 await ff(3);
 const queued = await world(() => [...window.__bd.world.buildings.values()].some((b) => b.kind === "fab-plant" && b.faction === window.__bd.player && b.queue.length > 0));
 if (!queued) fail("Stinger tap did not queue production");
-await ff(80);
+const productionTicks = await world(() => {
+  const { world: w, player } = window.__bd;
+  const fab = [...w.buildings.values()].find((b) => b.kind === "fab-plant" && b.faction === player);
+  return fab?.queue.find((q) => q.kind === "stinger")?.remaining ?? 0;
+});
+await ff(productionTicks + 2);
 const sid = await world(() => [...window.__bd.world.units.values()].find((u) => u.faction === window.__bd.player && u.kind === "stinger")?.id);
 if (!sid) fail("no Stinger was produced");
 
