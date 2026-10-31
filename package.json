@@ -13,6 +13,7 @@
     "test": "vitest run && node --test tools/pages-archive.test.mjs",
     "test:watch": "vitest",
     "smoke": "node tools/smoke.mjs",
+    "smoke:hud": "node tools/hud-components-smoke.mjs",
     "maps": "vite-node tools/export-maps.ts",
     "mapgen": "vite-node tools/mapgen-preview.ts",
     "balance": "vite-node tools/balance.ts",
