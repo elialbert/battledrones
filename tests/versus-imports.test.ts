@@ -104,7 +104,7 @@ const where = (from: string, r: Ref) => `${from.slice(3)}:${r.line} ${r.kind ===
 
 describe("the sound duel's import rules", () => {
   it("finds the modules it checks", () => {
-    for (const p of ["../src/main.ts", "../src/versus/lobby.ts", "../src/versus/feed.ts", "../src/link/worklet.ts", "../src/link/rig.ts", "../src/game/GameScene.ts", "../src/arena/record.ts"])
+    for (const p of ["../src/main.ts", "../src/versus/lobby.ts", "../src/versus/lobby-machine.ts", "../src/versus/feed.ts", "../src/link/worklet.ts", "../src/link/rig.ts", "../src/game/GameScene.ts", "../src/arena/record.ts"])
       expect(all, p).toContain(p);
     // (the parser sees through comments: the lobby's header names the import it is reached by)
     expect(refsOf("../src/versus/lobby.ts").some((r) => r.spec === "./versus/lobby")).toBe(false);
@@ -148,6 +148,14 @@ describe("the sound duel's import rules", () => {
     for (const from of all.filter(inDuel))
       for (const r of refsOf(from)) if (r.path?.startsWith("../src/arena/") && !r.typeOnly) bad.push(where(from, r));
     expect(bad).toEqual([]);
+  });
+
+  it("the lobby machine imports no sheet, feed or UI code", () => {
+    const graph = valueGraph("../src/versus/lobby-machine.ts");
+    expect(graph.problems).toEqual([]);
+    expect([...graph.files].filter((f) => f.startsWith("../src/ui/"))).toEqual([]);
+    for (const f of ["../src/versus/lobby.ts", "../src/versus/feed.ts", "../src/game/audio.ts", "../src/game/GameScene.ts"])
+      expect(graph.files.has(f), f).toBe(false);
   });
 
   it("the rig never imports game code: its value imports stay in src/link and src/sim", () => {

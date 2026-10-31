@@ -13,9 +13,11 @@ import { worldHash } from "../src/sim/checksum";
 import type { World } from "../src/sim/types";
 import {
   GAIN_MIN, GAIN_QUIET_MS, GAIN_RISE, GAIN_RISE_MS, GAIN_START, GAIN_STEP, GAIN_STEP_MS, LOUD_MS, LOUD_OWN_SNR_DB, LobbyMachine, QUIET_MS, REMATCH_FALLBACK_MS,
-  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS, openerGives, parseDuelParams, parsePrefs, parseRematch, routeText, rttLine, tipsText, type DuelRematch,
+  ROUTE_GRACE_MS, ROUTE_MS, ROUTE_SNR_DB, TIPS_MS,
   type LobbyEnd, type LobbyEnv, type LobbyLink, type LobbyRig
-} from "../src/versus/lobby";
+} from "../src/versus/lobby-machine";
+import { openerGives, parseDuelParams, parsePrefs, parseRematch, routeText, rttLine, tipsText } from "../src/versus/lobby";
+import type { RematchPlan } from "../src/versus/records";
 import { OPENERS, OPENER_IDS } from "../src/sim/openers";
 import { UNITS } from "../src/sim/balance";
 import { HeldEnd, LoopFriend, LoopLink, lobbyLatencyFor } from "../src/versus/loop-peer";
@@ -71,7 +73,7 @@ describe("the dev modes' URL parameters", () => {
 });
 
 describe("the rematch a report stored", () => {
-  const good: DuelRematch = { role: "guest", plan: "low", micMode: "ec", hostSide: "red", mapId: "riverlands", mutators: [] };
+  const good: RematchPlan = { role: "guest", plan: "low", micMode: "ec", hostSide: "red", mapId: "riverlands", mutators: [] };
 
   it("reads back what Rematch wrote", () => {
     expect(parseRematch(JSON.stringify(good))).toEqual(good);
@@ -466,7 +468,7 @@ interface Bench {
 
 /** The machine with a fake rig (or none) whose links are LoopLinks: a friend on the other end, all on one manual clock. */
 function bench(
-  o: { rig?: FakeRig | null; rematch?: DuelRematch | null; seat?: BandRole | null; friend?: boolean; latencyMs?: number; friendBuild?: number; online?: boolean } = {}
+  o: { rig?: FakeRig | null; rematch?: RematchPlan | null; seat?: BandRole | null; friend?: boolean; latencyMs?: number; friendBuild?: number; online?: boolean } = {}
 ): Bench {
   const c = clock();
   const guards: (BandPlan | null)[] = [];
@@ -914,7 +916,7 @@ describe("the lobby's logic", () => {
   });
 
   it("a rematch pairs at once in its role and plan, and falls back to the menu after 60 s with nothing heard", { timeout: 30_000 }, async () => {
-    const rematch: DuelRematch = { role: "guest", plan: "low", micMode: "raw", hostSide: "red", mapId: "riverlands", mutators: [] };
+    const rematch: RematchPlan = { role: "guest", plan: "low", micMode: "raw", hostSide: "red", mapId: "riverlands", mutators: [] };
     const b = bench({ rematch, friend: false });
     await flush();
     await flush();
@@ -931,7 +933,7 @@ describe("the lobby's logic", () => {
   });
 
   it("a retry starts the rematch's 60 s and the tips' 30 s again", { timeout: 30_000 }, async () => {
-    const rematch: DuelRematch = { role: "host", plan: "high", micMode: "raw", hostSide: "red", mapId: "riverlands", mutators: [] };
+    const rematch: RematchPlan = { role: "host", plan: "high", micMode: "raw", hostSide: "red", mapId: "riverlands", mutators: [] };
     const b = bench({ rematch });
     await flush();
     await flush();
@@ -1007,7 +1009,7 @@ describe("the lobby's logic", () => {
   });
 
   it("a rematch host offers the stored map, mutators and side", { timeout: 30_000 }, async () => {
-    const rematch: DuelRematch = { role: "host", plan: "high", micMode: "raw", hostSide: "red", mapId: "random-arctic-77", mutators: [] };
+    const rematch: RematchPlan = { role: "host", plan: "high", micMode: "raw", hostSide: "red", mapId: "random-arctic-77", mutators: [] };
     const b = bench({ rematch });
     await flush();
     await flush();

@@ -18,7 +18,7 @@ import { step } from "../src/sim/sim";
 import type { Command, Faction, World } from "../src/sim/types";
 import { C_MAX, commandBits } from "../src/versus/codec";
 import { VersusFeed, type DuelRig, type FeedEnv } from "../src/versus/feed";
-import { LobbyMachine, type LobbyEnv, type LobbyRig } from "../src/versus/lobby";
+import { LobbyMachine, type LobbyEnv, type LobbyRig } from "../src/versus/lobby-machine";
 import type { HostOffer } from "../src/versus/pairing";
 import { RECORD_KEY, readTally } from "../src/versus/records";
 import { Session } from "../src/versus/session";
