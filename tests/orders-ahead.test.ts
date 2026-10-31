@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BUILDINGS, ECONOMY, UNITS } from "../src/sim/balance";
-import { Controller, buildView, ordersAhead, pickProducer } from "../src/game/controller";
+import { buildView } from "../src/game/build-view";
+import { Controller, pickProducer } from "../src/game/controller";
+import { ordersAhead } from "../src/game/orders-ahead";
 import { modeProgress } from "../src/sim/goliath";
 import { step } from "../src/sim/sim";
 import type { Command, Unit, World } from "../src/sim/types";

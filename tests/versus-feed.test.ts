@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { replay } from "../src/arena/record";
 import { planTicks } from "../src/game/awareness";
-import { Controller, buildView } from "../src/game/controller";
+import { buildView } from "../src/game/build-view";
+import { Controller } from "../src/game/controller";
 import { ReplayFeed, parseRecord } from "../src/game/replay";
 import { PacketAir } from "../src/link/packet-air";
 import { RigError, type LostReason, type MicMode, type RigState } from "../src/link/rig";

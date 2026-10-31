@@ -475,7 +475,7 @@ export function createHud(api: HudApi): Hud {
 
   for (const kind of BUILDABLE)
     makeButton(`b:${kind}`, kind, BUILDINGS[kind].cost, SHORT[kind] ?? BUILDINGS[kind].name, () => {
-      // (a sound duel: orders still on their way count as applied, controller.ts BuildView)
+      // (a sound duel: orders still on their way count as applied, game/build-view.ts BuildView)
       const view = api.ctrl.view();
       const p = view.pending;
       if (p?.kind === kind && p.ready) {
@@ -1283,7 +1283,7 @@ export function createHud(api: HudApi): Hud {
     // (a duel's pause menu: Leave appears once the link is lost, "Resign and leave" while packets arrive)
     if (api.duel && api.ctrl.paused && duelShown && !duelShown.ask && duelShown.key !== exitsKey(api.duel)) renderDuelExits(api.duel, null);
     const fs = f();
-    // (a sound duel: orders still on their way count as applied, controller.ts BuildView)
+    // (a sound duel: orders still on their way count as applied, game/build-view.ts BuildView)
     const view = api.ctrl.view();
     const scrap = Math.floor(view.scrap);
     if (scrap !== lastScrap) {
