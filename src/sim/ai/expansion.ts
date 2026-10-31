@@ -167,8 +167,16 @@ function scanExpansionSite(w: World, faction: Faction, hqC: { x: number; y: numb
 export const EXPANSION_MINERS = 5;
 /** Harvesters left on the home field however many Depots want staffing. */
 const HOME_MINERS = 3;
-/** Armed enemies this close to a Depot (tiles): no more harvesters fed in till they're gone. */
+/** Armed enemies this close to a Depot, or to its field (tiles): no more harvesters fed in till they're gone. */
 const UNSAFE = 8;
+/**
+ * Depots whose fields are this close (tiles) work one field: it is staffed once. Two Depots side
+ * by side on one field each wanted a shift of their own, and the second never saw its miners
+ * (they counted for the first): five more pulled over every think, and ai/fields.ts sent five back
+ * for the crowding. Ten harvesters walked to and fro for a minute, a third of Brutal's APM (replay
+ * 2026-10-31, dune-sea).
+ */
+const SAME_FIELD = 4;
 
 /** The field tile nearest a Depot's middle, within SERVED (scanned in the side's own frame: mirror-fair ties), or null. */
 function fieldBy(w: World, faction: Faction, cx: number, cy: number): { x: number; y: number } | null {
@@ -217,13 +225,25 @@ export function staffExpansions(
     const cy = b.ty + size / 2;
     const field = perTick(w, `depot field ${b.id}`, () => fieldBy(w, faction, cx, cy));
     if (!field || dist(field.x + 0.5, field.y + 0.5, hqC.x, hqC.y) <= HOME_FIELD) continue;
+    if (sites.some((s) => dist(s.field.x, s.field.y, field.x, field.y) <= SAME_FIELD)) continue;
     sites.push({ cx, cy, field });
   }
   if (!sites.length) return { sent, extra };
+  // (a harvester counts for the site whose field it's sent to is nearest: one site, never two)
   const servedBy = (h: Unit) => {
     const o = h.order;
     if (o.type !== "harvest") return -1;
-    return sites.findIndex((s) => dist(o.fieldX + 0.5, o.fieldY + 0.5, s.cx, s.cy) <= SERVED);
+    let best = -1;
+    let bestD = Infinity;
+    for (const [i, s] of sites.entries()) {
+      if (dist(o.fieldX + 0.5, o.fieldY + 0.5, s.cx, s.cy) > SERVED) continue;
+      const d = dist(o.fieldX, o.fieldY, s.field.x, s.field.y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
   };
   const free = harvesters.filter((h) => !skip.has(h.id) && (h.order.type === "idle" || h.order.type === "harvest"));
   let home = free.filter((h) => servedBy(h) < 0);
@@ -231,7 +251,11 @@ export function staffExpansions(
     extra += EXPANSION_MINERS - 1;
     const have = harvesters.filter((h) => servedBy(h) === i).length;
     if (have >= EXPANSION_MINERS) continue;
-    if (enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, s.cx, s.cy) <= UNSAFE)) continue;
+    // (by the field too: an army camped on it, past the Depot's reach, ate the harvesters fed in)
+    const fx = s.field.x + 0.5;
+    const fy = s.field.y + 0.5;
+    if (enemies.some((e) => UNITS[e.kind].dps > 0 && (dist(e.x, e.y, s.cx, s.cy) <= UNSAFE || dist(e.x, e.y, fx, fy) <= UNSAFE)))
+      continue;
     const take = Math.min(EXPANSION_MINERS - have, home.length - HOME_MINERS);
     if (take <= 0) continue;
     const picks = home

@@ -230,6 +230,14 @@ export const DIFFICULTY: Record<
   Difficulty,
   {
     label: string; interval: number; incomeMult: number; extraHarvesters: number; assaultMult: number; harass: boolean;
+    /** The army comes to an expansion under attack, when it can win there (not just to the HQ). */
+    defendExpansions?: boolean;
+    /**
+     * Expands boldly: the crew goes once half the miners are working, not after a full shift on top
+     * of them, and a raid at home doesn't put it off. A Depot by a field pays back so fast it's worth
+     * losing one in a fight (a player beat Brutal on that alone).
+     */
+    boldExpand?: boolean;
     /** Personalities this difficulty picks from at random. */
     pool: StrategyName[];
   }
@@ -246,16 +254,16 @@ export const DIFFICULTY: Record<
     pool: ["balanced", "rush", "airswarm", "boom"]
   },
   normal: {
-    label: "Normal", interval: 2, incomeMult: 1, extraHarvesters: 0, assaultMult: 1, harass: true,
+    label: "Normal", interval: 2, incomeMult: 1, extraHarvesters: 0, assaultMult: 1, harass: true, defendExpansions: true,
     pool: ["balanced", "rush", "airswarm", "boom", "skyforce", "ironclad"]
   },
   hard: {
-    label: "Hard", interval: 1.2, incomeMult: 1.3, extraHarvesters: 1, assaultMult: 0.9, harass: true,
+    label: "Hard", interval: 1.2, incomeMult: 1.3, extraHarvesters: 1, assaultMult: 0.9, harass: true, defendExpansions: true, boldExpand: true,
     pool: ["balanced", "airswarm", "boom", "ironclad"]
   },
   // (plays as Hard; only a stock commander's handicap grows. Marshal's Brutal smaller waves lost: APM-BOTS.md)
   brutal: {
-    label: "Brutal", interval: 1.2, incomeMult: 1.5, extraHarvesters: 2, assaultMult: 0.9, harass: true,
+    label: "Brutal", interval: 1.2, incomeMult: 1.5, extraHarvesters: 2, assaultMult: 0.9, harass: true, defendExpansions: true, boldExpand: true,
     pool: ["balanced", "airswarm", "boom", "ironclad"]
   }
 };
@@ -387,6 +395,14 @@ const OPENING_GRACE = 45 * TICK_RATE;
 const HOME_ALARM_VALUE = 400;
 /** Visible armed enemies this close to our buildings/harvesters are threats. */
 const DEFENSE_RADIUS = 11;
+/** Bold expansion (Difficulty.boldExpand): harvesters left mining while a crew goes, at least. */
+const BOLD_KEEP = 5;
+/**
+ * An expansion's raiders (scrap value) the army goes out to, if what it can send is at least this
+ * share of them (Difficulty.defendExpansions). Replay 2026-10-31 (dune-sea): Brutal's army, as big as
+ * the raid, sat by its HQ while the raid killed 22 harvesters and both Depots 17 tiles away.
+ */
+const EXPANSION_DEFEND_ODDS = 0.9;
 
 const GUARD_RADIUS = 5;
 const STAGE_RADIUS = 6;
@@ -627,8 +643,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // an expansion Depot: its crew of harvesters walks to the site, and it's started there (ai/expansion.ts)
   const mining = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots + goliathFields.extra);
   // (an expansion is next: its crew is trained on top of the miners, and it's never started under attack)
-  const expanding = !!s.expansion || (expansionNext && !threatened);
-  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, mining, s.strategy.depotReach ?? 9, cmds);
+  // (bold: a raid at home doesn't put it off, and half the miners stay on while the crew goes: the rest are trained after)
+  const expanding = !!s.expansion || (expansionNext && (!threatened || !!diff.boldExpand));
+  const crewKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds);
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
   const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
@@ -658,7 +676,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- production: adaptive counters to the enemy composition -------------
   // reserve scrap while an important building is still wanted
   // (an expansion's crew trained or on its way: its price)
-  const crewReady = expansionNext && !threatened && harvesters.length >= mining + ECONOMY.expansion.crew;
+  const crewReady = expansionNext && (!threatened || !!diff.boldExpand) && harvesters.length >= crewKeep + ECONOMY.expansion.crew;
   const reserve = ((s.expansion && s.expansion.depotId === undefined) || crewReady) && !f.pending
     ? ECONOMY.expansion.cost
     : f.pending || wanted === null ? 0 : wanted === "turret" || wanted === "radar" ? 0 : Math.min(400, BUILDINGS[wanted].cost);
@@ -941,6 +959,41 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (away.length > 0) {
       away.forEach((u) => used.add(u.id));
       cmds.push({ type: "attackMove", faction, unitIds: away.map((u) => u.id), x: hqC.x, y: hqC.y });
+    }
+  }
+  // --- 1b'. an expansion under attack: the army goes to it, if it can win there ---------
+  // (the Depot pays for itself many times over; its miners die first, and with them the income)
+  if (diff.defendExpansions && !threatened) {
+    let raided: { x: number; y: number; value: number; domains: Set<Domain> } | null = null;
+    for (const d of myBuildings) {
+      if (d.kind !== "depot") continue;
+      const c = buildingCenter(d);
+      if (dist(c.x, c.y, hqC.x, hqC.y) <= DEFENSE_RADIUS) continue; // (home: 1b's)
+      const raid = threats.filter((t) => dist(t.x, t.y, c.x, c.y) <= DEFENSE_RADIUS);
+      const v = raid.reduce((a, t) => a + t.value, 0);
+      if (v < HOME_ALARM_VALUE || (raided && v <= raided.value)) continue;
+      const n = raid.length;
+      raided = {
+        x: raid.reduce((a, t) => a + t.x, 0) / n,
+        y: raid.reduce((a, t) => a + t.y, 0) / n,
+        value: v,
+        domains: new Set(raid.map((t) => t.domain))
+      };
+    }
+    if (raided) {
+      const r = raided;
+      const there = army.filter((u) => dist(u.x, u.y, r.x, r.y) <= DEFENSE_RADIUS);
+      const go = army.filter(
+        (u) =>
+          !used.has(u.id) && u.kind !== "mender" &&
+          dist(u.x, u.y, r.x, r.y) > DEFENSE_RADIUS &&
+          dist(u.x, u.y, enemyHome.x, enemyHome.y) > 8 && // about to finish the job there
+          [...r.domains].some((dom) => canHitDomain(UNITS[u.kind].targets, dom))
+      );
+      if (go.length && value(go) + value(there) >= EXPANSION_DEFEND_ODDS * r.value) {
+        go.forEach((u) => used.add(u.id));
+        cmds.push({ type: "attackMove", faction, unitIds: go.map((u) => u.id), x: r.x, y: r.y });
+      }
     }
   }
   // --- 1c. Goliaths: ours dig in, hold, move on, lift, walk with a wave; theirs are hunted (ai/goliath.ts)
