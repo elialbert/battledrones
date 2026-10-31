@@ -1382,6 +1382,23 @@ function nextBuilding(
     if (s.strategy.expandEarly) order.splice(Math.min(order.length, Math.max(2 + i, lab + 1 + i)), 0, k);
     else order.push(k);
   }
+  // (depots follow the mining: the next Depot goes up before anything put in ahead of it since —
+  // expandEarly's factories, the turrets and SAMs answering what it saw. Each factory built was
+  // replaced by another in front of it, -dune-sea-…-brutal: Juggernaut's Depot, fifth in its plan,
+  // slid to eleventh and went up at 4:23, the home field long dry. Brutal, 24 games each against
+  // the order as it was: Juggernaut 15–1, Skyforce 13–4, Strike 12–8; the plans with an early Depot unchanged)
+  if (s.strategy.depotReach !== undefined) {
+    const counted = new Map<BuildingKind, number>();
+    const left = order.findIndex((k) => {
+      counted.set(k, (counted.get(k) ?? 0) + 1);
+      return (have.get(k) ?? 0) < counted.get(k)!;
+    });
+    const depot = order.indexOf("depot", left);
+    if (left >= 0 && depot > left) {
+      order.splice(depot, 1);
+      order.splice(left, 0, "depot");
+    }
+  }
   const wanted = new Map<BuildingKind, number>();
   let depotsSkipped = 0;
   for (const kind of order) {

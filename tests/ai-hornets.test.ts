@@ -48,7 +48,8 @@ describe("the Hornet strike (Marshal's Hornet Strike)", () => {
     const hornetsOrdered = (strike: boolean) => {
       const { w, ai, c } = strikeWorld(strike);
       for (const k of ["airpad", "airpad", "tech-lab", "fab-plant"] as const) placeNear(w, k, c.x - 4, c.y + 3);
-      w.factions.red.scrap = 800;
+      // (800 for two Hornets, and the next Depot: it jumps the order, commander.ts nextBuilding)
+      w.factions.red.scrap = 800 + BUILDINGS.depot.cost;
       w.tick = 120 * TICK_RATE;
       const cmds = tickAi(w, "red", ai);
       return cmds.filter((x) => x.type === "produce" && x.unit === "hornet").length;
