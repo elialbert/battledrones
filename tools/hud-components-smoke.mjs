@@ -309,6 +309,146 @@ try {
     assert.deepEqual(result, { rebuilt: true, active: true, calls: ["stop", "move"], remaining: 0 });
   });
 
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+  await page.evaluate(async () => {
+    const { createMessages } = await import("/src/ui/messages.ts");
+    const { announce } = await import("/src/game/announce.ts");
+    window.messageFixture = () => {
+      const toasts = document.createElement("div");
+      const banner = document.createElement("div");
+      banner.hidden = true;
+      document.body.replaceChildren(toasts, banner);
+      const jumps = [];
+      let refreshes = 0;
+      const messages = createMessages(toasts, banner, { centerCamera: (x, y) => jumps.push([x, y]), refresh: () => refreshes++ });
+      return window.messages = { toasts, banner, messages, jumps, announce, refreshes: () => refreshes };
+    };
+  });
+
+  await test("toasts use safe text, preserve waiting hints and expire in two phases", async () => {
+    const initial = await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.messages.toast("<img src=x>", undefined, "hint");
+      f.messages.toast("old alert");
+      f.messages.toast("new alert", () => f.jumps.push("toast"));
+      f.toasts.lastChild.click();
+      return { texts: [...f.toasts.children].map((e) => e.textContent), image: !!f.toasts.querySelector("img"),
+        passive: f.toasts.firstChild.classList.contains("passive"), jumps: f.jumps };
+    });
+    assert.deepEqual(initial, { texts: ["<img src=x>", "new alert"], image: false, passive: true, jumps: ["toast"] });
+    await page.clock.runFor(2199);
+    assert.equal(await page.evaluate(() => window.messages.toasts.querySelectorAll(".out").length), 0);
+    await page.clock.runFor(1);
+    assert.equal(await page.evaluate(() => window.messages.toasts.querySelectorAll(".out").length), 2);
+    await page.clock.runFor(499);
+    assert.equal(await page.evaluate(() => window.messages.toasts.children.length), 2);
+    await page.clock.runFor(1);
+    assert.equal(await page.evaluate(() => window.messages.toasts.children.length), 0);
+    await page.evaluate(() => window.messages.messages.destroy());
+  });
+
+  await test("toast eviction removes exiting hints first and otherwise the oldest hint", async () => {
+    const result = await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.messages.toast("exiting", undefined, "hint out");
+      f.messages.toast("alert"); f.messages.toast("new");
+      const exitingFirst = [...f.toasts.children].map((e) => e.textContent);
+      f.toasts.replaceChildren();
+      f.messages.toast("hint 1", undefined, "hint"); f.messages.toast("hint 2", undefined, "hint"); f.messages.toast("hint 3", undefined, "hint");
+      const hints = [...f.toasts.children].map((e) => e.textContent);
+      f.messages.destroy();
+      return { exitingFirst, hints };
+    });
+    assert.deepEqual(result, { exitingFirst: ["alert", "new"], hints: ["hint 2", "hint 3"] });
+  });
+
+  await test("banners deduplicate without restarting, queue three by priority, and safely jump", async () => {
+    const result = await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.announce({ key: "current", text: "<img>", sub: "<script>", tone: "good", x: 2, y: 9 });
+      f.announce({ key: "late", text: "late", priority: 3 });
+      f.announce({ key: "first", text: "first" });
+      f.announce({ key: "second", text: "second", priority: 2 });
+      f.announce({ key: "third", text: "third", priority: 2 });
+      f.announce({ key: "first", text: "duplicate", priority: 0 });
+      f.banner.click();
+      return { text: f.banner.textContent, image: !!f.banner.querySelector("img"), tone: f.banner.className,
+        late: f.messages.bannerUp("late"), queued: f.messages.bannerUp("fir"), busy: f.messages.busy, jumps: f.jumps, refreshes: f.refreshes() };
+    });
+    assert.deepEqual(result, { text: "<img><script>", image: false, tone: "banner good in", late: false, queued: true,
+      busy: true, jumps: [[2, 9]], refreshes: 2 });
+    await page.clock.runFor(1000);
+    await page.evaluate(() => window.messages.announce({ key: "current", text: "duplicate", priority: 0 }));
+    await page.clock.runFor(1200);
+    assert.equal(await page.evaluate(() => window.messages.banner.classList.contains("out")), true);
+    await page.clock.runFor(260);
+    assert.equal(await page.evaluate(() => window.messages.banner.textContent), "first");
+    await page.clock.runFor(2460);
+    assert.equal(await page.evaluate(() => window.messages.banner.textContent), "second");
+    await page.clock.runFor(2460);
+    assert.equal(await page.evaluate(() => window.messages.banner.textContent), "third");
+    await page.clock.runFor(2460);
+    assert.deepEqual(await page.evaluate(() => ({ hidden: window.messages.banner.hidden, busy: window.messages.messages.busy,
+      refreshes: window.messages.refreshes() })), { hidden: true, busy: false, refreshes: 9 });
+    await page.evaluate(() => window.messages.messages.destroy());
+  });
+
+  await test("a critical banner pre-empts a showing banner and cancels its old timeout", async () => {
+    await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.announce({ key: "ordinary", text: "ordinary" });
+      f.announce({ key: "waiting", text: "waiting" });
+    });
+    await page.clock.runFor(1000);
+    assert.deepEqual(await page.evaluate(() => {
+      const f = window.messages;
+      f.announce({ key: "critical", text: "critical", priority: 0, x: 5, y: 6 });
+      f.banner.click();
+      return { old: f.messages.bannerUp("ordinary"), queued: f.messages.bannerUp("waiting"), jumps: f.jumps };
+    }), { old: false, queued: true, jumps: [[5, 6]] });
+    await page.clock.runFor(2999);
+    assert.equal(await page.evaluate(() => window.messages.banner.className), "banner info in");
+    await page.clock.runFor(1);
+    assert.equal(await page.evaluate(() => window.messages.banner.className), "banner info out");
+    await page.clock.runFor(260);
+    assert.equal(await page.evaluate(() => window.messages.banner.textContent), "waiting");
+    await page.evaluate(() => window.messages.messages.destroy());
+  });
+
+  await test("pre-emption during exit cancels hiding; teardown stops callbacks and unsubscribes", async () => {
+    await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.announce({ key: "ordinary", text: "ordinary" });
+    });
+    await page.clock.runFor(2200);
+    await page.evaluate(() => window.messages.announce({ key: "urgent", text: "urgent", priority: 1 }));
+    await page.clock.runFor(260);
+    assert.deepEqual(await page.evaluate(() => {
+      const f = window.messages;
+      const state = { hidden: f.banner.hidden, text: f.banner.textContent, cls: f.banner.className };
+      f.announce({ key: "waiting", text: "waiting" });
+      f.messages.destroy();
+      f.banner.click();
+      f.announce({ key: "after", text: "after", priority: 0 });
+      return { ...state, jumps: f.jumps, refreshes: f.refreshes() };
+    }), { hidden: false, text: "urgent", cls: "banner info in", jumps: [], refreshes: 4 });
+    await page.clock.runFor(10000);
+    assert.deepEqual(await page.evaluate(() => ({ text: window.messages.banner.textContent, refreshes: window.messages.refreshes() })),
+      { text: "urgent", refreshes: 4 });
+    // Also destroy during the exit timeout, while a queued banner is waiting.
+    await page.evaluate(() => {
+      const f = window.messageFixture();
+      f.announce({ key: "exiting", text: "exiting" });
+      f.announce({ key: "waiting", text: "waiting" });
+    });
+    await page.clock.runFor(2200);
+    await page.evaluate(() => window.messages.messages.destroy());
+    await page.clock.runFor(10000);
+    assert.deepEqual(await page.evaluate(() => ({ text: window.messages.banner.textContent, refreshes: window.messages.refreshes() })),
+      { text: "exiting", refreshes: 2 });
+  });
+
   await test("HUD components raise no browser exceptions", () => assert.deepEqual(errors, []));
 } finally {
   await browser?.close();
