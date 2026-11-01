@@ -340,7 +340,9 @@ const enum Rank {
   Production,
   Focus,
   Army,
-  Other
+  Other,
+  /** Keeping a marching wave together (low: only APM the rest leaves). */
+  March
 }
 
 interface Want {
@@ -358,6 +360,19 @@ const SAME_SPOT = 1.5;
 const MENDER_SLACK = 4;
 /** Fight micro looks this far round a fight for both sides' strength. */
 const FIGHT_RADIUS = 8;
+/** A marching wave's unit this much closer (tiles) to where it's going than the wave's middle waits for it. */
+const MARCH_LEAD = 5;
+/** …at a spot this far (tiles) ahead of the middle, till the middle is this close behind it (MARCH_CATCH). */
+const MARCH_AHEAD = 2;
+const MARCH_CATCH = 1.5;
+/** Within this (tiles) of where it's going, or in contact, the wave stops waiting and goes in. */
+const MARCH_ARRIVE = 10;
+const MARCH_CONTACT = 8;
+/** A unit waits at most this long (s); a wave is kept together at most this long after it's sent (s). */
+const MARCH_WAIT = 20;
+const MARCH_MAX = 120;
+/** How long (s) a wave's orders have to go out, before it counts as broken up. */
+const MARCH_SEND = 4;
 /** Break off when our strength is under this share of theirs (Lanchester: dps × hp). */
 const BREAK_OFF = 0.3;
 /** Fights this close to home are never broken off: there's nowhere to go. */
@@ -507,6 +522,10 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   // exactly one action threw away 57.5 of every 60 and it acted on every other look, 60 a minute)
   const microCap = MICRO_BURST * PER_ACTION + Math.max(0, reactTicks * (opts.microApm ?? 0) - 1);
   let microTick = 0;
+  /** Units of the marching wave waiting for the rest (ai/commander.ts AiState.wave): since when. */
+  const waiting = new Map<number, number>();
+  /** The wave `waiting` is for (its launch tick). */
+  let waveTick = -1;
 
   /** `c` cut down to the units it would change (null: none). The plan doesn't pull held units out of a fight. */
   function trim(w: World, c: Command, planned: boolean): Command | null {
@@ -547,7 +566,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       }
       if (opts.react > 0 && w.tick % reactTicks === 0 && !w.winner) {
         push = finish(w) ?? (finishing ? push : null);
-        let micro = fights(w, dodging);
+        let micro = [...fights(w, dodging), ...march(w, dodging)];
         if (opts.microApm !== undefined) {
           // (the most urgent first: breaking off and stepping back, then focus fire)
           micro.sort((a, b) => a.rank - b.rank);
@@ -639,6 +658,71 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const ids = army.map((u) => u.id);
     for (const id of ids) held.set(id, w.tick + (K.finishEvery + 2) * TICK_RATE);
     return { rank: Rank.Push, cmd: { type: "attackMove", faction: side, unitIds: ids, x: at.x, y: at.y }, planned: false, push: true };
+  }
+
+  /**
+   * Keep the last wave sent (AiState.wave) together on its way: the fast
+   * units that get well ahead of its middle wait just ahead of it till the
+   * rest catch up, so it arrives as one, not a trickle into the enemy. Off
+   * once it's close, in contact, or the wave has moved on to other orders.
+   */
+  function march(w: World, dodging: Set<number>): Want[] {
+    const wave = s.wave;
+    if (!wave) return [];
+    if (wave.tick !== waveTick) {
+      // a new wave: the last one's waiting are the plan's again
+      for (const id of waiting.keys()) held.delete(id);
+      waiting.clear();
+      waveTick = wave.tick;
+    }
+    const dest = { x: wave.x, y: wave.y };
+    const res: Want[] = [];
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
+    const going = (u: Unit) => u.order.type === "attackMove" && dist(u.order.x, u.order.y, dest.x, dest.y) <= 0.5;
+    const units = wave.ids
+      .map((id) => w.units.get(id))
+      .filter((u): u is Unit => !!u && u.faction === side && UNITS[u.kind].dps > 0 && !wing.has(u.id) && !dodging.has(u.id));
+    const marching = units.filter((u) => waiting.has(u.id) || going(u));
+    // (its orders may not be out yet: the APM cap sends the plan's in turn)
+    if (2 * marching.length < units.length && w.tick - wave.tick < MARCH_SEND * TICK_RATE) return [];
+    // (contact: an armed enemy at hand, not a long gun's reach off: artillery would end every march at the gate)
+    const enemies = seenEnemies(w, side).filter((e) => e.kind !== "harvester" && (UNITS[e.kind].dps > 0 || !!e.goliath));
+    const contact = marching.some((u) => enemies.some((e) => dist(u.x, u.y, e.x, e.y) <= MARCH_CONTACT));
+    const r = (u: Unit) => dist(u.x, u.y, dest.x, dest.y);
+    const sorted = [...marching].sort((a, b) => r(a) - r(b) || a.id - b.id);
+    const pace = sorted[Math.floor(sorted.length / 2)];
+    const over =
+      !pace || marching.length < 3 || 2 * marching.length < units.length || contact || r(pace) <= MARCH_ARRIVE ||
+      w.tick - wave.tick > MARCH_MAX * TICK_RATE;
+    const go = (ids: number[]) => {
+      for (const id of ids) {
+        waiting.delete(id);
+        held.delete(id);
+      }
+      if (ids.length) res.push({ rank: Rank.March, cmd: { type: "attackMove", faction: side, unitIds: ids, x: dest.x, y: dest.y }, planned: false });
+    };
+    if (over) {
+      // still on its way (close, or in contact): the waiting go in with it; else (recalled, broken up) the plan has them
+      const still = !pace || 2 * marching.length < units.length ? [] : [...waiting.keys()].filter((id) => w.units.has(id));
+      go(still);
+      for (const id of waiting.keys()) held.delete(id);
+      waiting.clear();
+      s.wave = undefined;
+      return res;
+    }
+    const m = r(pace);
+    // caught up (or waited long enough): on with the wave
+    go(marching.filter((u) => waiting.has(u.id) && (r(u) >= m - MARCH_CATCH || w.tick - waiting.get(u.id)! > MARCH_WAIT * TICK_RATE)).map((u) => u.id));
+    // well ahead of the middle: wait just ahead of it
+    const ahead = marching.filter((u) => !waiting.has(u.id) && r(u) < m - MARCH_LEAD).map((u) => u.id);
+    if (ahead.length) {
+      const spot = toward(pace.x, pace.y, dest, MARCH_AHEAD);
+      for (const id of ahead) waiting.set(id, w.tick);
+      res.push({ rank: Rank.March, cmd: { type: "attackMove", faction: side, unitIds: ahead, x: spot.x, y: spot.y }, planned: false });
+    }
+    // the plan doesn't send the waiting back to the staging point meanwhile
+    for (const id of waiting.keys()) held.set(id, w.tick + 2 * reactTicks + TICK_RATE);
+    return res;
   }
 
   /** The fight micro: break off lost fights, step hurt units back, focus fire. */

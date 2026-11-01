@@ -611,7 +611,9 @@ describe("hunting enemy Goliaths", () => {
     step(w, []);
     const cmds = tickAi(w, "red", ai);
     expect(ai.mode).toBe("assault");
-    expect(cmds.some((cmd) => cmd.type === "attack" && cmd.targetId === gantry.id)).toBe(true);
+    // (from afar the wave attack-moves onto it, so it fights its way through: an attack order would hold its fire)
+    const c = buildingCenter(gantry);
+    expect(cmds.some((cmd) => cmd.type === "attackMove" && Math.hypot(cmd.x - c.x, cmd.y - c.y) < 0.5)).toBe(true);
   });
 });
 

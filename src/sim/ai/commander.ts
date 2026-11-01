@@ -325,6 +325,8 @@ export interface AiState {
   weighs?: boolean;
   sightings?: Map<number, { value: number; tick: number; x: number; y: number; faction: Faction }>;
   waveReady?: number | null;
+  /** The last wave sent: its units and where it marches (ai/marshal.ts keeps it together on the way). */
+  wave?: { ids: number[]; x: number; y: number; tick: number };
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
   fair?: boolean;
   /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
@@ -1137,7 +1139,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
           dist(u.order.x, u.order.y, staging.x, staging.y) < 1 && dist(u.x, u.y, staging.x, staging.y) <= 2 * STAGE_RADIUS &&
           !staged.includes(u)
       );
-      launchWave(w, cmds, faction, [...staged, ...marching], target, used);
+      const wave = [...staged, ...marching];
+      launchWave(w, cmds, faction, wave, target, used);
+      s.wave = { ids: wave.map((u) => u.id), x: target.x, y: target.y, tick: w.tick };
     } else {
       for (const u of idleArmy()) {
         if (dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < 14) {
@@ -1267,6 +1271,9 @@ function pickPriorityTarget(w: World, faction: Faction, seen: Unit[], fallback: 
   return { x: fallback.x, y: fallback.y, domain: "ground", armor: "structure" };
 }
 
+/** Closer than this (tiles) to a wave's target, a unit that can hurt it is ordered onto it; farther, it attack-moves there. */
+const WAVE_STRIKE = 10;
+
 /** Send a wave at a target: attackers attack it, the rest (and anything that can't hurt it, a Sniper Team at a building) escort. */
 function launchWave(
   w: World,
@@ -1284,7 +1291,9 @@ function launchWave(
   const escorts: number[] = [];
   for (const u of units) {
     used.add(u.id);
-    if (id !== undefined && effectivenessVs(u.kind, target.armor, target.domain) >= USELESS) attackers.push(u.id);
+    // (an attack order holds fire on everything else: from afar, the wave attack-moves there, and fights its way through)
+    if (id !== undefined && dist(u.x, u.y, target.x, target.y) <= WAVE_STRIKE && effectivenessVs(u.kind, target.armor, target.domain) >= USELESS)
+      attackers.push(u.id);
     else escorts.push(u.id);
   }
   if (attackers.length > 0 && id !== undefined)
@@ -1365,9 +1374,11 @@ function observeEnemy(s: AiState, seen: Unit[], gantryBuilds = 0): void {
 /**
  * The enemy army a weighing commander remembers (AiState.sightings): every
  * armed unit (or Mender) seen in the last SIGHTING_TTL, at its price, but
- * not one whose last spot we can see now with it gone from there (it died,
- * or moved off: we know it isn't there). In a free-for-all, the focus
- * rival's only. Goliaths count for what they can still fire.
+ * not one that died where we last saw it (its spot in sight, and it gone
+ * from there for good). One that only moved off out of sight is still
+ * counted: forgotten, a besieging army that stepped back a few tiles read
+ * as gone, and the base sent its army out into it. In a free-for-all, the
+ * focus rival's only. Goliaths count for what they can still fire.
  */
 function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[], focus: Faction | null): number {
   const memo = (s.sightings ??= new Map());
@@ -1379,7 +1390,8 @@ function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[],
   }
   let v = 0;
   for (const [id, e] of memo) {
-    if (w.tick - e.tick > SIGHTING_TTL || (!now.has(id) && isVisible(w, faction, Math.floor(e.x), Math.floor(e.y)))) memo.delete(id);
+    // (an army that steps back out of sight is still out there: only one seen gone and dead is forgotten early)
+    if (w.tick - e.tick > SIGHTING_TTL || (!now.has(id) && !w.units.has(id) && isVisible(w, faction, Math.floor(e.x), Math.floor(e.y)))) memo.delete(id);
     else if (!focus || e.faction === focus) v += e.value;
   }
   return v;

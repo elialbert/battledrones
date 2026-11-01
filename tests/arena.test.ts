@@ -68,8 +68,9 @@ describe("arena observations show only what the side can see", () => {
           for (const u of w.units.values()) if (u.faction === side) [u, ...(u.passengers ?? [])].forEach((p) => allowed.add(p.id));
           for (const b of w.buildings.values()) if (b.faction === side) allowed.add(b.id);
           const text = renderObservation(obs, { round: 1, lastRound: 240, roundSecs: 5 });
-          const hq = hqOf(w, side)!;
-          const [hx, hy] = fr.topLeft("hq", hq.tx, hq.ty);
+          // (a look out from the HQ, or from where it stood: a fight can take it down before the last round)
+          const hq = hqOf(w, side);
+          const [hx, hy] = hq ? fr.topLeft("hq", hq.tx, hq.ty) : fr.tile(w.width / 2, w.height / 2);
           const close = look(w, side, hx + 12, hy - 12, 12);
           for (const id of [...ids(text), ...ids(close)]) expect(allowed.has(id), `#${id} leaked to ${side}`).toBe(true);
           // nothing about the enemy's economy

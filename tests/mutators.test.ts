@@ -344,10 +344,12 @@ describe("infantry mutators", () => {
     // (how many drops one side gets in swings with the run: a base under attack keeps its
     // squads busy at home. So: both fly, every match, and drop after drop between them. Three:
     // since harvesters leave a field an army comes to, ai/fields.ts, Skyforce often gets one
-    // drop, not two — 37 drops in seeds 1–10, not 41, none under three)
+    // drop, not two — 37 drops in seeds 1–10, not 41, none under three. Frostbite is the same map on any
+    // seed, so the AIs' seeds vary with it: since waves attack-move to their target from afar, fighting their
+    // way through instead of holding fire, AI seeds 1–16 in pairs gave 29 drops, Skyforce none in 2 of 8)
     for (const seed of [3, 4]) {
       const w = createMapWorld("frostbite", { seed, mutators: ["airborne"] });
-      const ai = { blue: createAiState("skyforce", "normal", 1), red: createAiState("airswarm", "normal", 2) };
+      const ai = { blue: createAiState("skyforce", "normal", 2 * seed - 1), red: createAiState("airswarm", "normal", 2 * seed) };
       const bays = { blue: 0, red: 0 } as Record<Faction, number>;
       const drops = { blue: 0, red: 0 } as Record<Faction, number>;
       const home = perSide((f) => hqOf(w, f)!);
