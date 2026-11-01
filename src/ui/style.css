@@ -340,6 +340,31 @@ button {
 .vs-purple {
   color: #c9a2ff;
 }
+/* watching: each commander's line carries its scrap, income, army worth and ⚡ (src/ui/side-econ.ts) */
+.versus > span > b {
+  font-weight: inherit;
+}
+.versus.econ > span {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.versus.econ > span::before {
+  flex: none;
+}
+.versus.econ > span > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.versus.econ > span > em {
+  flex: none;
+  margin-left: auto;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
 /* a four-player map's four commanders, two by two; a side knocked out is struck through */
 .versus.multi {
   grid-template-columns: auto auto;
@@ -357,6 +382,20 @@ button {
     height: auto;
     padding: 3px 10px 4px;
     line-height: 1.25;
+  }
+  /* watching on a phone: each side's numbers under its name, without the ⚡ */
+  .versus.econ > span {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0;
+  }
+  .versus.econ > span > em {
+    grid-column: 1 / -1;
+    margin-left: 0;
+    font-size: 11px;
+  }
+  .versus.econ .e-pow {
+    display: none;
   }
 }
 
@@ -728,6 +767,23 @@ button {
   background: linear-gradient(0deg, rgba(126, 242, 155, 0.35), rgba(126, 242, 155, 0.12));
   border-top: 1px solid rgba(126, 242, 155, 0.7);
   pointer-events: none;
+}
+/* a unit's: one column per building that makes it, each filling with its own unit in production */
+.bb .progs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  pointer-events: none;
+}
+.bb .progs[hidden] {
+  display: none;
+}
+.bb .progs > i {
+  flex: 1;
+  background: linear-gradient(0deg, rgba(126, 242, 155, 0.35), rgba(126, 242, 155, 0.12));
+  border-top: 1px solid rgba(126, 242, 155, 0.7);
 }
 .bb .repeat {
   display: none;
@@ -2849,6 +2905,30 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 8px 10px 6px;
+}
+/* army strength | mining speed */
+.aar-metric {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.aar-metric button {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.aar-metric button[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
 }
 .aar-legend {
   display: flex;

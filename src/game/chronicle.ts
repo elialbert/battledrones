@@ -27,6 +27,8 @@ export interface Sample {
   /** Scrap in the bank. */
   bank: PerSide<number>;
   harvesters: PerSide<number>;
+  /** Scrap harvested so far (FactionStats.scrapHarvested): the report's mining-speed chart. Unset in old snapshots. */
+  mined?: PerSide<number>;
 }
 
 export interface DeathRec {
@@ -237,7 +239,8 @@ export class Chronicle {
       t: this.t,
       army,
       bank: perSide((f) => Math.floor(w.factions[f].scrap)),
-      harvesters
+      harvesters,
+      mined: perSide((f) => w.factions[f]?.stats.scrapHarvested ?? 0)
     };
     const last = this.samples[this.samples.length - 1];
     if (last && last.t === s.t) this.samples[this.samples.length - 1] = s;

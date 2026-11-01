@@ -231,7 +231,7 @@ await page.mouse.down();
 await page.waitForTimeout(600);
 await page.mouse.up();
 if (await page.locator("#card").isHidden()) fail("long-press did not open the info card");
-// Autobuild lives in unit info and leaves already queued units intact when switched off.
+// Autobuild lives in unit info; switched off, it cancels its queued units but the one in production.
 const auto = page.locator("#card-auto");
 if ((await auto.getAttribute("aria-pressed")) !== "false") fail("autobuild did not start off");
 await auto.click();
@@ -248,7 +248,7 @@ if ((await auto.getAttribute("aria-pressed")) !== "false") fail("unit info did n
 const stillQueued = await world(() => [...window.__bd.world.buildings.values()].some((b) =>
   b.faction === window.__bd.player && b.queue.some((q) => q.kind === "wasp")
 ));
-if (!stillQueued) fail("disabling autobuild cancelled the queued Wasp");
+if (!stillQueued) fail("disabling autobuild cancelled the Wasp in production");
 // Clicking outside the card closes it; using the controls inside it kept it open above.
 const outsideCard = await page.evaluate(() => {
   for (let y = 180; y < innerHeight; y += 20)

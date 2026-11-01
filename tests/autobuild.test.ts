@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Controller, setLocalSide } from "../src/game/controller";
-import { ECONOMY, TICK_RATE, UNITS } from "../src/sim/balance";
+import { TICK_RATE, UNITS } from "../src/sim/balance";
 import { worldHash } from "../src/sim/checksum";
 import { produceUnit } from "../src/sim/economy";
 import { step } from "../src/sim/sim";
@@ -20,82 +20,77 @@ afterEach(() => setLocalSide("blue"));
 
 describe("unit autobuild", () => {
   const kinds = (q: { kind: string }[]) => q.map((x) => x.kind);
-  const count = (q: { kind: string }[], k: string) => q.filter((x) => x.kind === k).length;
 
-  it("fills every free slot behind manual orders", () => {
+  it("keeps the producer building one at a time, without stacking a queue", () => {
     const { w, fab, ctrl } = setup();
-    produceUnit(w, "blue", fab.id, "mortar");
     ctrl.toggleAutoBuild("stinger");
     const scrap = w.factions.blue.scrap;
     step(w, ctrl.drainCommands());
-    expect(kinds(fab.queue)).toEqual(["mortar", ...Array(ECONOMY.maxQueue - 1).fill("stinger")]);
-    expect(w.factions.blue.scrap).toBe(scrap - (ECONOMY.maxQueue - 1) * UNITS.stinger.cost);
+    expect(kinds(fab.queue)).toEqual(["stinger"]);
+    expect(w.factions.blue.scrap).toBe(scrap - UNITS.stinger.cost);
+    expect(ctrl.drainCommands()).toEqual([]);
+    fab.queue[0]!.remaining = 1;
+    step(w, []);
+    expect(fab.queue).toHaveLength(0);
+    step(w, ctrl.drainCommands());
+    expect(kinds(fab.queue)).toEqual(["stinger"]);
+  });
+
+  it("waits behind manual orders, then picks up", () => {
+    const { w, fab, ctrl } = setup();
+    produceUnit(w, "blue", fab.id, "mortar");
+    ctrl.toggleAutoBuild("stinger");
     expect(ctrl.drainCommands()).toEqual([]);
     fab.queue[0]!.remaining = 1;
     step(w, []);
     step(w, ctrl.drainCommands());
-    expect(kinds(fab.queue)).toEqual(Array(ECONOMY.maxQueue).fill("stinger"));
+    expect(kinds(fab.queue)).toEqual(["stinger"]);
   });
 
-  it("splits the slots evenly between enabled kinds", () => {
+  it("alternates enabled kinds, the one with fewest in the field first", () => {
     const { w, fab, ctrl } = setup();
+    const other = spawnBuilding(w, "fab-plant", "blue", 14, 2);
+    spawnUnit(w, "stinger", "blue", 20, 20);
     ctrl.toggleAutoBuild("stinger");
     ctrl.toggleAutoBuild("flak-crawler");
     step(w, ctrl.drainCommands());
-    expect(fab.queue).toHaveLength(ECONOMY.maxQueue);
-    expect(count(fab.queue, "stinger")).toBe(ECONOMY.maxQueue / 2);
-    expect(count(fab.queue, "flak-crawler")).toBe(ECONOMY.maxQueue / 2);
+    expect(kinds(fab.queue)).toEqual(["flak-crawler"]);
+    expect(kinds(other.queue)).toEqual(["stinger"]);
   });
 
-  it("rebalances a full queue when another kind is enabled, refunding the surplus and keeping the head", () => {
-    const { w, fab, ctrl } = setup();
-    ctrl.toggleAutoBuild("stinger");
-    step(w, ctrl.drainCommands());
-    step(w, []);
-    const head = fab.queue[0]!;
-    ctrl.toggleAutoBuild("flak-crawler");
-    for (let i = 0; i < 20; i++) step(w, ctrl.drainCommands());
-    expect(fab.queue[0]).toBe(head);
-    expect(fab.queue).toHaveLength(ECONOMY.maxQueue);
-    expect(count(fab.queue, "stinger")).toBe(ECONOMY.maxQueue / 2);
-    expect(count(fab.queue, "flak-crawler")).toBe(ECONOMY.maxQueue / 2);
-    expect(ctrl.drainCommands()).toEqual([]);
-  });
-
-  it("leaves other kinds' orders alone and waits for queue space", () => {
-    const { w, fab, ctrl } = setup();
-    for (let i = 0; i < ECONOMY.maxQueue; i++) produceUnit(w, "blue", fab.id, "mortar");
-    ctrl.toggleAutoBuild("stinger");
-    ctrl.toggleAutoBuild("flak-crawler");
-    expect(ctrl.drainCommands()).toEqual([]);
-    fab.queue[0]!.remaining = 1;
-    step(w, []);
-    step(w, ctrl.drainCommands());
-    expect(count(fab.queue, "mortar")).toBe(ECONOMY.maxQueue - 1);
-    expect(fab.queue).toHaveLength(ECONOMY.maxQueue);
-  });
-
-  it("waits for scrap, spreading what there is across producers", () => {
+  it("spreads short scrap across producers", () => {
     const { w, fab, ctrl } = setup();
     const other = spawnBuilding(w, "fab-plant", "blue", 14, 2);
     ctrl.toggleAutoBuild("stinger");
-    w.factions.blue.scrap = UNITS.stinger.cost * 2 + 1;
+    w.factions.blue.scrap = UNITS.stinger.cost + 1;
     step(w, ctrl.drainCommands());
-    expect(fab.queue).toHaveLength(1);
-    expect(other.queue).toHaveLength(1);
+    expect(fab.queue.length + other.queue.length).toBe(1);
     expect(ctrl.drainCommands()).toEqual([]);
   });
 
-  it("turning it off leaves the queued units to finish", () => {
+  it("turning it off cancels its queued units (refunded), all but the one in production", () => {
     const { w, fab, ctrl } = setup();
+    for (const k of ["stinger", "stinger", "mortar", "stinger", "stinger"] as const) produceUnit(w, "blue", fab.id, k);
     ctrl.toggleAutoBuild("stinger");
-    step(w, ctrl.drainCommands());
+    expect(ctrl.drainCommands()).toEqual([]);
+    const scrap = w.factions.blue.scrap;
     ctrl.toggleAutoBuild("stinger");
     expect(ctrl.isAutoBuilding("stinger")).toBe(false);
-    fab.queue[0]!.remaining = 1;
     step(w, ctrl.drainCommands());
-    expect(fab.queue).toHaveLength(ECONOMY.maxQueue - 1);
+    expect(kinds(fab.queue)).toEqual(["stinger", "mortar"]);
+    expect(w.factions.blue.scrap).toBe(scrap + 3 * UNITS.stinger.cost);
     expect(ctrl.drainCommands()).toEqual([]);
+  });
+
+  it("turning it off cancels an order still in flight (it isn't in production yet)", () => {
+    const { w, fab, ctrl } = setup();
+    ctrl.trackInFlight();
+    ctrl.toggleAutoBuild("stinger");
+    const sent = ctrl.drainCommands();
+    expect(sent).toHaveLength(1);
+    ctrl.toggleAutoBuild("stinger");
+    step(w, [...sent, ...ctrl.drainCommands()]);
+    expect(fab.queue).toHaveLength(0);
   });
 
   it("counts production in flight and retries after an order can no longer land", () => {
@@ -103,7 +98,7 @@ describe("unit autobuild", () => {
     ctrl.trackInFlight();
     ctrl.toggleAutoBuild("stinger");
     const first = ctrl.drainCommands();
-    expect(first).toHaveLength(ECONOMY.maxQueue);
+    expect(first).toHaveLength(1);
     expect(ctrl.drainCommands()).toEqual([]);
     ctrl.settled(w.tick); // no longer in flight, but never applied
     expect(ctrl.drainCommands()).toEqual(first);
@@ -125,8 +120,8 @@ describe("unit autobuild", () => {
     const bay = spawnBuilding(w, "assembly-bay", "blue", 14, 2);
     ctrl.toggleAutoBuild("trooper");
     step(w, ctrl.drainCommands());
-    expect(g.goliath!.queue).toHaveLength(ECONOMY.maxQueue);
-    expect(bay.queue).toHaveLength(ECONOMY.maxQueue);
+    expect(g.goliath!.queue).toHaveLength(1);
+    expect(bay.queue).toHaveLength(1);
     g.goliath!.mode = "walking";
     expect(ctrl.drainCommands()).toEqual([]);
   });
@@ -141,7 +136,7 @@ describe("unit autobuild", () => {
       step(replay.w, commands);
     }
     expect(live.w.factions.blue.stats.unitsBuilt).toBe(2);
-    expect(live.fab.queue).toHaveLength(ECONOMY.maxQueue);
+    expect(live.fab.queue).toHaveLength(1);
     expect(worldHash(replay.w)).toBe(worldHash(live.w));
   });
 

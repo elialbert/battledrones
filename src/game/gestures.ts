@@ -24,7 +24,7 @@ export interface GestureCallbacks {
    * when the box was cut short — a second finger came down, or the pointer
    * was cancelled (an OS gesture, a call) — which is never a deliberate end.
    */
-  onBoxEnd(x: number, y: number, released: boolean): void;
+  onBoxEnd(x: number, y: number, released: boolean, pointerType?: "touch" | "mouse" | "pen"): void;
   /** Screen-space camera pan delta. */
   onPan(dx: number, dy: number): void;
   /** A pan gesture ended (finger/button lifted) — for momentum. */
@@ -206,7 +206,7 @@ export class GestureRecognizer {
         // never promoted: tap if quick, degenerate box if it was a long hold
         if (now - this.downTime >= HOLD_DELAY_MS) {
           this.cb.onBoxStart(this.downX, this.downY);
-          this.cb.onBoxEnd(p.x, p.y, true);
+          this.cb.onBoxEnd(p.x, p.y, true, this.downType);
         } else if (
           now - this.lastTapTime <= DOUBLE_TAP_MS &&
           Math.hypot(p.x - this.lastTapX, p.y - this.lastTapY) <= DOUBLE_TAP_SLOP_PX
@@ -223,7 +223,7 @@ export class GestureRecognizer {
         break;
       }
       case "box":
-        this.cb.onBoxEnd(p.x, p.y, true);
+        this.cb.onBoxEnd(p.x, p.y, true, this.downType);
         this.mode = "idle";
         break;
       case "pan":

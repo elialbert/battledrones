@@ -94,7 +94,7 @@ export function createBuildCard(cardEl: HTMLElement, api: BuildCardApi, ui: { re
       ${weapons ? `<table>${rows.slice(0, 2).join("")}</table>${weapons}<table>${rows.slice(2).join("")}</table>` : `<table>${rows.join("")}</table>`}
       ${m ? `<p class="good">▲ ${m.strong}</p><p class="bad">▼ ${m.weak}</p>` : ""}
       ${note ? `<p class="ctr">⚔ ${note}</p>` : ""}
-      ${isUnit && !api.ctrl.spectator ? `<button class="cta small" id="card-auto" aria-pressed="${api.ctrl.isAutoBuilding(kind as UnitKind)}">Autobuild: ${api.ctrl.isAutoBuilding(kind as UnitKind) ? "ON" : "OFF"}</button><p class="note">Keeps every queue that builds it full, split evenly with your other autobuild units.</p>` : ""}
+      ${isUnit && !api.ctrl.spectator ? `<button class="cta small" id="card-auto" aria-pressed="${api.ctrl.isAutoBuilding(kind as UnitKind)}">Autobuild: ${api.ctrl.isAutoBuilding(kind as UnitKind) ? "ON" : "OFF"}</button><p class="note">Keeps every building that makes it working, one at a time, taking turns with your other autobuild units. Off: its queued units are cancelled.</p>` : ""}
       ${queuedHere > 0 ? `<button class="cta small" id="card-cancel">Cancel one (${queuedHere} queued)</button>` : ""}
       ${!isUnit && view.pending?.kind === kind ? `<button class="cta small warn" id="card-cancel-b">Cancel construction</button>` : ""}`;
     cardEl.hidden = false;
@@ -113,9 +113,12 @@ export function createBuildCard(cardEl: HTMLElement, api: BuildCardApi, ui: { re
     });
     cardEl.querySelector("#card-cancel")?.addEventListener("click", () => {
       const now = api.ctrl.view();
-      const p = queuesOf(w, PLAYER, kind as UnitKind).find((p) => p.queue.some((q) => q.kind === kind) || now.extra(p.id, kind as UnitKind) > 0);
+      // (the producer with the most of them left, counting cancels not landed yet: clicks in a row spread out)
+      const left = (p: { id: number; queue: { kind: string }[] }) => p.queue.filter((q) => q.kind === kind).length + now.extra(p.id, kind as UnitKind);
+      const p = queuesOf(w, PLAYER, kind as UnitKind).filter((p) => left(p) > 0).sort((a, b) => left(b) - left(a))[0];
       if (p) api.ctrl.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: kind as UnitKind });
-      cardEl.hidden = true;
+      sfx.play("sell", 0.5);
+      showCard(kind); // (stays open, the count one less: cancel as many as you like)
     });
     cardEl.querySelector("#card-cancel-b")?.addEventListener("click", () => {
       api.ctrl.enqueue({ type: "cancelBuilding", faction: PLAYER });

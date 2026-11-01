@@ -64,7 +64,7 @@ describe("touch gestures", () => {
     g.move(touch(1, 180, 160), 350);
     expect(cb.onBoxMove).toHaveBeenCalledWith(180, 160);
     g.up(touch(1, 180, 160), 400);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(180, 160, true);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(180, 160, true, "touch");
     expect(cb.onTap).not.toHaveBeenCalled();
     expect(cb.onPan).not.toHaveBeenCalled();
   });
@@ -73,7 +73,7 @@ describe("touch gestures", () => {
     g.down(touch(1, 100, 100), 0);
     g.tick(300);
     g.up(touch(1, 100, 100), 500);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(100, 100, true);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(100, 100, true, "touch");
     expect(cb.onTap).not.toHaveBeenCalled();
   });
 
@@ -256,8 +256,16 @@ describe("mouse gestures", () => {
     expect(cb.onBoxStart).toHaveBeenCalledWith(60, 60);
     expect(cb.onBoxMove).toHaveBeenCalledWith(120, 130);
     g.up(mouse(120, 130), 100);
-    expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130, true);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130, true, "mouse");
     expect(cb.onPan).not.toHaveBeenCalled();
+  });
+
+  it("a slow click (held, not dragged) is a hold release that says it was the mouse", () => {
+    // (GameScene turns it into a click unless it drops a Condor's squads: a retreat order mustn't vanish)
+    g.down(mouse(60, 60), 0);
+    g.up(mouse(61, 60), 400);
+    expect(cb.onTap).not.toHaveBeenCalled();
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(61, 60, true, "mouse");
   });
 
   it("identifies mouse double-clicks so repeated terrain clicks can issue moves", () => {

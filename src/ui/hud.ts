@@ -28,6 +28,7 @@ import { goliathMode } from "./goliath-display";
 import { createMessages } from "./messages";
 import { createTutorial } from "./tutorial";
 import { createMinimap, type MinimapApi, type MinimapPing } from "./minimap";
+import { econHtml, incomeTracker } from "./side-econ";
 
 export { minimapDot, shroudRects } from "./minimap";
 
@@ -278,7 +279,7 @@ export function createHud(api: HudApi): Hud {
   let tab: Tab = "build";
   const buttons = new Map<string, HTMLButtonElement>();
   /** Cached child elements of each build button (no per-frame DOM queries), and the price its label shows. */
-  const parts = new Map<string, { prog: HTMLElement; lock: HTMLElement; badge: HTMLElement; cost: HTMLElement; kc: HTMLElement; price: number; name: string }>();
+  const parts = new Map<string, { prog: HTMLElement; progs: HTMLElement; lock: HTMLElement; badge: HTMLElement; cost: HTMLElement; kc: HTMLElement; price: number; name: string }>();
   /** What a tap on each build button does (build mode's keys press the same). */
   const taps = new Map<string, () => void>();
 
@@ -306,6 +307,7 @@ export function createHud(api: HudApi): Hud {
       <span class="repeat" aria-hidden="true">↻</span>
       <span class="badge" hidden></span>
       <span class="prog" hidden></span>
+      <span class="progs" hidden></span>
       <span class="lock" hidden>🔒</span>
       <span class="kc"></span>`;
     // long-press (touch) or right-click (mouse) opens the info card
@@ -339,6 +341,7 @@ export function createHud(api: HudApi): Hud {
     taps.set(key, onTap);
     parts.set(key, {
       prog: b.querySelector<HTMLElement>(".prog")!,
+      progs: b.querySelector<HTMLElement>(".progs")!,
       lock: b.querySelector<HTMLElement>(".lock")!,
       badge: b.querySelector<HTMLElement>(".badge")!,
       cost: b.querySelector<HTMLElement>(".cost")!,
@@ -623,6 +626,8 @@ export function createHud(api: HudApi): Hud {
   ] as const)
     $(`#${id}`).addEventListener("click", () => api.zoomBy(factor));
 
+  /** Watching: refresh each side's economy on the versus pill (null when playing). */
+  let updateEcon: (() => void) | null = null;
   // (a four-player online battle: who plays which colour, the player's own side "You")
   const roster = api.duel?.names && sidesOf(w).length > 2 ? api.duel.names : null;
   if (api.ctrl.spectator || roster) {
@@ -633,9 +638,28 @@ export function createHud(api: HudApi): Hud {
     const sides = sidesOf(w);
     const label = (f: Faction) => (roster ? (f === PLAYER ? "You" : roster[f] ?? SIDE_NAME[f]) : api.strategies?.[f] ?? SIDE_NAME[f]);
     versus.classList.toggle("multi", sides.length > 2);
-    versus.innerHTML = sides.map((f) => `<span class="vs-${f}"></span>`).join("");
-    for (const f of sides) versus.querySelector(`.vs-${f}`)!.textContent = label(f);
+    // (watching: each side's line carries its economy and army too, src/ui/side-econ.ts)
+    const watching = api.ctrl.spectator;
+    versus.classList.toggle("econ", watching);
+    versus.innerHTML = sides.map((f) => `<span class="vs-${f}"><b></b>${watching ? `<em></em>` : ""}</span>`).join("");
+    for (const f of sides) versus.querySelector(`.vs-${f} > b`)!.textContent = label(f);
     versus.title = sides.map(label).join(" vs ");
+    if (watching) {
+      const income = incomeTracker(sides);
+      const lines = new Map(sides.map((f) => [f, versus.querySelector<HTMLElement>(`.vs-${f} > em`)!]));
+      let shownAt = -1;
+      updateEcon = () => {
+        // twice a game second, and at once after a seek back
+        if (shownAt >= 0 && w.tick >= shownAt && w.tick - shownAt < TICK_RATE / 2) return;
+        shownAt = w.tick;
+        const rate = income(w);
+        for (const f of sides) {
+          const t = econHtml(w, f, rate[f] ?? 0);
+          const el = lines.get(f)!;
+          if (el.innerHTML !== t) el.innerHTML = t;
+        }
+      };
+    }
   }
   /** A free-for-all's knocked-out sides, struck through on the spectator's pill as they go. */
   let outShown = 0;
@@ -665,6 +689,7 @@ export function createHud(api: HudApi): Hud {
         <div id="p-sound"></div>
         <button class="cta alt" id="p-help">How to play</button>
         ${uncharted || duel ? "" : `<button class="cta alt" id="p-fog">${api.ctrl.showFog ? "Reveal map (debug)" : "Restore fog of war"}</button>`}
+        ${duel || api.ctrl.spectator ? "" : `<div id="p-gg" class="p-duel"></div>`}
         ${duel ? `<div id="p-duel" class="p-duel"></div>` : `<button class="cta alt" id="p-quit">Quit to menu</button>`}
         <div id="p-helptext" class="help" hidden>${HELP_HTML}</div>
       </div>`;
@@ -681,6 +706,26 @@ export function createHud(api: HudApi): Hud {
     });
     pauseEl.querySelector("#p-quit")?.addEventListener("click", () => fullscreen.reload());
     if (duel) renderDuelExits(duel, null);
+    else renderResign(false);
+  }
+
+  /** Resign against the AI: asks first, then gives up through the sim (a defeat, with its finale and report). */
+  function renderResign(ask: boolean): void {
+    const box = pauseEl.querySelector<HTMLElement>("#p-gg");
+    if (!box) return;
+    if (!ask) {
+      box.innerHTML = `<button class="cta alt" id="p-resign">Resign</button>`;
+      box.querySelector("#p-resign")!.addEventListener("click", () => renderResign(true));
+      return;
+    }
+    box.innerHTML = `<button class="cta alt warn" id="p-yes">Resign</button>
+      <button class="cta alt" id="p-no">Cancel</button>`;
+    box.querySelector("#p-no")!.addEventListener("click", () => renderResign(false));
+    box.querySelector("#p-yes")!.addEventListener("click", () => {
+      if (api.ctrl.locked || w.winner) return;
+      api.ctrl.enqueue({ type: "resign", faction: PLAYER });
+      if (api.ctrl.paused) togglePause(); // (the resign lands on the next tick: the finale, then the report)
+    });
   }
 
   /** The duel buttons as last rendered (null: the pause menu is closed), so update() redraws them only when they change. */
@@ -776,6 +821,7 @@ export function createHud(api: HudApi): Hud {
       const rate = ((earned - first.v) / span) * 60;
       rateEl.textContent = secs > 10 ? `+${Math.round(rate)}/m` : "";
     }
+    updateEcon?.();
     surv?.update();
     ops?.update();
     // (the calldown block turns up after the HUD: into the sidebar with it)
@@ -909,16 +955,24 @@ export function createHud(api: HudApi): Hud {
     for (const kind of ALL_UNITS) {
       const el = buttons.get(`u:${kind}`)!;
       const pt = parts.get(`u:${kind}`)!;
-      const { prog, lock, badge } = pt;
+      const { progs, lock, badge } = pt;
       // (Goliaths' training queues count with the Assembly Bays', paused ones too)
       let queued = 0;
-      let headProg = -1;
-      for (const p of queuesOf(w, PLAYER, kind)) {
+      // one progress column per building that makes it, side by side: each one's unit in production (0: busy with
+      // something else, or between units); shown while any of them is building one
+      const cols: number[] = [];
+      let building = false;
+      for (const p of queuesOf(w, PLAYER, kind).sort((a, b) => a.id - b.id)) {
+        let col = 0;
         p.queue.forEach((q, i) => {
           if (q.kind !== kind) return;
           queued++;
-          if (i === 0) headProg = Math.max(headProg, 1 - q.remaining / (UNITS[kind].buildTime * TICK_RATE));
+          if (i === 0) {
+            col = 1 - q.remaining / (UNITS[kind].buildTime * TICK_RATE);
+            building = true;
+          }
         });
+        cols.push(col);
         queued += view.extra(p.id, kind);
       }
       queued = Math.max(0, queued);
@@ -934,8 +988,16 @@ export function createHud(api: HudApi): Hud {
       markBanned(lock, w, kind); // mutators: ⛔ instead of 🔒
       badge.hidden = queued === 0;
       if (badge.textContent !== String(queued)) badge.textContent = String(queued);
-      prog.hidden = headProg < 0;
-      if (headProg >= 0) prog.style.height = `${headProg * 100}%`;
+      progs.hidden = !building;
+      if (building) {
+        while (progs.children.length < cols.length) progs.appendChild(document.createElement("i"));
+        while (progs.children.length > cols.length) progs.lastElementChild!.remove();
+        cols.forEach((c, i) => {
+          const h = `${(c * 100).toFixed(1)}%`;
+          const bar = progs.children[i] as HTMLElement;
+          if (bar.style.height !== h) bar.style.height = h;
+        });
+      }
     }
     for (const el of tabsEl.children) {
       const t = (el as HTMLElement).dataset.tab as Tab;

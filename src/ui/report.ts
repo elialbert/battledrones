@@ -124,21 +124,45 @@ const VB_W = 320;
 const VB_H = 104;
 const PLOT = { x0: 6, x1: 314, y0: 10, y1: 94 };
 
-function valueAt(samples: Sample[], t: number, f: Faction): number {
-  let best = samples[0]!;
-  for (const s of samples) if (Math.abs(s.t - t) < Math.abs(best.t - t)) best = s;
-  return best.army[f] ?? 0;
+/** What the report's chart plots: toggled at its top. */
+export type ChartMetric = "army" | "mining";
+const METRIC_LABEL: Record<ChartMetric, string> = { army: "Army strength", mining: "Mining speed" };
+/** Mining speed is scrap harvested over this trailing window (deposits come in lumps), per minute. */
+const MINING_WINDOW_S = 30;
+
+/** Each sample's value per side for a metric: army strength, or scrap mined per minute. */
+export function metricSeries(samples: Sample[], metric: ChartMetric, sides: readonly Faction[]): PerSide<number>[] {
+  if (metric === "army") return samples.map((s) => s.army);
+  return samples.map((s, i) => {
+    let j = i;
+    while (j > 0 && s.t - samples[j - 1]!.t <= MINING_WINDOW_S) j--;
+    const p = samples[j]!;
+    const dt = s.t - p.t;
+    const out = {} as PerSide<number>;
+    for (const f of sides) out[f] = dt > 0 ? (((s.mined?.[f] ?? 0) - (p.mined?.[f] ?? 0)) / dt) * 60 : 0;
+    return out;
+  });
 }
 
-function chartHtml(ctx: ReportContext): string | null {
+function nearest(samples: Sample[], t: number): number {
+  let best = 0;
+  samples.forEach((s, i) => {
+    if (Math.abs(s.t - t) < Math.abs(samples[best]!.t - t)) best = i;
+  });
+  return best;
+}
+
+function chartHtml(ctx: ReportContext, metric: ChartMetric = "army"): string | null {
   const samples = ctx.chronicle.samples;
   if (samples.length < 3) return null;
   const T = Math.max(1, samples[samples.length - 1]!.t);
   const sides = sidesOf(ctx.world);
-  const maxV = Math.max(1, ...samples.map((s) => Math.max(...sides.map((f) => s.army[f] ?? 0))));
+  const vals = metricSeries(samples, metric, sides);
+  const v = (i: number, f: Faction) => vals[i]![f] ?? 0;
+  const maxV = Math.max(1, ...vals.map((_, i) => Math.max(...sides.map((f) => v(i, f)))));
   const x = (t: number) => PLOT.x0 + (t / T) * (PLOT.x1 - PLOT.x0);
-  const y = (v: number) => PLOT.y1 - (v / maxV) * (PLOT.y1 - PLOT.y0);
-  const pts = (f: Faction) => samples.map((s) => `${x(s.t).toFixed(1)},${y(s.army[f] ?? 0).toFixed(1)}`).join(" ");
+  const y = (n: number) => PLOT.y1 - (n / maxV) * (PLOT.y1 - PLOT.y0);
+  const pts = (f: Faction) => samples.map((s, i) => `${x(s.t).toFixed(1)},${y(v(i, f)).toFixed(1)}`).join(" ");
   const area = (f: Faction) => `M${x(0).toFixed(1)},${PLOT.y1} L${pts(f).replace(/ /g, " L")} L${x(T).toFixed(1)},${PLOT.y1} Z`;
   // the reader's side draws on top
   const order: Faction[] = isMulti(ctx.world)
@@ -147,7 +171,8 @@ function chartHtml(ctx: ReportContext): string | null {
   const marks = ctx.moments
     .map((m, i) => {
       const mx = x(m.t);
-      const top = Math.max(...sides.map((f) => valueAt(samples, m.t, f)));
+      const at = nearest(samples, m.t);
+      const top = Math.max(...sides.map((f) => v(at, f)));
       const my = Math.max(PLOT.y0 + 2, y(top) - 9);
       return `<g class="mk ${m.tone}" data-i="${i}">
         <line x1="${mx.toFixed(1)}" y1="${(my + 7).toFixed(1)}" x2="${mx.toFixed(1)}" y2="${PLOT.y1}" class="mk-stem"/>
@@ -161,13 +186,17 @@ function chartHtml(ctx: ReportContext): string | null {
   const label = (f: Faction) => (ctx.spectator ? `${sideName(f, ctx)} · ${escapeHtml(ctx.strategies?.[f] ?? "")}` : sideName(f, ctx));
   // (four sides' areas would muddy each other: a free-for-all draws lines only)
   const areas = isMulti(ctx.world) ? "" : order.map((f) => `<path d="${area(f)}" fill="url(#aar-g${f === "blue" ? "b" : "r"})" class="area"/>`).join("");
+  const toggle = (Object.keys(METRIC_LABEL) as ChartMetric[])
+    .map((k) => `<button type="button" data-metric="${k}" aria-pressed="${k === metric}">${METRIC_LABEL[k]}</button>`)
+    .join("");
   return `
+    <div class="aar-metric" role="group" aria-label="Chart">${toggle}</div>
     <div class="aar-legend">
       ${sides.map((f) => `<span class="lk ${f}"><i></i>${label(f)}</span>`).join("\n      ")}
-      <span class="cap">Army strength</span>
+      ${metric === "mining" ? `<span class="cap">scrap / min</span>` : ""}
     </div>
     <svg class="aar-svg" viewBox="0 0 ${VB_W} ${VB_H}" role="img"
-      aria-label="Army strength over time for ${sides.length === 2 ? "both" : "every"} side${sides.length === 2 ? "s" : ""}, with ${ctx.moments.length} key moments marked">
+      aria-label="${METRIC_LABEL[metric]} over time for ${sides.length === 2 ? "both" : "every"} side${sides.length === 2 ? "s" : ""}, with ${ctx.moments.length} key moments marked">
       <defs>
         <linearGradient id="aar-gb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4c9dff" stop-opacity="0.32"/><stop offset="1" stop-color="#4c9dff" stop-opacity="0"/></linearGradient>
         <linearGradient id="aar-gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff7a6a" stop-opacity="0.28"/><stop offset="1" stop-color="#ff7a6a" stop-opacity="0"/></linearGradient>
@@ -184,14 +213,28 @@ function chartHtml(ctx: ReportContext): string | null {
     <p class="aar-readout">Tap or drag across the chart</p>`;
 }
 
-function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | null) => void): void {
+/** Wire the chart (crosshair, moment markers) and its metric toggle, which redraws the section in place. */
+function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | null) => void, metric: ChartMetric = "army"): void {
+  el.querySelectorAll<HTMLButtonElement>(".aar-metric button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const next = b.dataset.metric as ChartMetric;
+      if (next === metric) return;
+      const html = chartHtml(ctx, next);
+      if (!html) return;
+      el.innerHTML = html;
+      select(null);
+      mountChart(el, ctx, select, next);
+    })
+  );
   const svg = el.querySelector<SVGSVGElement>(".aar-svg");
   const readout = el.querySelector<HTMLElement>(".aar-readout");
   if (!svg || !readout) return;
   const samples = ctx.chronicle.samples;
   const T = Math.max(1, samples[samples.length - 1]!.t);
   const sides = sidesOf(ctx.world);
-  const maxV = Math.max(1, ...samples.map((s) => Math.max(...sides.map((f) => s.army[f] ?? 0))));
+  const vals = metricSeries(samples, metric, sides);
+  const v = (i: number, f: Faction) => vals[i]![f] ?? 0;
+  const maxV = Math.max(1, ...vals.map((_, i) => Math.max(...sides.map((f) => v(i, f)))));
   const xh = svg.querySelector<SVGLineElement>(".xh")!;
   const dots = new Map(sides.map((f) => [f, svg.querySelector<SVGCircleElement>(`.xd.${f}`)!]));
   const toVb = (clientX: number) => {
@@ -199,9 +242,8 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
     return ((clientX - r.left) / Math.max(1, r.width)) * VB_W;
   };
   const showSample = (vx: number) => {
-    const t = ((vx - PLOT.x0) / (PLOT.x1 - PLOT.x0)) * T;
-    let s = samples[0]!;
-    for (const c of samples) if (Math.abs(c.t - t) < Math.abs(s.t - t)) s = c;
+    const i = nearest(samples, ((vx - PLOT.x0) / (PLOT.x1 - PLOT.x0)) * T);
+    const s = samples[i]!;
     const sx = PLOT.x0 + (s.t / T) * (PLOT.x1 - PLOT.x0);
     xh.setAttribute("x1", String(sx));
     xh.setAttribute("x2", String(sx));
@@ -209,11 +251,12 @@ function mountChart(el: HTMLElement, ctx: ReportContext, select: (i: number | nu
     for (const f of sides) {
       const dot = dots.get(f)!;
       dot.setAttribute("cx", String(sx));
-      dot.setAttribute("cy", String(PLOT.y1 - ((s.army[f] ?? 0) / maxV) * (PLOT.y1 - PLOT.y0)));
+      dot.setAttribute("cy", String(PLOT.y1 - (v(i, f) / maxV) * (PLOT.y1 - PLOT.y0)));
       dot.setAttribute("visibility", "visible");
     }
+    const unit = metric === "mining" ? "/min" : "";
     readout.innerHTML = `<b>${fmtTime(s.t)}</b>${sides
-      .map((f) => `<span class="rk ${f}"><i></i><em>${short(s.army[f] ?? 0)}</em> ${sideName(f, ctx)}</span>`)
+      .map((f) => `<span class="rk ${f}"><i></i><em>${short(v(i, f))}${unit}</em> ${sideName(f, ctx)}</span>`)
       .join("")}`;
     select(null);
   };

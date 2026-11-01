@@ -136,20 +136,29 @@ export class Controller {
     return this.autoBuild.has(kind);
   }
 
+  /** Switching one off also cancels its queued units (refunded), all but the one each producer is building. */
   toggleAutoBuild(kind: UnitKind): void {
     if (this.spectator || this.locked) return;
-    if (!this.autoBuild.delete(kind)) this.autoBuild.add(kind);
+    if (!this.autoBuild.delete(kind)) {
+      this.autoBuild.add(kind);
+      return;
+    }
+    const view = buildView(this.world, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
+    for (const p of producersOf(this.world, PLAYER, kind)) {
+      // (the head is in production: it finishes; cancels take the newest first)
+      const waiting = p.queue.filter((q, i) => i > 0 && q.kind === kind).length + view.extra(p.id, kind);
+      for (let i = 0; i < waiting; i++) this.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: kind });
+    }
   }
 
   /**
-   * Autobuild fills every slot: each producer that builds an enabled kind is
-   * kept queued to its cap, split as evenly as it can be between the enabled
-   * kinds it builds (variety). A free slot takes the enabled kind that queue
-   * holds fewest of (ties: the kind with fewest in the field). A full queue
-   * that is lopsided, one enabled kind 2+ ahead of another (say one just
-   * switched on), gives back its newest surplus unit (refunded; never the one
-   * in production) so the slot can go to the other. Other kinds' orders are
-   * left alone and just take slots. Orders still in flight count as queued.
+   * Autobuild keeps every producer that builds an enabled kind busy without
+   * stacking up a queue: one with nothing queued (or on its way) gets one
+   * more, so each builds back to back. With several enabled kinds sharing a
+   * producer, each new order takes the kind with fewest in the field
+   * (counting those just ordered), so they alternate. Manual orders are left
+   * alone: a producer working through them gets nothing more until it's
+   * done. Scrap short of everything goes round the producers one each.
    */
   private queueAutoBuild(): void {
     if (this.spectator || this.locked || this.paused || this.world.winner || this.autoBuild.size === 0) return;
@@ -164,32 +173,15 @@ export class Controller {
       }
     }
     if (lines.size === 0) return;
-    const fielded = new Map<UnitKind, number>();
-    for (const u of w.units.values()) if (u.faction === PLAYER) fielded.set(u.kind, (fielded.get(u.kind) ?? 0) + 1);
-    // one order per producer per pass, so scrap short of filling everything spreads across producers
-    for (let pass = 0; pass < ECONOMY.maxQueue * 2; pass++) {
-      let ordered = false;
-      for (const { p, kinds } of lines.values()) {
-        const view = buildView(w, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
-        if (view.closed(p.id)) continue;
-        const held = (k: UnitKind) => p.queue.filter((q) => q.kind === k).length + view.extra(p.id, k);
-        const ranked = [...kinds].sort((a, b) => held(a) - held(b) || (fielded.get(a) ?? 0) - (fielded.get(b) ?? 0));
-        const fewest = ranked[0]!;
-        const most = ranked[ranked.length - 1]!;
-        if (p.queue.length + view.extra(p.id) < producerCap(fewest)) {
-          if (view.scrap < unitCost(w, PLAYER, fewest)) continue;
-          this.enqueue({ type: "produce", faction: PLAYER, buildingId: p.id, unit: fewest });
-          ordered = true;
-        } else if (held(most) - held(fewest) >= 2) {
-          // (a cancel takes an order still in flight first, else the newest queued: not the head in production)
-          let last = -1;
-          for (let i = p.queue.length - 1; i >= 0 && last < 0; i--) if (p.queue[i]!.kind === most) last = i;
-          if (view.extra(p.id, most) <= 0 && last <= 0) continue;
-          this.enqueue({ type: "cancelProduce", faction: PLAYER, buildingId: p.id, unit: most });
-          ordered = true;
-        }
-      }
-      if (!ordered) break;
+    const count = new Map<UnitKind, number>();
+    for (const u of w.units.values()) if (u.faction === PLAYER) count.set(u.kind, (count.get(u.kind) ?? 0) + 1);
+    for (const { p, kinds } of lines.values()) {
+      const view = buildView(w, PLAYER, [...(this.inFlight ?? []), ...this.queue]);
+      if (view.closed(p.id) || p.queue.length + view.extra(p.id) > 0) continue;
+      const kind = [...kinds].sort((a, b) => (count.get(a) ?? 0) - (count.get(b) ?? 0))[0]!;
+      if (view.scrap < unitCost(w, PLAYER, kind)) continue;
+      this.enqueue({ type: "produce", faction: PLAYER, buildingId: p.id, unit: kind });
+      count.set(kind, (count.get(kind) ?? 0) + 1);
     }
   }
 
@@ -241,9 +233,9 @@ export class Controller {
     return this.flights && [...this.flights.commands, ...this.queue];
   }
 
-  /** The player's construction, scrap and queues as the build bar shows them (BuildView). */
+  /** The player's construction, scrap and queues as the build bar shows them (BuildView), orders not drained yet included. */
   view(): BuildView {
-    return buildView(this.world, PLAYER, this.unapplied());
+    return buildView(this.world, PLAYER, this.unapplied() ?? this.queue);
   }
 
   /**

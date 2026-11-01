@@ -1379,15 +1379,16 @@ export class GameScene {
     const rig = this.stage.rig;
     /** Shift was held on the click that fires a tap (it adds or removes a unit), or ends a box (it adds the box). */
     let shift = false;
+    const tap = (sx: number, sy: number, type: "touch" | "mouse" | "pen") => {
+      if (this.place.tap(sx, sy, type)) return; // placing: move the ghost / build
+      const p = this.worldAt(sx, sy);
+      if (this.powerUi?.tapWorld(p.x, p.y)) return; // an armed calldown fires here
+      const hit = this.pick(sx, sy);
+      if (type === "mouse") this.ctrl.clickWorld(p.x, p.y, hit, "left", shift);
+      else this.ctrl.tapWorld(p.x, p.y, hit, shift);
+    };
     this.gest = new GestureRecognizer({
-      onTap: (sx, sy, type) => {
-        if (this.place.tap(sx, sy, type)) return; // placing: move the ghost / build
-        const p = this.worldAt(sx, sy);
-        if (this.powerUi?.tapWorld(p.x, p.y)) return; // an armed calldown fires here
-        const hit = this.pick(sx, sy);
-        if (type === "mouse") this.ctrl.clickWorld(p.x, p.y, hit, "left", shift);
-        else this.ctrl.tapWorld(p.x, p.y, hit, shift);
-      },
+      onTap: tap,
       onDoubleTap: (sx, sy, type) => {
         if (this.place.tap(sx, sy, type)) return; // 2nd tap lands on the ghost it just moved: build
         const hit = this.pick(sx, sy);
@@ -1414,7 +1415,7 @@ export class GameScene {
           this.boxRect.y1 = sy;
         }
       },
-      onBoxEnd: (sx, sy, released) => {
+      onBoxEnd: (sx, sy, released, type) => {
         if (!this.boxRect) return;
         const b = this.boxRect;
         this.boxRect = null;
@@ -1428,6 +1429,9 @@ export class GameScene {
           const p = this.worldAt(sx, sy);
           if (this.powerUi?.tapWorld(p.x, p.y)) return;
           if (this.ctrl.dropAt(p.x, p.y)) return;
+          // a slow mouse click (held a moment, not dragged) is still a click: a move order
+          // in the heat of a fight mustn't vanish into an empty box
+          if (type === "mouse") return tap(sx, sy, "mouse");
         }
         const x0 = Math.min(b.x0, sx);
         const y0 = Math.min(b.y0, sy);
