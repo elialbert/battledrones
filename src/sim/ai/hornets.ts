@@ -19,8 +19,13 @@ import { aaSources, aaStrengthAt, type Sighting } from "./intel";
  *   STRIKE.trigger worth of it on our half of the map, the wing strikes. It
  *   strikes at once if it's found (enemy anti-air by it), and after
  *   STRIKE.patience seconds in any case.
- * - STRIKE: every Hornet bombs their HQ; nothing turns them back. Once the
- *   wing is gone (or the HQ) the next one gathers.
+ * - STRIKE: every Hornet bombs their HQ; nothing turns them back for
+ *   STRIKE.strikeFor seconds.
+ * - SPENT: it's a surprise, and works once. Once the wing is gone (shot down
+ *   on the way or over the HQ, or the HQ with it), or the strike has had
+ *   its time, no other wing gathers: the Hornets join the army, and the plan
+ *   turns to a strong air attack (PIVOT: air from every factory to come, and
+ *   a bigger wave).
  */
 
 export const STRIKE = {
@@ -37,11 +42,16 @@ export const STRIKE = {
   /** Seconds parked before it strikes anyway. */
   patience: 240,
   /** Gathering Hornets wait this far behind our HQ. */
-  gatherBack: 4
+  gatherBack: 4,
+  /** Seconds over their HQ before the wing that's left joins the army. */
+  strikeFor: 60
 };
 
+/** What the plan turns to once the strike is spent (AiState.strategy): an air force, and one big wave. */
+export const PIVOT = { airOnly: true, assaultValue: 2600 } as const;
+
 type P = { x: number; y: number };
-type Phase = "gather" | "fly" | "park" | "strike";
+type Phase = "gather" | "fly" | "park" | "strike" | "spent";
 
 interface Memo {
   phase: Phase;
@@ -51,13 +61,15 @@ interface Memo {
   route: P[];
   /** Tick it parked. */
   parked: number;
+  /** Tick it struck. */
+  struck: number;
 }
 
 const memos = new WeakMap<AiState, Memo>();
 function memo(s: AiState): Memo {
   let m = memos.get(s);
   if (!m) {
-    m = { phase: "gather", ids: [], route: [], parked: -1 };
+    m = { phase: "gather", ids: [], route: [], parked: -1, struck: -1 };
     memos.set(s, m);
   }
   return m;
@@ -69,7 +81,7 @@ export const strikes = (s: AiState) => s.hornetStyle === "strike";
 /** Our Hornets the strike holds (all of them, when it's on): no other tactic gives them orders. */
 export function strikeHolds(w: World, faction: Faction, s: AiState): Set<number> {
   const out = new Set<number>();
-  if (!strikes(s)) return out;
+  if (!strikes(s) || memo(s).phase === "spent") return out;
   for (const u of w.units.values()) if (u.faction === faction && u.kind === "hornet") out.add(u.id);
   return out;
 }
@@ -78,7 +90,7 @@ export function strikeHolds(w: World, faction: Faction, s: AiState): Set<number>
 export function strikeWants(w: World, faction: Faction, s: AiState, queued: number): number {
   if (!strikes(s)) return 0;
   const m = memo(s);
-  if (m.phase === "fly" || m.phase === "park") return 0;
+  if (m.phase !== "gather") return 0;
   const inFlight = new Set(m.ids);
   let home = 0;
   for (const u of w.units.values()) if (u.faction === faction && u.kind === "hornet" && !inFlight.has(u.id)) home++;
@@ -101,16 +113,22 @@ export interface StrikeContext {
 export function planStrike(w: World, faction: Faction, s: AiState, ctx: StrikeContext): Command[] {
   if (!strikes(s)) return [];
   const m = memo(s);
+  if (m.phase === "spent") return [];
   const cmds: Command[] = [];
   const hornets = [...w.units.values()].filter((u) => u.faction === faction && u.kind === "hornet").sort((a, b) => a.id - b.id);
   m.ids = m.ids.filter((id) => w.units.has(id));
   const enemyHq = knownBuildings(w, faction).find((b) => b.kind === "hq" && b.faction !== faction);
-  // the wing is spent, or its target is (gone where we bombed it): the next one gathers
+  // the wing is spent, or its target is (gone where we bombed it), or it has had its time: no second
+  // strike (they'd see it coming), the Hornets join the army and the plan turns to the air (PIVOT)
   const done =
-    m.phase === "strike" && !enemyHq && hornets.some((u) => m.ids.includes(u.id) && dist(u.x, u.y, ctx.enemyHqPos.x, ctx.enemyHqPos.y) <= 3);
+    m.phase === "strike" &&
+    ((!enemyHq && hornets.some((u) => m.ids.includes(u.id) && dist(u.x, u.y, ctx.enemyHqPos.x, ctx.enemyHqPos.y) <= 3)) ||
+      w.tick - m.struck >= STRIKE.strikeFor * TICK_RATE);
   if (m.phase !== "gather" && (m.ids.length === 0 || done)) {
-    m.phase = "gather";
+    m.phase = "spent";
     m.ids = [];
+    s.strategy = { ...s.strategy, ...PIVOT };
+    return [];
   }
 
   // --- gather behind the HQ, and set out once there's a wing
@@ -158,7 +176,10 @@ export function planStrike(w: World, faction: Faction, s: AiState, ctx: StrikeCo
       .filter((e) => e.kind !== "harvester" && UNITS[e.kind].dps > 0 && ourHalf(e))
       .reduce((v, e) => v + (e.goliath ? UNITS.goliath.cost : UNITS[e.kind].cost), 0);
     const found = aaStrengthAt(aaSources(w, faction, ctx.seen), cx, cy) >= STRIKE.found;
-    if (coming >= STRIKE.trigger || found || w.tick - m.parked >= STRIKE.patience * TICK_RATE) m.phase = "strike";
+    if (coming >= STRIKE.trigger || found || w.tick - m.parked >= STRIKE.patience * TICK_RATE) {
+      m.phase = "strike";
+      m.struck = w.tick;
+    }
     else {
       // (back on the spot if something shoved them off it)
       const spot = m.route[m.route.length - 1]!;

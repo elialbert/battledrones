@@ -38,6 +38,22 @@ describe("The Wall (Marshal)", () => {
     expect(units.some((u) => u.kind === "mastodon" || u.kind === "lancer")).toBe(false);
   });
 
+  it("creeps forward: few turrets at home, and on to the enemy's HQ once the fields are taken", () => {
+    const w = createMapWorld("riverlands", { seed: 3 });
+    const wall = seatMarshal("blue", 3, "brutal", "wall");
+    const redHq = hqOf(w, "red")!;
+    for (let i = 0; i < 13 * 60 * TICK_RATE && !w.winner; i++) {
+      step(w, wall.tick(w));
+      redHq.hp = BUILDINGS.hq.hp;
+    }
+    const hq = buildingCenter(hqOf(w, "blue")!);
+    const red = buildingCenter(redHq);
+    const turrets = [...w.buildings.values()].filter((b) => b.faction === "blue" && b.kind === "turret").map(buildingCenter);
+    expect(turrets.length).toBeGreaterThanOrEqual(20);
+    expect(turrets.filter((t) => dist(t.x, t.y, hq.x, hq.y) <= 8).length).toBeLessThanOrEqual(2);
+    expect(turrets.some((t) => dist(t.x, t.y, red.x, red.y) <= 6)).toBe(true);
+  }, 60000);
+
   it("is never drawn on Brutal", () => {
     expect(MARSHAL_POOL.brutal).not.toContain("wall");
     expect(MARSHAL_POOL.hard).toContain("wall");

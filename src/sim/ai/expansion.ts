@@ -38,9 +38,15 @@ const WALK_SLACK = 1.5;
 
 /**
  * The nearest field to the HQ that no drop-off within `reach` serves (a
- * Depot still going up counts: it will), or null.
+ * Depot still going up counts: it will), or null. `skip`: field tiles left out.
  */
-export function unservedField(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { x: number; y: number; d: number } | null {
+export function unservedField(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number },
+  reach: number,
+  skip?: (x: number, y: number) => boolean
+): { x: number; y: number; d: number } | null {
   const drops = [...w.buildings.values()].filter((b) => b.faction === faction && BUILDINGS[b.kind].dropOff);
   const walk = walkFromDrops(w, faction);
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
@@ -58,7 +64,7 @@ export function unservedField(w: World, faction: Faction, hqC: { x: number; y: n
         if (steps >= 0 && steps <= reach * WALK_SLACK) continue;
       }
       const d = dist(x, y, hqC.x, hqC.y);
-      if (!best || d < best.d) best = { x, y, d };
+      if ((!best || d < best.d) && !skip?.(x, y)) best = { x, y, d };
     }
   return best && best.d <= MAX_FIELD ? best : null;
 }

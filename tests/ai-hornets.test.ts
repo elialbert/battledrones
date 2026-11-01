@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
-import { STRIKE, strikePhase } from "../src/sim/ai/hornets";
+import { PIVOT, STRIKE, strikePhase, strikeWants } from "../src/sim/ai/hornets";
 import { MARSHAL_PLANS, planStrategy } from "../src/sim/ai/marshal";
 import { BUILDINGS, TICK_RATE } from "../src/sim/balance";
 import { canPlaceBuilding } from "../src/sim/economy";
@@ -86,5 +86,19 @@ describe("the Hornet strike (Marshal's Hornet Strike)", () => {
     // …and no other tactic sends a Hornet of the wing anywhere else
     for (const o of orders)
       if ("unitIds" in o && o.unitIds.some((id) => ids.has(id))) expect(toHq).toContain(o);
+  }, 30000);
+
+  it("strikes once: with the wing gone, no other gathers, and the plan turns to the air", () => {
+    const { w, ai, c } = strikeWorld();
+    const wing: Unit[] = [];
+    for (let i = 0; i < STRIKE.wing; i++) wing.push(spawnUnit(w, "hornet", "red", c.x + 2 + (i % 3), c.y + 2 + Math.floor(i / 3)));
+    runRed(w, 60, ai);
+    expect(strikePhase(ai)).toBe("park");
+    for (const u of wing) w.units.delete(u.id); // (shot down)
+    runRed(w, 4, ai);
+    expect(strikePhase(ai)).toBe("spent");
+    expect(strikeWants(w, "red", ai, 0)).toBe(0);
+    expect(ai.strategy.airOnly).toBe(true);
+    expect(ai.strategy.assaultValue).toBe(PIVOT.assaultValue);
   }, 30000);
 });

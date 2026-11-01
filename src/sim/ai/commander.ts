@@ -139,8 +139,9 @@ export interface Strategy {
    * No crew founds a Depot past the build zone: turrets are built out toward
    * the field one after another, each carrying the zone on (economy.ts
    * buildRadiusOf), until a Depot fits by it, a turret out there coming
-   * ahead of the rest of the order; and each drop-off gets `guard` turrets on
-   * the enemy's side before the wall moves on (wallAnchor). The Tech Lab
+   * ahead of the rest of the order; each Depot out past home gets `guard`
+   * turrets on the enemy's side, and with no field left to reach the
+   * turrets creep on toward the enemy's drop-offs (wallAnchor). The Tech Lab
    * waits for the `tech`th turret; the factories stop at an army worth
    * `army`, plus `armyPerTurret` a turret standing, unless scrap piles up.
    */
@@ -612,7 +613,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const outpost = outpostSpot(w, faction, s, kind, enemyHqPos);
     let spot = outpost === "wait" ? null : outpost;
     if (!spot && outpost !== "wait" && kind === "depot" && hq) {
-      const site = depotSite(w, faction, hqC, s.strategy.depotReach, depotFar(s.strategy));
+      const site = depotSite(w, faction, hqC, s.strategy.depotReach, depotFar(s.strategy), depotTries(s.strategy));
       spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
     } else if (!spot && outpost !== "wait") spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
     if (outpost === "wait") {
@@ -1493,7 +1494,7 @@ function nextBuilding(
       const c = hq ? buildingCenter(hq) : null;
       // (the Wall founds none: with no spot in range, the turrets build out toward the field instead)
       expansion = !!c && !wall && depotByCrew(w, faction, c, s.strategy.depotReach);
-      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach, depotFar(s.strategy)))) {
+      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach, depotFar(s.strategy), depotTries(s.strategy)))) {
         // (the Wall expands hard: with a field out there to reach, the next turret builds out to it, ahead of the rest)
         if (wall && c && wallFrontier(w, faction, s.strategy, c, mirror(w, c.x, c.y)) && !buildingBlocker(w, faction, "turret")) return "turret";
         depotsSkipped++;
@@ -1525,17 +1526,30 @@ function wallOrder(wall: NonNullable<Strategy["wall"]>, order: readonly Building
 
 /** The factories the Wall adds when scrap piles up, in turn. */
 const WALL_FACTORIES = ["fab-plant", "airpad", "assembly-bay"] as const;
-/** The Wall's guard round a drop-off counts its turrets (or SAM Sites) this close (tiles). */
+/** The Wall's guard round a Depot counts its turrets (or SAM Sites) this close (tiles). */
 const WALL_GUARD = 6;
 /** …and stands this far out from it, toward the enemy. */
 const WALL_OUT = 3;
+/** A Depot this close to the HQ (tiles) is home, and gets no guard of its own. */
+const WALL_HOME = 10;
+/** The creep's front is this wide (tiles each side of the line to its target): turrets go up across it in turn. */
+const WALL_SPREAD = 5;
+/** A field with this many of our turrets by it (WALL_GUARD) and still no Depot is given up on: the wall moves on. */
+const WALL_STUCK = 4;
 
 /**
- * Where the Wall's next turret or SAM Site goes (Strategy.wall): by a
- * drop-off (the HQ or a Depot) with fewer than `guard` turrets (one SAM
- * Site) by it, on the enemy's side of it; else, a turret, out toward the
- * nearest field on our side of the map nothing serves, carrying the build
- * zone till a Depot fits by it; else by the least guarded drop-off.
+ * Where the Wall's next turret or SAM Site goes (Strategy.wall). Always
+ * forward, the HQ guarded only by the creep going out from it:
+ *
+ * - a Depot out past WALL_HOME with fewer than `guard` turrets (one SAM
+ *   Site) by it: on the enemy's side of it (each expansion enveloped before
+ *   the wall moves on);
+ * - a turret: out toward the nearest field on our side nothing serves,
+ *   carrying the build zone till a Depot fits by it;
+ * - else the creep: a turret at the edge of the zone toward the nearest
+ *   enemy drop-off we know of (their expansions first, then their HQ),
+ *   across a front WALL_SPREAD wide; a SAM Site by the turret nearest it,
+ *   to cover the creep from the air.
  */
 function wallAnchor(
   w: World,
@@ -1548,23 +1562,47 @@ function wallAnchor(
 ): { x: number; y: number } {
   const wall = strategy.wall!;
   const guards = myBuildings.filter((b) => b.kind === kind).map(buildingCenter);
+  // the creep's target: the enemy drop-off we know of nearest our HQ, or their home
+  let target = enemyHome;
+  let best = Infinity;
+  for (const kb of knownBuildings(w, faction)) {
+    if (kb.faction === faction || !BUILDINGS[kb.kind].dropOff) continue;
+    const s = BUILDINGS[kb.kind].size / 2;
+    const d = dist(kb.tx + s, kb.ty + s, hqC.x, hqC.y);
+    if (d < best) (best = d), (target = { x: kb.tx + s, y: kb.ty + s });
+  }
   let weakest: { c: { x: number; y: number }; n: number; d: number } | null = null;
   for (const b of myBuildings) {
-    if (!BUILDINGS[b.kind].dropOff || b.outpost || b.founding !== undefined) continue;
+    if (b.kind !== "depot" || b.outpost || b.founding !== undefined) continue;
     const c = buildingCenter(b);
+    if (dist(c.x, c.y, hqC.x, hqC.y) <= WALL_HOME) continue; // (one by the HQ is home: the creep out from it guards it)
     const n = guards.filter((g) => dist(g.x, g.y, c.x, c.y) <= WALL_GUARD).length;
-    const d = dist(c.x, c.y, enemyHome.x, enemyHome.y);
+    const d = dist(c.x, c.y, target.x, target.y);
     // (ties: the one nearer the enemy)
     if (!weakest || n < weakest.n || (n === weakest.n && d < weakest.d)) weakest = { c, n, d };
   }
-  const out = (c: { x: number; y: number }) => {
-    const d = dist(c.x, c.y, enemyHome.x, enemyHome.y);
-    return d < 1 ? c : { x: c.x + ((enemyHome.x - c.x) / d) * WALL_OUT, y: c.y + ((enemyHome.y - c.y) / d) * WALL_OUT };
+  const toward = (c: { x: number; y: number }, to: { x: number; y: number }, by: number) => {
+    const d = dist(c.x, c.y, to.x, to.y);
+    return d < 1 ? c : { x: c.x + ((to.x - c.x) / d) * by, y: c.y + ((to.y - c.y) / d) * by };
   };
-  if (weakest && weakest.n < (kind === "turret" ? wall.guard : 1)) return out(weakest.c);
-  const field = kind === "turret" ? wallFrontier(w, faction, strategy, hqC, enemyHome) : null;
+  if (weakest && weakest.n < (kind === "turret" ? wall.guard : 1)) return toward(weakest.c, target, WALL_OUT);
+  if (kind === "sam-site") {
+    // (by the turret nearest the target, a step back toward home)
+    let front: { x: number; y: number } | null = null;
+    for (const b of myBuildings)
+      if (b.kind === "turret") {
+        const c = buildingCenter(b);
+        if (!front || dist(c.x, c.y, target.x, target.y) < dist(front.x, front.y, target.x, target.y)) front = c;
+      }
+    return front ? toward(front, hqC, 1.5) : toward(hqC, target, WALL_OUT);
+  }
+  const field = wallFrontier(w, faction, strategy, hqC, enemyHome);
   if (field) return field;
-  return weakest ? out(weakest.c) : hqC;
+  // (across the front in turn: left of the line, on it, right of it; the nearest spot in the zone to
+  // that point is the zone's edge toward it)
+  const d = Math.max(1, dist(hqC.x, hqC.y, target.x, target.y));
+  const side = (guards.length % 3) - 1;
+  return { x: target.x - ((target.y - hqC.y) / d) * WALL_SPREAD * side, y: target.y + ((target.x - hqC.x) / d) * WALL_SPREAD * side };
 }
 
 /**
@@ -1575,12 +1613,22 @@ function wallFrontier(w: World, faction: Faction, strategy: Strategy, hqC: { x: 
   let depots = 0;
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
   if (depots >= (strategy.spend?.maxDepots ?? SPEND.maxDepots)) return null;
-  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED));
+  // (turrets round a field can take the spot its Depot needed: with WALL_STUCK by it and still none, on to the next)
+  const turrets: { x: number; y: number }[] = [];
+  for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "turret") turrets.push(buildingCenter(b));
+  const stuck = (x: number, y: number) => {
+    let n = 0;
+    for (const t of turrets) if (dist(t.x, t.y, x, y) <= WALL_GUARD && ++n >= WALL_STUCK) return true;
+    return false;
+  };
+  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED), stuck);
   return field && dist(field.x, field.y, hqC.x, hqC.y) <= dist(field.x, field.y, enemyHome.x, enemyHome.y) ? field : null;
 }
 
 /** How far from the HQ a field may be for a Depot in the build zone: the Wall builds its zone out to far ones. */
 const depotFar = (s: Strategy): number => (s.wall ? 36 : 24);
+/** How many fields, nearest first, a Depot site is looked for by: the Wall's turrets may have taken one field's spot, and go on to the next. */
+const depotTries = (s: Strategy): number => (s.wall ? 4 : 1);
 
 /** Is the Depot it wants one a crew deploys past the build zone (no spot in range, but one out there)? */
 function depotByCrew(w: World, faction: Faction, hqC: { x: number; y: number }, reach?: number): boolean {
@@ -1630,11 +1678,13 @@ function depotSite(
   hqC: { x: number; y: number },
   reach = 9,
   /** Fields farther than this from the HQ are left out. */
-  far = 24
+  far = 24,
+  /** Fields tried, nearest first. */
+  tries = 1
 ): { spot: { tx: number; ty: number } } | null {
-  return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach} ${far}`, () => scanDepotSite(w, faction, hqC, reach, far));
+  return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach} ${far} ${tries}`, () => scanDepotSite(w, faction, hqC, reach, far, tries));
 }
-function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number, far: number): { spot: { tx: number; ty: number } } | null {
+function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number, far: number, tries: number): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   // (a field with a drop-off in reach of any of its tiles is served: one depot to a field, not a ring of them)
   const ids = fieldIds(w);
@@ -1647,7 +1697,8 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       if (dist((i % w.width) + 0.5, Math.floor(i / w.width) + 0.5, dc.x, dc.y) < reach) served.add(ids[i]!);
     }
   }
-  let best: { x: number; y: number; d: number } | null = null;
+  // (the nearest tile of each field)
+  const near = new Map<number, { x: number; y: number; d: number }>();
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
@@ -1655,15 +1706,21 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       if (!isResource(w, i) || served.has(ids[i]!)) continue;
       if (!nearestDropOff(w, faction, tx + 0.5, ty + 0.5)) continue;
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
-      if (!best || d < best.d) best = { x: tx + 0.5, y: ty + 0.5, d };
+      const had = near.get(ids[i]!);
+      if (!had || d < had.d) near.set(ids[i]!, { x: tx + 0.5, y: ty + 0.5, d });
     }
-  if (!best || best.d > far) return null;
-  const spot = findPlacementSpot(w, faction, "depot", best);
-  if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) return null;
-  // reachable by ground from just behind the HQ (in the side's own frame)
-  const [bx, by] = fr.vec(0, 2.5);
-  if (!findPath(w, hqC.x + bx, hqC.y + by, best.x, best.y, "ground", faction)) return null;
-  return { spot };
+  // (ties keep scan order: a stable sort, in the side's own frame)
+  const fields = [...near.values()].sort((a, b) => a.d - b.d).slice(0, tries);
+  for (const best of fields) {
+    if (best.d > far) return null;
+    const spot = findPlacementSpot(w, faction, "depot", best);
+    if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) continue;
+    // reachable by ground from just behind the HQ (in the side's own frame)
+    const [bx, by] = fr.vec(0, 2.5);
+    if (!findPath(w, hqC.x + bx, hqC.y + by, best.x, best.y, "ground", faction)) continue;
+    return { spot };
+  }
+  return null;
 }
 
 /** Closest placeable spot to `anchor` within build range of our base. */

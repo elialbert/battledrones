@@ -186,7 +186,8 @@ export const MARSHAL_PLANS: Record<
    * For fun (APM-BOTS.md): the Tech Lab straight after the Airpad, the
    * Airpads build Hornets before anything else till there are seven, and
    * the wing hides by a far corner of the map until the enemy's army comes
-   * at ours, then bombs their HQ (ai/hornets.ts). No raids: the Wasps stay
+   * at ours, then bombs their HQ (ai/hornets.ts). Once only: then it turns
+   * to a strong air attack (hornets.ts PIVOT). No raids: the Wasps stay
    * home and guard.
    */
   strike: {
@@ -203,8 +204,9 @@ export const MARSHAL_PLANS: Record<
    * For fun, and never Brutal's (MARSHAL_POOL): turrets, a SAM Site after
    * every fourth, and a tier-1 army from all three factories. It expands by
    * building turrets out to each new field until a Depot fits by it (no
-   * crews), guards each drop-off with two before moving on, and leaves the
-   * Tech Lab till the fifteenth turret (commander.ts Strategy.wall).
+   * crews), guards each new Depot with two before moving on, then creeps
+   * the turrets on to the enemy's expansions and HQ, few kept at home; it
+   * leaves the Tech Lab till the fifteenth turret (commander.ts Strategy.wall).
    */
   wall: {
     base: "boom",

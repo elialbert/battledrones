@@ -698,8 +698,18 @@ known anti-air on the way, then along the enemy's edge to a spot at most 30
 tiles from their HQ. It waits there until it sees 800 of the enemy's army on
 our half of the map, then every Hornet bombs the HQ (seven do about 340
 damage a second, so the HQ falls in roughly 9 s). The wing also strikes at
-once if anti-air finds it, and after 4 minutes parked in any case. Once the
-wing is gone, the next one gathers.
+once if anti-air finds it, and after 4 minutes parked in any case.
+
+It strikes once (2026-11-01). It's a surprise, and a second wing would be
+seen coming. Once the wing is gone, or the HQ is, or it has spent 60 s over
+the HQ, no other wing gathers. Its Hornets join the army, and the plan turns
+to a strong air attack (`PIVOT` in hornets.ts: `airOnly`, so every factory it
+adds is an Airpad and the Airpads lean to Wasps, and a wave at 2600 instead
+of 1700). On Riverlands against Brutal Balanced it had 7 Airpads and 41
+Wasps at 8:00, but that wave died to flak. Brutal, against Balanced, Rush,
+Boom and Turtle, on Riverlands, Dune Sea and Frostbite, seed 3, both sides
+(24 games): 15–9, against 14–10 for the old repeat-the-strike version. Most
+of its wins come from the first strike, which is unchanged.
 
 The wing is ready at about 2:15 and has struck by about 3:00. On Hard,
 against regular Marshal with random plans, 30 games on five maps, both sides:
@@ -734,6 +744,29 @@ in turn, up to 4. Its army holds at home, and it waves only once 2400 of the
 army is tier 2.
 
 It is in every pool but Brutal's. It can still be picked by name there.
+
+**Always forward (2026-11-01).** It used to put most of its turrets round
+its own base: once every field on our side was served, each turret went to
+the least guarded drop-off, and the HQ was one of those. Now `wallAnchor`
+never guards the HQ, or a Depot within 10 tiles of it (`WALL_HOME`); the
+creep out from them does that. Each Depot further out still gets two turrets
+and a SAM Site on the enemy's side. With no field left to build out to, the
+turrets creep toward the nearest enemy drop-off we know of (their expansions
+first, then their HQ). Each one goes at the edge of the build zone, across a
+front 5 tiles either side of the line (`WALL_SPREAD`). SAM Sites go by the
+turret nearest the target, to cover the creep from the air. Two changes keep
+the expansions coming. A field with 4 of our turrets by it and still no
+Depot is given up on (`WALL_STUCK`), because turrets round a field could
+take the Depot's spot, and then the wall piled turrets there for good. And
+the Depot site search tries the 4 nearest fields, not just the nearest
+(`depotTries`). On Riverlands at Brutal, with red standing still, it has 8
+Depots by 8:00 and turrets round red's HQ by 12:00, with none within 8
+tiles of its own.
+
+Brutal, the same 24 games as Hornet Strike above: 12–12, against 6–17–1
+for the old version. On Normal, its 30 actions a minute go mostly on
+staffing the new Depots, and the build order stalls for minutes at a time.
+That limit is older than this change.
 
 Normal, playing blue against Normal Marshal Balanced, Rush, Boom and Turtle
 on six maps, seeds 3 and 5 (48 games): 11–35 with 2 draws. Juggernaut went
