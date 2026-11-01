@@ -1552,7 +1552,9 @@ describe("two phones in lockstep over PacketAir, an AI on each", () => {
       expect(one[side].ls.status().stallMs).toBeGreaterThan(2_000); // (the loss really stalled the match)
       expect(k[side].ls.status().stallMs, side).toBeLessThanOrEqual(one[side].ls.status().stallMs + 300);
     }
-    expect(firstDiff(k, FIVE_MINUTES)).toBe(-1);
+    // (no desync, to the end of the match: with the AIs of 226c591, red wins this one at 4:13)
+    expect(k.red.w.tick).toBe(k.blue.w.tick);
+    expect(firstDiff(k, k.blue.w.winner ? k.blue.w.tick : FIVE_MINUTES)).toBe(-1);
   });
 
   it("rotate at each phone's own packet period when the two directions run different modes", { timeout: 120_000 }, () => {
