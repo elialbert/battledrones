@@ -674,7 +674,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // the rest mine the best field going: near a drop-off, on our side, none with an enemy army by it (ai/fields.ts)
   const busy = new Set([...goliathFields.keep, ...crew, ...staffed.sent]);
   const tended = fieldsLeft
-    ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds)
+    ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds, staffed.staffed)
     : { sent: new Set<number>(), held: new Set<number>() };
   for (const h of harvesters) {
     if (busy.has(h.id) || tended.sent.has(h.id) || tended.held.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one; sent to a field)

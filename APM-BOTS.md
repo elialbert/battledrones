@@ -764,9 +764,35 @@ Depots by 8:00 and turrets round red's HQ by 12:00, with none within 8
 tiles of its own.
 
 Brutal, the same 24 games as Hornet Strike above: 12–12, against 6–17–1
-for the old version. On Normal, its 30 actions a minute go mostly on
-staffing the new Depots, and the build order stalls for minutes at a time.
-That limit is older than this change.
+for the old version. On Normal, its build order used to stall for minutes
+at a time; see "Harvesters traded back and forth" below.
+
+### Harvesters traded back and forth (2026-11-01)
+
+Marshal was trading harvesters between an expansion and home on every think.
+`staffExpansions` (ai/expansion.ts) sent a Depot's shift of 5 to its field.
+When that field lay out past the base (over a quarter of the way to the
+enemy), `tendFields` (ai/fields.ts) called them home on the next think,
+because the home field scored more than its margin better. That left the
+Depot short of miners, so they were sent straight back. The miners walked
+instead of mining, and every order cost an action. `startBuilding` was
+ranked with production, below the harvesters' economy orders, so at 30 APM
+the build order was what got cut. In one 12-minute game each against Normal
+Balanced, the longest wait to start a building was 74 s for the Wall
+(Normal), 60 s for Greed (Normal) and 38 s for Boom (Hard), against 4–8 s
+for plans without the loop.
+
+Two fixes. `staffExpansions` now returns the shift it counts as serving each
+Depot (`staffed`), and `tendFields` moves those off their field only when
+it's unsafe. And `startBuilding` now has the Economy rank (marshal.ts
+`rankOf`): a building is started at most once a think, with the scrap for
+it, so that costs about one action per building. After both, the same
+games' longest wait was 0–2 s, and the back-and-forth orders were gone
+(13 were left in a Brutal Wall game). The fixed Marshal against the one
+before, same plan on both sides (Balanced, Boom, Greed, Turtle, Wall,
+Juggernaut), Normal and Hard, on Riverlands, Dune Sea and Frostbite, seed 3,
+both sides (72 games): 45–22–5. That was 24–7–5 at Hard and 21–15 at
+Normal; Balanced and Greed were even. tests/ai-staffing.test.ts covers it.
 
 Normal, playing blue against Normal Marshal Balanced, Rush, Boom and Turtle
 on six maps, seeds 3 and 5 (48 games): 11–35 with 2 draws. Juggernaut went

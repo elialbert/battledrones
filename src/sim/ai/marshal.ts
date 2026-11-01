@@ -434,10 +434,12 @@ function rankOf(c: Command, dodging: Set<number>, goliaths: Set<number>): Rank {
     case "found":
     case "placeBuilding":
     case "cancelBuilding":
+    // (a building is started at most once a think, with the scrap for it: about an action each. Ranked
+    // with production it lost to the harvesters' orders at 30 APM, and the build order waited up to 74 s)
+    case "startBuilding":
       return Rank.Economy;
     case "produce":
       return c.unit === "harvester" ? Rank.Economy : Rank.Production;
-    case "startBuilding":
     case "cancelProduce":
     case "sell":
       return Rank.Production;

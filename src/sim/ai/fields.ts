@@ -18,7 +18,11 @@ import { perTick, walkFromDrops } from "./expansion";
  * and so is one on an unsafe field, or on one out past the base when the
  * best is better by a margin. With every field unsafe it waits behind the HQ.
  * Crowding only picks where one goes, never moves one: a Depot's shift
- * (ai/expansion.ts staffExpansions) is meant to crowd its field.
+ * (ai/expansion.ts staffExpansions) is meant to crowd its field. Nor does a
+ * better field move one of that shift (`staffed`): an expansion's field is
+ * often out past the base, and calling its miners home for the field there
+ * had staffExpansions send them straight back, every think, the APM spent on
+ * it starving the build order. Only an unsafe field moves them.
  */
 
 /** A connected patch of scrap/crystal tiles. */
@@ -146,7 +150,9 @@ export function tendFields(
   seen: Unit[],
   own: Unit[],
   accept: ((tx: number, ty: number) => boolean) | null,
-  cmds: Command[]
+  cmds: Command[],
+  /** A Depot's shift (ai/expansion.ts staffExpansions): moved off its field only when that's unsafe. */
+  staffed: ReadonlySet<number> = new Set()
 ): { sent: Set<number>; held: Set<number> } {
   const sightings = remember(w, key, seen);
   let last = sentAt.get(key);
@@ -240,7 +246,7 @@ export function tendFields(
     // (cur < 0 on a harvest order: its tile just ran dry, and the sim picks the next; we see where next think)
     const stay =
       o.type === "harvest" &&
-      (cur < 0 || (!unsafe[cur] && (to < 0 || to === cur || exposure[cur]! < EXPOSED || score(cur) - score(to) <= MARGIN)));
+      (cur < 0 || (!unsafe[cur] && (staffed.has(h.id) || to < 0 || to === cur || exposure[cur]! < EXPOSED || score(cur) - score(to) <= MARGIN)));
     if (stay) {
       if (cur >= 0) crowd[cur]!++;
       continue;

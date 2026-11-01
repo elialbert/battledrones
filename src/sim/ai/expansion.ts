@@ -209,8 +209,10 @@ function fieldBy(w: World, faction: Faction, cx: number, cy: number): { x: numbe
  * field nearest where they stand, so an expansion's field sat untouched while
  * they walked out to the contested middle. Short ones are made up from the
  * home field's miners, nearest first, as soon as the Depot is up. Returns the
- * harvesters sent this think (the commander leaves them be) and how many the
- * Depots want on top of the one each already counts for.
+ * harvesters sent this think (the commander leaves them be), the ones mining
+ * for a Depot already (`staffed`: ai/fields.ts tendFields doesn't call them
+ * home for a better field, or the two traded them back and forth every
+ * think), and how many the Depots want on top of the one each already counts for.
  */
 export function staffExpansions(
   w: World,
@@ -220,8 +222,9 @@ export function staffExpansions(
   skip: Set<number>,
   enemies: Unit[],
   cmds: Command[]
-): { sent: Set<number>; extra: number } {
+): { sent: Set<number>; staffed: Set<number>; extra: number } {
   const sent = new Set<number>();
+  const staffed = new Set<number>();
   let extra = 0;
   const sites: { cx: number; cy: number; field: { x: number; y: number } }[] = [];
   for (const b of w.buildings.values()) {
@@ -234,7 +237,7 @@ export function staffExpansions(
     if (sites.some((s) => dist(s.field.x, s.field.y, field.x, field.y) <= SAME_FIELD)) continue;
     sites.push({ cx, cy, field });
   }
-  if (!sites.length) return { sent, extra };
+  if (!sites.length) return { sent, staffed, extra };
   // (a harvester counts for the site whose field it's sent to is nearest: one site, never two)
   const servedBy = (h: Unit) => {
     const o = h.order;
@@ -255,7 +258,10 @@ export function staffExpansions(
   let home = free.filter((h) => servedBy(h) < 0);
   for (const [i, s] of sites.entries()) {
     extra += EXPANSION_MINERS - 1;
-    const have = harvesters.filter((h) => servedBy(h) === i).length;
+    const serving = harvesters.filter((h) => servedBy(h) === i);
+    // (its shift, and no more: one past it may still go to a better field)
+    for (const h of serving.slice(0, EXPANSION_MINERS)) staffed.add(h.id);
+    const have = serving.length;
     if (have >= EXPANSION_MINERS) continue;
     // (by the field too: an army camped on it, past the Depot's reach, ate the harvesters fed in)
     const fx = s.field.x + 0.5;
@@ -273,7 +279,7 @@ export function staffExpansions(
     home = home.filter((h) => !sent.has(h.id));
     cmds.push({ type: "harvest", faction, unitIds: picks.map((h) => h.id), x: s.field.x + 0.5, y: s.field.y + 0.5 });
   }
-  return { sent, extra };
+  return { sent, staffed, extra };
 }
 
 /**
