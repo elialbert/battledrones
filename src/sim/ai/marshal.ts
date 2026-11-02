@@ -389,6 +389,14 @@ const FINISH = 2;
 const FINISH_MIN = 3000;
 /** Seconds between the finishing push's orders. */
 const FINISH_EVERY = 10;
+/**
+ * The finishing push starts only on a fresh look at the enemy's base (in sight within this many s): an
+ * army kept home out of sight isn't in what's been seen lately, and "won" at 2:10 on what the scouts saw
+ * a minute before sent the whole army into one half again its size (replay, Brutal Turtle on Dune Sea).
+ */
+const LOOK_FRESH = 30;
+/** Seconds between sending a unit to look (a Scout, else one fast unit), while the push waits on one. */
+const LOOK_EVERY = 20;
 /** An enemy unit unseen this long no longer counts toward its army (ticks). */
 const SIGHTING_TTL = 90 * TICK_RATE;
 /** A lost fight falls back to a Goliath of ours this close (tiles) to it and nearer home, one above this share of its HP. */
@@ -518,6 +526,11 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   /** Enemy units seen lately: what each is worth and when it was last seen. */
   const sighted = new Map<number, { value: number; tick: number }>();
   let finishing = false;
+  /** When the enemy's base was last in sight, and a unit last sent to look at it (LOOK_FRESH). */
+  let lookedAt = -1e9;
+  let lookSent = -1e9;
+  /** The look's order, until it's sent. */
+  let look: Want | null = null;
   // the fight micro's own budget (opts.microApm), a token bucket like ai/apm.ts's
   let microTokens = MICRO_BURST * PER_ACTION;
   // (the bank also holds what a look's refill leaves over: at 115 a minute and a look every 0.5 s, a bank of
@@ -579,7 +592,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         }
         microLog = micro;
       }
-      const all = merge([...cut(w, [...reflex, ...(push ? [push] : []), ...microLog], false), ...cut(w, backlog, true)]);
+      const all = merge([...cut(w, [...reflex, ...(push ? [push] : []), ...(look ? [look] : []), ...microLog], false), ...cut(w, backlog, true)]);
+      look = null;
       all.sort((a, b) => a.rank - b.rank); // (stable: the plan's own order within a rank)
       // (all of it sent, unless sent() says otherwise)
       out = all;
@@ -645,7 +659,32 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         (u.order.type === "idle" || u.order.type === "attackMove" || u.order.type === "attack")
     );
     const ours = army.reduce((v, u) => v + UNITS[u.kind].cost, 0);
-    if (!finishing && ours >= Math.max(K.finishMin, K.finish * enemy)) finishing = true;
+    // (where their army would be: their HQs we know of, else the mirror of ours)
+    const homes = knownBuildings(w, side).filter((b) => b.faction !== side && b.kind === "hq").map((b) => ({ x: b.tx + BUILDINGS.hq.size / 2, y: b.ty + BUILDINGS.hq.size / 2 }));
+    if (!homes.length) {
+      const hq = hqOf(w, side);
+      if (hq) {
+        const c = buildingCenter(hq);
+        homes.push({ x: w.width - c.x, y: w.height - c.y });
+      }
+    }
+    if (homes.some((h) => isVisible(w, side, Math.floor(h.x), Math.floor(h.y)))) lookedAt = w.tick;
+    if (!finishing && ours >= Math.max(K.finishMin, K.finish * enemy)) {
+      if (w.tick - lookedAt <= LOOK_FRESH * TICK_RATE || !homes.length) finishing = true;
+      else if (w.tick - lookSent >= LOOK_EVERY * TICK_RATE) {
+        // not seen lately: look before calling it won (what the look sees counts on the next pass)
+        const mine = [...w.units.values()].filter((u) => u.faction === side && !wing.has(u.id) && !u.goliath);
+        const scout =
+          mine.find((u) => u.kind === "scout") ??
+          army.filter((u) => u.kind === "wasp" || u.kind === "stinger").sort((a, b) => UNITS[b.kind].speed - UNITS[a.kind].speed || a.id - b.id)[0];
+        if (scout) {
+          const h = [...homes].sort((a, b) => dist(a.x, a.y, scout.x, scout.y) - dist(b.x, b.y, scout.x, scout.y))[0]!;
+          lookSent = w.tick;
+          held.set(scout.id, w.tick + LOOK_EVERY * TICK_RATE);
+          look = { rank: Rank.Push, cmd: { type: "move", faction: side, unitIds: [scout.id], x: h.x, y: h.y }, planned: false };
+        }
+      }
+    }
     else if (finishing && ours < Math.max(K.finishMin * 0.6, 1.5 * enemy)) finishing = false;
     if (!finishing || w.tick < (s.strategy.holdUntil ?? 0) * TICK_RATE || w.tick - lastPush < K.finishEvery * TICK_RATE || !army.length) return null;
     const cx = army.reduce((a, u) => a + u.x, 0) / army.length;
