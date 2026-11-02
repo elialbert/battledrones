@@ -123,7 +123,7 @@ describe("expansion Depots", () => {
     expect(inBaseRange(w, "blue", tx + 1, ty + 1)).toBe(true);
   });
 
-  it("waits for the scrap, and a crew cut below strength calls it off", () => {
+  it("waits for the scrap, and a crew cut below strength calls it off: back to work, a loaded hold home first", () => {
     const { w, site } = withHomeDepot();
     const [tx, ty] = site;
     w.factions.blue.scrap = 0;
@@ -133,9 +133,12 @@ describe("expansion Depots", () => {
     expect(w.buildings.size).toBeGreaterThan(0);
     expect([...w.buildings.values()].some((b) => b.tx === tx && b.ty === ty)).toBe(false);
     expect(crew[0]!.order.type).toBe("found");
+    crew[0]!.cargo = 40;
     w.units.delete(crew[3]!.id);
     step(w, []);
-    for (const u of crew.slice(0, 3)) expect(u.order.type).toBe("idle");
+    for (const u of crew.slice(0, 3)) expect(u.order.type).toBe("harvest");
+    expect(crew[0]!.order.type === "harvest" && crew[0]!.order.phase).toBe("toBase");
+    expect(crew[1]!.order.type === "harvest" && crew[1]!.order.phase).toBe("toField");
   });
 
   it("sends the crew it didn't need back to work", () => {

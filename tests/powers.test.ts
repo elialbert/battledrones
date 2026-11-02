@@ -363,14 +363,15 @@ describe("AI and calldowns", () => {
 
   it("uses calldowns in a full AI-vs-AI match, legally, and Easy never shells", () => {
     const fired: Record<Faction, Record<string, number>> = perSide(() => ({}));
-    // (a match long enough for both sides to need them: with seed 1001 the Easy Rush wins by 5:30 without one)
+    // (a match long enough for both sides to need them: with seed 1001 the Easy Rush wins by 5:30 without one;
+    // since harvesters have a right of way, movement.ts harvesterRank, AI seeds 1 and 2 end by 5:52, so 7 and 8: 8:46)
     const seed = 1002;
     const w = createMapWorld("riverlands", {
       seed,
       openers: { blue: AI_OPENER, red: AI_OPENER }
     });
-    const blue = createAiState("rush", "easy", 1);
-    const red = createAiState("balanced", "normal", 2);
+    const blue = createAiState("rush", "easy", 7);
+    const red = createAiState("balanced", "normal", 8);
     let issued = 0;
     for (let i = 0; i < 14 * 60 * TICK_RATE && !w.winner; i++) {
       const cmds = [...tickAi(w, "blue", blue), ...tickAi(w, "red", red)];

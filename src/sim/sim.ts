@@ -2,6 +2,7 @@ import { cleanupDeaths, eliminate, isOut, tickCombat } from "./combat";
 import { isMulti, otherSide, sidesOf } from "./sides";
 import {
   applyEconomyCommand,
+  harvestFromDropOff,
   tickConstruction,
   tickFoundCrews,
   tickFounding,
@@ -87,6 +88,8 @@ function applyCommand(w: World, c: Command, held?: HeldLiftOrders): void {
       const tx = Math.floor(c.x);
       const ty = Math.floor(c.y);
       if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height) break;
+      // on the side's own HQ or Depot: unload, then mine the field by it (economy.ts harvestFromDropOff)
+      if (harvestFromDropOff(w, c.faction, c.unitIds.filter((id) => !lifting.has(id)), tx, ty)) break;
       if (!isResource(w, tileIndex(w, tx, ty))) break;
       for (const id of c.unitIds) {
         const u = w.units.get(id);

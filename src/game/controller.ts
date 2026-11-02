@@ -6,7 +6,7 @@ import { canCarry, liftBlocker } from "../sim/lift";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { POWER_NAMES, powerBlocker, powerCost, powerStatus, type PowerStatus } from "../sim/powers";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
-import type { BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
+import type { Building, BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
 import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { buildView, type BuildView } from "./build-view";
@@ -415,6 +415,17 @@ export class Controller {
     return true;
   }
 
+  /**
+   * Building `id` if it's one of ours harvesters work from (an HQ, a finished Depot) and the selection is all
+   * harvesters, else null (a mixed selection just moves there, as on any building).
+   */
+  private workAt(id: number): Building | null {
+    const b = this.world.buildings.get(id);
+    if (!b || b.faction !== PLAYER || !BUILDINGS[b.kind].dropOff || b.founding !== undefined || this.ahead().sold(id)) return null;
+    const own = this.selectedOwn();
+    return own.length > 0 && own.every((u) => u.kind === "harvester") ? b : null;
+  }
+
   /** Mouse commands: left-click selects friendly buildings or moves on ground; right-click commands without selecting or boarding. */
   clickWorld(wx: number, wy: number, hit: TapHit, button: "left" | "right", toggle = false): void {
     if (button === "right") {
@@ -422,7 +433,8 @@ export class Controller {
         const u = this.world.units.get(hit.id);
         if (u) { wx = u.x; wy = u.y; }
       }
-      if (hit.kind === "ownUnit" || hit.kind === "ownBuilding") hit = { kind: "ground" };
+      // (harvesters on their own HQ or Depot: back to work from there, in tapWorld)
+      if (hit.kind === "ownUnit" || (hit.kind === "ownBuilding" && !this.workAt(hit.id))) hit = { kind: "ground" };
       this.forceMove = false;
     } else if (hit.kind === "ownBuilding" && !this.placing && !this.ahead().sold(hit.id)) {
       this.clearSelection();
@@ -463,6 +475,15 @@ export class Controller {
       if (this.selectedUnits.size === 0) {
         this.selectedUnits.clear();
         this.selectedBuilding = hit.id;
+        return;
+      }
+      // …except harvesters on an HQ or Depot: they unload there and mine the field by it
+      const b = this.workAt(hit.id);
+      if (b) {
+        const c = { x: b.tx + BUILDINGS[b.kind].size / 2, y: b.ty + BUILDINGS[b.kind].size / 2 };
+        this.enqueue({ type: "harvest", faction: PLAYER, unitIds: this.selectedOwn().map((u) => u.id), x: c.x, y: c.y });
+        this.lastFeedback = { kind: "harvest", x: c.x, y: c.y };
+        this.forceMove = false;
         return;
       }
     }

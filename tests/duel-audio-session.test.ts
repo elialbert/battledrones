@@ -179,7 +179,7 @@ describe("main.ts, which no test can boot", () => {
     // (at the top level: not behind a rematch or any other condition)
     const boot = main.search(/^resetAudioSession\(\);$/m);
     expect(boot).toBeGreaterThan(0);
-    for (const start of [/^ {2}showMenu\(linkedMap\);$/m, /^if \(replayLink\) void watchLinked\(/m]) {
+    for (const start of [/^ {2}showMenu\(linkedMap\);$/m, /^if \(replayLink\) void watchLinked\(/m, /^else if \(storedWatch\) void watchLinked\(/m]) {
       const at = main.search(start);
       expect(at).toBeGreaterThan(boot);
     }

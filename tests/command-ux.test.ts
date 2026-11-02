@@ -316,6 +316,28 @@ describe("mouse orders", () => {
     ]);
   });
 
+  it("right-clicking (or tapping) your own HQ or Depot with harvesters selected sends them to work from there", () => {
+    const w = field();
+    const c = new Controller(w);
+    const hq = hqOf(w, "blue")!;
+    const centre = { x: hq.tx + BUILDINGS.hq.size / 2, y: hq.ty + BUILDINGS.hq.size / 2 };
+    const a = spawnUnit(w, "harvester", "blue", 12, 12);
+    const b = spawnUnit(w, "harvester", "blue", 13, 12);
+    c.selectUnits([a.id, b.id]);
+    c.clickWorld(5.5, 5.5, { kind: "ownBuilding", id: hq.id }, "right");
+    expect(c.drainCommands()).toEqual([{ type: "harvest", faction: "blue", unitIds: [a.id, b.id], ...centre }]);
+    c.tapWorld(5.5, 5.5, { kind: "ownBuilding", id: hq.id });
+    expect(c.drainCommands()).toEqual([{ type: "harvest", faction: "blue", unitIds: [a.id, b.id], ...centre }]);
+    // a building that isn't a drop-off, or a mixed selection: just a move there, as before
+    const fab = spawnBuilding(w, "fab-plant", "blue", 9, 4);
+    c.clickWorld(10, 5, { kind: "ownBuilding", id: fab.id }, "right");
+    expect(c.drainCommands().map((cmd) => cmd.type)).toEqual(["move"]);
+    const tank = spawnUnit(w, "stinger", "blue", 14, 12);
+    c.selectUnits([a.id, tank.id]);
+    c.clickWorld(5.5, 5.5, { kind: "ownBuilding", id: hq.id }, "right");
+    expect(c.drainCommands().map((cmd) => cmd.type)).toEqual(["move", "attackMove"]);
+  });
+
   it("clicking a building being sold treats it as terrain and keeps the selected units", () => {
     const w = field();
     const c = new Controller(w);

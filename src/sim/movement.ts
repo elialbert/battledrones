@@ -402,6 +402,9 @@ const KIND_INDEX: Record<string, number> = Object.fromEntries(Object.keys(UNITS)
  * to one shoulders it aside, as a second vehicle would — else it would be
  * pinned there, short of its goal, for good).
  *
+ * Harvesters have a right of way among their own side (harvesterRank):
+ * founding > full > empty, and a founding one pushes the army aside too.
+ *
  * A dug-in Goliath (anchoring, anchored or packing up) is never pushed:
  * whatever it meets takes the whole push (its footprint is in the occupancy
  * grid, so paths already go round it). A walking one parts like any unit. A
@@ -454,6 +457,21 @@ function separate(w: World, driving: Set<number>): void {
         else nudge(w, a, -ux * push * 2, -uy * push * 2);
         continue;
       }
+      if (a.faction === b.faction) {
+        // right of way among a side's own (harvesterRank): the higher one keeps its line, the other steps off it
+        const ra = harvesterRank(a);
+        const rb = harvesterRank(b);
+        if (ra !== rb && (ra > 0 && rb > 0 || Math.max(ra, rb) === FOUNDING)) {
+          if (ra > rb) {
+            const s = stepAside(a, ux, uy);
+            nudge(w, b, s.x * push * 2, s.y * push * 2);
+          } else {
+            const s = stepAside(b, -ux, -uy);
+            nudge(w, a, s.x * push * 2, s.y * push * 2);
+          }
+          continue;
+        }
+      }
       if (ia !== ib && driving.has(ia ? b.id : a.id)) {
         // a squad steps aside for a friendly vehicle on the move: it takes the whole push
         const [veh, squad, sx, sy] = ia ? [b, a, -ux, -uy] : [a, b, ux, uy];
@@ -467,8 +485,27 @@ function separate(w: World, driving: Set<number>): void {
   }
 }
 
+/** harvesterRank: a harvester going to found an expansion Depot. */
+const FOUNDING = 3;
+
 /**
- * Which way a squad in a vehicle's way gives ground: straight away from it,
+ * A harvester's right of way in separation: founding a Depot (3) > full,
+ * heading home or unloading (2) > empty (1); anything else 0. Between two of
+ * a side's own harvesters the higher rank shoulders the lower aside (it takes
+ * the whole push); a founding harvester shoulders its side's army aside too
+ * (whatever gives way steps off its line, stepAside). Other pairs share the push as usual, and
+ * nothing moves a dug-in Goliath.
+ */
+function harvesterRank(u: Unit): number {
+  if (u.kind !== "harvester") return 0;
+  const o = u.order;
+  if (o.type === "found") return FOUNDING;
+  if (o.type === "harvest" && (o.phase === "toBase" || o.phase === "unloading") && u.cargo > 0) return 2;
+  return 1;
+}
+
+/**
+ * Which way a squad in a vehicle's way (or a unit in a harvester's, harvesterRank) gives ground: straight away from it,
  * or — when it stands in front — sideways off the vehicle's line of travel,
  * to whichever side it is already on (dead ahead: the vehicle's right, which
  * turns with the vehicle, so mirror-image pairs part as mirror images).

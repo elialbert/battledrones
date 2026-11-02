@@ -845,6 +845,7 @@ export type Command =
   | { type: "move"; faction: Faction; unitIds: number[]; x: number; y: number }
   | { type: "attackMove"; faction: Faction; unitIds: number[]; x: number; y: number }
   | { type: "attack"; faction: Faction; unitIds: number[]; targetId: number }
+  /** (x, y) on a field: mine it. On the side's own HQ or Depot: unload, then mine the field by it (economy.ts harvestFromDropOff). */
   | { type: "harvest"; faction: Faction; unitIds: number[]; x: number; y: number }
   | { type: "stop"; faction: Faction; unitIds: number[] }
   /** `buildingId`: a production building, or an anchored Goliath's unit id (it trains infantry, goliath.ts). */

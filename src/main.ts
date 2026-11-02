@@ -12,7 +12,7 @@ import { SIDE_NAME } from "./game/side-style";
 import { FACTIONS } from "./sim/sides";
 import { activeMutators, duelSetup, gameMode, loadSettings, saveSettings, unchartedMatch, type GameType } from "./game/mode";
 import { loadBest } from "./game/survival";
-import { HELP_HTML } from "./ui/hud";
+import { HELP_HTML, WATCH_KEY } from "./ui/hud";
 import { mountMenuCareer, openSheet, starsText } from "./ui/career";
 import { dailyOp, today, type DailyOp } from "./game/daily";
 import { opById, type OpDef } from "./sim/ops";
@@ -965,13 +965,16 @@ function showMenu(linkedMap?: string | null): void {
  * (relative to the game, any CORS-enabled URL, a file on GitHub or a Gist) and
  * watch it. Its Menu buttons leave the link behind (ui/fullscreen.ts).
  */
-async function watchLinked(url: string, follow: boolean): Promise<void> {
+async function watchLinked(url: string, follow: boolean): Promise<void>;
+/** The end screen's 🎬 Watch replay (ui/hud.ts WATCH_KEY): the record it stored before the reload, watched the same way. */
+async function watchLinked(stored: { json: string }): Promise<void>;
+async function watchLinked(src: string | { json: string }, follow = false): Promise<void> {
   const note = document.createElement("div");
   note.className = "screen";
-  note.innerHTML = `<div class="loadbox"><p>Fetching the battle record…</p></div>`;
+  note.innerHTML = `<div class="loadbox"><p>${typeof src === "string" ? "Fetching" : "Loading"} the battle record…</p></div>`;
   document.getElementById("hud")!.appendChild(note);
   const feed = await import("./game/replay")
-    .then((m) => m.loadReplay(url, follow))
+    .then((m) => (typeof src === "string" ? m.loadReplay(src, follow) : m.replayFromJson(src.json)))
     .catch((e: unknown) => {
       note.innerHTML = `<div class="panel"><p class="time"></p><button class="cta">Main menu</button></div>`;
       note.querySelector("p")!.textContent = `Couldn't play that battle record. ${e instanceof Error ? e.message : String(e)}`;
@@ -1014,7 +1017,16 @@ function startDaily(op: DailyOp): void {
 // drop it (import.meta.env.DEV is false there).
 const params = new URLSearchParams(location.search);
 const replayLink = params.get("replay")?.trim();
+/** The end screen's 🎬 Watch replay: a record to play now (read once). */
+let storedWatch: string | null = null;
+try {
+  storedWatch = sessionStorage.getItem(WATCH_KEY);
+  sessionStorage.removeItem(WATCH_KEY);
+} catch {
+  /* ignore */
+}
 if (replayLink) void watchLinked(replayLink, import.meta.env.DEV && params.has("follow"));
+else if (storedWatch) void watchLinked({ json: storedWatch });
 else {
   // /?map=<id> (the random map panel's 🔗 link): preselect that map once; the saved pick carries it after
   const linkedMap = params.get("map")?.trim().toLowerCase();

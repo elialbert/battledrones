@@ -132,6 +132,10 @@ type DuelAsk = "resign" | "resign-leave" | "leave";
 
 /** The end screen's button that copies the match's battle record. */
 const COPY_REPLAY = "📋 Copy replay JSON";
+/** The end screen's button that reloads into the battle viewer, playing this match's battle record. */
+const WATCH_REPLAY = "🎬 Watch replay";
+/** sessionStorage: the battle record the next boot plays in the battle viewer (main.ts reads it). */
+export const WATCH_KEY = "battledrones.watch";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "build", label: "Base", icon: "🏗" },
@@ -1035,6 +1039,26 @@ export function createHud(api: HudApi): Hud {
     }
   }
 
+  /** Watch replay: the record goes to sessionStorage, and the page reloads into the battle viewer (main.ts). */
+  function watchReplay(): void {
+    const btn = endEl.querySelector<HTMLButtonElement>("#watch-replay");
+    const say = (text: string) => {
+      if (!btn) return;
+      btn.textContent = text;
+      setTimeout(() => btn.isConnected && (btn.textContent = WATCH_REPLAY), 2500);
+    };
+    const record = api.battleRecord?.() ?? null;
+    if (!record) return say("Nothing to watch");
+    try {
+      sessionStorage.setItem(WATCH_KEY, JSON.stringify(record));
+    } catch {
+      return say("Couldn't load it");
+    }
+    // (a duel leaves the link first, as its Main menu does)
+    if (api.duel) api.duel.menu();
+    else fullscreen.reload();
+  }
+
   function showEnd(winner: Faction | "draw" | null, opts?: EndOpts): void {
     over = true;
     // (a duel can end while its pause menu is up: the friend left, or the worlds drifted apart)
@@ -1048,7 +1072,12 @@ export function createHud(api: HudApi): Hud {
     const rematch = () => relaunch(rematchToken());
     const duel = api.duel;
     // every end screen: the match as JSON for 🎬 Watch a replay (one played here, a duel, or the replay itself)
-    const replay = api.battleRecord ? [{ id: "copy-replay", label: COPY_REPLAY, cls: "alt", on: () => copyReplay() }] : [];
+    const replay = api.battleRecord
+      ? [
+          { id: "watch-replay", label: WATCH_REPLAY, cls: "alt", on: () => watchReplay() },
+          { id: "copy-replay", label: COPY_REPLAY, cls: "alt", on: () => copyReplay() }
+        ]
+      : [];
     // (Last Stand only ends one way; a draw anywhere goes to the report, titled DRAW)
     if (surv && !ops && winner !== "draw" && winner !== null) {
       surv.showEnd(endEl, winner, Math.round(api.matchSeconds()), rematch, () => fullscreen.reload());

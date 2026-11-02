@@ -163,7 +163,8 @@ export function tickFoundCrews(w: World): void {
     const cx = tx + size / 2;
     const cy = ty + size / 2;
     if (crew.length < E.crew || foundBlocker(w, faction, tx, ty)) {
-      for (const u of crew) u.order = { type: "idle" };
+      // called off (a crew member lost, the site taken): back to work, a loaded hold home first
+      for (const u of crew) backToWork(w, u);
       continue;
     }
     // nearest the middle first (ties: id): they're the ones used up
@@ -186,10 +187,7 @@ export function tickFoundCrews(w: World): void {
       b.hp = BUILDINGS.depot.hp * E.siteHp;
       invalidatePathsThrough(w, b);
       // the rest of the crew (more were sent than it takes) back to work, on the field it's by
-      for (const u of back) {
-        const f = nearestReachableResource(w, u.x, u.y, faction);
-        u.order = f ? { type: "harvest", fieldX: f.x, fieldY: f.y, phase: "toField" } : { type: "idle" };
-      }
+      for (const u of back) backToWork(w, u);
       continue;
     }
     // walk up, each to its own side of the site
@@ -199,6 +197,36 @@ export function tickFoundCrews(w: World): void {
       moveUnitToward(w, u, cx + ox * (size / 2 + 0.5), cy + oy * (size / 2 + 0.5));
     });
   }
+}
+
+/**
+ * A harvester back to work: mining the field nearest (x, y) (default: where
+ * it stands) that it can reach, a loaded hold (any cargo) unloaded on the way
+ * there first (tickHarvest toBase). No field left to reach: idle.
+ */
+export function backToWork(w: World, u: Unit, x = u.x, y = u.y): void {
+  const f = nearestReachableResource(w, x, y, u.faction);
+  u.order = f ? { type: "harvest", fieldX: f.x, fieldY: f.y, phase: u.cargo > 1e-6 ? "toBase" : "toField" } : { type: "idle" };
+  u.path = null;
+}
+
+/**
+ * The harvest command on a side's own drop-off (an HQ, a finished Depot,
+ * any building BUILDINGS[kind].dropOff), not a field: "work from here".
+ * Each harvester unloads what it holds, then mines the field nearest that
+ * building (searched from where it docks). Returns false for any other tile.
+ */
+export function harvestFromDropOff(w: World, faction: Faction, unitIds: number[], tx: number, ty: number): boolean {
+  const b = buildingAtTile(w, tx, ty);
+  if (!b || b.faction !== faction || !BUILDINGS[b.kind].dropOff || b.founding !== undefined) return false;
+  const site: DropSite = { id: b.id, faction, tx: b.tx, ty: b.ty, size: BUILDINGS[b.kind].size };
+  for (const id of unitIds) {
+    const u = w.units.get(id);
+    if (!u || u.faction !== faction || u.kind !== "harvester") continue;
+    const d = dockPoint(w, site, u.x, u.y);
+    backToWork(w, u, d.x, d.y);
+  }
+  return true;
 }
 
 /** Where a crew stands round its site (unit offsets from the middle: the corners, then the sides). */

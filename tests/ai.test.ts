@@ -466,7 +466,9 @@ describe("AI and robot infantry", () => {
     const near = (x: number, y: number) => Math.hypot(x - blueHq.x, y - blueHq.y) < 14;
     let trips = 0;
     let homeDrop = false;
-    for (let i = 0; i < 120 * TICK_RATE && !w.winner; i++) {
+    // (100 s: the call-off comes ~15 s in, and the SAMs it saw are remembered CONDOR_AI.recall s from there; a
+    // second trip after that is fair, and boards ~100–115 s in)
+    for (let i = 0; i < 100 * TICK_RATE && !w.winner; i++) {
       const cmds = tickAi(w, "red", ai);
       for (const c of cmds) if (c.type === "unload" && c.x !== undefined && near(c.x, c.y!)) trips++;
       step(w, cmds);

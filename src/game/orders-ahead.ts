@@ -1,9 +1,9 @@
-import { GOLIATH, TICK_RATE } from "../sim/balance";
+import { BUILDINGS, GOLIATH, TICK_RATE } from "../sim/balance";
 import { isInfantry, isTransport } from "../sim/infantry";
 import { canCarry, liftBlocker, liftedBy } from "../sim/lift";
 import { isLoaded } from "../sim/transport";
 import type { Command, GoliathMode, PowerKind, Unit, UnitOrder, World } from "../sim/types";
-import { isResource, tileIndex } from "../sim/world";
+import { buildingAtTile, isResource, tileIndex } from "../sim/world";
 
 /** The lift a unit belongs to: the Goliath itself (hooked on or carried), or the Goliath its Condor is lifting. */
 const liftOf = (w: World, u: Unit): Unit | null => (u.goliath?.lift ? u : liftedBy(w, u));
@@ -121,7 +121,15 @@ export function ordersAhead(w: World, orders: readonly Command[] | null): Orders
       case "harvest": {
         const tx = Math.floor(c.x);
         const ty = Math.floor(c.y);
-        if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height || !isResource(w, tileIndex(w, tx, ty))) break;
+        if (tx < 0 || ty < 0 || tx >= w.width || ty >= w.height) break;
+        // on its own HQ or Depot: back to work (economy.ts harvestFromDropOff; which field, the sim finds: the building's tile stands in)
+        const b = buildingAtTile(w, tx, ty);
+        if (b && b.faction === c.faction && BUILDINGS[b.kind].dropOff && b.founding === undefined) {
+          for (const u of named(c, lifting))
+            if (u.kind === "harvester") edit(u).order = { type: "harvest", fieldX: tx, fieldY: ty, phase: u.cargo > 1e-6 ? "toBase" : "toField" };
+          break;
+        }
+        if (!isResource(w, tileIndex(w, tx, ty))) break;
         for (const u of named(c, lifting)) if (u.kind === "harvester") edit(u).order = { type: "harvest", fieldX: tx, fieldY: ty, phase: "toField" };
         break;
       }
