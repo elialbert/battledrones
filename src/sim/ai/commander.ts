@@ -236,8 +236,36 @@ export const STRATEGIES: Record<StrategyName, Strategy> = {
   }
 };
 
-/** Strategy.spendDown: scrap counts as piling up past `rich`; a queue slot per `perSlot` banked; more factories past `expandAt`, up to `maxExtra`. Strategy.depotReach: up to `maxDepots` depots. */
+/** Strategy.spendDown: scrap counts as piling up past `rich`; a queue slot per `perSlot` banked; more factories past `expandAt`, up to `maxExtra`. Strategy.depotReach: up to `maxDepots` depots (till the fields run low: RUNNING_LOW). */
 export const SPEND = { rich: 600, perSlot: 400, expandAt: 600, maxExtra: 5, maxDepots: 4 };
+/**
+ * Scrap left per harvester in the fields our drop-offs serve, below which the depot cap
+ * (Strategy.spend.maxDepots) is off: Depots follow the mining, however few the plan wanted, while
+ * there's an unserved field to reach. (About 80 s of mining at Brutal's rate: a crew's walk and build.)
+ * Replay 2026-11-02 (ashlands, 64 tiles): Brutal Rush, capped at two, ran its fields dry at 4:20 and
+ * mined 3k to the player's 14k after 4:30. Lifting every cap at 3:00 instead cost the other plans
+ * ~4k mined by 5:00 (crews of 4 used up on Depots while the old fields had plenty left), 26–46.
+ */
+const RUNNING_LOW = 300;
+/** How many Depots a plan may have now (RUNNING_LOW). */
+const depotCap = (w: World, faction: Faction, strategy: Strategy): number =>
+  fieldsRunningLow(w, faction) ? Infinity : strategy.spend?.maxDepots ?? SPEND.maxDepots;
+function fieldsRunningLow(w: World, faction: Faction): boolean {
+  return perTick(w, `low ${faction}`, () => {
+    const drops: { x: number; y: number }[] = [];
+    for (const b of w.buildings.values()) if (b.faction === faction && BUILDINGS[b.kind].dropOff) drops.push(buildingCenter(b));
+    let harvesters = 0;
+    for (const u of w.units.values()) if (u.faction === faction && u.kind === "harvester") harvesters++;
+    let left = 0;
+    for (let i = 0; i < w.scrap.length; i++) {
+      if (!w.scrap[i] || !isResource(w, i)) continue;
+      const x = (i % w.width) + 0.5;
+      const y = Math.floor(i / w.width) + 0.5;
+      if (drops.some((d) => dist(x, y, d.x, d.y) <= SERVED)) left += w.scrap[i]!;
+    }
+    return left < RUNNING_LOW * Math.max(1, harvesters);
+  });
+}
 
 export const DIFFICULTY: Record<
   Difficulty,
@@ -1013,6 +1041,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
           !used.has(u.id) && u.kind !== "mender" &&
           dist(u.x, u.y, r.x, r.y) > DEFENSE_RADIUS &&
           dist(u.x, u.y, enemyHome.x, enemyHome.y) > 8 && // about to finish the job there
+          // (nearer their base than the raid: a wave on its way over keeps going. Replay 2026-11-02, ashlands:
+          // eight Stingers called back from beside the enemy's harvesters walked 45 tiles home, too late, and died)
+          dist(u.x, u.y, enemyHome.x, enemyHome.y) >= dist(u.x, u.y, r.x, r.y) &&
           [...r.domains].some((dom) => canHitDomain(UNITS[u.kind].targets, dom))
       );
       if (go.length && value(go) + value(there) >= EXPANSION_DEFEND_ODDS * r.value) {
@@ -1457,7 +1488,7 @@ function nextBuilding(
     }
   // depots follow the mining (Strategy.depotReach): one more, early, while there's a field for it
   if (s.strategy.depotReach !== undefined) {
-    const depots = Math.min(s.strategy.spend?.maxDepots ?? SPEND.maxDepots, Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
+    const depots = Math.min(depotCap(w, faction, s.strategy), Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
     for (let i = order.filter((k) => k === "depot").length; i < depots; i++) order.splice(Math.min(order.length, 3), 0, "depot");
   }
   const fabs = order.filter((k) => k === "fab-plant").length;
@@ -1624,7 +1655,7 @@ function wallAnchor(
 function wallFrontier(w: World, faction: Faction, strategy: Strategy, hqC: { x: number; y: number }, enemyHome: { x: number; y: number }): { x: number; y: number } | null {
   let depots = 0;
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
-  if (depots >= (strategy.spend?.maxDepots ?? SPEND.maxDepots)) return null;
+  if (depots >= depotCap(w, faction, strategy)) return null;
   // (turrets round a field can take the spot its Depot needed: with WALL_STUCK by it and still none, on to the next)
   const turrets: { x: number; y: number }[] = [];
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "turret") turrets.push(buildingCenter(b));
