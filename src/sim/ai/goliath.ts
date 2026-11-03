@@ -303,7 +303,10 @@ export const GOLIATH_AI = {
   rushEscort: 1.2,
   rushReach: 32,
   /** …and falls back to the staging point once it has waited this long (s) for company. */
-  rushWait: 40
+  rushWait: 40,
+
+  /** The base under attack: a walking Goliath this near (tiles) the intruder walks into the fight, whatever it was doing. */
+  defendReach: 22
 };
 
 type P = { x: number; y: number };
@@ -738,6 +741,8 @@ export interface GoliathContext {
   mode: AiMode;
   /** A real attack on the base is under way. */
   threatened: boolean;
+  /** …and the intruder nearest our HQ, while it is (a walking Goliath near home joins the defence). */
+  defend?: P | null;
   /** Where the army gathers for a wave. */
   staging: P;
   /** The mined field near home, shaded toward home (ai/commander guardPoint). */
@@ -1352,6 +1357,25 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       setPhase(w, plan, "pack");
       return;
     }
+  }
+
+  // --- the base under attack: a walking Goliath near home fights for it ---
+  // (replay 2026-11-03: a Juggernaut's Goliath stood 12 tiles off, waiting for an escort the
+  // defence had taken, while the base it could have held fell)
+  const defend = ctx.defend;
+  if (
+    defend && ctx.hasHq && gs.mode === "walking" && plan.phase !== "retreat" &&
+    dist(g.x, g.y, defend.x, defend.y) <= GOLIATH_AI.defendReach && walkable(w, g, defend)
+  ) {
+    if (plan.phase !== "muster") {
+      plan.site = null;
+      setPhase(w, plan, "muster");
+    }
+    const o = g.order;
+    if (o.type === "attack") return; // (in the fight: let it)
+    if (!(o.type === "attackMove" && dist(o.x, o.y, defend.x, defend.y) < 3))
+      cmds.push({ type: "attackMove", faction, unitIds: [g.id], x: defend.x, y: defend.y });
+    return;
   }
 
   switch (plan.phase) {

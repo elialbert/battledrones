@@ -300,9 +300,15 @@ export function tendExpansion(
   /** Harvesters to leave mining: the crew is on top of them. */
   keep: number,
   reach: number,
-  cmds: Command[]
+  cmds: Command[],
+  /** Enemies in sight: no crew walks onto a site with an armed one by it. */
+  enemies: readonly Unit[] = []
 ): Set<number> {
   const E = ECONOMY.expansion;
+  // (replay 2026-11-03: a forward Depot was killed, and a fresh crew founded it again on the spot,
+  // into the army that had killed it, 2 s later)
+  const hot = (tx: number, ty: number) =>
+    enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE);
   const f = w.factions[faction];
   const plan = s.expansion;
   const size = BUILDINGS.depot.size;
@@ -324,7 +330,7 @@ export function tendExpansion(
       !!u && u.faction === faction && u.order.type === "found" && u.order.tx === plan.tx && u.order.ty === plan.ty;
     const crew = plan.crew.map((id) => w.units.get(id)).filter(onIt);
     // (a beat for the order to land: an APM cap may hold it back)
-    const lost = (w.tick - plan.since > TICK_RATE * 2 && crew.length < E.crew) || w.tick - plan.since > STALE;
+    const lost = (w.tick - plan.since > TICK_RATE * 2 && crew.length < E.crew) || w.tick - plan.since > STALE || hot(plan.tx, plan.ty);
     if (lost) {
       s.expansion = null;
       if (crew.length) cmds.push({ type: "stop", faction, unitIds: crew.map((u) => u.id) });
@@ -347,7 +353,7 @@ export function tendExpansion(
   const free = harvesters.filter((h) => !skip.has(h.id));
   if (free.length < E.crew + keep) return new Set();
   const site = expansionSite(w, faction, hqC, reach);
-  if (!site) return new Set();
+  if (!site || hot(site.tx, site.ty)) return new Set();
   const cx = site.tx + size / 2;
   const cy = site.ty + size / 2;
   const crew = free

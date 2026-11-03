@@ -68,6 +68,7 @@ import {
   isResource,
   moveClassOf,
   nearestDropOff,
+  passable,
   regionAt,
   regionLabels,
   sideFrame,
@@ -691,7 +692,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (bold: a raid at home doesn't put it off, and half the miners stay on while the crew goes: the rest are trained after)
   const expanding = !!s.expansion || (expansionNext && (!threatened || !!diff.boldExpand));
   const crewKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
-  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds);
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen);
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
   const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
@@ -1057,7 +1058,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   for (const id of goliathHolds(w, s)) used.add(id);
   const staging = towardEnemy(w, hqC, 9, enemyHqPos);
   cmds.push(
-    ...planGoliaths(w, faction, s, { army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq })
+    ...planGoliaths(w, faction, s, {
+      army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq,
+      defend: threatened && atHome[0] ? { x: atHome[0].x, y: atHome[0].y } : null
+    })
   );
   cmds.push(...huntGoliaths(w, faction, s, { army, used, seen, enemyHqPos, mode: s.mode, threatened }));
   // --- 1c'. the Hornet strike: gather, hide, bomb their HQ when their army is out (ai/hornets.ts)
@@ -1788,6 +1792,22 @@ function findPlacementSpot(
   if (kind !== "hq") for (const g of dugIn) centres.push({ c: g, r: Math.ceil(GOLIATH.buildRing + size) });
   /** A tile's lane round a dug-in Goliath's feet stays open (it walks out again once packed up). */
   const atFeet = (tx: number, ty: number) => dugIn.some((g) => distToFootprint(tx, ty, size, g.x, g.y) < GOLIATH.footprint / 2 + 1);
+  // a Gantry's Goliath rolls out GOLIATH.footprint wide: the Gantry keeps that lane all round it, clear of
+  // the map edge, rock and other buildings (replay 2026-11-03: one by the map edge, boxed in by a Depot
+  // and a Fab Plant, held its Goliath for 30 s while the base was attacked)
+  const lane = GOLIATH.footprint;
+  const gantries = kind === "gantry" ? [] : [...w.buildings.values()].filter((b) => b.faction === faction && b.kind === "gantry");
+  const gs = BUILDINGS.gantry.size;
+  const inLane = (tx: number, ty: number) =>
+    gantries.some((b) => tx < b.tx + gs + lane && tx + size > b.tx - lane && ty < b.ty + gs + lane && ty + size > b.ty - lane);
+  const laneClear = (tx: number, ty: number) => {
+    for (let y = ty - lane; y < ty + size + lane; y++)
+      for (let x = tx - lane; x < tx + size + lane; x++) {
+        if (x >= tx && x < tx + size && y >= ty && y < ty + size) continue;
+        if (!passable(w, x, y, "ground")) return false;
+      }
+    return true;
+  };
   for (const { c: at, r } of centres) {
     const c = fr.toFrame(at);
     for (let dy = -r; dy <= r; dy++)
@@ -1801,6 +1821,7 @@ function findPlacementSpot(
         // keep a lane open: don't wall the HQ in with production buildings
         if (size > 1 && isCramped(w, tx, ty, size)) continue;
         if (dugIn.length > 0 && atFeet(tx, ty)) continue;
+        if (kind === "gantry" ? !laneClear(tx, ty) : gantries.length > 0 && inLane(tx, ty)) continue;
         // and never box ground in: a pocket our own units roll out into and can't leave, or the base's way out shut
         if (sealsOff(w, tx, ty, size)) continue;
         best = { tx, ty };
