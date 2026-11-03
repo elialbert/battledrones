@@ -85,10 +85,10 @@ export interface MarshalOptions {
   sorties?: SortieKind[];
 }
 
-export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall" | "landgrab";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and five of
+ * The game plans Marshal picks from: the stock personalities, and six of
  * its own built on one of them (`base`: the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
  * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
@@ -226,6 +226,27 @@ export const MARSHAL_PLANS: Record<
       expandEarly: true,
       spend: { maxDepots: 8, maxExtra: 4 },
       wall: { max: 32, samEvery: 4, guard: 2, tech: 15, army: 1200, armyPerTurret: 90 }
+    }
+  },
+  /**
+   * For fun: a Depot on every field it can reach, either side of the halfway
+   * line, and most of the army out to fight for a site with enemies by it
+   * when that fight looks winnable (commander.ts Strategy.landGrab). Its
+   * income grows while its army stays thin: kill the Depots. (Brutal, 24
+   * games on four maps: 14–9–1 against Balanced, so it's in Brutal's pool;
+   * 6.3 Depots at 5:00 to Greed's 4.7, mining level with it.)
+   */
+  landgrab: {
+    base: "boom",
+    label: "Land Grab",
+    sorties: ["poke"],
+    tweak: {
+      buildOrder: ["fab-plant", "depot", "depot", "fab-plant", "turret", "depot", "tech-lab", "airpad", "depot", "sam-site"],
+      harvesters: 6,
+      assaultValue: 2400,
+      harassGroup: Infinity,
+      landGrab: true,
+      spend: { maxDepots: 8 }
     }
   }
 };

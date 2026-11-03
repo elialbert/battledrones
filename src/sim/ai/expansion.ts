@@ -324,7 +324,7 @@ export function staffExpansions(
 export function tendExpansion(
   w: World,
   faction: Faction,
-  s: { expansion?: ExpansionPlan | null },
+  s: { expansion?: ExpansionPlan | null; contest?: { x: number; y: number } | null },
   want: boolean,
   hqC: { x: number; y: number } | null,
   harvesters: Unit[],
@@ -334,7 +334,9 @@ export function tendExpansion(
   reach: number,
   cmds: Command[],
   /** Enemies in sight: no crew walks onto a site with an armed one by it. */
-  enemies: readonly Unit[] = []
+  enemies: readonly Unit[] = [],
+  /** Land Grab (Strategy.landGrab): may the army fight for a site with enemies by it? Left out: it never does. */
+  contestable?: (x: number, y: number) => boolean
 ): Set<number> {
   const E = ECONOMY.expansion;
   // (replay 2026-11-03: a forward Depot was killed, and a fresh crew founded it again on the spot,
@@ -348,6 +350,11 @@ export function tendExpansion(
     // founded since the last think? (the Depot now stands on the site)
     const b = [...w.buildings.values()].find((d) => d.faction === faction && d.kind === "depot" && d.tx === plan.tx && d.ty === plan.ty);
     if (b) plan.depotId = b.id;
+  }
+  // (the army goes out with the crew, and stays by the site till it's founded: commander.ts guards it)
+  if (contestable) {
+    const at = plan && plan.depotId === undefined ? { x: plan.tx + size / 2, y: plan.ty + size / 2 } : null;
+    s.contest = at && contestable(at.x, at.y) ? at : null;
   }
   if (plan?.depotId !== undefined) {
     const b = w.buildings.get(plan.depotId);
@@ -387,9 +394,16 @@ export function tendExpansion(
   let site = expansionSite(w, faction, hqC, reach);
   // (the nearest on foot is often the contested one in the middle: with an enemy by it, the next
   // field with none by it, not a crew kept waiting — Frostbite, 1:00 to 3:30)
-  if (site && hot(site.tx, site.ty))
+  if (site && hot(site.tx, site.ty)) {
+    // (Land Grab: a fight it can win is fought, and the crew goes once the site is clear)
+    const at = { x: site.tx + size / 2, y: site.ty + size / 2 };
+    if (contestable?.(at.x, at.y)) {
+      s.contest = at;
+      return new Set();
+    }
     site = scanExpansionSite(w, faction, hqC, reach, (x, y) =>
       enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, x, y) <= UNSAFE + BUILDINGS.depot.size + ECONOMY.wastelandRing));
+  }
   if (!site || hot(site.tx, site.ty)) return new Set();
   const cx = site.tx + size / 2;
   const cy = site.ty + size / 2;

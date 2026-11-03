@@ -147,6 +147,14 @@ export interface Strategy {
    * `army`, plus `armyPerTurret` a turret standing, unless scrap piles up.
    */
   wall?: { max: number; samEvery: number; guard: number; tech: number; army: number; armyPerTurret: number };
+  /**
+   * Land Grab (ai/marshal.ts): every field is worth having, past the halfway
+   * line too. The base builds out to fields on either side and the guard
+   * stands by the expansion nearest the enemy wherever it is; a site with
+   * enemies by it is fought for by most of the army (CONTEST_SHARE) if that
+   * fight looks winnable (contestable), else the crew goes to the next quiet field.
+   */
+  landGrab?: boolean;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -339,6 +347,8 @@ export interface AiState {
   skippedDepots: number;
   /** An expansion Depot's crew on its way to found it (ai/expansion.ts). */
   expansion?: ExpansionPlan | null;
+  /** The expansion site the army is fighting for (Strategy.landGrab; ai/expansion.ts tendExpansion). */
+  contest?: { x: number; y: number } | null;
   /** Harass raids launched: every other one looks in on where the enemy would expand. */
   raids?: number;
   /** Army value when the current wave launched (for retreat decisions). */
@@ -598,9 +608,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   /** Where the economy needs defending: the way into the base (Strategy.holdChoke), else the mined field, shaded toward home. */
   const [entrance] = s.strategy.holdChoke && hq && !baseGoliath ? baseEntrances(w, faction) : [];
   // (an expansion out past the home field is where the economy is exposed: the guard stands by it)
-  const outGuard = entrance || !hq ? null : expansionGuard(w, faction, hqC, enemyHome, ourSide);
+  // (Land Grab: either side of the halfway line is ours to hold)
+  const claimable = s.strategy.landGrab ? () => true : ourSide;
+  const outGuard = entrance || !hq ? null : expansionGuard(w, faction, hqC, enemyHome, claimable);
+  const contest = !entrance && hq ? s.contest ?? null : null;
   const guardPoint = entrance
     ? entrance.hold
+    : contest
+    ? contest
     : outGuard
     ? outGuard
     : activeField
@@ -644,7 +659,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (!ok) roomless = true;
     return ok;
   };
-  const creepField = hq ? creepTarget(w, faction, s.strategy, hqC, ourSide) : null;
+  const creepField = hq ? creepTarget(w, faction, s.strategy, hqC, claimable) : null;
   const creepOut = { deferred: false };
   const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, false, !!creepField, creepOut);
   creepAt = creepOut.deferred ? creepField : null;
@@ -706,14 +721,21 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (an expansion is next: its crew is trained on top of the miners, and it's never started under attack)
   // (bold: a raid at home doesn't put it off, and half the miners stay on while the crew goes: the rest are trained after)
   const expanding = !!s.expansion || (expansionNext && (!threatened || !!diff.boldExpand));
-  const crewKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
-  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen);
+  const boldKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
+  // (Land Grab: each crew is four harvesters gone, and a Depot with nobody to work it earns nothing)
+  const crewKeep = s.strategy.landGrab ? Math.max(boldKeep, GRAB_MINERS * depots) : boldKeep;
+  const contestable = s.strategy.landGrab
+    ? (x: number, y: number) => contestWinnable(seen, x, y, armyValue, s.weighs ? enemyArmy : 0)
+    : undefined;
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen, contestable);
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
   const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
   // (Nomads: no HQ ever — the dug-in Goliath builds them, goliath.ts trainableAt)
   const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
-  if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length === 0 && f.scrap >= UNITS.harvester.cost)
+  // (Land Grab: the next one queued behind the last, the HQ never idle: crews use them up as fast as it trains them)
+  const yardRoom = s.strategy.landGrab ? 2 : 1;
+  if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length < yardRoom && f.scrap >= UNITS.harvester.cost)
     cmds.push({ type: "produce", faction, buildingId: yard.id, unit: "harvester" });
   // the rest mine the best field going: near a drop-off, on our side, none with an enemy army by it (ai/fields.ts)
   const busy = new Set([...goliathFields.keep, ...crew, ...staffed.sent]);
@@ -1102,7 +1124,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   else cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened, skip }));
 
   // --- 2. economy guard: a share of the army holds the mining line --------
-  const guardShare = s.mode === "assault" ? 0.15 : entrance ? 1 : 0.35;
+  const guardShare = s.mode === "assault" ? 0.15 : entrance ? 1 : contest ? CONTEST_SHARE : 0.35;
   const guardValue = value(army.filter((u) => dist(u.x, u.y, guardPoint.x, guardPoint.y) <= GUARD_RADIUS));
   if (guardValue < guardShare * armyValue) {
     let need = guardShare * armyValue - guardValue;
@@ -1541,10 +1563,23 @@ function nextBuilding(
       counted.set(k, (counted.get(k) ?? 0) + 1);
       return (have.get(k) ?? 0) < counted.get(k)!;
     });
-    const depot = order.indexOf("depot", left);
-    if (left >= 0 && depot > left) {
-      order.splice(depot, 1);
-      order.splice(left, 0, "depot");
+    if (s.strategy.landGrab) {
+      // (every Depot up to the first it hasn't got: they're counted in order, so the next one alone
+      // may be one that stands, the one it wants left behind a run of factories. Frostbite: red
+      // stopped at three from 2:00 on)
+      const ahead = order.slice(0, Math.max(0, left)).filter((k) => k === "depot").length;
+      for (let at = left, n = ahead; left >= 0 && n <= (have.get("depot") ?? 0); at++, n++) {
+        const d = order.indexOf("depot", at);
+        if (d < 0) break;
+        order.splice(d, 1);
+        order.splice(at, 0, "depot");
+      }
+    } else {
+      const depot = order.indexOf("depot", left);
+      if (left >= 0 && depot > left) {
+        order.splice(depot, 1);
+        order.splice(left, 0, "depot");
+      }
     }
   }
   const wanted = new Map<BuildingKind, number>();
@@ -1640,6 +1675,27 @@ function creepTarget(
 }
 /** The creep's next building must stand at least this much (tiles) nearer the field than the nearest one does. */
 const CREEP_STEP = 2;
+
+/** Harvesters Land Grab keeps mining for each Depot before another crew goes. */
+const GRAB_MINERS = 3;
+/** Land Grab's share of the army that goes to a site it's fighting for (Strategy.landGrab). */
+const CONTEST_SHARE = 0.6;
+/** …which must outweigh what's seen by the site by this much (as WAVE_EDGE). */
+const CONTEST_EDGE = 1.2;
+/** Enemies this close to a site (tiles) are in the fight for it. */
+const CONTEST_RADIUS = 10;
+
+/**
+ * Is a site worth fighting for: does CONTEST_SHARE of our army outweigh the armed enemies seen by it,
+ * and, for a commander that weighs, our whole army at least match the one it remembers (`remembered`:
+ * what's by the site may be the edge of it)? The share sent whatever was there lost the army to the
+ * enemy's main force.
+ */
+function contestWinnable(seen: readonly Unit[], x: number, y: number, armyValue: number, remembered: number): boolean {
+  let there = 0;
+  for (const e of seen) if (UNITS[e.kind].dps > 0 && dist(e.x, e.y, x, y) <= CONTEST_RADIUS) there += UNITS[e.kind].cost;
+  return CONTEST_SHARE * armyValue >= CONTEST_EDGE * there && armyValue >= remembered;
+}
 
 /**
  * Where the guard stands when the base has an expansion out past its home field on our side of the map:
