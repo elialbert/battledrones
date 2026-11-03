@@ -33,40 +33,53 @@ export const SERVED = 10;
 /** Fields this close to the HQ (tiles) are its home field (as ai/commander.ts HOME_FIELD). */
 const HOME_FIELD = 10;
 
+/** Ranks a field no harvester can walk to behind every one they can (unservedField). */
+export const UNWALKED = 1e6;
+
 /** A field in a drop-off's reach is served if a harvester walks there in at most this many times `reach` steps. */
 const WALK_SLACK = 1.5;
 
 /**
- * The nearest field to the HQ that no drop-off within `reach` serves (a
- * Depot still going up counts: it will), or null. `skip`: field tiles left out.
+ * The nearest field that no drop-off within `reach` serves (a Depot still
+ * going up counts: it will), or null. `skip`: field tiles left out. Nearest
+ * on foot from our drop-offs, not as the crow flies from the HQ (`d` is
+ * that, and MAX_FIELD caps it): on Dune Sea the field "nearest" red's HQ
+ * lies behind a ridge, 24 steps round it and out on the enemy's lane, where
+ * the player killed both crew and miners (replay 2026-11-03); the one in
+ * front of its base was 13 steps.
  */
 export function unservedField(
   w: World,
   faction: Faction,
   hqC: { x: number; y: number },
   reach: number,
-  skip?: (x: number, y: number) => boolean
+  skip?: (x: number, y: number) => boolean,
+  /** Nearest as the crow flies from the HQ instead (the Wall: its turrets build out over ground harvesters walk round). */
+  byCrow = false
 ): { x: number; y: number; d: number } | null {
   const drops = [...w.buildings.values()].filter((b) => b.faction === faction && BUILDINGS[b.kind].dropOff);
   const walk = walkFromDrops(w, faction);
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
-  let best: { x: number; y: number; d: number } | null = null;
+  let best: { x: number; y: number; d: number; k: number } | null = null;
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
       if (!isResource(w, tileIndex(w, tx, ty))) continue;
       const x = tx + 0.5;
       const y = ty + 0.5;
+      const steps = walk[tileIndex(w, tx, ty)]!;
       if (drops.some((b) => dist(x, y, b.tx + BUILDINGS[b.kind].size / 2, b.ty + BUILDINGS[b.kind].size / 2) < reach)) {
         // (in reach as the crow flies, but not on foot — a field behind rocks, every load walked round
         // them, past whatever waits out there — isn't served: Riverlands' south field, -marshal-brutal)
-        const steps = walk[tileIndex(w, tx, ty)]!;
         if (steps >= 0 && steps <= reach * WALK_SLACK) continue;
       }
       const d = dist(x, y, hqC.x, hqC.y);
-      if ((!best || d < best.d) && !skip?.(x, y)) best = { x, y, d };
+      if (d > MAX_FIELD) continue;
+      // (none walk there: last, by the crow; ties by the crow too)
+      const k = byCrow ? d : steps >= 0 ? steps : UNWALKED + d;
+      if ((!best || k < best.k || (k === best.k && d < best.d)) && !skip?.(x, y)) best = { x, y, d, k };
     }
-  return best && best.d <= MAX_FIELD ? best : null;
+  return best ? { x: best.x, y: best.y, d: best.d } : null;
 }
 
 /**
@@ -139,8 +152,14 @@ function walkFrom(w: World, faction: Faction, avoid?: Uint8Array): Int32Array {
 export function expansionSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { tx: number; ty: number } | null {
   return perTick(w, `exp ${faction} ${hqC.x} ${hqC.y} ${reach}`, () => scanExpansionSite(w, faction, hqC, reach));
 }
-function scanExpansionSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number): { tx: number; ty: number } | null {
-  const field = unservedField(w, faction, hqC, Math.max(reach, SERVED));
+function scanExpansionSite(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number },
+  reach: number,
+  skip?: (x: number, y: number) => boolean
+): { tx: number; ty: number } | null {
+  const field = unservedField(w, faction, hqC, Math.max(reach, SERVED), skip);
   if (!field) return null;
   const size = BUILDINGS.depot.size;
   const fr = sideFrame(w, faction);
@@ -203,6 +222,29 @@ function fieldBy(w: World, faction: Faction, cx: number, cy: number): { x: numbe
 }
 
 /**
+ * Our finished Depots that serve a field of their own past the home field
+ * (one to a field: SAME_FIELD), with the field tile nearest each.
+ */
+export function expansionSites(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number }
+): { cx: number; cy: number; field: { x: number; y: number } }[] {
+  const sites: { cx: number; cy: number; field: { x: number; y: number } }[] = [];
+  for (const b of w.buildings.values()) {
+    if (b.faction !== faction || b.kind !== "depot" || b.founding !== undefined) continue;
+    const size = BUILDINGS.depot.size;
+    const cx = b.tx + size / 2;
+    const cy = b.ty + size / 2;
+    const field = perTick(w, `depot field ${b.id}`, () => fieldBy(w, faction, cx, cy));
+    if (!field || dist(field.x + 0.5, field.y + 0.5, hqC.x, hqC.y) <= HOME_FIELD) continue;
+    if (sites.some((s) => dist(s.field.x, s.field.y, field.x, field.y) <= SAME_FIELD)) continue;
+    sites.push({ cx, cy, field });
+  }
+  return sites;
+}
+
+/**
  * Keep each finished Depot that serves a field of its own (past the home
  * field: an expansion, or a sidebar Depot out by one) worked by
  * EXPANSION_MINERS harvesters. Left alone, harvesters only ever mine the
@@ -226,17 +268,7 @@ export function staffExpansions(
   const sent = new Set<number>();
   const staffed = new Set<number>();
   let extra = 0;
-  const sites: { cx: number; cy: number; field: { x: number; y: number } }[] = [];
-  for (const b of w.buildings.values()) {
-    if (b.faction !== faction || b.kind !== "depot" || b.founding !== undefined) continue;
-    const size = BUILDINGS.depot.size;
-    const cx = b.tx + size / 2;
-    const cy = b.ty + size / 2;
-    const field = perTick(w, `depot field ${b.id}`, () => fieldBy(w, faction, cx, cy));
-    if (!field || dist(field.x + 0.5, field.y + 0.5, hqC.x, hqC.y) <= HOME_FIELD) continue;
-    if (sites.some((s) => dist(s.field.x, s.field.y, field.x, field.y) <= SAME_FIELD)) continue;
-    sites.push({ cx, cy, field });
-  }
+  const sites = expansionSites(w, faction, hqC);
   if (!sites.length) return { sent, staffed, extra };
   // (a harvester counts for the site whose field it's sent to is nearest: one site, never two)
   const servedBy = (h: Unit) => {
@@ -352,7 +384,12 @@ export function tendExpansion(
   if (f.scrap < E.cost * 0.7) return new Set();
   const free = harvesters.filter((h) => !skip.has(h.id));
   if (free.length < E.crew + keep) return new Set();
-  const site = expansionSite(w, faction, hqC, reach);
+  let site = expansionSite(w, faction, hqC, reach);
+  // (the nearest on foot is often the contested one in the middle: with an enemy by it, the next
+  // field with none by it, not a crew kept waiting — Frostbite, 1:00 to 3:30)
+  if (site && hot(site.tx, site.ty))
+    site = scanExpansionSite(w, faction, hqC, reach, (x, y) =>
+      enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, x, y) <= UNSAFE + BUILDINGS.depot.size + ECONOMY.wastelandRing));
   if (!site || hot(site.tx, site.ty)) return new Set();
   const cx = site.tx + size / 2;
   const cy = site.ty + size / 2;

@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { SERVED, expansionSite, perTick, staffExpansions, tendExpansion, unservedField, type ExpansionPlan } from "./expansion";
+import { SERVED, UNWALKED, expansionSite, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
 import { tendFields } from "./fields";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
@@ -597,8 +597,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const activeField = nearestField && (!islandMap || ourSide(nearestField.x, nearestField.y)) ? nearestField : null;
   /** Where the economy needs defending: the way into the base (Strategy.holdChoke), else the mined field, shaded toward home. */
   const [entrance] = s.strategy.holdChoke && hq && !baseGoliath ? baseEntrances(w, faction) : [];
+  // (an expansion out past the home field is where the economy is exposed: the guard stands by it)
+  const outGuard = entrance || !hq ? null : expansionGuard(w, faction, hqC, enemyHome, ourSide);
   const guardPoint = entrance
     ? entrance.hold
+    : outGuard
+    ? outGuard
     : activeField
     ? {
         x: activeField.x + 0.5 + Math.sign(hqC.x - activeField.x - 0.5) * 1.5,
@@ -618,10 +622,18 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (late in a match, rich and with an army: a Gantry and whatever it needs first, ai/goliath.ts)
   // (with no HQ, lost or Nomads, there's a Gantry only while a Goliath is dug in to build round)
   const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened, home: origin, enemyHome, behind: armyValue < enemyArmy });
-  /** Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the HQ (it is big, and always seen), the rest by the HQ. */
+  // (the base builds out to the next field instead of sending a crew: set below, once the order is read)
+  let creepAt: { x: number; y: number } | null = null;
+  /**
+   * Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the
+   * HQ (it is big, and always seen), production out toward the field the base is building out to
+   * (creepTarget), the rest by the HQ.
+   */
   const anchorFor = (kind: BuildingKind) =>
     s.strategy.wall && hq && (kind === "turret" || kind === "sam-site")
       ? wallAnchor(w, faction, s.strategy, kind, myBuildings, hqC, enemyHome)
+      : creepAt && CREEP_KINDS.has(kind)
+      ? creepAt
       : kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
       ? guardPoint
       : kind === "radar" ? towardEnemy(w, hqC, 4) : kind === "gantry" ? towardEnemy(w, hqC, -5) : hqC;
@@ -632,11 +644,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (!ok) roomless = true;
     return ok;
   };
-  const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits);
+  const creepField = hq ? creepTarget(w, faction, s.strategy, hqC, ourSide) : null;
+  const creepOut = { deferred: false };
+  const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, false, !!creepField, creepOut);
+  creepAt = creepOut.deferred ? creepField : null;
   // a Depot past the build zone is deployed by a crew: it goes up alongside the rest of the order, once
   // the crew is trained (ai/expansion.ts)
   const expansionNext = next === "depot" && !!hq && !s.strategy.wall && depotByCrew(w, faction, buildingCenter(hq), s.strategy.depotReach);
-  const wanted = expansionNext ? nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, true) : next;
+  const wanted = expansionNext ? nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, true, !!creepField) : next;
   if (roomless) noteNoRoom(w, s); // (the base Goliath may move on to build more: ai/goliath.ts)
   if (f.pending?.ready) {
     const kind = f.pending.kind;
@@ -1446,7 +1461,11 @@ function nextBuilding(
   gantry = false,
   fits?: (kind: BuildingKind) => boolean,
   /** Pass over an expansion Depot (it goes up alongside the order: ai/expansion.ts). */
-  skipExpansion = false
+  skipExpansion = false,
+  /** The base can build out to the field (creepTarget): a Depot a crew would found waits, and the rest of the order goes up toward it. */
+  creep = false,
+  /** Set when that happened: a crew's Depot passed over for the creep. */
+  out?: { deferred: boolean }
 ): BuildingKind | null {
   const have = new Map<BuildingKind, number>();
   // (with no HQ every building is an outpost: then they're the base)
@@ -1530,6 +1549,7 @@ function nextBuilding(
   }
   const wanted = new Map<BuildingKind, number>();
   let depotsSkipped = 0;
+  let deferred = false;
   for (const kind of order) {
     wanted.set(kind, (wanted.get(kind) ?? 0) + 1);
     if ((have.get(kind) ?? 0) >= wanted.get(kind)!) continue;
@@ -1549,13 +1569,103 @@ function nextBuilding(
       }
     }
     if (skipExpansion && expansion) continue;
+    if (expansion && creep) {
+      deferred = true;
+      if (out) out.deferred = true;
+      continue;
+    }
     if (expansion) return kind; // (deployed by a crew: ai/expansion.ts)
     if (buildingBlocker(w, faction, kind)) continue;
     if (fits && !fits(kind)) continue; // (no room for it in any ring: the next thing that fits)
+    // (the creep goes on only while production is what comes next: else the crew goes after all)
+    if (deferred && !CREEP_KINDS.has(kind)) return crewAfterAll();
     return kind;
   }
-  return null;
+  return deferred ? crewAfterAll() : null;
+
+  function crewAfterAll(): BuildingKind | null {
+    if (out) out.deferred = false;
+    return skipExpansion ? null : "depot";
+  }
 }
+
+/**
+ * Production that carries the build zone out to the next field (creepTarget): what the player does on
+ * Dune Sea, an Assembly Bay, an Airpad and a Fab Plant one in front of the other out to the field in
+ * front of the base, then an ordinary Depot by it — no crew of four used up, a Depot at full health,
+ * and the factories' new units standing by it (replay 2026-11-03).
+ */
+const CREEP_KINDS: ReadonlySet<BuildingKind> = new Set(["fab-plant", "airpad", "assembly-bay", "tech-lab"]);
+/** The creep's buildings stop this far (tiles) short of the field: the Depot goes up in front of them, by it. */
+const CREEP_SHORT = 5;
+/** A field this close (tiles) to one of the base's buildings is built out to, not crewed: two or three buildings' reach. */
+const CREEP_REACH = 16;
+
+/**
+ * Where the base builds its production out to, or null: the next field the expansion wants (ai/expansion.ts
+ * unservedField, nearest on foot) while no Depot fits by it yet, on our side of the map, within depotFar of
+ * the HQ and CREEP_REACH of a building of ours. Not the Wall (its turrets build out) nor a plan that holds
+ * its choke (it keeps a tight base behind it), nor Last Stand.
+ */
+function creepTarget(
+  w: World,
+  faction: Faction,
+  strategy: Strategy,
+  hqC: { x: number; y: number },
+  ourSide: (tx: number, ty: number) => boolean
+): { x: number; y: number } | null {
+  if (strategy.wall || strategy.holdChoke || w.survival) return null;
+  let depots = 0;
+  for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
+  if (depots >= depotCap(w, faction, strategy)) return null;
+  if (depotSite(w, faction, hqC, strategy.depotReach, depotFar(strategy), depotTries(strategy))) return null; // (one fits already)
+  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED));
+  if (!field || field.d > depotFar(strategy) || !ourSide(Math.floor(field.x), Math.floor(field.y))) return null;
+  let near = Infinity;
+  for (const b of w.buildings.values())
+    if (b.faction === faction && !b.outpost) {
+      const c = buildingCenter(b);
+      near = Math.min(near, dist(c.x, c.y, field.x, field.y));
+    }
+  if (near > CREEP_REACH) return null;
+  const d = Math.max(1, dist(field.x, field.y, hqC.x, hqC.y));
+  const by = Math.min(CREEP_SHORT, d);
+  const at = { x: field.x + ((hqC.x - field.x) / d) * by, y: field.y + ((hqC.y - field.y) / d) * by };
+  // (only while the next building gets nearer: Frostbite's field past a band of rock and woods drew
+  // the factories up to the ridge, where the zone can't cross, and held the crew back till 4:28)
+  const spot = findPlacementSpot(w, faction, "fab-plant", at);
+  const size = BUILDINGS["fab-plant"].size / 2;
+  if (!spot || dist(spot.tx + size, spot.ty + size, field.x, field.y) > near - CREEP_STEP) return null;
+  return at;
+}
+/** The creep's next building must stand at least this much (tiles) nearer the field than the nearest one does. */
+const CREEP_STEP = 2;
+
+/**
+ * Where the guard stands when the base has an expansion out past its home field on our side of the map:
+ * between its Depot and field, a step toward the enemy (the one nearest the enemy, if several), or null.
+ */
+function expansionGuard(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number },
+  enemyHome: { x: number; y: number },
+  ourSide: (tx: number, ty: number) => boolean
+): { x: number; y: number } | null {
+  let best: { x: number; y: number; d: number } | null = null;
+  for (const site of expansionSites(w, faction, hqC)) {
+    const mx = (site.cx + site.field.x + 0.5) / 2;
+    const my = (site.cy + site.field.y + 0.5) / 2;
+    if (!ourSide(Math.floor(mx), Math.floor(my))) continue;
+    const d = dist(mx, my, enemyHome.x, enemyHome.y);
+    if (best && d >= best.d) continue;
+    const by = Math.min(EXPANSION_GUARD_OUT, d);
+    best = { x: mx + ((enemyHome.x - mx) / Math.max(1, d)) * by, y: my + ((enemyHome.y - my) / Math.max(1, d)) * by, d };
+  }
+  return best && { x: best.x, y: best.y };
+}
+/** The expansion guard stands this far (tiles) out from its Depot and field, toward the enemy. */
+const EXPANSION_GUARD_OUT = 2;
 
 /**
  * The Wall's buildings after its build order (Strategy.wall): turrets to `max`,
@@ -1668,7 +1778,7 @@ function wallFrontier(w: World, faction: Faction, strategy: Strategy, hqC: { x: 
     for (const t of turrets) if (dist(t.x, t.y, x, y) <= WALL_GUARD && ++n >= WALL_STUCK) return true;
     return false;
   };
-  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED), stuck);
+  const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED), stuck, true);
   return field && dist(field.x, field.y, hqC.x, hqC.y) <= dist(field.x, field.y, enemyHome.x, enemyHome.y) ? field : null;
 }
 
@@ -1744,8 +1854,9 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       if (dist((i % w.width) + 0.5, Math.floor(i / w.width) + 0.5, dc.x, dc.y) < reach) served.add(ids[i]!);
     }
   }
-  // (the nearest tile of each field)
-  const near = new Map<number, { x: number; y: number; d: number }>();
+  // (the nearest tile of each field, on foot from our drop-offs, as ai/expansion.ts unservedField)
+  const walk = walkFromDrops(w, faction);
+  const near = new Map<number, { x: number; y: number; d: number; k: number }>();
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
@@ -1753,13 +1864,14 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       if (!isResource(w, i) || served.has(ids[i]!)) continue;
       if (!nearestDropOff(w, faction, tx + 0.5, ty + 0.5)) continue;
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
+      if (d > far) continue;
+      const k = walk[i]! >= 0 ? walk[i]! : UNWALKED + d;
       const had = near.get(ids[i]!);
-      if (!had || d < had.d) near.set(ids[i]!, { x: tx + 0.5, y: ty + 0.5, d });
+      if (!had || k < had.k || (k === had.k && d < had.d)) near.set(ids[i]!, { x: tx + 0.5, y: ty + 0.5, d, k });
     }
   // (ties keep scan order: a stable sort, in the side's own frame)
-  const fields = [...near.values()].sort((a, b) => a.d - b.d).slice(0, tries);
+  const fields = [...near.values()].sort((a, b) => a.k - b.k || a.d - b.d).slice(0, tries);
   for (const best of fields) {
-    if (best.d > far) return null;
     const spot = findPlacementSpot(w, faction, "depot", best);
     if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) continue;
     // reachable by ground from just behind the HQ (in the side's own frame)
