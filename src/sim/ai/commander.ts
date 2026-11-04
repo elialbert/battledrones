@@ -18,6 +18,7 @@ import { planSalvage } from "./salvage";
 import { planStrike, strikeHolds, strikeWants } from "./hornets";
 import { planSorties, sortieHolds, type SortieKind } from "./harass";
 import { feintHolds, planFeint, type Trick } from "./feint";
+import { planSiege, siegeHolds, type Hop } from "./siege";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
@@ -125,8 +126,10 @@ export interface Strategy {
   holdUntil?: number;
   /** Hold the way into the base (ai/choke.ts), not the mining line: the guard, and the whole army while it builds up, stand there, and the turrets go up toward it. */
   holdChoke?: boolean;
-  /** Share of its Fab Plants' orders that are Mortars once the Tech Lab stands (up to 4 at a time): splash for a tank flood at the gate. */
+  /** Share of its Fab Plants' orders that are Mortars once the Tech Lab stands (up to mortarCap at a time): splash for a tank flood at the gate. */
   mortarShare?: number;
+  /** The most Mortars mortarShare keeps at a time (4 if unset). */
+  mortarCap?: number;
   /** A turret more for every this many enemy ground units seen (up to 4): Turtle digs in against a tank rush. */
   turretsVsGround?: number;
   /** Seconds before its first raid may leave, instead of OPENING_GRACE (Rush: the Blitz opener's Stingers go at once). */
@@ -163,6 +166,12 @@ export interface Strategy {
    * trick as it starts, kept up to date as it plays (traces).
    */
   feint?: { from: number; army: number; after: number; tricks: number; onTrick?: (t: Trick) => void };
+  /**
+   * Siege Train (ai/siege.ts): a column leaves from `from` s, once there are
+   * `mortars` Mortars and an army worth `army` (scaled as a wave is).
+   * `onHop`: each hop as it starts, kept up to date as it plays (traces).
+   */
+  siege?: { from: number; mortars: number; army: number; onHop?: (h: Hop) => void };
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -873,7 +882,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = tech && r < 0.35 ? "lancer" : "flak-crawler";
       else if (tech && have("mortar") < Math.min(3, 1 + enemyDefenses) && (enemyDefenses > 0 || r < 0.2))
         kind = "mortar";
-      else if (tech && s.strategy.mortarShare && have("mortar") < 4 && r < s.strategy.mortarShare) kind = "mortar";
+      else if (tech && s.strategy.mortarShare && have("mortar") < (s.strategy.mortarCap ?? 4) && r < s.strategy.mortarShare) kind = "mortar";
       else if (infantryHeavy && r < 0.65)
         // (a couple of Mortars for the splash; Stingers do the rest — Mortars die fast in a brawl)
         kind = tech && have("mortar") < Math.min(3, 1 + Math.floor(s.seenInfantry / 4)) ? "mortar" : "stinger";
@@ -1013,6 +1022,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   for (const id of airliftHolds(w, s)) used.add(id);
   // (a trick under way, ai/feint.ts: they still count as the army, for what it's worth)
   for (const id of feintHolds(s)) used.add(id);
+  // (a column on its way, ai/siege.ts: the same)
+  for (const id of siegeHolds(s)) used.add(id);
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
 
   // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
@@ -1123,6 +1134,16 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         enemyArmy, outweigh: s.weighs ? WAVE_EDGE * enemyArmy : 0,
         barred: airlifts || !!w.survival,
         field: (leg) => enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus, leg)
+      })
+    );
+  // --- 1c'. Siege Train: Mortars and an escort in hops, shelling from out of reach (ai/siege.ts)
+  if (s.strategy.siege)
+    cmds.push(
+      ...planSiege(w, faction, s, {
+        hqC, army, used, seen, threatened, focus, enemyHqPos,
+        readyAt: s.strategy.siege.army * diff.assaultMult,
+        enemyArmy,
+        barred: airlifts || !!w.survival
       })
     );
   // --- 1c''. harassment sorties: a few units at their mining, and home before they're lost (ai/harass.ts)

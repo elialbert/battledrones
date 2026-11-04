@@ -49,6 +49,7 @@ import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
 import { sortieHolds, type SortieKind } from "./harass";
 import { feintHolds } from "./feint";
+import { siegeHolds } from "./siege";
 import type { MapDef } from "../maps";
 import { hash32 } from "../rand";
 import { AI_OPENER } from "../openers";
@@ -87,10 +88,10 @@ export interface MarshalOptions {
   sorties?: SortieKind[];
 }
 
-export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall" | "landgrab" | "feint";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall" | "landgrab" | "feint" | "siege";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and seven of
+ * The game plans Marshal picks from: the stock personalities, and eight of
  * its own built on one of them (`base`: the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
  * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
@@ -268,6 +269,28 @@ export const MARSHAL_PLANS: Record<
       assaultValue: Infinity,
       harassGroup: Infinity,
       feint: { from: 240, army: 3000, after: 1700, tricks: 2 }
+    }
+  },
+  /**
+   * For fun: a slow column of Mortars and Menders behind an escort, coming on
+   * in hops and shelling from past a Turret's reach (ai/siege.ts). It's the
+   * army, all but a home guard: go round it, or come by air. (Brutal, against
+   * Balanced: 18–19–11 on four maps, so it's in Brutal's pool; three hops or
+   * more in 43 of the 48, and 10 Mortars lost a game.)
+   */
+  siege: {
+    base: "ironclad",
+    label: "Siege Train",
+    sorties: ["poke"],
+    tweak: {
+      buildOrder: ["fab-plant", "depot", "tech-lab", "airpad", "fab-plant", "turret", "depot", "sam-site"],
+      harvesters: 6,
+      // (the column is the attack: stock waves would take its army off it)
+      assaultValue: 12000,
+      harassGroup: Infinity,
+      mortarShare: 0.3,
+      mortarCap: 6,
+      siege: { from: 210, mortars: 4, army: 4000 }
     }
   }
 };
@@ -707,7 +730,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       else enemy += x.value;
     }
     // (a Hornet strike's wing, and a sortie out harassing, fly their own plans: ai/hornets.ts, ai/harass.ts)
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s), ...siegeHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
@@ -773,7 +796,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     }
     const dest = { x: wave.x, y: wave.y };
     const res: Want[] = [];
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s), ...siegeHolds(s)]);
     const going = (u: Unit) => u.order.type === "attackMove" && dist(u.order.x, u.order.y, dest.x, dest.y) <= 0.5;
     const units = wave.ids
       .map((id) => w.units.get(id))
@@ -827,7 +850,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const hq = hqOf(w, side);
     const home = hq ? buildingCenter(hq) : null;
     const enemies = seenEnemies(w, side).filter((e) => !e.goliath && (UNITS[e.kind].dps > 0 || UNITS[e.kind].heal));
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s), ...siegeHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
