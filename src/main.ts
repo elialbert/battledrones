@@ -859,7 +859,7 @@ function showMenu(linkedMap?: string | null): void {
           mutators: plan?.mutators ?? activeMutators(),
           difficulty: plan?.difficulty ?? gameMode.difficulty,
           // (the menu's Marshal plan, or 🎲 one the rules allow for each seat)
-          plan: (d) => marshalPlanFor(d, gameMode.opponent, (Math.random() * 1e9) | 0),
+          plan: (d) => marshalPlanFor(d, gameMode.opponent, (Math.random() * 1e9) | 0, plan?.map ?? shownMap()),
           ...(plan ? { code: plan.code } : {}),
           start: startFfa,
           onClose: ffaClosed

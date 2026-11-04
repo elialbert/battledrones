@@ -183,8 +183,8 @@ describe("Marshal, the bot built for a budget", () => {
     }
     for (const d of ["easy", "casual", "normal", "hard"] as const)
       expect([...MARSHAL_POOL[d]].sort()).toEqual(Object.keys(MARSHAL_PLANS).sort()); // (every level, every plan)
-    // (…but Brutal never draws The Wall)
-    expect([...MARSHAL_POOL.brutal].sort()).toEqual(Object.keys(MARSHAL_PLANS).filter((p) => p !== "wall").sort());
+    // (…but Brutal never draws The Wall or The Feint)
+    expect([...MARSHAL_POOL.brutal].sort()).toEqual(Object.keys(MARSHAL_PLANS).filter((p) => p !== "wall" && p !== "feint").sort());
     expect(MARSHAL.easy.holdUntil).toBeGreaterThan(0);
   });
 

@@ -17,6 +17,7 @@ import { bannedBy, infantryArmy } from "../rules";
 import { planSalvage } from "./salvage";
 import { planStrike, strikeHolds, strikeWants } from "./hornets";
 import { planSorties, sortieHolds, type SortieKind } from "./harass";
+import { feintHolds, planFeint, type Trick } from "./feint";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
@@ -155,6 +156,13 @@ export interface Strategy {
    * fight looks winnable (contestable), else the crew goes to the next quiet field.
    */
   landGrab?: boolean;
+  /**
+   * The Feint (ai/feint.ts): a trick from `from` s, once the army is worth `army` (scaled as
+   * a wave is), up to `tricks` of them, with the stock waves off between
+   * (assaultValue Infinity) and at `after` once one is sprung. `onTrick`: each
+   * trick as it starts, kept up to date as it plays (traces).
+   */
+  feint?: { from: number; army: number; after: number; tricks: number; onTrick?: (t: Trick) => void };
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -1003,6 +1011,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // squads walking up a Condor's ramp, or dropped on a raid, follow the drop plan (ai/condor.ts)
   for (const id of condorHolds(w, s)) used.add(id);
   for (const id of airliftHolds(w, s)) used.add(id);
+  // (a trick under way, ai/feint.ts: they still count as the army, for what it's worth)
+  for (const id of feintHolds(s)) used.add(id);
   const idleArmy = () => army.filter((u) => u.order.type === "idle" && !used.has(u.id));
 
   // --- 0. wounded veterans fall back to a Mender or the HQ ----------------
@@ -1104,6 +1114,17 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- 1c'. the Hornet strike: gather, hide, bomb their HQ when their army is out (ai/hornets.ts)
   const intruder = threatened ? atHome[0] : undefined;
   cmds.push(...planStrike(w, faction, s, { hqC, enemyHqPos, seen, defend: intruder ? { x: intruder.x, y: intruder.y } : null }));
+  // --- 1c'. The Feint: a loud few at one target, the army out of sight for the other (ai/feint.ts)
+  if (s.strategy.feint)
+    cmds.push(
+      ...planFeint(w, faction, s, {
+        hqC, army, used, seen, threatened, focus, enemyHqPos,
+        readyAt: s.strategy.feint.army * diff.assaultMult * lateGame,
+        enemyArmy, outweigh: s.weighs ? WAVE_EDGE * enemyArmy : 0,
+        barred: airlifts || !!w.survival,
+        field: (leg) => enemyHarvestArea(w, faction, hqC, focus ? seen.filter((u) => u.faction === focus) : seen, focus, leg)
+      })
+    );
   // --- 1c''. harassment sorties: a few units at their mining, and home before they're lost (ai/harass.ts)
   cmds.push(
     ...planSorties(w, faction, s, {

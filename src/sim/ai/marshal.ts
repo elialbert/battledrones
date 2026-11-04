@@ -48,6 +48,8 @@ import type { Bot } from "./bots";
 import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
 import { sortieHolds, type SortieKind } from "./harass";
+import { feintHolds } from "./feint";
+import type { MapDef } from "../maps";
 import { hash32 } from "../rand";
 import { AI_OPENER } from "../openers";
 import { capApm } from "./apm";
@@ -85,10 +87,10 @@ export interface MarshalOptions {
   sorties?: SortieKind[];
 }
 
-export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall" | "landgrab";
+export type PlanName = StrategyName | "turtle" | "greed" | "juggernaut" | "strike" | "wall" | "landgrab" | "feint";
 
 /**
- * The game plans Marshal picks from: the stock personalities, and six of
+ * The game plans Marshal picks from: the stock personalities, and seven of
  * its own built on one of them (`base`: the tables keyed by
  * personality, ai/goliath.ts and ai/airlift.ts). `goliath`: how its Goliaths
  * play (AiState.goliathStyle), "expand" unless it says; `hornets`: how its
@@ -248,6 +250,25 @@ export const MARSHAL_PLANS: Record<
       landGrab: true,
       spend: { maxDepots: 8 }
     }
+  },
+  /**
+   * For fun, and never Brutal's (MARSHAL_POOL): a loud few at one drop-off
+   * and, once the army's gone to them, the real thing at another (ai/feint.ts).
+   * It plays on a player's habits, not their build: watch the other side of
+   * the base. Only on maps with room for it (planFitsMap). (Brutal, against
+   * Balanced: 29–28–3 on Ashlands, 4–14–12 on random maps, and the bots rarely
+   * take the bait: the wave reached its target in a third of tricks at best.)
+   */
+  feint: {
+    base: "balanced",
+    label: "The Feint",
+    sorties: ["poke"],
+    fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]),
+    tweak: {
+      assaultValue: Infinity,
+      harassGroup: Infinity,
+      feint: { from: 240, army: 3000, after: 1700, tricks: 2 }
+    }
   }
 };
 
@@ -264,8 +285,8 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
 /**
  * The plans each difficulty picks from, at random for each game: every plan,
  * at every level (a player at any level can meet any of them), but for The
- * Wall on Brutal (it's there to be weird, not hard; it can still be picked
- * by name). The level is in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
+ * Wall and The Feint on Brutal (they're there to be weird, not hard; they
+ * can still be picked by name). The level is in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
  * Rush's wave till 5:00; Hornet Strike's bombers and Juggernaut's Goliath
  * don't wait for it (they never did on Casual).
  */
@@ -275,7 +296,7 @@ export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   casual: ALL_PLANS,
   normal: ALL_PLANS,
   hard: ALL_PLANS,
-  brutal: ALL_PLANS.filter((p) => p !== "wall")
+  brutal: ALL_PLANS.filter((p) => p !== "wall" && p !== "feint")
 };
 
 /**
@@ -291,6 +312,19 @@ export const planStrategy = (name: PlanName, fast = false): Strategy => {
   const p = MARSHAL_PLANS[name];
   return { ...STRATEGIES[p.base], ...MARSHAL_ECONOMY, ...p.tweak, ...(fast ? p.fast : undefined), label: p.label };
 };
+
+/** The smallest map The Feint is played on (planFitsMap). */
+const FEINT_MAP = 64;
+
+/**
+ * May this plan be played on this map? The Feint needs a duel on open ground
+ * with room to hide an army (Brutal, against Balanced: 8–25–3 on the 48 and
+ * 56 tile maps, 29–28–3 on Ashlands); on islands it never plays its trick, and
+ * nobody has tried it four ways.
+ */
+export function planFitsMap(plan: PlanName, map: Pick<MapDef, "size" | "islands" | "players">): boolean {
+  return plan !== "feint" || (map.size >= FEINT_MAP && !map.islands && (map.players ?? 2) === 2);
+}
 
 /** The plan a Marshal with this seed draws (from `pool`: the plans the match rules allow). */
 export function marshalPlan(seed: number, difficulty: Difficulty, pool: readonly PlanName[] = MARSHAL_POOL[difficulty]): PlanName {
@@ -673,7 +707,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       else enemy += x.value;
     }
     // (a Hornet strike's wing, and a sortie out harassing, fly their own plans: ai/hornets.ts, ai/harass.ts)
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&
@@ -739,7 +773,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     }
     const dest = { x: wave.x, y: wave.y };
     const res: Want[] = [];
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
     const going = (u: Unit) => u.order.type === "attackMove" && dist(u.order.x, u.order.y, dest.x, dest.y) <= 0.5;
     const units = wave.ids
       .map((id) => w.units.get(id))
@@ -793,7 +827,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     const hq = hqOf(w, side);
     const home = hq ? buildingCenter(hq) : null;
     const enemies = seenEnemies(w, side).filter((e) => !e.goliath && (UNITS[e.kind].dps > 0 || UNITS[e.kind].heal));
-    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s)]);
+    const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s)]);
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&

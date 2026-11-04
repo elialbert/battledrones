@@ -1,7 +1,8 @@
 import { botSeat, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
-import { MARSHAL, MARSHAL_POOL, marshalPlan, planStrategy, seatMarshal, type PlanName } from "../sim/ai/marshal";
+import { MARSHAL, MARSHAL_POOL, marshalPlan, planFitsMap, planStrategy, seatMarshal, type PlanName } from "../sim/ai/marshal";
+import { mapById } from "../sim/maps";
 import { MUTATORS, makeRules, rulesOf, strategyFits } from "../sim/rules";
 import type { Faction, World } from "../sim/types";
 import { announce } from "./announce";
@@ -22,10 +23,11 @@ import { activeMutators, gameMode } from "./mode";
 /** Each side's bot seed salt (blue and red's as they always were). */
 const BOT_SALT: Record<Faction, number> = { blue: 2, red: 1, green: 3, purple: 4 };
 
-/** `plan`, or ("random", or a plan the rules don't allow) one drawn from the difficulty's pool that the rules allow. */
-export function marshalPlanFor(difficulty: Difficulty, plan: PlanName | "random", seed: number): PlanName {
+/** `plan`, or ("random", or a plan the rules or the map don't allow) one drawn from the difficulty's pool that they allow. */
+export function marshalPlanFor(difficulty: Difficulty, plan: PlanName | "random", seed: number, mapId = gameMode.mapId): PlanName {
   const rules = makeRules(activeMutators());
-  const fits = (n: PlanName) => strategyFits(planStrategy(n, MARSHAL[difficulty].fast), rules);
+  const map = mapById(mapId);
+  const fits = (n: PlanName) => strategyFits(planStrategy(n, MARSHAL[difficulty].fast), rules) && planFitsMap(n, map);
   return plan !== "random" && fits(plan) ? plan : marshalPlan(seed, difficulty, MARSHAL_POOL[difficulty].filter(fits));
 }
 
