@@ -400,7 +400,7 @@ export const MARSHAL: Record<
     think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {},
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
-    tweak: { harvesters: 12, expandEarly: true },
+    tweak: { harvesters: 12, expandEarly: true, factoryBeforeLab: true, bayOverflow: true },
     assaultValue: 2500,
     // a lost fight broken off sooner, and stayed out of longer; the finishing push at 1.5× the enemy army
     // seen; a shooter switches to a target twice as good (not 3×)

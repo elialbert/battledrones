@@ -28,7 +28,7 @@ import { chronicleOf, type Chronicle, type ChronicleSnapshot } from "./chronicle
 import { CINE_KEY, Director } from "./director";
 import { FINALE, Finale, LOVE_FINALE, finaleBanner, finaleOutcome, finaleZoom, freeAreaOffset, type FinaleCause } from "./finale";
 import { HeroPresenter } from "./hero-fx";
-import { announceRules, difficultyBot, opEnemyBot, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
+import { announceRules, seatInfo, difficultyBot, opEnemyBot, opponentBot, settleCareer, watchBot, type WatchedBot } from "./meta";
 import { OpsPresenter } from "./ops";
 import { MatchRecorder } from "./recorder";
 import type { BattleRecord } from "../arena/record";
@@ -282,15 +282,15 @@ export class GameScene {
           this.world.mapId,
           opts,
           Object.fromEntries(
-            sidesOf(this.world).map((f) => [f, { player: this.bots.get(f)?.seat ?? "player" }])
+            sidesOf(this.world).map((f) => [f, seatInfo(this.bots.get(f), "player")])
           )
         );
       else {
-        const enemy =
-          this.watched?.red?.seat ?? this.foe?.seat ?? (this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none");
+        const foe = this.watched?.red ?? this.foe;
+        const enemy = this.world.survival ? `waves:${this.world.survival.difficulty}` : opts.op ? `op:${opts.op}` : "none";
         this.recorder = new MatchRecorder(this.world.mapId, opts, {
-          [PLAYER]: { player: this.watched?.blue.seat ?? "player" },
-          [ENEMY]: { player: enemy }
+          [PLAYER]: seatInfo(this.watched?.blue, "player"),
+          [ENEMY]: seatInfo(foe, enemy)
         });
       }
     }

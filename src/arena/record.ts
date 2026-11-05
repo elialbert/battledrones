@@ -23,6 +23,12 @@ export const HASH_EVERY = 100;
 export interface SeatInfo {
   /** "bot:rush:hard", "bot:novice", "scripted", "openai:gpt-6-luna", "seat" (an outside agent)… (older records: "ai:rush:hard") */
   player: string;
+  /**
+   * A bot's own seed and plan, when they aren't derived from the record's (a match played in the game
+   * draws them at random): with these the record's `commit` plays the same bot, every order and tie-break
+   * of it, so what it was thinking can be asked of it again (tests/recorder.test.ts).
+   */
+  bot?: { seed: number; plan: string };
   /** Model options (reasoning effort, temperature), budgets, client versions. */
   settings?: Record<string, unknown>;
 }

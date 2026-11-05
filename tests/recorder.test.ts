@@ -3,6 +3,7 @@ import { replay } from "../src/arena/record";
 import { applyOpenersCanonical, composeTick } from "../src/game/local-side";
 import { MatchRecorder } from "../src/game/recorder";
 import { createAiState, tickAi, type AiState } from "../src/sim/ai/commander";
+import { seatMarshal, type PlanName } from "../src/sim/ai/marshal";
 import { worldHash } from "../src/sim/checksum";
 import { createMapWorld, type MatchOptions } from "../src/sim/maps";
 import { OPS, opAiState, opById } from "../src/sim/ops";
@@ -121,4 +122,31 @@ describe("a match played here, as a battle record (Copy replay JSON)", () => {
       expect(m.record.op).toBe(op.id);
       replaysExactly(m);
     });
+});
+
+describe("a bot's seat in the record", () => {
+  it("says enough to play the same bot again, order for order", () => {
+    const opts: MatchOptions = { seed: 77 };
+    const seat = { player: "bot:marshal:brutal", bot: { seed: 424242, plan: "balanced" } };
+    const w = createMapWorld("dune-sea", opts);
+    const rec = new MatchRecorder(w.mapId, opts, { blue: { player: "none" }, red: seat });
+    const played = seatMarshal("red", seat.bot.seed, "brutal", seat.bot.plan as PlanName);
+    while (w.tick < 900) {
+      const cmds = played.tick(w);
+      step(w, cmds);
+      rec.stepped(w, cmds);
+    }
+    const r = JSON.parse(JSON.stringify(rec.record(w)));
+    expect(r.seats.red.bot).toEqual(seat.bot);
+
+    const again = createMapWorld(r.map, { seed: r.seed });
+    const bot = seatMarshal("red", r.seats.red.bot.seed, "brutal", r.seats.red.bot.plan);
+    const said = new Map<number, Command[]>(r.turns.map(([t, , c]: [number, Faction, Command[]]) => [t, c]));
+    expect(said.size).toBeGreaterThan(10);
+    while (again.tick < 900) {
+      const want = said.get(again.tick) ?? [];
+      expect(JSON.parse(JSON.stringify(bot.tick(again)))).toEqual(want);
+      step(again, want);
+    }
+  }, 30000);
 });

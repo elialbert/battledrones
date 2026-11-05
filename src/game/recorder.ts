@@ -19,7 +19,8 @@
  *  - the seats say who played: "player" for this phone, "ai:<strategy>:
  *    <difficulty>" for the commander it plays, "bot:<id>…" for a bot
  *    watched in AI vs AI (sim/ai/bots.ts), "waves:<difficulty>" for Last
- *    Stand's director, "op:<id>" for an op's enemy;
+ *    Stand's director, "op:<id>" for an op's enemy; a bot's seed and plan go
+ *    with it (SeatInfo.bot);
  *  - commands are copied as they are stepped: the Controller may keep
  *    references to the arrays it sent;
  *  - a match not decided (the record is made mid-match) has no end, and its
@@ -36,6 +37,9 @@ import { sidesOf } from "../sim/sides";
 declare const __SIM_HASH__: string | undefined;
 /** The sim this build plays (vite.config.ts), or null outside a Vite build (tests). */
 const BUILD_SIM: string | null = typeof __SIM_HASH__ === "undefined" ? null : __SIM_HASH__;
+declare const __COMMIT__: string | null | undefined;
+/** The git commit this build was made from (vite.config.ts), or null where that isn't known. */
+const BUILD_COMMIT: string | null = typeof __COMMIT__ === "undefined" ? null : __COMMIT__;
 
 
 /** A world hash goes into the record every this many ticks: the arena's rate (arena/record.ts HASH_EVERY), which the viewer checks. */
@@ -85,7 +89,7 @@ export class MatchRecorder {
     const o = this.opts;
     return structuredClone<BattleRecord>({
       v: 1,
-      commit: null,
+      commit: BUILD_COMMIT,
       sim: BUILD_SIM,
       created: this.created,
       map: this.map,

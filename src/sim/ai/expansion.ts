@@ -193,7 +193,11 @@ export const EXPANSION_MINERS = 5;
 /** Harvesters left on the home field however many Depots want staffing. */
 const HOME_MINERS = 3;
 /** Armed enemies this close to a Depot, or to its field (tiles): no more harvesters fed in till they're gone. */
-const UNSAFE = 8;
+export const UNSAFE = 8;
+/** A crew with CREW_AMBUSH armed enemies this close to one of them turns back. */
+const CREW_DANGER = 6;
+const CREW_AMBUSH = 3;
+
 /**
  * Depots whose fields are this close (tiles) work one field: it is staffed once. Two Depots side
  * by side on one field each wanted a shift of their own, and the second never saw its miners
@@ -338,13 +342,16 @@ export function tendExpansion(
   /** Enemies in sight: no crew walks onto a site with an armed one by it. */
   enemies: readonly Unit[] = [],
   /** Land Grab (Strategy.landGrab): may the army fight for a site with enemies by it? Left out: it never does. */
-  contestable?: (x: number, y: number) => boolean
+  contestable?: (x: number, y: number) => boolean,
+  /** Ground to stay off besides what's in sight (commander.ts noteHotSpots). */
+  hotSpots: readonly { x: number; y: number }[] = []
 ): Set<number> {
   const E = ECONOMY.expansion;
   // (replay 2026-11-03: a forward Depot was killed, and a fresh crew founded it again on the spot,
   // into the army that had killed it, 2 s later)
   const hot = (tx: number, ty: number) =>
-    enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE);
+    enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE) ||
+    hotSpots.some((e) => dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE);
   const f = w.factions[faction];
   const plan = s.expansion;
   const size = BUILDINGS.depot.size;
@@ -371,7 +378,9 @@ export function tendExpansion(
       !!u && u.faction === faction && u.order.type === "found" && u.order.tx === plan.tx && u.order.ty === plan.ty;
     const crew = plan.crew.map((id) => w.units.get(id)).filter(onIt);
     // (a beat for the order to land: an APM cap may hold it back)
-    const lost = (w.tick - plan.since > TICK_RATE * 2 && crew.length < E.crew) || w.tick - plan.since > STALE || hot(plan.tx, plan.ty);
+    // (an army across the way: replay 2026-11-05, a crew of four walked into it, and the site was quiet)
+    const ambushed = hotSpots.length > 0 && crew.some((u) => enemies.filter((e) => UNITS[e.kind].dps > 0 && e.kind !== "harvester" && dist(e.x, e.y, u.x, u.y) <= CREW_DANGER).length >= CREW_AMBUSH);
+    const lost = (w.tick - plan.since > TICK_RATE * 2 && crew.length < E.crew) || w.tick - plan.since > STALE || hot(plan.tx, plan.ty) || ambushed;
     if (lost) {
       s.expansion = null;
       if (crew.length) cmds.push({ type: "stop", faction, unitIds: crew.map((u) => u.id) });
@@ -403,8 +412,9 @@ export function tendExpansion(
       s.contest = at;
       return new Set();
     }
+    const margin = UNSAFE + BUILDINGS.depot.size + ECONOMY.wastelandRing;
     site = scanExpansionSite(w, faction, hqC, reach, (x, y) =>
-      enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, x, y) <= UNSAFE + BUILDINGS.depot.size + ECONOMY.wastelandRing));
+      enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, x, y) <= margin) || hotSpots.some((e) => dist(e.x, e.y, x, y) <= margin));
   }
   if (!site || hot(site.tx, site.ty)) return new Set();
   const cx = site.tx + size / 2;

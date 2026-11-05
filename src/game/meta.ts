@@ -1,3 +1,4 @@
+import type { SeatInfo } from "../arena/record";
 import { botSeat, type Bot } from "../sim/ai/bots";
 import { DIFFICULTY, type Difficulty } from "../sim/ai/commander";
 import type { OpenerId } from "../sim/openers";
@@ -42,7 +43,8 @@ function marshalBot(side: Faction, difficulty: Difficulty, plan: PlanName | "ran
     label,
     versus: `vs Marshal · ${label} (${DIFFICULTY[difficulty].label})`,
     opener: bot.opener!,
-    seat: botSeat("marshal", difficulty)
+    seat: botSeat("marshal", difficulty),
+    brain: { seed, plan: strategy }
   };
 }
 
@@ -55,6 +57,8 @@ export interface WatchedBot {
   versus: string;
   opener: OpenerId;
   seat: string;
+  /** The seed and plan it was made with, for the record (SeatInfo.bot). */
+  brain?: { seed: number; plan: string };
   /** The menu's difficulty with no plan picked: the career ladder, its tips and stars (difficultyBot). */
   ladder?: boolean;
 }
@@ -85,6 +89,12 @@ export function watchBot(side: Faction): WatchedBot {
   return { ...bot, label: `Marshal (${bot.label}, ${DIFFICULTY[m.difficulty].label})` };
 }
 
+/** A seat in the record: the bot on it (with its seed and plan), or `otherwise`. */
+export const seatInfo = (bot: WatchedBot | null | undefined, otherwise: string): SeatInfo => ({
+  player: bot?.seat ?? otherwise,
+  ...(bot?.brain ? { bot: bot.brain } : {})
+});
+
 /** Seed for the AI's tie-breaks: the Daily Op's (same match for everyone) or random. */
 export const aiSeed = (salt: number): number =>
   gameMode.daily ? (gameMode.daily.seed + salt) | 0 : (Math.random() * 1e9) | 0;
@@ -101,12 +111,14 @@ export function opEnemyBot(side: Faction): WatchedBot | null {
   const ai = gameMode.op?.ai;
   if (!ai || ai === "survival") return null;
   const label = planStrategy(ai.strategy).label;
+  const seed = aiSeed(BOT_SALT[side]);
   return {
-    bot: seatMarshal(side, aiSeed(BOT_SALT[side]), ai.difficulty, ai.strategy, ai.tweak),
+    bot: seatMarshal(side, seed, ai.difficulty, ai.strategy, ai.tweak),
     label,
     versus: `vs Marshal · ${label} (${DIFFICULTY[ai.difficulty].label})`,
     opener: "blitz", // (unused: an op sets up its own start)
     seat: botSeat("marshal", ai.difficulty),
+    brain: { seed, plan: ai.strategy },
     ladder: true
   };
 }

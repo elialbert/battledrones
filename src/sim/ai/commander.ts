@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { SERVED, UNWALKED, expansionSite, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
+import { SERVED, UNSAFE, UNWALKED, expansionSite, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
 import { tendFields } from "./fields";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
@@ -136,6 +136,13 @@ export interface Strategy {
   turretsVsGround?: number;
   /** Seconds before its first raid may leave, instead of OPENING_GRACE (Rush: the Blitz opener's Stingers go at once). */
   raidFrom?: number;
+  /**
+   * A third tier-1 factory ahead of the Tech Lab: its 35 s hold the only build slot, and with a Fab
+   * Plant and an Airpad to spend on, Brutal banked 1,800 scrap behind it (replay 2026-11-05).
+   */
+  factoryBeforeLab?: boolean;
+  /** Scrap piling up (`rich`) buys squads from the Assembly Bays, past the plan's infantry share. */
+  bayOverflow?: boolean;
   /** Changes to SPEND for this personality. */
   spend?: Partial<typeof SPEND>;
   /** Scrap piling up adds factories even before the build order is through, and they come next, not last. */
@@ -368,6 +375,12 @@ export interface AiState {
   skippedDepots: number;
   /** An expansion Depot's crew on its way to found it (ai/expansion.ts). */
   expansion?: ExpansionPlan | null;
+  /** Our Depots last think, to tell which fell (hotSpots). */
+  depotsStanding?: Map<number, { x: number; y: number }>;
+  /** Where a Depot of ours fell, and when (DEPOT_LOST_HOLD). */
+  depotsLost?: { x: number; y: number; tick: number }[];
+  /** This think's ground no Depot goes up on and no crew walks to: see noteHotSpots. */
+  hotSpots?: { x: number; y: number }[];
   /** The expansion site the army is fighting for (Strategy.landGrab; ai/expansion.ts tendExpansion). */
   contest?: { x: number; y: number } | null;
   /** Harass raids launched: every other one looks in on where the enemy would expand. */
@@ -453,6 +466,32 @@ export function createAiState(strategy?: StrategyName, difficulty: Difficulty = 
 }
 
 const RETREAT_ARMY_VALUE = 350;
+/** Defences go up at least this far (tiles) out in front of the HQ. */
+const DEFENCE_FRONT = 4;
+/** No Depot goes back up where one fell for this long, whatever's in sight: what killed it has only stepped out of view. */
+const DEPOT_LOST_HOLD = 45 * TICK_RATE;
+/** An enemy remembered (AiState.sightings) counts for a site this long after it was seen. */
+const HOT_MEMORY = 15 * TICK_RATE;
+
+/**
+ * This think's AiState.hotSpots: armed enemies seen, those remembered lately, and where a Depot of
+ * ours fell lately. A Depot's site is judged from these, not from what's in sight: the army that
+ * kills a forward Depot takes its sight with it.
+ */
+function noteHotSpots(w: World, faction: Faction, s: AiState, seen: readonly Unit[]): void {
+  const now = new Map<number, { x: number; y: number }>();
+  for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") now.set(b.id, buildingCenter(b));
+  const lost = (s.depotsLost ?? []).filter((d) => w.tick - d.tick <= DEPOT_LOST_HOLD);
+  for (const [id, at] of s.depotsStanding ?? []) if (!now.has(id)) lost.push({ ...at, tick: w.tick });
+  s.depotsStanding = now;
+  s.depotsLost = lost;
+  const spots: { x: number; y: number }[] = [...lost];
+  const armed = (k: UnitKind) => UNITS[k].dps > 0 && k !== "harvester";
+  for (const e of seen) if (armed(e.kind)) spots.push({ x: e.x, y: e.y });
+  for (const e of s.sightings?.values() ?? []) if (armed(e.kind) && w.tick - e.tick <= HOT_MEMORY) spots.push({ x: e.x, y: e.y });
+  s.hotSpots = spots;
+}
+
 /**
  * Share of the assault threshold that must gather at the staging point
  * before a wave launches: big waves, and a lull while the next one gathers
@@ -637,6 +676,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const focus = multi ? pickFocus(w, faction, s, origin, raidersAt(w, threats, home0)) : null;
   const enemyHome = focus ? homeOf(w, faction, focus, origin) : mirror(w, origin.x, origin.y);
   const enemyArmy = s.weighs ? rememberEnemyArmy(w, faction, s, seen, focus) : 0;
+  noteHotSpots(w, faction, s, seen);
   const ourSide = (tx: number, ty: number) =>
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
   const nearestField = nearestScrapTile(w, hqC.x, hqC.y, faction);
@@ -675,8 +715,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const gantryWanted = (!!hq || !!baseGoliath) && wantGantry(w, faction, s, { armyValue, threatened, home: origin, enemyHome, behind: armyValue < enemyArmy });
   // (the base builds out to the next field instead of sending a crew: set below, once the order is read)
   let creepAt: { x: number; y: number } | null = null;
+  // (the home field lies behind the HQ, so "by the mining line" was the back of the base: two Turrets
+  // there never fired while the HQ died a few tiles off, replay 2026-11-05. They go up in front of it.)
+  const defencePoint = hq && !entrance && inFrontBy(hqC, guardPoint, enemyHome) < DEFENCE_FRONT ? towardEnemy(w, hqC, DEFENCE_FRONT, enemyHome) : guardPoint;
   /**
-   * Where a building of `kind` goes: defences by the mining line, radar forward, the Gantry behind the
+   * Where a building of `kind` goes: defences in front of the base, by the mining line, radar forward, the Gantry behind the
    * HQ (it is big, and always seen), production out toward the field the base is building out to
    * (creepTarget), the rest by the HQ.
    */
@@ -685,7 +728,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       ? wallAnchor(w, faction, s.strategy, kind, myBuildings, hqC, enemyHome)
       : creepAt && CREEP_KINDS.has(kind)
       ? creepAt
-      : kind === "turret" || kind === "sam-site" || (kind === "depot" && !hq)
+      : kind === "turret" || kind === "sam-site"
+      ? defencePoint
+      : kind === "depot" && !hq
       ? guardPoint
       : kind === "radar" ? towardEnemy(w, hqC, 4) : kind === "gantry" ? towardEnemy(w, hqC, -5) : hqC;
   // (no HQ: every building goes up in a Goliath's ring, and a full ring is skipped, not started and refunded)
@@ -701,7 +746,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   creepAt = creepOut.deferred ? creepField : null;
   // a Depot past the build zone is deployed by a crew: it goes up alongside the rest of the order, once
   // the crew is trained (ai/expansion.ts)
-  const expansionNext = next === "depot" && !!hq && !s.strategy.wall && depotByCrew(w, faction, buildingCenter(hq), s.strategy.depotReach);
+  const expansionNext = next === "depot" && !!hq && !s.strategy.wall && depotByCrew(w, faction, s, buildingCenter(hq));
   const wanted = expansionNext ? nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, true, !!creepField) : next;
   if (roomless) noteNoRoom(w, s); // (the base Goliath may move on to build more: ai/goliath.ts)
   if (f.pending?.ready) {
@@ -710,8 +755,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const outpost = outpostSpot(w, faction, s, kind, enemyHqPos);
     let spot = outpost === "wait" ? null : outpost;
     if (!spot && outpost !== "wait" && kind === "depot" && hq) {
-      const site = depotSite(w, faction, hqC, s.strategy.depotReach, depotFar(s.strategy), depotTries(s.strategy));
-      spot = site ? site.spot : findPlacementSpot(w, faction, kind, guardPoint);
+      const site = safeDepotSite(w, faction, s, hqC);
+      // (nowhere safe any more: it's refunded, below, and not put up by the guard for nothing)
+      const hotSite = !site && !!depotSite(w, faction, hqC, s.strategy.depotReach, depotFar(s.strategy), depotTries(s.strategy));
+      spot = site ? site.spot : hotSite ? null : findPlacementSpot(w, faction, kind, guardPoint);
     } else if (!spot && outpost !== "wait") spot = findPlacementSpot(w, faction, kind, anchorFor(kind));
     if (outpost === "wait") {
       // (an outpost Depot built ahead of its Goliath waits, ready, until it digs in)
@@ -760,10 +807,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const boldKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
   // (Land Grab: each crew is four harvesters gone, and a Depot with nobody to work it earns nothing)
   const crewKeep = s.strategy.landGrab ? Math.max(boldKeep, GRAB_MINERS * depots) : boldKeep;
-  const contestable = s.strategy.landGrab
+  // (the fields running low: the next one is worth a fight, when it's one the army can win)
+  const contestable = s.strategy.landGrab || (s.weighs && hq && fieldsRunningLow(w, faction))
     ? (x: number, y: number) => contestWinnable(seen, x, y, armyValue, s.weighs ? enemyArmy : 0)
     : undefined;
-  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen, contestable);
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen, contestable, s.hotSpots);
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
   const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
@@ -861,6 +909,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const wall = s.strategy.wall;
   const armyFull = !!wall && !rich && armyValue >= wall.army + wall.armyPerTurret * myBuildings.filter((b) => b.kind === "turret").length;
   const wallSpends = !!wall && rich;
+  const overflow = !!s.strategy.bayOverflow && rich;
   const runBays = (liftOnly = false) => {
     if (armyFull && !liftOnly) return;
     let liftWants = airlifts ? airliftSquadsWanted(s) - INFANTRY_KINDS.reduce((n, k) => n + queued(k), 0) : 0;
@@ -877,7 +926,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       let kind: UnitKind;
       if (have("rocket-squad") < wantRockets) kind = "rocket-squad";
       else if (have("sniper") < wantSnipers) kind = "sniper";
-      else if (liftWants > 0 || (!liftOnly && (wallSpends || infantryValue < infantryShare * Math.max(500, forceValue))))
+      else if (liftWants > 0 || (!liftOnly && (wallSpends || overflow || infantryValue < infantryShare * Math.max(500, forceValue))))
         // (island garrisons face the enemy's drones alone: Rocket Squads once they fly)
         kind = ownAA < Math.ceil(s.seenAir * 0.6) || r < 0.2 || (airlifts && s.seenAir >= 2 && r < 0.5) ? "rocket-squad" : "trooper";
       else continue;
@@ -1353,6 +1402,12 @@ function ownFieldLeft(w: World, hqC: { x: number; y: number }, ourSide: (tx: num
 }
 
 /** A point `d` tiles from `from` toward the enemy HQ (or the map mirror). */
+/** How far `p` lies in front of `from`, on the line to `to` (behind it: less than 0). */
+function inFrontBy(from: { x: number; y: number }, p: { x: number; y: number }, to: { x: number; y: number }): number {
+  const len = Math.max(1, dist(from.x, from.y, to.x, to.y));
+  return ((p.x - from.x) * (to.x - from.x) + (p.y - from.y) * (to.y - from.y)) / len;
+}
+
 function towardEnemy(w: World, from: { x: number; y: number }, d: number, to?: { x: number; y: number }) {
   const target = to ?? mirror(w, from.x, from.y);
   const len = Math.max(1, dist(from.x, from.y, target.x, target.y));
@@ -1615,6 +1670,13 @@ function nextBuilding(
       if (later > i) order.splice(later, 1);
       order.splice(i++, 0, k);
     }
+  // (a third factory, ahead of the lab, while the lab's still to come: Strategy.factoryBeforeLab)
+  if (s.strategy.factoryBeforeLab && !have.has("tech-lab")) {
+    const lab = order.indexOf("tech-lab");
+    const factories = order.slice(0, Math.max(0, lab)).filter((k) => k === "fab-plant" || k === "airpad").length;
+    if (lab >= 0 && factories < 3)
+      order.splice(lab, 0, infantryWar ? "assembly-bay" : s.strategy.airOnly || bannedBy(w, "fab-plant", faction) ? "airpad" : "fab-plant");
+  }
   // depots follow the mining (Strategy.depotReach): one more, early, while there's a field for it
   if (s.strategy.depotReach !== undefined) {
     const depots = Math.min(depotCap(w, faction, s.strategy), Math.max(order.filter((k) => k === "depot").length, (have.get("depot") ?? 0) + 1));
@@ -1687,8 +1749,8 @@ function nextBuilding(
       const hq = hqOf(w, faction);
       const c = hq ? buildingCenter(hq) : null;
       // (the Wall founds none: with no spot in range, the turrets build out toward the field instead)
-      expansion = !!c && !wall && depotByCrew(w, faction, c, s.strategy.depotReach);
-      if (!c || (!expansion && !depotSite(w, faction, c, s.strategy.depotReach, depotFar(s.strategy), depotTries(s.strategy)))) {
+      expansion = !!c && !wall && depotByCrew(w, faction, s, c);
+      if (!c || (!expansion && !safeDepotSite(w, faction, s, c))) {
         // (the Wall expands hard: with a field out there to reach, the next turret builds out to it, ahead of the rest)
         if (wall && c && wallFrontier(w, faction, s.strategy, c, mirror(w, c.x, c.y)) && !buildingBlocker(w, faction, "turret")) return "turret";
         depotsSkipped++;
@@ -1745,7 +1807,7 @@ function creepTarget(
   let depots = 0;
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
   if (depots >= depotCap(w, faction, strategy)) return null;
-  if (depotSite(w, faction, hqC, strategy.depotReach, depotFar(strategy), depotTries(strategy))) return null; // (one fits already)
+  if (depotSite(w, faction, hqC, strategy.depotReach, depotFar(strategy), depotTries(strategy))) return null; // (one fits already: hot or not, it's no creep's business)
   const field = unservedField(w, faction, hqC, Math.max(strategy.depotReach ?? 9, SERVED));
   if (!field || field.d > depotFar(strategy) || !ourSide(Math.floor(field.x), Math.floor(field.y))) return null;
   let near = Infinity;
@@ -1936,8 +1998,9 @@ const depotFar = (s: Strategy): number => (s.wall ? 36 : 24);
 const depotTries = (s: Strategy): number => (s.wall ? 4 : 1);
 
 /** Is the Depot it wants one a crew deploys past the build zone (no spot in range, but one out there)? */
-function depotByCrew(w: World, faction: Faction, hqC: { x: number; y: number }, reach?: number): boolean {
-  return !depotSite(w, faction, hqC, reach) && !!expansionSite(w, faction, hqC, reach ?? 9);
+function depotByCrew(w: World, faction: Faction, s: AiState, hqC: { x: number; y: number }): boolean {
+  const reach = s.strategy.depotReach;
+  return !safeDepotSite(w, faction, s, hqC, 24, 1) && !!expansionSite(w, faction, hqC, reach ?? 9);
 }
 
 /** Tiles of one field are at most this far apart (a gap in a field's piles doesn't split it). */
@@ -1976,6 +2039,26 @@ function fieldIds(w: World): Int32Array {
   return ids;
 }
 
+/**
+ * depotSite, on ground that's safe (AiState.hotSpots): with a spot gone hot, the next field's. Replay
+ * 2026-11-05: a Depot killed at 2:08 went up again on the same tiles at 2:54 and 3:34, in the sidebar
+ * where nothing asked what stood there, 20 s of the build slot and 500 scrap for 13 s of Depot.
+ */
+function safeDepotSite(
+  w: World,
+  faction: Faction,
+  s: AiState,
+  hqC: { x: number; y: number },
+  far = depotFar(s.strategy),
+  tries = depotTries(s.strategy)
+): { spot: { tx: number; ty: number } } | null {
+  const reach = s.strategy.depotReach ?? 9;
+  const hot = s.hotSpots;
+  if (!hot?.length) return depotSite(w, faction, hqC, reach, far, tries);
+  const clear = (x: number, y: number) => !hot.some((h) => dist(h.x, h.y, x, y) <= UNSAFE);
+  return perTick(w, `safe depot ${faction} ${hqC.x} ${hqC.y} ${reach} ${far} ${tries}`, () => scanDepotSite(w, faction, hqC, reach, far, tries, clear));
+}
+
 /** A spot for a forward depot next to a field no drop-off serves yet. */
 function depotSite(
   w: World,
@@ -1989,7 +2072,16 @@ function depotSite(
 ): { spot: { tx: number; ty: number } } | null {
   return perTick(w, `depot ${faction} ${hqC.x} ${hqC.y} ${reach} ${far} ${tries}`, () => scanDepotSite(w, faction, hqC, reach, far, tries));
 }
-function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }, reach: number, far: number, tries: number): { spot: { tx: number; ty: number } } | null {
+function scanDepotSite(
+  w: World,
+  faction: Faction,
+  hqC: { x: number; y: number },
+  reach: number,
+  far: number,
+  tries: number,
+  /** Is this spot fit to build on? Left out: all are. Unfit fields don't count toward `tries`. */
+  clear?: (x: number, y: number) => boolean
+): { spot: { tx: number; ty: number } } | null {
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   // (a field with a drop-off in reach of any of its tiles is served: one depot to a field, not a ring of them)
   const ids = fieldIds(w);
@@ -2018,10 +2110,11 @@ function scanDepotSite(w: World, faction: Faction, hqC: { x: number; y: number }
       if (!had || k < had.k || (k === had.k && d < had.d)) near.set(ids[i]!, { x: tx + 0.5, y: ty + 0.5, d, k });
     }
   // (ties keep scan order: a stable sort, in the side's own frame)
-  const fields = [...near.values()].sort((a, b) => a.k - b.k || a.d - b.d).slice(0, tries);
+  const fields = [...near.values()].sort((a, b) => a.k - b.k || a.d - b.d).filter((f) => !clear || clear(f.x, f.y)).slice(0, tries);
   for (const best of fields) {
     const spot = findPlacementSpot(w, faction, "depot", best);
     if (!spot || dist(spot.tx + 1, spot.ty + 1, best.x, best.y) > 5) continue;
+    if (clear && !clear(spot.tx + 1, spot.ty + 1)) continue;
     // reachable by ground from just behind the HQ (in the side's own frame)
     const [bx, by] = fr.vec(0, 2.5);
     if (!findPath(w, hqC.x + bx, hqC.y + by, best.x, best.y, "ground", faction)) continue;

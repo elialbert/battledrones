@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { MAP_ART } from "./src/game/map-art";
@@ -44,12 +45,23 @@ function showcaseBattles(): Plugin {
   };
 }
 
+function gitCommit(): string | null {
+  try {
+    const git = (args: string) => execSync(`git ${args}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    return git("rev-parse --short HEAD") + (git("status --porcelain src") ? "+dirty" : "");
+  } catch {
+    return null; // (no git where it's built)
+  }
+}
+
 export default defineConfig({
   // Local builds are portable; Pages supplies an absolute base for each version.
   base: "./",
   server: { host: true },
   define: {
     __TERRAIN_REVS__: JSON.stringify(terrainRevisions()),
+    // the commit this build is, for its replays (a dirty tree says so: the code isn't all in that commit)
+    __COMMIT__: JSON.stringify(gitCommit()),
     // the sim this build plays: the battle viewer checks a record played by other code before it vouches for it
     __SIM_HASH__: JSON.stringify(simHash(fileURLToPath(new URL(".", import.meta.url)))),
     // a sound duel pairs only two phones running the same sim and duel code (SOUND-DUEL.md)

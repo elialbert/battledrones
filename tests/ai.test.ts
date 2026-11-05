@@ -151,7 +151,7 @@ describe("AI commander", () => {
     expect(answered).toBe(true);
   }, 30000);
 
-  it("places turrets covering the mining line, not a random ring tile", () => {
+  it("places turrets in front of the HQ, not behind it by the home field", () => {
     const w = createSkirmishWorld();
     const state = createAiState("skyforce"); // three turrets in its build order
     runWithAi(w, 240, state);
@@ -159,11 +159,11 @@ describe("AI commander", () => {
       (b) => b.faction === "red" && b.kind === "turret"
     );
     expect(turrets.length).toBeGreaterThanOrEqual(1);
-    // red home field centres around (45.5, 2.5), in the corner behind its HQ; turrets should lean that way
-    const nearField = turrets.some(
-      (t) => Math.hypot(t.tx + 0.5 - 45.5, t.ty + 0.5 - 2.5) < 8
-    );
-    expect(nearField).toBe(true);
+    // the home field lies in the corner behind red's HQ: a turret back there never meets an attack
+    const hq = [...w.buildings.values()].find((b) => b.faction === "red" && b.kind === "hq")!;
+    const [dx, dy] = [w.width / 2 - hq.tx, w.height / 2 - hq.ty]; // (toward blue's half)
+    const len = Math.hypot(dx, dy);
+    for (const t of turrets) expect(((t.tx + 0.5 - hq.tx - 1.5) * dx + (t.ty + 0.5 - hq.ty - 1.5) * dy) / len).toBeGreaterThan(0);
   }, 30000);
 
   it("AI vs AI reaches a decisive result inside 25 minutes", () => {
