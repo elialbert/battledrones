@@ -177,6 +177,85 @@ describe("Menders are shot first", () => {
   });
 });
 
+describe("harmless targets don't hold a unit's fire", () => {
+  /** A blue Stinger already shooting `first`, frozen so only its targeting moves. */
+  function shooting(first: "harvester" | "fab-plant") {
+    const w = createWorld(24, 24);
+    const tank = spawnUnit(w, "stinger", "blue", 5.5, 5.5);
+    const target = first === "harvester" ? spawnUnit(w, "harvester", "red", 7.5, 5.5) : spawnBuilding(w, "fab-plant", "red", 7, 5);
+    w.powers.stunned.set(target.id, 1e9);
+    runTicks(w, 2);
+    expect(tank.autoTargetId).toBe(target.id);
+    return { w, tank, target };
+  }
+
+  it.each(["harvester", "fab-plant"] as const)("drops a %s for an armed enemy that comes into range", (first) => {
+    const { w, tank } = shooting(first);
+    const foe = spawnUnit(w, "stinger", "red", 5.5, 5.5 + UNITS.stinger.range - 0.2);
+    w.powers.stunned.set(foe.id, 1e9);
+    runTicks(w, 2);
+    expect(tank.autoTargetId).toBe(foe.id);
+  });
+
+  it("drops a factory for a Turret, but a unit before a nearer Turret", () => {
+    const { w, tank } = shooting("fab-plant");
+    const turret = spawnBuilding(w, "turret", "red", 5, 7);
+    w.powers.stunned.set(turret.id, 1e9);
+    runTicks(w, 2);
+    expect(tank.autoTargetId).toBe(turret.id);
+    const again = shooting("fab-plant");
+    spawnBuilding(again.w, "turret", "red", 5, 7);
+    const foe = spawnUnit(again.w, "stinger", "red", 5.5, 5.5 + UNITS.stinger.range - 0.2);
+    runTicks(again.w, 2);
+    expect(again.tank.autoTargetId).toBe(foe.id);
+  });
+
+  it("stays on it for an armed enemy still out of weapon range, or one it can't hit", () => {
+    const { w, tank, target } = shooting("fab-plant");
+    spawnUnit(w, "stinger", "red", 5.5, 5.5 + UNITS.stinger.range + 1);
+    spawnUnit(w, "wasp", "red", 5.5, 6.5);
+    runTicks(w, 1);
+    expect(tank.autoTargetId).toBe(target.id);
+  });
+
+  it("an armed target stays sticky: a nearer threat doesn't pull it off", () => {
+    const w = createWorld(24, 24);
+    const tank = spawnUnit(w, "stinger", "blue", 5.5, 5.5);
+    const first = spawnUnit(w, "stinger", "red", 8, 5.5);
+    w.powers.stunned.set(first.id, 1e9);
+    runTicks(w, 2);
+    const near = spawnUnit(w, "stinger", "red", 6.5, 5.5);
+    w.powers.stunned.set(near.id, 1e9);
+    runTicks(w, 2);
+    expect(tank.autoTargetId).toBe(first.id);
+  });
+
+  it("an ordered attack on a factory stands, whatever turns up", () => {
+    const w = createWorld(24, 24);
+    const tank = spawnUnit(w, "stinger", "blue", 5.5, 5.5);
+    const fab = spawnBuilding(w, "fab-plant", "red", 7, 5);
+    const foe = spawnUnit(w, "stinger", "red", 5.5, 7.5);
+    w.powers.stunned.set(foe.id, 1e9);
+    step(w, [{ type: "attack", faction: "blue", unitIds: [tank.id], targetId: fab.id }]);
+    runTicks(w, 3);
+    expect(tank.order).toMatchObject({ type: "attack", targetId: fab.id });
+  });
+
+  it("a Goliath's weapon leaves a factory for an armed enemy in its reach", () => {
+    const w = createWorld(32, 32);
+    const g = spawnUnit(w, "goliath", "blue", 10.5, 10.5);
+    const fab = spawnBuilding(w, "fab-plant", "red", 12, 10);
+    runTicks(w, 2);
+    const held = Object.values(g.goliath!.weapons).map((x) => x.targetId);
+    expect(held).toContain(fab.id);
+    const foe = spawnUnit(w, "stinger", "red", 10.5, 12);
+    w.powers.stunned.set(foe.id, 1e9);
+    runTicks(w, 2);
+    expect(Object.values(g.goliath!.weapons).map((x) => x.targetId)).not.toContain(fab.id);
+    expect(Object.values(g.goliath!.weapons).map((x) => x.targetId)).toContain(foe.id);
+  });
+});
+
 describe("Menders and move orders", () => {
   it("a Mender with a move order walks on past wounded friends, mending in passing", () => {
     const w = createWorld(24, 24);

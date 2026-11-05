@@ -1,4 +1,34 @@
+const opening = ["fab-plant", "airpad", "turret", "assembly-bay", "tech-lab", "depot"];
+/** Balanced's order with more factories after the Lab, for a focused army (or a control with the same spend). */
+const more = (...extra: string[]) => [...opening, ...extra, "turret", "radar"];
+const FAB = more("fab-plant", "fab-plant"), PAD = more("airpad", "airpad"), BAY = more("assembly-bay", "assembly-bay");
 export const VARIANTS: Record<string, any> = {
+  // focused armies (rush.ts only()): 2-3 lines instead of everything; xFab etc: the factories alone
+  noGol: { noGoliath: true },
+  xFab: { buildOrder: FAB },
+  xPad: { buildOrder: PAD },
+  xBay: { buildOrder: BAY },
+  xMix: { buildOrder: more("fab-plant", "airpad", "assembly-bay") },
+  oTanks: { only: ["stinger", "lancer", "mastodon"], buildOrder: FAB },
+  oLancer: { only: ["lancer", "mender"], buildOrder: more("fab-plant", "fab-plant") },
+  oRange: { only: ["lancer", "mortar", "stinger"], buildOrder: FAB },
+  oAir: { only: ["wasp", "hornet", "raptor"], buildOrder: PAD },
+  oHornet: { only: ["hornet", "raptor", "stinger"], buildOrder: more("airpad", "fab-plant") },
+  oLanHor: { only: ["lancer", "hornet"], buildOrder: more("airpad", "fab-plant") },
+  oInf: { only: ["trooper", "rocket-squad", "sniper"], buildOrder: BAY },
+  oMast: { only: ["mastodon", "rocket-squad", "flak-crawler"], buildOrder: more("fab-plant", "assembly-bay") },
+  oLancerOnly: { only: ["lancer"], buildOrder: more("fab-plant", "fab-plant") },
+  mTanks: { only: ["stinger", "lancer", "mastodon", "mender"], buildOrder: FAB },
+  mRange: { only: ["lancer", "mortar", "stinger", "mender"], buildOrder: FAB },
+  mLanMast: { only: ["lancer", "mastodon", "mender"], buildOrder: FAB },
+  mLanMort: { only: ["lancer", "mortar", "mender"], buildOrder: FAB },
+  mLanHor: { only: ["lancer", "hornet", "mender"], buildOrder: more("airpad", "fab-plant") },
+  mLanRock: { only: ["lancer", "rocket-squad", "mender"], buildOrder: more("fab-plant", "assembly-bay") },
+  mInf: { only: ["trooper", "rocket-squad", "sniper", "mender"], buildOrder: BAY },
+  mAir: { only: ["wasp", "hornet", "raptor", "mender"], buildOrder: PAD },
+  mMastFlak: { only: ["mastodon", "flak-crawler", "mender"], buildOrder: FAB },
+  mStFlak: { only: ["stinger", "flak-crawler", "mender"], buildOrder: FAB },
+  oStFlak: { only: ["stinger", "flak-crawler"], buildOrder: FAB },
   // fight micro without kiting (ai/kite.ts): A/B a plan against itself
   nokite: { fight: { kite: false } },
   // no harassment sorties (ai/harass.ts)

@@ -3,6 +3,7 @@
 import { Arena, parseSeat } from "../../src/arena/match";
 import { TICK_RATE, UNITS } from "../../src/sim/balance";
 import { hash32 } from "../../src/sim/rand";
+import { rulesOf } from "../../src/sim/rules";
 import { buildingAtTile, setTerrain } from "../../src/sim/world";
 import { MARSHAL, marshal } from "../../src/sim/ai/marshal";
 import { capApm } from "../../src/sim/ai/apm";
@@ -17,17 +18,64 @@ const [map, seed, diff = "hard", side = "blue", ours = "rush", theirs = "greed",
 const foe = side === "blue" ? "red" : "blue";
 const a: any = new Arena({ map, seed: +seed, seats: { blue: parseSeat(`bot:marshal:${diff}`), red: parseSeat(`bot:marshal:${diff}`) }, maxTicks: 20 * 60 * TICK_RATE });
 const M = MARSHAL[diff as "hard"];
+/**
+ * Variant `only: [kinds]`: from the Tech Lab on, an army of just these (before it, Marshal's own opening: a player
+ * goes focused once there is something to focus on). Each order for a combat unit becomes an allowed kind from the
+ * same factory, in turn; a factory with nothing allowed stops; and allowed factories are kept busy past what Marshal
+ * asks for, or the scrap the idle ones would have spent just banks. Give it factories to match (`buildOrder`).
+ * Harvesters, Scouts, Condors and the Goliath are left alone.
+ */
+function only(kinds: string[] | undefined, side: string, bot: any) {
+  if (!kinds) return bot;
+  const turn: Record<string, number> = {};
+  const free = new Set(["harvester", "scout", "condor", "goliath"]);
+  const pick = (site: string) => {
+    const here = Object.keys(UNITS).filter((k) => UNITS[k as "stinger"].builtAt === site && kinds.includes(k));
+    turn[site] = (turn[site] ?? 0) + 1;
+    return here.length ? here[turn[site]! % here.length]! : null;
+  };
+  return { ...bot, sent: bot.sent?.bind(bot), tick(w: any) {
+    const want: any[] = bot.tick(w);
+    const mine = [...w.buildings.values()].filter((b: any) => b.faction === side);
+    if (!mine.some((b: any) => b.kind === "tech-lab")) return want;
+    const out: any[] = [];
+    const busy = new Set<number>();
+    for (const c of want) {
+      if (c.type !== "produce" || free.has(c.unit)) { out.push(c); continue; }
+      const site = w.buildings.get(c.buildingId)?.kind;
+      const unit = site ? pick(site) : null;
+      if (!unit) continue;
+      busy.add(c.buildingId);
+      out.push({ ...c, unit });
+    }
+    let scrap = w.factions[side].scrap;
+    for (const b of mine as any[]) {
+      if (busy.has(b.id) || b.queue.length >= 2 || !["fab-plant", "airpad", "assembly-bay"].includes(b.kind)) continue;
+      const unit = pick(b.kind);
+      if (!unit || scrap < UNITS[unit as "stinger"].cost + 400) continue;
+      scrap -= UNITS[unit as "stinger"].cost;
+      out.push({ type: "produce", faction: side, buildingId: b.id, unit });
+    }
+    return out;
+  } };
+}
 function seat(f: string, spec: string) {
   const [plan, v] = spec.split("+");
   const V = v ? VARIANTS[v] : {};
   if (v && !V) throw new Error("no variant " + v);
-  const { fast, fight, sorties, ...tweak } = V as any;
+  const { fast, fight, sorties, only: _only, noGoliath: _ng, ...tweak } = V as any;
   a.seats[f].bot = capApm(
-    marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, ...(fast !== undefined ? { fast } : {}), ...(sorties ? { sorties } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } }),
+    only(V.only, f, marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, ...(fast !== undefined ? { fast } : {}), ...(sorties ? { sorties } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } })),
     M.apm, M.burst);
 }
 seat(side, ours);
 seat(foe, theirs);
+// Variant `noGoliath`: that side can't build the Gantry or a Goliath (a side ban, as an op's rules: Marshal plans around it)
+{
+  const bans: any = {};
+  for (const [f, spec] of [[side, ours], [foe, theirs]] as const) if (VARIANTS[spec.split("+")[1] ?? ""]?.noGoliath) bans[f] = { units: ["goliath"], buildings: ["gantry"] };
+  if (Object.keys(bans).length) a.w.rules = { ...rulesOf(a.w), sideBans: bans };
+}
 // WALL="R,gap,n": a rock ring R tiles round each HQ with n gaps of `gap` tiles (toward the foe; ±45° if 2): chokepoints
 if (process.env.WALL) {
   const [R, gap, n] = process.env.WALL.split(",").map(Number);
@@ -67,8 +115,10 @@ const seenU = new Map<number, any>();
 // tier 2 (units the Tech Lab unlocks): when each side's Lab stands, its first tier-2 unit, tier-2 share of army value at 3/5 min
 const T2 = new Set(Object.entries(UNITS).filter(([, u]: any) => u.requires === "tech-lab").map(([k]) => k));
 const lab: Record<string, string> = {}, t2: Record<string, string> = {}, t2share: Record<string, string[]> = { blue: [], red: [] };
+const goliaths: Record<string, { first: string; ids: Set<number> }> = { blue: { first: "-", ids: new Set() }, red: { first: "-", ids: new Set() } };
 a.onRound = () => {
   const w = a.w;
+  for (const u of w.units.values()) if (u.kind === "goliath") { const g = goliaths[u.faction]!; if (!g.ids.size) g.first = clock(w.tick); g.ids.add(u.id); }
   for (const b of w.buildings.values()) if (b.kind === "tech-lab" && !lab[b.faction]) lab[b.faction] = clock(w.tick);
   for (const u of w.units.values()) if (T2.has(u.kind) && !t2[u.faction]) t2[u.faction] = clock(w.tick);
   if (w.tick === 180 * TICK_RATE || w.tick === 300 * TICK_RATE) for (const f of [side, foe]) {
@@ -143,4 +193,5 @@ const res = e.winner === side ? "W" : e.winner === foe ? "L" : "D";
 if (!quiet) { console.log(firsts, "foeLost2+", firstHit); for (const s of snap) console.log(s); }
 if (process.env.HIT) console.log(hitSnap || "HIT none", "|", at2);
 console.log("END", res, map, seed, side, ours, "vs", theirs, clock(e.tick), "depots", depotAt[side]!.join(","), "|", depotAt[foe]!.join(","), "exp", Object.values(exps).map((e: any) => e.at + (e.k ? "k" : "") + (e.h ? "h" : "") + (e.x ? "x" : "")).join(","),
-  "t2", [side, foe].map((f) => `lab${lab[f] ?? "-"} first${t2[f] ?? "-"} share${t2share[f]!.join("/") || "-"}`).join(" | "));
+  "t2", [side, foe].map((f) => `lab${lab[f] ?? "-"} first${t2[f] ?? "-"} share${t2share[f]!.join("/") || "-"}`).join(" | "),
+  "gol", [side, foe].map((f) => `${goliaths[f]!.first}x${goliaths[f]!.ids.size}`).join("|"));

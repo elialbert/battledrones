@@ -425,6 +425,9 @@ export function tickCombat(w: World): Set<number> {
           const cur = w.units.get(u.autoTargetId);
           if (!cur || !UNITS[cur.kind].heal) u.autoTargetId = healerInRange(u, healers, stats.range, minRange) ?? u.autoTargetId;
         }
+        // (a fight turned up while it was busy with a factory or a harvester)
+        if (u.autoTargetId !== null && harmless(w, u.autoTargetId))
+          u.autoTargetId = armedInRange(w, u.faction, stats.targets, u.x, u.y, stats.range, minRange) ?? u.autoTargetId;
       }
       if (u.autoTargetId === null && (u.order.type === "idle" || u.order.type === "attackMove")) {
         const found = findTarget(w, u.faction, stats.targets, u.x, u.y, acquire, minRange, u);
@@ -510,12 +513,13 @@ function goliathWeapons(w: World, u: Unit, healers: Unit[], incidents: Incident[
     else {
       const keep = inReach(ws.targetId) ? ws.targetId : null;
       const cur = keep !== null ? w.units.get(keep) : undefined;
-      if (keep !== null && (healers.length === 0 || (cur && UNITS[cur.kind].heal))) tid = keep;
+      const threat = keep !== null && harmless(w, keep) ? armedInRange(w, u.faction, st.targets, u.x, u.y, st.range, minR) : null;
+      if (keep !== null && threat === null && (healers.length === 0 || (cur && UNITS[cur.kind].heal))) tid = keep;
       else {
         const found = findTarget(w, u.faction, st.targets, u.x, u.y, st.range, minR);
         const fu = found ? w.units.get(found.id) : undefined;
         // a Mender that came into reach takes over; otherwise keep what we had
-        tid = keep !== null && !(fu && UNITS[fu.kind].heal) ? keep : found?.id ?? null;
+        tid = keep !== null && !(fu && UNITS[fu.kind].heal) ? threat ?? keep : found?.id ?? null;
       }
     }
     ws.targetId = tid;
@@ -540,6 +544,40 @@ function healerInRange(u: Unit, healers: Unit[], range: number, minRange: number
       bestD = d;
       best = h.id;
     }
+  }
+  return best;
+}
+
+/** A target that can't hurt anyone: an unarmed building or unit, though never a Mender (that one is shot first). */
+function harmless(w: World, id: number): boolean {
+  const u = w.units.get(id);
+  if (u) return UNITS[u.kind].targets === "none" && !UNITS[u.kind].heal;
+  const b = w.buildings.get(id);
+  return !!b && BUILDINGS[b.kind].targets === "none";
+}
+
+/**
+ * The nearest armed enemy within weapon range of (x, y), units before
+ * buildings. Auto-targets on something harmless switch to it; picking a
+ * fight among armed targets stays the player's job.
+ */
+function armedInRange(w: World, faction: Faction, targets: TargetDomain, x: number, y: number, range: number, minRange: number): number | null {
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (const e of w.units.values()) {
+    if (e.faction === faction || UNITS[e.kind].targets === "none" || !canHit(targets, unitDomain(e))) continue;
+    const d = hypot(e.x - x, e.y - y);
+    if (d > range || d < minRange || d >= bestD || concealedFrom(w, faction, e)) continue;
+    bestD = d;
+    best = e.id;
+  }
+  if (best !== null || !canHit(targets, "ground")) return best;
+  for (const b of w.buildings.values()) {
+    if (b.faction === faction || BUILDINGS[b.kind].targets === "none") continue;
+    const d = distToBuilding(b, x, y);
+    if (d > range || d < minRange || d >= bestD) continue;
+    bestD = d;
+    best = b.id;
   }
   return best;
 }
