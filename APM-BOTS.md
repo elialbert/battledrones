@@ -974,3 +974,18 @@ In a fresh session on the `selectable-bots` branch:
 > the cap in the "vs" line. Marshal already wears its difficulty's cap in the
 > game (`seatBot` and `difficultyBot` in `src/game/meta.ts`); the choice
 > should override it.
+
+## Big maps: waves, staging and the mesa run (Three Canyons, 2026-11-05)
+
+Marshal mirrors on the 120-tile map sat out 40 minutes with 70k armies. Three causes, none of them the chokes:
+- **The APM cap starved the army.** Once scrap piled up, every Fab Plant's next unit outranked every army order.
+  At Normal, 0 of 4,700 army orders went out in two minutes. An attack order for 6+ units, merged or sent as one
+  (`WAVE_ORDER`), now ranks with the finishing push.
+- **The staging ring was too small.** 140 units don't fit in 6 tiles round a base, so a third of the army read as
+  gathered and never reached 1.2× the enemy. The ring now grows with the army.
+- **Even armies each waited for 1.2× the other.** A wave held back by `WAVE_EDGE` for 2 minutes now goes at 0.75×.
+
+`ai/skylift.ts` (Normal and up): from 5:00, with 8 harvesters kept home, two Condors fly a crew of 4 and a shift of 5
+to a field no harvester can drive to. Ferry orders rank as economy.
+
+New against committed, 72 games on Dune Sea, Frostbite, Ashlands and Riverlands, all three levels, both sides: 47–25–0.

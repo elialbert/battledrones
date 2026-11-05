@@ -2,7 +2,7 @@ import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { foundBlocker } from "../economy";
 import { findPath } from "../movement";
 import type { Command, Faction, Unit, World } from "../types";
-import { dist, isResource, passable, sideFrame, tileIndex } from "../world";
+import { dist, isResource, passable, regionAt, sideFrame, tileIndex } from "../world";
 import { sealsOff } from "../placement";
 import { anchorFootprint } from "../goliath";
 
@@ -238,6 +238,8 @@ export function expansionSites(
     const cy = b.ty + size / 2;
     const field = perTick(w, `depot field ${b.id}`, () => fieldBy(w, faction, cx, cy));
     if (!field || dist(field.x + 0.5, field.y + 0.5, hqC.x, hqC.y) <= HOME_FIELD) continue;
+    // (a Depot on a mesa: nobody drives up to staff it, ai/skylift.ts flies its shift in)
+    if (regionAt(w, field.x, field.y, "ground") !== regionAt(w, Math.floor(hqC.x), Math.floor(hqC.y), "ground")) continue;
     if (sites.some((s) => dist(s.field.x, s.field.y, field.x, field.y) <= SAME_FIELD)) continue;
     sites.push({ cx, cy, field });
   }

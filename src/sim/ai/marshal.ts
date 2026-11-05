@@ -37,6 +37,7 @@
  * It reads what the commander reads: its own side, and the enemy only
  * through seenEnemies, knownBuildings and visible tiles. No income handicap.
  */
+import { ferryCondors } from "./skylift";
 import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
 import type { Command, Faction, Unit, World } from "../types";
@@ -72,6 +73,8 @@ export interface MarshalOptions {
   microApm?: number;
   /** Weighs its waves, aircraft and Gantry against the enemy it remembers (AiState.weighs). */
   weighs?: boolean;
+  /** Flies crews up to fields no harvester can drive to (ai/skylift.ts). */
+  skylift?: boolean;
   /** Play the plan's fast-expanding version, if it has one (MARSHAL_PLANS). */
   fast?: boolean;
   /** Seconds of peace: no raids, waves or finishing push before this. */
@@ -380,21 +383,21 @@ export const MARSHAL: Record<
   Difficulty,
   {
     think: number; react: number; apm: number; burst?: number; microApm: number; fast: boolean; holdUntil: number;
-    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>; weighs?: boolean; doctrine?: Partial<DoctrinePlan>;
+    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>; weighs?: boolean; skylift?: boolean; doctrine?: Partial<DoctrinePlan>;
   }
 > = {
   // (Easy and Casual don't kite, ai/kite.ts: a step back every 20 s is no kiting, and lost Easy fights it would win)
   easy: { think: 4, react: 3, apm: 10, microApm: 3, fast: false, holdUntil: 300, fight: { kite: false } },
   // (between Easy and Normal: three minutes' peace, the slow plans and Air Swarm)
   casual: { think: 3, react: 2, apm: 18, microApm: 8, fast: false, holdUntil: 180, fight: { kite: false } },
-  normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0 },
+  normal: { think: 2, react: 1, apm: 30, microApm: 20, fast: true, holdUntil: 0, skylift: true },
   // (Hard before Brutal took its place, at 80 actions a minute, 100 since 2026-10-30: at 120 it beat Normal 99%, and lost only 39% to Brutal)
   // (`weighs`, Hard and Brutal: waves weighed against the enemy army it remembers, no aircraft into
   // massed flak, no Gantry while behind — AiState.weighs)
-  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true, doctrine: {} },
+  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {} },
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
-    think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true, doctrine: {},
+    think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {},
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
     tweak: { harvesters: 12, expandEarly: true },
@@ -416,6 +419,9 @@ export function seatMarshal(side: Faction, seed: number, difficulty: Difficulty,
 }
 
 /** Orders by rank: the cap spends from the top. */
+/** An attack order for this many units or more is a wave, not a unit's errand (merge). */
+const WAVE_ORDER = 6;
+
 const enum Rank {
   Dodge,
   Retreat,
@@ -513,11 +519,13 @@ const PER_ACTION = 60 * TICK_RATE;
 
 const unitsOf = (c: Command): number[] | null => ("unitIds" in c ? c.unitIds : null);
 
-function rankOf(c: Command, dodging: Set<number>, goliaths: Set<number>): Rank {
+function rankOf(c: Command, dodging: Set<number>, goliaths: Set<number>, ferry: ReadonlySet<number>): Rank {
   // (a Goliath's own orders, to walk out to a field, dig in, pack up, go with the economy: it expands
   // the economy, and an order to it lost to the cap leaves it idle, chasing whatever it sees)
   if ("unitIds" in c && c.unitIds.length > 0 && c.unitIds.every((id) => goliaths.has(id)) && !c.unitIds.every((id) => dodging.has(id)))
     return Rank.Economy;
+  // (the mesa run is mining: ai/skylift.ts)
+  if (c.type === "board" ? ferry.has(c.carrierId) : (c.type === "unload" || c.type === "move") && c.unitIds.every((id) => ferry.has(id))) return Rank.Economy;
   switch (c.type) {
     case "move":
       return c.unitIds.every((id) => dodging.has(id)) ? Rank.Dodge : Rank.Army;
@@ -589,6 +597,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   const s = createAiState(plan.base, difficulty, seed, marshalStrategy(opts));
   s.fair = true;
   s.weighs = opts.weighs;
+  s.skylift = opts.skylift;
   s.interval = opts.think;
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
   s.goliathStyle = plan.goliath ?? "expand";
@@ -659,7 +668,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       const reflex: Want[] = [];
       if (s.lastDecisionTick === w.tick) {
         const goliaths = new Set(goliathsOf(w, side).map((g) => g.id));
-        backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging, goliaths), cmd, planned: true }));
+        const ferry = ferryCondors(s);
+        backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging, goliaths, ferry), cmd, planned: true }));
       } else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
       if (opts.microApm !== undefined) {
         microTokens = Math.min(microCap, microTokens + (w.tick - microTick) * opts.microApm);
@@ -726,6 +736,11 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       }
       res.push({ ...want });
     }
+    // (an order for a whole wave, merged or sent as one, is one action for an army: ranked with single
+    // orders it lost every time to a Fab Plant's next unit once scrap piled up. Three Canyons, Normal:
+    // 0 of 4,700 army orders sent in two minutes, 160 units idle at home all game)
+    for (const r of res)
+      if (r.rank === Rank.Army && (r.cmd.type === "attackMove" || r.cmd.type === "attack") && r.cmd.unitIds.length >= WAVE_ORDER) r.rank = Rank.Push;
     return res;
   }
 

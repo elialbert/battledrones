@@ -170,6 +170,9 @@ function noteLoss(w: World, m: Memo): void {
   }
 }
 
+/** The Condor the drop plan is flying, if any. */
+export const droppingCondor = (s: AiState): number | null => memos.get(s)?.condorId ?? null;
+
 /** Squads the drop plan has a claim on this pass (boarding, or out raiding): other tactics leave them be. */
 export function condorHolds(w: World, s: AiState): number[] {
   const m = memos.get(s);

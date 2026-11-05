@@ -21,6 +21,7 @@ import { feintHolds, planFeint, type Trick } from "./feint";
 import { planSiege, siegeHolds, type Hop } from "./siege";
 import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
+import { offHome, planSkylift, skyliftWantsCondor } from "./skylift";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
 import { AIRLIFT, airliftActive, airliftHolds, airliftSquadsWanted, airliftWantsCondor, offHomeLand, planAirlift } from "./airlift";
 import { DOCTRINES, DOCTRINE, doctrineUnit, reviewDoctrine, underDoctrine, type DoctrinePlan, type DoctrineState } from "./doctrine";
@@ -382,10 +383,14 @@ export interface AiState {
    * tick a wave was first ready to go.
    */
   weighs?: boolean;
+  /** Flies crews up to fields no harvester can drive to (ai/skylift.ts). */
+  skylift?: boolean;
   sightings?: Map<number, { kind: UnitKind; value: number; tick: number; x: number; y: number; faction: Faction }>;
   /** The army it has committed to (ai/doctrine.ts), once Strategy.doctrine has one. */
   doctrine?: DoctrineState;
   waveReady?: number | null;
+  /** When WAVE_EDGE first held a wave back that was otherwise ready (null: it isn't). */
+  waveStall?: number | null;
   /** The last wave sent: its units and where it marches (ai/marshal.ts keeps it together on the way). */
   wave?: { ids: number[]; x: number; y: number; tick: number };
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
@@ -459,6 +464,13 @@ const WAVE_LAUNCH = 0.75;
 const WAVE_EDGE = 1.2;
 /** …and waits this long for the rest of the army to reach the staging point, once it's enough. */
 const WAVE_GATHER = 15 * TICK_RATE;
+/**
+ * A wave held back by WAVE_EDGE this long goes anyway, with what has gathered, if that's at least
+ * WAVE_STALL_EDGE of the army remembered. Two even armies each waiting for 1.2× the other never
+ * moved (Three Canyons: mirror games sat out 40 minutes, mined dry, with 70k armies).
+ */
+const WAVE_STALL = 120 * TICK_RATE;
+const WAVE_STALL_EDGE = 0.75;
 /** How long an enemy unit seen stays in the remembered army (unless its spot is seen empty). */
 const SIGHTING_TTL = 90 * TICK_RATE;
 /** Enemy anti-air (in Flak, AiState.seenAA) past which a weighing commander's Airpads build no Wasps or Hornets… */
@@ -583,7 +595,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const f = w.factions[faction];
   const mine = [...w.units.values()].filter((u) => u.faction === faction);
   const myBuildings = [...w.buildings.values()].filter((b) => b.faction === faction);
-  const harvesters = mine.filter((u) => u.kind === "harvester");
+  const allHarvesters = mine.filter((u) => u.kind === "harvester");
+  // (those on a mesa, or boarding for one, are the mesa run's: ai/skylift.ts)
+  const harvesters = s.skylift ? allHarvesters.filter((u) => !offHome(w, hq, u)) : allHarvesters;
   // (island maps: squads holding an island relay, or stranded on one, are the airlift's — ai/airlift.ts —
   // never counted toward a wave they can't walk to)
   // (nor are the Hornets of a strike wing, ai/hornets.ts, nor a sortie out harassing, ai/harass.ts)
@@ -936,6 +950,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       else if (have("raptor") < wantRaptors && !unitBlocker(w, faction, "raptor")) kind = "raptor"; // (Infantry War: no fighters)
       else if (
         liftWantsCondors(w, faction, s) > queued("condor") ||
+        skyliftWantsCondor(w, s, queued("condor")) ||
         (airlifts
           ? airliftWantsCondor(w, faction, s, condors)
           : wantCondor(w, faction, s, condors, count("trooper") + count("rocket-squad")))
@@ -1180,7 +1195,11 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // (two cheap squads picked before the guard takes its share: the drop is a deliberate commitment)
   // (island relays: every Condor flies the airlift instead, ai/airlift.ts)
   // (never a Condor on, or held for, a Goliath's lift: ai/goliath.ts)
-  const skip = liftCondors(w, faction, s);
+  const skip = new Set(liftCondors(w, faction, s));
+  // (nor one flying a crew up to a mesa: ai/skylift.ts)
+  const skylift = planSkylift(w, faction, s, { hq, harvesters: allHarvesters, seen, threatened, skip });
+  cmds.push(...skylift.cmds);
+  for (const id of skylift.condors) skip.add(id);
   if (airlifts) cmds.push(...planAirlift(w, faction, s, { mine, army, used, hqC, seen, threatened, skip }));
   else cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened, skip }));
 
@@ -1234,14 +1253,17 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     }
   } else if (s.mode === "assault") {
     // staged waves: gather at a forward point, launch together
+    // (a big army takes a big ring: 140 units never fit in STAGE_RADIUS round the base's buildings,
+    // so a third of it read as gathered and it could never outweigh the army it was weighed against)
+    const stageRadius = Math.max(STAGE_RADIUS, Math.sqrt(army.length) * 1.1);
     const staged = army.filter(
-      (u) => !used.has(u.id) && dist(u.x, u.y, staging.x, staging.y) <= STAGE_RADIUS
+      (u) => !used.has(u.id) && dist(u.x, u.y, staging.x, staging.y) <= stageRadius
     );
     // (a Goliath waiting there to walk with the wave counts for what it can fire, ai/goliath.ts, but
     // never for more than the army staged beside it: alone it would launch empty waves every pass,
     // and the rest of the army would never be called up to the staging point)
     const goliathStaged = goliaths.reduce(
-      (v, g) => (canWalk(g) && dist(g.x, g.y, staging.x, staging.y) <= STAGE_RADIUS ? v + threatValue(g) : v),
+      (v, g) => (canWalk(g) && dist(g.x, g.y, staging.x, staging.y) <= stageRadius ? v + threatValue(g) : v),
       0
     );
     const stagedValue = value(staged) + Math.min(goliathStaged, value(staged));
@@ -1254,14 +1276,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (go && s.weighs) {
       const coming = value(army.filter((u) => !used.has(u.id) && u.kind !== "mender"));
       if (stagedValue < WAVE_EDGE * enemyArmy) {
-        go = false;
+        s.waveStall ??= w.tick;
+        go = w.tick - s.waveStall >= WAVE_STALL && stagedValue >= WAVE_STALL_EDGE * enemyArmy;
         s.waveReady = null;
       } else if (stagedValue < 0.8 * coming) {
         s.waveReady ??= w.tick;
         go = w.tick - s.waveReady >= WAVE_GATHER;
       }
     }
-    if (go) s.waveReady = null;
+    if (go) s.waveReady = s.waveStall = null;
 
     if (go) {
       const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
@@ -1269,7 +1292,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       const marching = army.filter(
         (u) =>
           isInfantry(u.kind) && !used.has(u.id) && u.order.type === "attackMove" &&
-          dist(u.order.x, u.order.y, staging.x, staging.y) < 1 && dist(u.x, u.y, staging.x, staging.y) <= 2 * STAGE_RADIUS &&
+          dist(u.order.x, u.order.y, staging.x, staging.y) < 1 && dist(u.x, u.y, staging.x, staging.y) <= 2 * stageRadius &&
           !staged.includes(u)
       );
       const wave = [...staged, ...marching];
@@ -1281,7 +1304,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
           // already deep in enemy territory: keep fighting, don't yo-yo home
           const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
           launchWave(w, cmds, faction, [u], target, used);
-        } else if (dist(u.x, u.y, staging.x, staging.y) > STAGE_RADIUS) {
+        } else if (dist(u.x, u.y, staging.x, staging.y) > stageRadius) {
           used.add(u.id);
           cmds.push({ type: "attackMove", faction, unitIds: [u.id], x: staging.x, y: staging.y });
         }
