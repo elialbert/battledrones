@@ -23,6 +23,7 @@ import { objectiveHolds, planObjectives } from "./objectives";
 import { dodgeCalldowns, dodgingUnits, planCalldowns } from "./powers";
 import { AIRBORNE_INFANTRY, condorHolds, flysGivenCondor, planCondor, wantCondor } from "./condor";
 import { AIRLIFT, airliftActive, airliftHolds, airliftSquadsWanted, airliftWantsCondor, offHomeLand, planAirlift } from "./airlift";
+import { DOCTRINES, DOCTRINE, doctrineUnit, reviewDoctrine, underDoctrine, type DoctrinePlan, type DoctrineState } from "./doctrine";
 import { AA_COVER, USELESS, aaSources, aaStrengthAt, aaWeight, effectivenessVs, seenEnemies, unitAntiAir } from "./intel";
 import {
   GOLIATH_AI,
@@ -172,6 +173,8 @@ export interface Strategy {
    * `onHop`: each hop as it starts, kept up to date as it plays (traces).
    */
   siege?: { from: number; mortars: number; army: number; onHop?: (h: Hop) => void };
+  /** Commit to one army from `from` seconds on, and change it on what's seen (ai/doctrine.ts). */
+  doctrine?: DoctrinePlan;
 }
 
 export type StrategyName = "balanced" | "rush" | "airswarm" | "boom" | "skyforce" | "ironclad";
@@ -379,7 +382,9 @@ export interface AiState {
    * tick a wave was first ready to go.
    */
   weighs?: boolean;
-  sightings?: Map<number, { value: number; tick: number; x: number; y: number; faction: Faction }>;
+  sightings?: Map<number, { kind: UnitKind; value: number; tick: number; x: number; y: number; faction: Faction }>;
+  /** The army it has committed to (ai/doctrine.ts), once Strategy.doctrine has one. */
+  doctrine?: DoctrineState;
   waveReady?: number | null;
   /** The last wave sent: its units and where it marches (ai/marshal.ts keeps it together on the way). */
   wave?: { ids: number[]; x: number; y: number; tick: number };
@@ -786,8 +791,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const fund = goliathFund(w, faction, s, fundCtx);
   let spendable = f.scrap - reserve - fund;
   const liftHeld = liftCondors(w, faction, s);
+  // the army it's committed to (ai/doctrine.ts): not where rules or the islands decide what it can field
+  if (s.strategy.doctrine && s.sightings && has("tech-lab") && !airlifts && !infantryArmy(w, faction) && !s.strategy.airOnly && !bannedBy(w, "fab-plant", faction)) {
+    const known = [...s.sightings.values()].filter((e) => !focus || e.faction === focus);
+    s.doctrine = reviewDoctrine(s.doctrine, s.strategy.doctrine, w.tick, TICK_RATE, known);
+  }
   /** Queue `kind` at a producer (a building, or an anchored Goliath for squads) if we can pay its price now. */
-  const produce = (b: { id: number }, kind: UnitKind | null) => {
+  const produce = (b: { id: number }, wants: UnitKind | null) => {
+    const kind = wants && underDoctrine(s.doctrine, w.buildings.get(b.id)?.kind, wants);
     if (!kind || unitBlocker(w, faction, kind) || spendable < unitCost(w, faction, kind)) return;
     spendable -= unitCost(w, faction, kind);
     cmds.push({ type: "produce", faction, buildingId: b.id, unit: kind });
@@ -957,6 +968,14 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     runPads();
   }
   runBays();
+  // (a doctrine's factories are kept busy: what the commander asks for is sized for a mixed army, and
+  // the scrap the idle ones would have spent just banks)
+  if (s.doctrine && !armyFull)
+    for (const b of myBuildings) {
+      if (!DOCTRINES[s.doctrine.name].lines[b.kind] || b.queue.length >= depth) continue;
+      const kind = doctrineUnit(s.doctrine, b.kind);
+      if (kind && spendable >= unitCost(w, faction, kind) + DOCTRINE.busyAbove) produce(b, kind);
+    }
 
   // --- scouting -----------------------------------------------------------
   for (const scout of mine.filter((u) => u.kind === "scout"))
@@ -1500,7 +1519,7 @@ function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[],
   for (const u of seen) {
     if (u.kind === "harvester" || (UNITS[u.kind].dps <= 0 && !UNITS[u.kind].heal)) continue;
     now.add(u.id);
-    memo.set(u.id, { value: u.goliath ? threatValue(u) : UNITS[u.kind].cost, tick: w.tick, x: u.x, y: u.y, faction: u.faction });
+    memo.set(u.id, { kind: u.kind, value: u.goliath ? threatValue(u) : UNITS[u.kind].cost, tick: w.tick, x: u.x, y: u.y, faction: u.faction });
   }
   let v = 0;
   for (const [id, e] of memo) {
@@ -1585,6 +1604,14 @@ function nextBuilding(
   // would otherwise buy factory after factory in front of it)
   // (the Wall's Tech Lab waits for its turrets, so the factories don't wait for it)
   const lab = wall || (have.get("tech-lab") ?? 0) > 0 ? -1 : order.indexOf("tech-lab");
+  // the factories its doctrine wants, on top of what the order has (ai/doctrine.ts)
+  if (s.doctrine) {
+    const counted = new Map<BuildingKind, number>();
+    for (const k of DOCTRINES[s.doctrine.name].factories) {
+      counted.set(k, (counted.get(k) ?? 0) + 1);
+      if (order.filter((o) => o === k).length < counted.get(k)!) order.push(k);
+    }
+  }
   for (let i = 0; i < s.extraProduction; i++) {
     // (weighing: no more Airpads into massed flak)
     const flak = !!s.weighs && s.seenAA >= FLAK_WALL;

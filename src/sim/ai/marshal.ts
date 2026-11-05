@@ -42,6 +42,7 @@ import { isVisible, knownBuildings } from "../fog";
 import type { Command, Faction, Unit, World } from "../types";
 import { buildingCenter, dist, domainOf, hqOf } from "../world";
 import { STRATEGIES, createAiState, tickAi, type Difficulty, type Strategy, type StrategyName } from "./commander";
+import { DOCTRINE, type DoctrinePlan } from "./doctrine";
 import { USELESS, effectivenessVs, seenEnemies } from "./intel";
 import { dodgingUnits } from "./powers";
 import type { Bot } from "./bots";
@@ -84,6 +85,8 @@ export interface MarshalOptions {
   assaultValue?: number;
   /** Changes to how it fights (FIGHT). */
   fight?: Partial<Fight>;
+  /** Commit to an army late on (ai/doctrine.ts). Needs `weighs`: it reads the army that remembers. */
+  doctrine?: Partial<DoctrinePlan>;
   /** The harassment sorties it flies instead of its plan's (ai/harass.ts): experiments. */
   sorties?: SortieKind[];
 }
@@ -102,6 +105,8 @@ export const MARSHAL_PLANS: Record<
   {
     base: StrategyName; label: string; tweak?: Partial<Strategy>; fast?: Partial<Strategy>; goliath?: "rush"; hornets?: "strike";
     sorties: SortieKind[];
+    /** Its army is the plan: no doctrine (ai/doctrine.ts). */
+    ownArmy?: boolean;
   }
 > = {
   balanced: { base: "balanced", label: "Balanced", sorties: ["poke", "pressure", "air"], fast: fastDepot(["fab-plant", "depot", "airpad", "turret", "tech-lab", "assembly-bay", "turret", "radar"]) },
@@ -280,6 +285,8 @@ export const MARSHAL_PLANS: Record<
    */
   siege: {
     base: "ironclad",
+    // (Hard, 24 games with a doctrine against without: 48% with its Mortars replaced, 35% with them kept)
+    ownArmy: true,
     label: "Siege Train",
     sorties: ["poke"],
     tweak: {
@@ -373,7 +380,7 @@ export const MARSHAL: Record<
   Difficulty,
   {
     think: number; react: number; apm: number; burst?: number; microApm: number; fast: boolean; holdUntil: number;
-    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>; weighs?: boolean;
+    tweak?: Partial<Strategy>; assaultValue?: number; fight?: Partial<Fight>; weighs?: boolean; doctrine?: Partial<DoctrinePlan>;
   }
 > = {
   // (Easy and Casual don't kite, ai/kite.ts: a step back every 20 s is no kiting, and lost Easy fights it would win)
@@ -384,10 +391,10 @@ export const MARSHAL: Record<
   // (Hard before Brutal took its place, at 80 actions a minute, 100 since 2026-10-30: at 120 it beat Normal 99%, and lost only 39% to Brutal)
   // (`weighs`, Hard and Brutal: waves weighed against the enemy army it remembers, no aircraft into
   // massed flak, no Gantry while behind — AiState.weighs)
-  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true },
+  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true, doctrine: {} },
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
-    think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true,
+    think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true, doctrine: {},
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
     tweak: { harvesters: 12, expandEarly: true },
@@ -572,7 +579,8 @@ export function marshalStrategy(opts: MarshalOptions): Partial<Strategy> {
   const own = MARSHAL_PLANS[opts.strategy].tweak?.assaultValue !== undefined;
   const assault = opts.assaultValue !== undefined && !own ? { assaultValue: opts.assaultValue } : {};
   // (no stock harass raids: its sorties harass, on a leash, ai/harass.ts)
-  return { ...planStrategy(opts.strategy, opts.fast), ...assault, holdUntil: opts.holdUntil, harassGroup: Infinity, ...opts.tweak };
+  const doctrine = opts.doctrine && !MARSHAL_PLANS[opts.strategy].ownArmy && { from: DOCTRINE.from, ...opts.doctrine };
+  return { ...planStrategy(opts.strategy, opts.fast), ...assault, holdUntil: opts.holdUntil, harassGroup: Infinity, ...(doctrine ? { doctrine } : {}), ...opts.tweak };
 }
 
 export function marshal(side: Faction, seed: number, difficulty: Difficulty, opts: MarshalOptions): Bot {

@@ -333,3 +333,17 @@ bots at Normal.
       `about` and a `group`
 - [ ] `tests/bots.test.ts` and `tests/fmath.test.ts` pass, and it has played
       a league
+
+## Doctrine: changing army late on
+
+Marshal's production answers what it sees one unit at a time, so left alone its
+army is a bit of everything. On Hard and Brutal, from 6:00, `ai/doctrine.ts`
+commits it to one of three armies on the enemy army it remembers: Lancer + Flak
+against an air force, Air against little anti-air, Lancer + Rocket Squad against
+heavy armour. A choice stands for at least two minutes, and it needs a real read
+to start or change. The factories for a new army are paid for like any others.
+Siege Train opts out, because its army is the plan.
+
+Hard, 24 games a row: with a doctrine against without, Balanced 58%, Rush 62%,
+Strike 50%. Against fixed armies, without then with: Air 46% to 77%, Lancer +
+Rocket 60% to 75%, Lancer + Flak 48% to 48%.

@@ -59,13 +59,15 @@ function only(kinds: string[] | undefined, side: string, bot: any) {
     return out;
   } };
 }
+const docs: Record<string, string[]> = { blue: [], red: [] };
 function seat(f: string, spec: string) {
   const [plan, v] = spec.split("+");
   const V = v ? VARIANTS[v] : {};
   if (v && !V) throw new Error("no variant " + v);
-  const { fast, fight, sorties, only: _only, noGoliath: _ng, ...tweak } = V as any;
+  const { fast, fight, sorties, only: _only, noGoliath: _ng, doctrine, ...tweak } = V as any;
+  const onSwitch = (n: string, t: number) => docs[f]!.push(`${n}@${clock(t)}`);
   a.seats[f].bot = capApm(
-    only(V.only, f, marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, ...(fast !== undefined ? { fast } : {}), ...(sorties ? { sorties } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } })),
+    only(V.only, f, marshal(f as any, hash32(+seed, f === "blue" ? 1 : 2), diff, { ...M, doctrine: doctrine === false || !M.doctrine ? undefined : { ...M.doctrine, ...doctrine, onSwitch }, ...(fast !== undefined ? { fast } : {}), ...(sorties ? { sorties } : {}), ...(fight ? { fight: { ...M.fight, ...fight } } : {}), strategy: plan as any, tweak: { ...M.tweak, ...tweak } })),
     M.apm, M.burst);
 }
 seat(side, ours);
@@ -194,4 +196,5 @@ if (!quiet) { console.log(firsts, "foeLost2+", firstHit); for (const s of snap) 
 if (process.env.HIT) console.log(hitSnap || "HIT none", "|", at2);
 console.log("END", res, map, seed, side, ours, "vs", theirs, clock(e.tick), "depots", depotAt[side]!.join(","), "|", depotAt[foe]!.join(","), "exp", Object.values(exps).map((e: any) => e.at + (e.k ? "k" : "") + (e.h ? "h" : "") + (e.x ? "x" : "")).join(","),
   "t2", [side, foe].map((f) => `lab${lab[f] ?? "-"} first${t2[f] ?? "-"} share${t2share[f]!.join("/") || "-"}`).join(" | "),
-  "gol", [side, foe].map((f) => `${goliaths[f]!.first}x${goliaths[f]!.ids.size}`).join("|"));
+  "gol", [side, foe].map((f) => `${goliaths[f]!.first}x${goliaths[f]!.ids.size}`).join("|"),
+  "doc", docs[side]!.join(",") || "-", "|", docs[foe]!.join(",") || "-");

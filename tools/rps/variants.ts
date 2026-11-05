@@ -30,6 +30,10 @@ export const VARIANTS: Record<string, any> = {
   mMastFlak: { only: ["mastodon", "flak-crawler", "mender"], buildOrder: FAB },
   mStFlak: { only: ["stinger", "flak-crawler", "mender"], buildOrder: FAB },
   oStFlak: { only: ["stinger", "flak-crawler"], buildOrder: FAB },
+  // doctrine (ai/doctrine.ts): none, or from this many seconds on
+  nodoc: { doctrine: false },
+  doc3: { doctrine: { from: 180 } },
+  doc9: { doctrine: { from: 540 } },
   // fight micro without kiting (ai/kite.ts): A/B a plan against itself
   nokite: { fight: { kite: false } },
   // no harassment sorties (ai/harass.ts)
