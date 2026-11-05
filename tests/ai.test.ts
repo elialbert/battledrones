@@ -225,7 +225,7 @@ describe("AI and robot infantry", () => {
   it("weighs anti-air by what it does to aircraft: a lone rifle squad is not flak", () => {
     expect(aaWeight(UNITS["flak-crawler"])).toBe(1);
     expect(aaWeight(UNITS.raptor)).toBe(1);
-    expect(aaWeight(UNITS.lancer)).toBeCloseTo(0.7, 9);
+    expect(aaWeight(UNITS.lancer)).toBe(0);
     expect(aaWeight(UNITS.stinger)).toBe(0);
     expect(aaWeight(UNITS.trooper)).toBeLessThan(AA_COVER);
     expect(aaWeight(UNITS["rocket-squad"])).toBeGreaterThanOrEqual(AA_COVER);

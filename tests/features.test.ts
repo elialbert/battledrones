@@ -202,14 +202,14 @@ describe("new weapons", () => {
     expect(b.hp).toBeGreaterThan(300);
   });
 
-  it("lancers hit both air and ground", () => {
+  it("lancers hit ground, not air", () => {
     const w = createWorld(24, 24);
     // unarmed targets, so the lancer survives to engage both
     spawnUnit(w, "lancer", "blue", 5.5, 5.5);
     const scout = spawnUnit(w, "scout", "red", 8.5, 5.5);
     const truck = spawnUnit(w, "harvester", "red", 5.5, 8.5);
     runTicks(w, 12 * TICK_RATE);
-    expect(scout.hp).toBeLessThan(UNITS.scout.hp);
+    expect(scout.hp).toBe(UNITS.scout.hp);
     expect(truck.hp).toBeLessThan(UNITS.harvester.hp);
   });
 

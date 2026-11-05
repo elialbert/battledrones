@@ -1427,7 +1427,8 @@ const FIVE_MINUTES = 3000;
 
 describe("two phones in lockstep over PacketAir, an AI on each", () => {
   it("keep identical hash trails at 0% loss, and the battle record replays", { timeout: 120_000 }, () => {
-    const r = duel({ map: "riverlands", seed: 42, ticks: FIVE_MINUTES });
+    // (seed 6: this test wants a match that runs the full five minutes)
+    const r = duel({ map: "riverlands", seed: 6, ticks: FIVE_MINUTES });
     expect(firstDiff(r, FIVE_MINUTES)).toBe(-1);
     for (const p of [r.blue, r.red]) {
       const s = p.ls.status();

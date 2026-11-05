@@ -44,7 +44,7 @@ export const FEATURES: Record<UnitKind, string[]> = {
   lancer: [
     "Hover tank: crosses water and shallows and ignores rough ground, opening routes no tracked unit can take.",
     "Its laser burns through heavy armour (1.55×), making it the Mastodon killer.",
-    "The only tank that can also shoot aircraft, at reduced effect."
+    "Cannot shoot at aircraft, so bring Flak or Rocket Squads along."
   ],
   wasp: [
     "Rocket strike drone that flies over every obstacle to hit ground targets.",

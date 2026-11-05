@@ -138,10 +138,10 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     buildTime: 15, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.55
   },
   lancer: {
-    name: "Lancer", role: "Hover laser tank. Burns through armour, hits air too. Crosses water.",
+    name: "Lancer", role: "Hover laser tank. Burns through armour. Crosses water. Cannot shoot air.",
     cost: 300, hp: 450, speed: 2.5, sight: 6, domain: "ground", armor: "medium",
     hover: true,
-    targets: "both", dps: 31, range: 5.5, shotInterval: 0.8, dmgType: "laser", fx: "laser", airMult: 0.65,
+    targets: "ground", dps: 31, range: 5.5, shotInterval: 0.8, dmgType: "laser", fx: "laser",
     buildTime: 11, builtAt: "fab-plant", requires: "tech-lab", turret: true, radius: 0.42
   },
   wasp: {

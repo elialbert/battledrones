@@ -428,7 +428,7 @@ export function raidAdvice(domain: RaidDomain, lead: UnitKind): { what: string; 
     case "mortar":
       return { what: "artillery", advice: "close in with Stingers or Wasps" };
     case "lancer":
-      return { what: "Lancers", advice: "Stingers or Hornets" };
+      return { what: "Lancers", advice: "Stingers, Wasps or Hornets" };
     default:
       return { what: "tanks", advice: "Mastodons, Wasps or a Turret" };
   }

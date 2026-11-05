@@ -22,7 +22,7 @@ export function seenEnemies(w: World, faction: Faction): Unit[] {
 /**
  * Anti-air worth of a weapon, in Flak Crawlers: its DPS against aircraft
  * (airMult applied) over the Flak's, capped at 1, to a tenth. Flak, Raptors
- * and SAMs 1, Lancers 0.6, Turrets 0.8, a Trooper Squad's rifles (half
+ * and SAMs 1, Turrets 0.8, a Trooper Squad's rifles (half
  * damage vs air) only 0.2 — a lone rifle squad is not flak.
  */
 export function aaWeight(st: ArmedStats): number {

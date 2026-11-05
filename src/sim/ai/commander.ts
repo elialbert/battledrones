@@ -802,7 +802,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const enemyDefenses = knownBuildings(w, faction).filter(
     (kb) => kb.kind === "turret" || kb.kind === "sam-site"
   ).length;
-  // anti-air on hand, in Flak Crawlers (intel.ts aaWeight: a Lancer 0.6, a Rocket Squad 1); rifle
+  // anti-air on hand, in Flak Crawlers (intel.ts aaWeight: a Rocket Squad 1); rifle
   // squads (0.2 each) don't count — a few of them out with the army leave the harvesters bare
   const ownAA = COMBAT_KINDS.reduce((a, k) => a + (aaWeight(UNITS[k]) >= AA_COVER ? have(k) * aaWeight(UNITS[k]) : 0), 0);
   // a ground army that is mostly robot infantry: splash and rapid fire answer it, not big guns
@@ -879,7 +879,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
         // home guard only: a few stingers vs raiders, flak when the skies fill
         if (ownAA < Math.ceil(s.seenAir * 0.5)) kind = "flak-crawler";
         else if (have("stinger") >= 3) continue;
-      } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = tech && r < 0.35 ? "lancer" : "flak-crawler";
+      } else if (ownAA < Math.ceil(s.seenAir * 0.6)) kind = "flak-crawler";
       else if (tech && have("mortar") < Math.min(3, 1 + enemyDefenses) && (enemyDefenses > 0 || r < 0.2))
         kind = "mortar";
       else if (tech && s.strategy.mortarShare && have("mortar") < (s.strategy.mortarCap ?? 4) && r < s.strategy.mortarShare) kind = "mortar";

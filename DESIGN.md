@@ -387,7 +387,7 @@ cost).
 | **Flak Crawler** | Fab | Ground | Air | The anti-air answer |
 | **Mortar** ⚗ | Fab | Ground | Ground | Long-range splash artillery with a minimum range; shells are real projectiles and can be dodged |
 | **Mastodon** ⚗ | Fab | Ground | Ground | Slow super-heavy twin-cannon tank |
-| **Lancer** ⚗ | Fab | Hover | Both | Anti-armour laser that also hits air (at reduced effect) and crosses water |
+| **Lancer** ⚗ | Fab | Hover | Ground | Anti-armour laser that crosses water |
 | **Wasp** | Airpad | Air | Ground | Rocket strike drone |
 | **Raptor** | Airpad | Air | Air | Interceptor |
 | **Hornet** ⚗ | Airpad | Air | Ground | Glass-cannon bomber: big splash vs ground and bases, light armour, dies to anti-air without escort |

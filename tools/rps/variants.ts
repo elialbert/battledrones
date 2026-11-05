@@ -24,6 +24,7 @@ export const VARIANTS: Record<string, any> = {
   mLanMort: { only: ["lancer", "mortar", "mender"], buildOrder: FAB },
   mLanHor: { only: ["lancer", "hornet", "mender"], buildOrder: more("airpad", "fab-plant") },
   mLanRock: { only: ["lancer", "rocket-squad", "mender"], buildOrder: more("fab-plant", "assembly-bay") },
+  mLanFlak: { only: ["lancer", "flak-crawler", "mender"], buildOrder: FAB },
   mInf: { only: ["trooper", "rocket-squad", "sniper", "mender"], buildOrder: BAY },
   mAir: { only: ["wasp", "hornet", "raptor", "mender"], buildOrder: PAD },
   mMastFlak: { only: ["mastodon", "flak-crawler", "mender"], buildOrder: FAB },
