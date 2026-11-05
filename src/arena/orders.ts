@@ -28,7 +28,7 @@ import {
   type Producer
 } from "../sim/economy";
 import { anchorBlocker, anchoredGoliaths, applyGoliathCommand, goliathReachAt, orderedToMove, packUpBlocker, unitCost } from "../sim/goliath";
-import { unitSeenBy, isInfantry, isTransport } from "../sim/infantry";
+import { canRide, unitSeenBy, isInfantry, isTransport } from "../sim/infantry";
 import { applyLiftCommand, liftBlocker, liftedBy, routeLiftCommand } from "../sim/lift";
 import { OPENER_IDS, isOpenerId, openerBlocked, type OpenerId } from "../sim/openers";
 import { isCramped, placementBlocker } from "../sim/placement";
@@ -321,12 +321,12 @@ function one(w: World, fr: Frame, side: Faction, verb: Verb, o: Record<string, u
       return `${power} called on ${fr.tile(p.x, p.y).join(",")}`;
     }
     case "board": {
-      const squads = selectUnits(w, fr, side, o.board).filter((u) => isInfantry(u.kind));
-      if (squads.length === 0) refuse("only infantry squads (trooper, rocket-squad, sniper) can board");
+      const squads = selectUnits(w, fr, side, o.board).filter((u) => canRide(u.kind));
+      if (squads.length === 0) refuse("only infantry squads (trooper, rocket-squad, sniper) and harvesters can board");
       const id = idOf(o.condor ?? o.into ?? o.carrier);
       const c = id === null ? undefined : w.units.get(id);
       if (!c || c.faction !== side || !isTransport(c.kind)) refuse(`board needs "condor": the id of one of your Condors`);
-      if (liftedBy(w, c!)) refuse(`Condor #${c!.id} is lifting a Goliath: unload the Goliath before boarding infantry`);
+      if (liftedBy(w, c!)) refuse(`Condor #${c!.id} is lifting a Goliath: unload the Goliath before boarding anyone`);
       const seats = freeSeats(c!);
       if (seats <= 0) refuse(`Condor #${c!.id} is full: unload it first`);
       const going = squads.slice(0, seats);

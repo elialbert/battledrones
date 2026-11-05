@@ -60,6 +60,7 @@ differs from the draft, and why:
   ground bosses bring Rocket Squads, and the Elite Strike Force Troopers too.
 - **Rule details the draft left open:**
   - A Condor shot down over a building loses its passengers.
+  - Harvesters ride too, a seat each (Three Canyons' mesas are mined this way): set down, one starts on the nearest field it can drive to, and it only unloads at a drop site on that same ground, so a crew of four has to found a Depot up there first.
   - A drop snaps to the nearest spot within 6 tiles where squads can be set
     down 0.4 tiles clear of water, rock, buildings and the map's edge, a
     squad's width apart (bail-outs too); out over a big lake, to the nearest

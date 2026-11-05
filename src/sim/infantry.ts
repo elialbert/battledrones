@@ -36,6 +36,9 @@ export function squadFirepower(u: Pick<Unit, "kind" | "hp">): number {
 /** Is this a transport (the Condor)? */
 export const isTransport = (kind: UnitKind): boolean => (UNITS[kind].capacity ?? 0) > 0;
 
+/** Can this kind ride in a transport? Squads and Harvesters, a seat each. */
+export const canRide = (kind: UnitKind): boolean => isInfantry(kind) || kind === "harvester";
+
 /**
  * Can `faction` see enemy unit `u` right now? Its tile must be in sight, and
  * a Sniper Team concealed in Woods (only seen by enemies within

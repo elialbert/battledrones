@@ -319,7 +319,8 @@ describe("Bot Swarm", () => {
 });
 
 describe("spawn sites", () => {
-  for (const def of MAPS)
+  // (Three Canyons isn't offered for Last Stand: mesa walls leave almost no open map edge)
+  for (const def of MAPS.filter((m) => m.id !== "three-canyons"))
     it(`are valid on ${def.name}`, () => {
       const w = lastStand(def.id, 5);
       const sites = w.survival!.sites;

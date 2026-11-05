@@ -390,9 +390,9 @@ export interface DropSite {
 
 /**
  * Nearest friendly drop site to a point: a drop-off building, or an anchored
- * Goliath (packing up, it is none). With `mc`, a Goliath or an outpost (which
- * can stand out on an island) only counts if a unit of that class at (x, y)
- * can drive up to it; the base's own drop-offs always count, as they always did.
+ * Goliath (packing up, it is none). With `mc`, one only counts if a unit of
+ * that class at (x, y) can drive up to it: a Harvester flown onto a mesa can't
+ * reach the HQ, and one at home can't reach the mesa's Depot.
  */
 export function nearestDropSite(w: World, faction: Faction, x: number, y: number, mc?: MoveClass): DropSite | null {
   let best: DropSite | null = null;
@@ -402,7 +402,7 @@ export function nearestDropSite(w: World, faction: Faction, x: number, y: number
   for (const b of w.buildings.values()) {
     if (b.faction !== faction || !BUILDINGS[b.kind].dropOff || b.founding !== undefined) continue;
     const size = BUILDINGS[b.kind].size;
-    if (b.outpost && !reaches(b.tx, b.ty, size)) continue;
+    if (!reaches(b.tx, b.ty, size)) continue;
     const d = distToFootprint(b.tx, b.ty, size, x, y);
     if (d < bestD) {
       bestD = d;

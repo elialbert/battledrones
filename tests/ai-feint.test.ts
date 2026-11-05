@@ -43,8 +43,8 @@ describe("The Feint (Marshal)", () => {
       expect(!!planStrategy(name).feint).toBe(name === "feint");
   });
 
-  it("is played on maps with room for it: Ashlands and random maps, no smaller, no islands, no free-for-alls", () => {
-    expect(MAPS.filter((m) => planFitsMap("feint", m)).map((m) => m.id)).toEqual(["ashlands"]);
+  it("is played on maps with room for it: Ashlands, Three Canyons and random maps, no smaller, no islands, no free-for-alls", () => {
+    expect(MAPS.filter((m) => planFitsMap("feint", m)).map((m) => m.id)).toEqual(["ashlands", "three-canyons"]);
     expect(planFitsMap("feint", mapById("random-desert-a1"))).toBe(true);
     for (const m of MAPS) expect(planFitsMap("rush", m)).toBe(true); // (every other plan goes anywhere)
   });

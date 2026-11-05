@@ -445,6 +445,85 @@ export const MAPS: MapDef[] = [
     }
   },
   {
+    id: "three-canyons",
+    name: "Three Canyons",
+    biome: "desert",
+    size: 120,
+    blurb: "Three long canyons to the enemy, fields all along them, and two rich mesas only a Condor reaches.",
+    hq: [8, 108],
+    seed: 97,
+    uplinks: [[50, 17]], // the north canyon's far room, and its mirror in the south canyon
+    dropSites: [[38.5, 82.5], [33.5, 34.5], [45.5, 105.5]], // the centre canyon, the north bend, the south canyon's mouth
+    lastStand: false, // (the walls leave no map edge for the waves to come in by)
+    starSecs: 1200,
+    paint(p) {
+      // the whole map is mesa: everything walkable is cut out of it
+      p.rect(0, 0, 119, 119, Terrain.Rock);
+      /** A canyon chamber, a stretch of open sand. */
+      const room = (cx: number, cy: number, r: number) => p.blob(cx, cy, r, G, 0.16);
+      // home: a basin in the corner, three ways out
+      room(16, 103, 15);
+      room(7, 112, 9);
+      room(29, 111, 7);
+      // the flank canyon, north up the west wall and east along the top into red's basin
+      // (its mirror is the south flank: blue's end of that one is the room at 45, 105)
+      const flank: Pt[] = [[15, 92], [15, 74], [15, 60], [16, 48], [25, 40], [34, 34], [42, 25], [50, 17], [62, 14], [74, 14], [90, 17]];
+      p.stroke(flank, 5, G, 0.14);
+      room(15, 74, 9);
+      room(16, 48, 9);
+      room(34, 34, 8);
+      room(50, 17, 9);
+      room(74, 14, 9);
+      // the centre canyon, out of the basin's east side to the oasis
+      const centre: Pt[] = [[26, 94], [38, 82], [48, 72], [59.5, 59.5]];
+      p.stroke(centre, 5, G, 0.14);
+      room(38, 82, 8);
+      room(59.5, 59.5, 13);
+      // dead-end side canyons: more fields, no way through
+      p.stroke([[18, 49], [36, 54]], 4.5, G, 0.14);
+      room(37, 55, 7);
+      p.stroke([[58, 52], [53, 41]], 4.5, G, 0.14);
+      room(52, 39, 7);
+      // the mesas in the empty corners: no way up but by air
+      room(12, 12, 12);
+      room(6, 6, 6);
+      // the oasis at the centre, palms round the pool
+      p.blob(59.5, 59.5, 5.4, Terrain.Forest, 0.25, [G]);
+      p.blob(59.5, 59.5, 3.2, Terrain.Water, 0.2);
+      // palms and scree dressing the rooms, left clear of the canyon line
+      p.blob(9, 70, 2.2, Terrain.Forest, 0.4, [G]);
+      p.blob(22, 45, 2, Terrain.Rough, 0.4, [G]);
+      p.blob(30, 29.5, 2, Terrain.Forest, 0.4, [G]);
+      p.blob(54, 12, 2, Terrain.Rough, 0.4, [G]);
+      p.blob(78, 19, 2.1, Terrain.Forest, 0.4, [G]);
+      p.blob(33, 86, 1.8, Terrain.Rough, 0.4, [G]);
+      p.blob(41, 58, 1.8, Terrain.Forest, 0.4, [G]);
+      p.blob(55, 36, 1.8, Terrain.Rough, 0.4, [G]);
+      p.blob(16, 16, 2.6, Terrain.Forest, 0.4, [G]);
+      // dusty tracks down all three canyons
+      p.stroke([[11, 106], ...flank], 2, Terrain.Road, 0, OPEN);
+      p.stroke([[12, 107], [20, 100], ...centre.slice(0, 3), [52, 68]], 2, Terrain.Road, 0, OPEN);
+      // resources: the home field in the corner behind the HQ, a natural in the basin
+      p.blob(3, 116, 2.2, Terrain.Scrap, 0.25);
+      p.blob(30, 113, 1.9, Terrain.Scrap, 0.25);
+      // up the flank canyon, room by room (the south flank's are these, mirrored)
+      p.blob(19, 77, 1.8, Terrain.Scrap, 0.25);
+      p.blob(11, 44, 1.7, Terrain.Scrap, 0.25);
+      p.blob(38, 37, 1.6, Terrain.Crystal, 0.2);
+      p.blob(47, 12, 1.7, Terrain.Scrap, 0.25);
+      p.blob(72, 9, 1.8, Terrain.Scrap, 0.25);
+      // the centre canyon and the oasis
+      p.blob(42, 85, 1.7, Terrain.Scrap, 0.25);
+      p.blob(50, 54, 1.7, Terrain.Crystal, 0.2);
+      // the side canyons
+      p.blob(40, 53, 1.8, Terrain.Scrap, 0.25);
+      p.blob(50, 37, 1.8, Terrain.Scrap, 0.25);
+      // the mesa: the richest ground on the map, for whoever flies a crew up
+      p.blob(7, 8, 2.6, Terrain.Scrap, 0.2);
+      p.blob(16, 8, 1.8, Terrain.Crystal, 0.2);
+    }
+  },
+  {
     id: "archipelago",
     name: "Archipelago",
     biome: "tropical",

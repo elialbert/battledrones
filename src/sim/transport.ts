@@ -1,5 +1,6 @@
 import { INFANTRY, TICK_RATE, UNITS } from "./balance";
-import { isInfantry, isTransport } from "./infantry";
+import { canRide, isTransport } from "./infantry";
+import { nearestReachableResource } from "./economy";
 import { moveUnitToward } from "./movement";
 import { isStunned } from "./powers";
 import type { Command, Faction, Unit, UnitOrder, World } from "./types";
@@ -7,7 +8,7 @@ import { inBounds, passable, sideFrame, type SideFrame } from "./world";
 import { cos, hypot, sin } from "./fmath";
 
 /**
- * The Condor dropship (INFANTRY.md). Infantry squads BOARD it — walk up, and
+ * The Condor dropship (INFANTRY.md). Infantry squads and Harvesters BOARD it — walk up, and
  * after INFANTRY.boardTime within INFANTRY.boardRange they are taken off the
  * map into `condor.passengers` — and it UNLOADS them: flies to a drop point,
  * hovers INFANTRY.unloadHover, puts them back (same ids) around the point,
@@ -236,6 +237,11 @@ function disembarkAll(w: World, c: Unit, x: number, y: number, bailout: boolean)
     if (bailout) p.hp = Math.min(p.hp, UNITS[p.kind].hp * INFANTRY.bailoutHp);
     w.units.set(p.id, p);
     ids.push(p.id);
+    if (p.kind === "harvester") {
+      // straight to work on the nearest field it can drive to, as a fresh one does
+      const f = nearestReachableResource(w, p.x, p.y, p.faction);
+      if (f) p.order = { type: "harvest", fieldX: f.x, fieldY: f.y, phase: "toField" };
+    }
   });
   c.passengers = [];
   if (ids.length > 0) w.fx.push({ type: "disembark", faction: c.faction, carrierId: c.id, unitIds: ids, x, y, bailout });
@@ -274,7 +280,7 @@ export function applyTransportCommand(w: World, c: Extract<Command, { type: "boa
     for (const id of c.unitIds) {
       // (a squad already aboard is not on the field: w.units misses it and it is ignored)
       const u = w.units.get(id);
-      if (!u || u.faction !== c.faction || !isInfantry(u.kind)) continue;
+      if (!u || u.faction !== c.faction || !canRide(u.kind)) continue;
       u.order = { type: "board", carrierId: carrier.id, ticks: 0 };
       u.path = null;
       u.autoTargetId = null;

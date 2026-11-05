@@ -90,6 +90,7 @@ chevron (`ui/hscroll.ts`).
 | Frostbite | 48² | Arctic | A frozen sea in the centre — short, brutal, hover-friendly |
 | Ashlands | 64² | Volcanic | Lava rivers carve three plateaus joined by bridges; air rules |
 | Compass Rose | 72² | Arctic | Four players, one per corner: frozen streams with a bridge and a ford split the quarters, five Uplinks (the centre and one by each bridge); a free-for-all (see FFA.md) |
+| Three Canyons | 120² | Desert | Three long choked canyons to the enemy with fields all along them; two rich corner mesas only a Condor reaches |
 | Archipelago | 108² | Tropical | Seven island Uplinks only troops flown in by Condor can take; two bridges, scarce scrap (see *The Archipelago*) |
 
 Terrain matters (numbers in `TERRAIN` in `src/sim/balance.ts`):

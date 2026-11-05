@@ -133,9 +133,9 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   airlift it, each one costs 25% more for every Goliath you already have,
   and a side is beaten only when its HQ and every Goliath are gone. A dead
   one topples and scatters its scrap in piles across the battlefield.
-- **7 maps in 5 biomes** — the classic Proving Grounds, Riverlands, Dune
-  Sea, Frostbite, Ashlands, the four-player **Compass Rose** and the big
-  tropical **Archipelago** — with
+- **8 maps in 5 biomes** — the classic Proving Grounds, Riverlands, Dune
+  Sea, Frostbite, Ashlands, the four-player **Compass Rose**, the big desert
+  **Three Canyons** and the big tropical **Archipelago** — with
   terrain that matters: roads, mud, woods (cover), fords, bridges,
   water/lava that only hover and air units cross, open sea that only
   aircraft cross, and rich crystal fields. On a phone the map row fades and

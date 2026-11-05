@@ -1030,6 +1030,7 @@ export class EntityRenderer {
         c.riders.delete(id);
       }
     ps.forEach((p, side) => {
+      if (!isInfantry(p.kind)) return; // (a Harvester has no bench rig: the panel's seat shows it)
       let r = c.riders.get(p.id);
       if (!r || r.side !== side) {
         if (r) {

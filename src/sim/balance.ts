@@ -195,7 +195,7 @@ export const UNITS: Record<UnitKind, UnitStats> = {
     buildTime: 10, builtAt: "assembly-bay", requires: "tech-lab", radius: 0.35, squad: 2
   },
   condor: {
-    name: "Condor", role: "Dropship. Carries two infantry squads over anything. Unarmed.",
+    name: "Condor", role: "Dropship. Carries two squads or Harvesters over anything. Unarmed.",
     cost: 200, hp: 400, speed: 3.6, sight: 6, domain: "air", armor: "medium",
     targets: "none", dps: 0, range: 0,
     buildTime: 9, builtAt: "airpad", radius: 0.5, capacity: 2

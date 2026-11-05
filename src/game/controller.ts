@@ -1,13 +1,13 @@
 import { BUILDINGS, ECONOMY, TICK_RATE, UNITS } from "../sim/balance";
 import { foundBlocker, producerCap, producersOf, unitBlocker, type Producer } from "../sim/economy";
 import { anchorBlocker, canWalk, goliathReachAt, unitCost } from "../sim/goliath";
-import { isInfantry, isTransport } from "../sim/infantry";
+import { isInfantry, isTransport, canRide } from "../sim/infantry";
 import { canCarry, liftBlocker } from "../sim/lift";
 import { placementBlocker, snapPlacement } from "../sim/placement";
 import { POWER_NAMES, powerBlocker, powerCost, powerStatus, type PowerStatus } from "../sim/powers";
 import { carrierOf, freeSeats, isLoaded } from "../sim/transport";
 import type { Building, BuildingKind, Command, Faction, PowerKind, Unit, UnitKind, World } from "../sim/types";
-import { buildingAtTile, distToBuilding, domainOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
+import { buildingAtTile, distToBuilding, domainOf, hqOf, isResource, moveClassOf, onHomeLand, regionAt, tileIndex } from "../sim/world";
 import { engageable } from "../sim/combat";
 import { buildView, type BuildView } from "./build-view";
 import { InFlight } from "./in-flight";
@@ -646,10 +646,14 @@ export class Controller {
 
   private tipped = -1e9;
 
-  /** Is tile (tx, ty) island ground, cut off from our base by the sea (an island map only)? */
+  /** Is tile (tx, ty) ground cut off from our base: an island, or a walled-in mesa? */
   onIsland(tx: number, ty: number): boolean {
     const w = this.world;
-    return !!w.rules?.islands && regionAt(w, tx, ty, "foot") > 0 && !onHomeLand(w, PLAYER, tx, ty);
+    const r = regionAt(w, tx, ty, "foot");
+    if (r <= 0) return false;
+    if (w.rules?.islands) return !onHomeLand(w, PLAYER, tx, ty);
+    const hq = hqOf(w, PLAYER);
+    return !!hq && r !== regionAt(w, hq.tx, hq.ty, "foot");
   }
 
   /** A tap on an island while squads were boarding: those Condors drop there once loaded (see prune). */
@@ -699,14 +703,15 @@ export class Controller {
     this.tipped = now;
     const hasCondor = this.selectedOwn().some((u) => isTransport(u.kind));
     const hasSquads = this.selectedOwn().some((u) => isInfantry(u.kind));
+    const hasHarvesters = this.selectedOwn().some((u) => u.kind === "harvester");
     const hasGoliath = this.selectedOwn().some((u) => !!u.goliath);
     this.tip = hasCondor
-      ? "That Condor is empty: tap your squads into it first"
-      : hasSquads
-        ? "Squads can't swim: tap a Condor to board, then tap the island"
+      ? "That Condor is empty: tap your squads or Harvesters into it first"
+      : hasSquads || hasHarvesters
+        ? `${hasSquads ? "Squads" : "Harvesters"} can't get there: tap a Condor to board, then tap the spot`
         : hasGoliath
           ? "No way across: two empty Condors can lift a Goliath there"
-          : "No way across: only troops flown in by Condor can take islands";
+          : "No way across: only a Condor gets there";
   }
 
   // ------------------------------------------------------------ transport --
@@ -855,9 +860,9 @@ export class Controller {
 
   /**
    * A tap on one of our own units that loads a Condor instead of selecting:
-   * with squads selected, tapping a Condor sends them aboard it (as many as
-   * it has seats, nearest first); with Condors (and no squads) selected,
-   * tapping a squad sends it aboard the nearest selected Condor with a seat,
+   * with squads or Harvesters selected, tapping a Condor sends them aboard it
+   * (as many as it has seats, nearest first); with Condors (and no riders)
+   * selected, tapping one sends it aboard the nearest selected Condor with a seat,
    * and tapping a Goliath has two empty ones lift it (liftTap). A Condor
    * that is flying somewhere stops to come and meet them. Returns false when
    * the tap is an ordinary selection.
@@ -869,7 +874,7 @@ export class Controller {
     if (!unit || unit.faction !== PLAYER) return false;
     const tapped = this.ahead().unit(unit);
     const sel = this.selectedOwn();
-    const squads = sel.filter((u) => isInfantry(u.kind));
+    const squads = sel.filter((u) => canRide(u.kind));
     // a loaded Condor over our own island garrison: the tap reinforces it, it doesn't pick the garrison up
     if (isInfantry(tapped.kind) && squads.length === 0 && this.onIsland(Math.floor(tapped.x), Math.floor(tapped.y)) && this.dropAt(tapped.x, tapped.y))
       return true;
@@ -882,9 +887,9 @@ export class Controller {
         return false; // (selects it, Unload chip and all)
       }
       riders = [...squads].sort((a, b) => dist(a, tapped) - dist(b, tapped) || a.id - b.id).slice(0, seats);
-      if (riders.length < squads.length) this.tip = `Room for ${seats} squad${seats === 1 ? "" : "s"} only`;
+      if (riders.length < squads.length) this.tip = `Room for ${seats} only`;
       carrier = tapped;
-    } else if (isInfantry(tapped.kind) && squads.length === 0) {
+    } else if (canRide(tapped.kind) && squads.length === 0) {
       const condors = sel.filter((u) => isTransport(u.kind));
       if (condors.length === 0) return false;
       const open = condors.filter((c) => this.openSeats(c, [tapped]) > 0);

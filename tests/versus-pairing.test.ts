@@ -287,10 +287,10 @@ describe("the lobby frame", () => {
     for (const t of [0, 1, 3]) bad(patch(ok, 0, 2, t));
     // reads past nbits, at every length short of the frame
     for (let n = 0; n < ok.nbits; n++) bad({ bits: ok.bits, nbits: n });
-    // map codes 6, 7 and 13–15 name no map
+    // map codes 7 and 13–15 name no map
     const MAP_AT = 2 + 1 + 4 + 16 + 16 + 16 + 3 + 8 + 8 + 7 + 1;
-    for (const code of [6, 7, 13, 14, 15]) bad(patch(ok, MAP_AT, 4, code));
-    for (const code of [0, 5]) expect(readLobbyFrame(patch(ok, MAP_AT, 4, code).bits, ok.nbits).config!.mapId).toBe(DUEL_MAPS[code]!.id);
+    for (const code of [7, 13, 14, 15]) bad(patch(ok, MAP_AT, 4, code));
+    for (const code of [0, 6]) expect(readLobbyFrame(patch(ok, MAP_AT, 4, code).bits, ok.nbits).config!.mapId).toBe(DUEL_MAPS[code]!.id);
     // delay codes 6 and 7 are D = 9 and 10
     const DELAY_AT = MAP_AT + 4 + 12;
     for (const code of [6, 7]) bad(patch(ok, DELAY_AT, 3, code));

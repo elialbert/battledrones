@@ -38,7 +38,7 @@
  *   nonce 16 (1…65535; 0: none)  heard 16 (the peer nonce this phone hears; 0: none)  rxq 3
  *   ping 8 (link clock at the start of the packet carrying it, 10 ms units, mod 256)
  *   echo 8 (the newest peer ping heard)  hold 7 (10 ms units from hearing it to this packet's start; 127: too old, or none)
- *   hasConfig 1 (host only), then: map 4 (0–5: MAPS index; 8–12: random map of BIOMES[map − 8], then seed 32)
+ *   hasConfig 1 (host only), then: map 4 (0–6: DUEL_MAPS index; 8–12: random map of BIOMES[map − 8], then seed 32)
  *     mutators 12 (MUTATOR_IDS order, first mutator first)  delay 3 (D − 3)  hostSide 1 (0: the host plays blue)  fast 1
  *   confHash 16 (0: none yet)  pick 2 (OPENER_IDS index; 3: none)  picked 1  go 1, then theirs 2 (the peer's pick as held here)
  *
@@ -163,7 +163,7 @@ import type { Faction, World } from "../sim/types";
 import { BitReader, BitWriter, CodecError } from "./codec";
 
 /** The lobby protocol's version: bumped with any change to the frame or the rules, so the lobby can say which phone is older. */
-export const LOBBY_PROTO = 1;
+export const LOBBY_PROTO = 2;
 /** The longest lobby frame (a random map, and GO). */
 export const LOBBY_FRAME_MAX = 157;
 /** Round trips kept; D comes from their median. */
