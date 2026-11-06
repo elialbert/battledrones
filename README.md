@@ -148,7 +148,7 @@ every order, note and radio line, in the [battle record viewer](https://simonw.g
   scarce, both sides start with a Condor and a squad aboard, and a side
   that loses its last Condor gets a free one flown in 45 s later. Tap an
   island with a loaded Condor selected to drop its troops. Two Condors can
-  lift a Goliath onto an island, where it anchors and trains squads like
+  lift a Goliath onto an island, where it anchors and builds outposts like
   anywhere else.
 - Armor classes and damage types, dodgeable artillery shells and bombs,
   splash damage, veterancy, retaliation AI for idle units.

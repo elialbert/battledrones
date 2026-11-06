@@ -73,8 +73,8 @@ and why:
   or is destroyed if there is none.
 - **Islands:** no special rules for the Goliath, as specified, so its
   outposts may go up on an island too: the one exception to "nothing
-  reaches an island but by Condor" on the Archipelago. The squads it
-  trains and an island outpost's units roll out on that island. Home land
+  reaches an island but by Condor" on the Archipelago. The Harvesters it
+  builds and an island outpost's units roll out on that island. Home land
   is remembered after the HQ falls, so ordinary buildings and Drop Pods
   still stay off the islands.
 - **Last Stand and Ops** still end when the HQ falls, Goliath or not:
@@ -132,7 +132,7 @@ and why:
   (`GOLIATH.armada.gap` either way of its centre), facing the map centre,
   each already on a two-Condor lift (`lift.ts armadaStart`). No opener is
   dealt (every card reads "Disabled: Goliath Armada"). As under Nomads
-  there is no HQ: anchored Goliaths also build Harvesters, every building
+  there is no HQ: anchored Goliaths are the only Harvester yard, every building
   is an outpost, and a side is beaten when its last Goliath falls. It
   also conflicts with Nomads and Airborne (each starts a side another way).
 - All three conflict with Air War and Infantry War, which ban the Goliath, and
@@ -141,7 +141,7 @@ and why:
 ## The spec as written
 
 The Goliath is a giant walking mech that works as a **mobile base**: it
-takes harvested scrap, lets you build far from home and trains infantry,
+takes harvested scrap, lets you build far from home and builds Harvesters,
 while fighting with weapons it loses one by one as it takes damage. It is
 built at a new top-of-the-tree building, the **Gantry**.
 
@@ -198,8 +198,9 @@ The Goliath has two modes, and switching between them takes time.
 - **Walking:** moves and fights. No scrap drop-off, no building nearby, no
   training.
 - **Anchored:** a scrap drop-off for harvesters, building is allowed within
-  3 tiles of it, and it trains infantry squads (only while anchored). It
-  fires normally while anchored.
+  3 tiles of it, and it builds Harvesters (only while anchored; since
+  2026-11-06 it no longer trains squads, which need an Assembly Bay, in its
+  ring if need be). It fires normally while anchored.
 - **Where it can anchor:** anywhere a building could be placed (buildable
   ground, no building or unit in the way), with no build-range requirement.
 - **Anchoring animation:** the body lowers on hydraulics, the legs splay and
@@ -268,7 +269,7 @@ The Goliath has two modes, and switching between them takes time.
   heavily damaged; over water, sea, lava or rock it is destroyed (as squads
   in a downed Condor are today).
 - **No special island rules:** on the Archipelago, a Goliath lifted onto an
-  island can anchor and train squads there like anywhere else.
+  island can anchor and build Harvesters there like anywhere else.
 
 ## Multiple Goliaths and defeat
 

@@ -89,7 +89,7 @@ export const FEATURES: Record<UnitKind, string[]> = {
   ],
   goliath: [
     "A giant walking mech and a mobile base: shoulder mortars, an eye laser, arm cannons and machine guns that hit aircraft too.",
-    `Anchor it (${GOLIATH.anchorTime} s to dig in, ${GOLIATH.packTime} s to pack up) and it takes harvesters' scrap, trains infantry, and lets you build outposts within ${GOLIATH.buildRing} tiles of it, anywhere on the map.`,
+    `Anchor it (${GOLIATH.anchorTime} s to dig in, ${GOLIATH.packTime} s to pack up) and it takes harvesters' scrap, builds Harvesters, and lets you build outposts within ${GOLIATH.buildRing} tiles of it, anywhere on the map.`,
     `Loses its weapons as it is hurt: mortars below ${Math.round(GOLIATH.weapons.mortars.lostBelow * 100)}% HP, the laser below ${Math.round(GOLIATH.weapons.laser.lostBelow * 100)}%, the cannons below ${Math.round(GOLIATH.weapons.cannons.lostBelow * 100)}%. Only Menders repair it, and each weapon reboots once it is mended.`,
     `Always visible to the enemy. Two empty Condors can carry it; while a side has a Goliath, losing its HQ doesn't lose the game. Each one costs ${Math.round(GOLIATH.costStep * 100)}% more for every Goliath you already have.`
   ]
@@ -289,8 +289,7 @@ const BUILDING_FEATURES: Record<BuildingKind, string[]> = {
   ],
   "assembly-bay": [
     "Assembles robot infantry: Trooper Squads, Rocket Squads and Sniper Teams.",
-    "Squads are cheap, take cover in woods and capture Uplinks fastest.",
-    "An anchored Goliath trains infantry too, wherever it stands."
+    "Squads are cheap, take cover in woods and capture Uplinks fastest."
   ],
   "tech-lab": [
     "Research, not production: it unlocks the heavier units at the other factories.",

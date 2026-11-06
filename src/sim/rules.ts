@@ -249,7 +249,7 @@ export const MUTATORS: Record<MutatorId, MutatorDef> = {
     id: "armada",
     name: "Goliath Armada",
     icon: "🚁",
-    // no base at all: anchored, the Goliaths build Harvesters and squads, and buildings go up round them
+    // no base at all: anchored, the Goliaths build Harvesters, and buildings go up round them
     desc: "Each side starts with four Goliaths in the air, two Condors carrying each, and nothing else",
     // (Air War and Infantry War ban the Goliath; Nomads and Airborne start a side some other way)
     conflicts: ["airwar", "infantrywar", "airborne", "nomads"],

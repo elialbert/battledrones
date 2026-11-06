@@ -30,7 +30,7 @@ import {
   GOLIATH_AI,
   enemyGantryBuilds,
   enemyHqGone,
-  goliathBarracks,
+  goliathYard,
   goliathFund,
   goliathHarvest,
   goliathHolds,
@@ -49,7 +49,7 @@ import {
   wantGantry,
   wantGoliath
 } from "./goliath";
-import { canWalk, distToFootprint, goliathsOf, hasGoliath, isAnchored, repairUrgency, trainableAt, unitCost } from "../goliath";
+import { canWalk, distToFootprint, goliathsOf, hasGoliath, isAnchored, repairUrgency, unitCost } from "../goliath";
 import type {
   ArmorClass,
   Building,
@@ -647,7 +647,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const count = (k: UnitKind) => mine.filter((u) => u.kind === k).length;
   // (Goliaths are their own planner's, never the army's: ai/goliath.ts)
   const goliaths = goliathsOf(w, faction).sort((a, b) => a.id - b.id);
-  // (squads training at an anchored Goliath count as queued too)
+  // (Harvesters building at an anchored Goliath count as queued too)
   const queued = (k: UnitKind) =>
     myBuildings.reduce((n, b) => n + b.queue.filter((q) => q.kind === k).length, 0) +
     goliaths.reduce((n, g) => n + g.goliath!.queue.filter((q) => q.kind === k).length, 0);
@@ -815,8 +815,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
   const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
-  // (Nomads: no HQ ever — the dug-in Goliath builds them, goliath.ts trainableAt)
-  const yard = hq ? { id: hq.id, queue: hq.queue } : baseGoliath && trainableAt(w, "harvester") ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null;
+  // (a Goliath short of its shift builds it on the spot; with no HQ, as under Nomads, the dug-in Goliath builds them all)
+  const yard = goliathYard(w, s) ?? (hq ? { id: hq.id, queue: hq.queue } : baseGoliath ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null);
   // (Land Grab: the next one queued behind the last, the HQ never idle: crews use them up as fast as it trains them)
   const yardRoom = s.strategy.landGrab ? 2 : 1;
   if (yard && fieldsLeft && harvesters.length < wantHarvesters && yard.queue.length < yardRoom && f.scrap >= UNITS.harvester.cost)
@@ -933,8 +933,6 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       liftWants--;
       produce(bay, kind);
     }
-    // anchored Goliaths train the squads that stand by them (ai/goliath.ts)
-    if (!liftOnly) for (const t of goliathBarracks(w, faction, s, () => rand(s), !!hq)) produce(t, t.kind);
   };
   // (island relays: tanks only reach the islands' war over the bridges, at the enemy's base —
   // a capped share of the force, the rest goes to squads, Condors and the air that holds islands)

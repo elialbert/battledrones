@@ -16,13 +16,12 @@ import {
   weaponsDown,
   anchorGround
 } from "../goliath";
-import { isInfantry } from "../infantry";
 import { canCarry } from "../lift";
 import { findPath } from "../movement";
 import { blocksObjective, uplinkPay } from "../objectives";
 import { bannedBy, goliathBase, rulesOf } from "../rules";
 import { isLoaded } from "../transport";
-import { Terrain, type Building, type BuildingKind, type Command, type Faction, type QueueItem, type Unit, type UnitKind, type World } from "../types";
+import { Terrain, type Building, type BuildingKind, type Command, type Faction, type QueueItem, type Unit, type World } from "../types";
 import {
   canGetWithin,
   dist,
@@ -56,10 +55,10 @@ import { cos, sin } from "../fmath";
  *   built), at the escalating price, one at a time and only a couple a match.
  * - SITES: a Goliath digs in at a rich field no drop-off serves (out of
  *   reach of the enemy's known guns), at an island relay on the island maps
- *   (two Condors fly it there: it trains the squads that crew the relay), or
+ *   (two Condors fly it there: an Assembly Bay in its ring trains the crew), or
  *   at a forward post toward the enemy when nothing pays better. Anchored,
- *   it is the drop-off for the harvesters sent to work its field, trains
- *   squads to stand by it and gets OUTPOSTS in its ring (a Depot that serves
+ *   it is the drop-off for the harvesters working its field, builds
+ *   the ones it is short of and gets OUTPOSTS in its ring (a Depot that serves
  *   the field after it leaves, a Turret, a SAM site). It packs up and moves
  *   on when the field runs dry, and backs off when it is losing a fight.
  * - ESCORTS: idle army with some anti-air walks with it and stands guard at
@@ -80,7 +79,7 @@ import { cos, sin } from "../fmath";
  *   (commander.ts pickPriorityTarget).
  *
  * After the HQ falls (and under Nomads, which starts that way) a Goliath is
- * the base: it digs in, builds Harvesters (Nomads) and trains squads, takes
+ * the base: it digs in, builds Harvesters, takes
  * the harvesters' scrap, buildings go up in its ring, and it moves the base
  * on to a fresh field when its own runs dry or the ring is full. Under Robot
  * Love its Goliaths keep clear of the enemy's (a meeting is a draw), unless
@@ -95,7 +94,7 @@ import { cos, sin } from "../fmath";
  * up and moves on to the next field: the economy spreads a field at a time.
  * It backs our army up: a fight on our half near it (our army in it, never
  * a fight of its own) it covers from a few tiles behind the line, dug in
- * (nothing shoves it, it trains squads into the fight, and Marshal's broken-
+ * (nothing shoves it, and Marshal's broken-
  * off units fall back to it), and once the fight is over it goes back to
  * expanding.
  *
@@ -210,10 +209,6 @@ export const GOLIATH_AI = {
   outpostIncome: 600,
   /** Sites keep this far (tiles) from an enemy Goliath (beyond its mortars' reach, 8). */
   goliathGap: 11,
-  /** Squads an anchored Goliath trains to stand by it (more at an island relay, more still with no HQ). */
-  garrison: 2,
-  relayGarrison: 3,
-  lastGarrison: 4,
 
   /** Menders the Airpads add for our Goliaths, at most (one with any; three for each hurt one). */
   menders: 4,
@@ -287,8 +282,6 @@ export const GOLIATH_AI = {
   coverReach: 18,
   /** …dug in this far behind the line, toward home (its mortars reach 8)… */
   coverBack: 5,
-  /** …training squads into it, this many by it at most… */
-  coverGarrison: 4,
   /** …and packs up this long (s) after the last enemy in reach. */
   coverLinger: 20,
 
@@ -838,7 +831,7 @@ function chooseSite(w: World, faction: Faction, s: AiState, g: Unit, ctx: Goliat
     cands.push({ kind: "field", at, field: c, value: cl.value, score, lift, key: cl.key });
   }
 
-  // island relays (the island maps): two Condors fly it out, it trains the crew
+  // island relays (the island maps): two Condors fly it out, a Bay in its ring trains the crew
   if (lifts && w.rules?.islands)
     for (const l of w.objectives.uplinks) {
       if (!l.infantryOnly) continue;
@@ -968,6 +961,10 @@ function prune(w: World, faction: Faction, m: Memo): Plan[] {
 
 // --- the harvesters ------------------------------------------------------
 
+/** Is Goliath `g` dug in at a field with scrap left? */
+const worksField = (w: World, g: Unit, plan: Plan): boolean =>
+  plan.phase === "hold" && isAnchored(g) && !!plan.site?.field && fieldLeft(w, plan.site.field, 5) > 0;
+
 /**
  * Harvesters for the fields our anchored Goliaths work (call from the
  * economy pass): `extra` more wanted beyond the base's count, `keep` (ids
@@ -992,8 +989,7 @@ export function goliathHarvest(
   for (const [id, plan] of [...m.plans].sort((a, b) => a[0] - b[0])) {
     const g = w.units.get(id);
     const site = plan.site;
-    const working = !!g && plan.phase === "hold" && isAnchored(g) && !!site?.field && fieldLeft(w, site.field, 5) > 0;
-    if (!working) {
+    if (!g || !worksField(w, g, plan)) {
       // moved on: back home, unless an outpost Depot by the field takes their scrap
       if (plan.harvesters.length > 0) {
         const field = site?.field;
@@ -1047,7 +1043,8 @@ function ownBuildingsNear(w: World, faction: Faction, p: P, r: number): Building
  * The outpost an anchored Goliath wants started now (construction pass,
  * when the slot is free), or null: the personality's list for a field (a
  * Depot only while the field is rich, a SAM only once enemy air is about),
- * a Turret and a SAM at an island relay or a forward post, one every
+ * an Assembly Bay (the crew), a SAM and a Turret at an island relay, a
+ * Turret and a SAM at a forward post, one every
  * GOLIATH_AI.outpostEvery seconds, never one it can't place. An expander's
  * Goliath (AiState.goliathStyle) wants its Depot first, started while it is
  * still walking in (GOLIATH_AI.expandAhead): it waits, ready, until the
@@ -1082,7 +1079,7 @@ export function outpostWanted(w: World, faction: Faction, s: AiState, scrap: num
       site.kind === "field"
         ? GOLIATH_AI.outposts[s.strategy.name]
         : site.kind === "relay"
-          ? ["sam-site", "turret"]
+          ? ["assembly-bay", "sam-site", "turret"]
           : site.kind === "cover"
             ? [] // (a fight's over before a tower would be)
             : ["turret", "sam-site"];
@@ -1162,31 +1159,17 @@ function outpostSpotFor(w: World, faction: Faction, g: Unit, site: Site, kind: B
 // --- training ------------------------------------------------------------
 
 /**
- * Anchored Goliaths that want a squad trained now, with what (runBays):
- * squads to stand by it (GOLIATH_AI.garrison; more at an island relay, more
- * still with the HQ gone), Rocket Squads once enemy air or armour is about.
+ * A Goliath working a field that is still short of its shift (goliathHarvest),
+ * or null: its Harvesters roll out on the field, with no walk from home.
  */
-export function goliathBarracks(
-  w: World,
-  faction: Faction,
-  s: AiState,
-  r: () => number,
-  hasHq: boolean
-): { id: number; queue: QueueItem[]; kind: UnitKind }[] {
+export function goliathYard(w: World, s: AiState): { id: number; queue: QueueItem[] } | null {
   const m = memos.get(s);
-  const out: { id: number; queue: QueueItem[]; kind: UnitKind }[] = [];
-  for (const g of goliathsOf(w, faction).sort(byId)) {
-    if (!isAnchored(g) || g.goliath!.queue.length > 0) continue;
-    const plan = m?.plans.get(g.id);
-    const kind = plan?.site?.kind;
-    const want = !hasHq ? GOLIATH_AI.lastGarrison : kind === "relay" ? GOLIATH_AI.relayGarrison : kind === "cover" ? GOLIATH_AI.coverGarrison : GOLIATH_AI.garrison;
-    let have = 0;
-    for (const u of w.units.values()) if (u.faction === faction && isInfantry(u.kind) && dist(u.x, u.y, g.x, g.y) <= 7) have++;
-    if (have >= want) continue;
-    const rockets = s.seenAir >= 2 || s.seenHeavy >= 2;
-    out.push({ id: g.id, queue: g.goliath!.queue, kind: rockets && r() < 0.6 ? "rocket-squad" : "trooper" });
+  if (!m) return null;
+  for (const [id, plan] of [...m.plans].sort((a, b) => a[0] - b[0])) {
+    const g = w.units.get(id);
+    if (g && worksField(w, g, plan) && plan.harvesters.length < GOLIATH_AI.harvesters[s.strategy.name]) return { id, queue: g.goliath!.queue };
   }
-  return out;
+  return null;
 }
 
 // --- the plan ------------------------------------------------------------
@@ -1562,7 +1545,7 @@ function step(w: World, faction: Faction, s: AiState, g: Unit, plan: Plan, ctx: 
       const site = plan.site;
       // no HQ (lost, or Nomads): this is the base. It stays — unless its field is dry, or its
       // ring is full and the field thin, and a field worth it lies within reach: then it moves
-      // on, while nothing threatens it (it's a drop-off and a barracks again within a minute)
+      // on, while nothing threatens it (it's a drop-off again within a minute)
       if (!ctx.hasHq) {
         if (w.tick - plan.checked < GOLIATH_AI.recheck * TICK_RATE) return;
         plan.checked = w.tick;

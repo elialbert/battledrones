@@ -1,7 +1,7 @@
 import { BUILDINGS, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
-import { applySpawnRank, goliathBase, rulesOf } from "./rules";
+import { applySpawnRank, rulesOf } from "./rules";
 import { Terrain, type Command, type Faction, type GoliathMode, type GoliathWeapon, type Unit, type UnitKind, type World } from "./types";
 import { buildingCenter, hqOf, inBounds, removeBuilding, sideFrame, spawnUnit, terrainAt } from "./world";
 import { hypot } from "./fmath";
@@ -12,7 +12,7 @@ import { FACTIONS, sidesOf } from "./sides";
  *
  * - WALKING it moves and fights. ANCHORED (GOLIATH.anchorTime to dig in,
  *   GOLIATH.packTime to pack up again) it can't move, but harvesters unload
- *   at it, it trains infantry squads, and buildings may go up in its build
+ *   at it, it builds Harvesters, and buildings may go up in its build
  *   ring as OUTPOSTS (economy.ts canPlaceBuilding): outposts never count as
  *   base for build range, so nothing is built off them.
  * - Four weapon systems (GOLIATH.weapons; combat.ts fires them) go offline as
@@ -324,18 +324,15 @@ export function goliathTrainer(w: World, id: number, faction: Faction): Unit | n
   return u && u.faction === faction && u.goliath ? u : null;
 }
 
-/** Can an anchored Goliath train this kind? (Robot infantry: what an Assembly Bay builds.) */
-export const trainable = (kind: UnitKind): boolean => UNITS[kind].builtAt === "assembly-bay";
-
-/** Can an anchored Goliath build this kind in this match? Robot infantry, and under Nomads or Goliath Armada Harvesters too (no HQ to build them). */
-export const trainableAt = (w: World, kind: UnitKind): boolean => trainable(kind) || (kind === "harvester" && goliathBase(w));
+/** Can an anchored Goliath build this kind? Harvesters only: squads come from an Assembly Bay, which can stand in its ring. */
+export const trainable = (kind: UnitKind): boolean => kind === "harvester";
 
 // ------------------------------------------------------------ mutators ---
 
 /**
  * Nomads (createMapWorld, skirmish): each side's HQ is replaced by a Goliath
  * standing anchored where it stood — the base walks. The starting Harvester
- * and squad stay; the Goliath builds Harvesters (trainableAt), takes their
+ * and squad stay; the Goliath builds Harvesters (trainable), takes their
  * scrap and lets buildings go up round it. With no HQ, a side is beaten when
  * its last Goliath falls.
  */

@@ -112,15 +112,15 @@ describe("a duel's Controller reads its own orders on their way as landed", () =
     expect(pickProducer(w, "condor", c.selectedUnits, v)).toBeNull();
   });
 
-  it("treats an anchored Goliath packing up as no barracks, and a tap on the map moves it", () => {
+  it("treats an anchored Goliath packing up as no yard, and a tap on the map moves it", () => {
     const w = field();
     const c = duel(w);
     const g = anchored(spawnUnit(w, "goliath", "blue", 14, 14));
-    expect(pickProducer(w, "trooper", c.selectedUnits, c.view())?.id).toBe(g.id);
     c.selectUnits([g.id]);
+    expect(pickProducer(w, "harvester", c.selectedUnits, c.view())?.id).toBe(g.id);
     expect(c.toggleAnchor()).toBe("packUp");
     c.drainCommands();
-    expect(pickProducer(w, "trooper", c.selectedUnits, c.view())).toBeNull();
+    expect(pickProducer(w, "harvester", c.selectedUnits, c.view())?.goliath).toBeNull();
     c.tapWorld(25.5, 25.5, { kind: "ground" });
     expect(c.drainCommands()).toEqual([{ type: "attackMove", faction: "blue", unitIds: [g.id], x: 25.5, y: 25.5 }]);
   });

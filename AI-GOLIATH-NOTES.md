@@ -46,7 +46,7 @@ with an escort, digs in, and from then on: harvesters are sent to unload at
 it (`goliathHarvest`), outposts go up in its ring (`outpostWanted`, `outpostSpot`: a per-personality list of Depot,
 Turret and SAM Site, `GOLIATH_AI.outposts`; the Depot only for a field still
 worth `depotMin`; each kind once per stay, not under enemy guns), and it
-trains squads (`goliathBarracks`). It packs up when the field is dry,
+builds the Harvesters its field is short of (`goliathYard`). It packs up when the field is dry,
 when it loses a fight (`retreatHp`), or when a much better site turns up
 (`recheck`, `better`).
 
@@ -83,7 +83,7 @@ round it, it falls back to the nearest group.
 
 **No HQ.** The commander no longer gives up when the HQ falls while a
 Goliath lives: the Goliath becomes the base (`baseGoliath` in
-`commander.ts`), digs in somewhere safe, takes the scrap, trains squads, and
+`commander.ts`), digs in somewhere safe, takes the scrap, builds Harvesters, and
 buildings go up in its ring.
 
 **Nomads.** The base Goliath digs in on the home field, builds Harvesters

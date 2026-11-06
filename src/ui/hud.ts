@@ -391,7 +391,7 @@ export function createHud(api: HudApi): Hud {
         radioCue("no-scrap");
         return toast("Not enough scrap");
       }
-      // (infantry: a selected anchored Goliath first, else the shortest queue, Bays and Goliaths alike)
+      // (Harvesters: a selected anchored Goliath first, else the shortest queue, HQ and Goliaths alike)
       const at = pickProducer(w, kind, api.ctrl.selectedUnits, view);
       if (!at) return toast(kind === "goliath" ? "Gantry busy" : "Production queue full");
       api.ctrl.enqueue({ type: "produce", faction: PLAYER, buildingId: at.id, unit: kind });
@@ -611,7 +611,7 @@ export function createHud(api: HudApi): Hud {
 
   const pings: MinimapPing[] = [];
   let lastReady: BuildingKind | null = null;
-  /** The anchored Goliaths selected last frame (ids), to open the Infantry tab when one turns up. */
+  /** The anchored Goliaths selected last frame (ids), to open the Vehicles tab when one turns up. */
   let lastTrainers = "";
 
   // --------------------------------------------------------- top buttons ---
@@ -911,11 +911,11 @@ export function createHud(api: HudApi): Hud {
     renderChips(chips);
     selection.update();
     // an anchored Goliath selected (or one selected finishing digging in): the
-    // squads it trains are on the Infantry tab
+    // Harvesters it builds are on the Vehicles tab
     const trainers = ctrl.spectator ? "" : ctrl.goliathsSelected().filter((g) => g.goliath!.mode === "anchored").map((g) => g.id).join(",");
     if (trainers !== lastTrainers) {
-      if (trainers && !lastTrainers && tab !== "infantry") {
-        tab = "infantry";
+      if (trainers && !lastTrainers && tab !== "ground") {
+        tab = "ground";
         renderGrid();
       }
       lastTrainers = trainers;
@@ -960,7 +960,7 @@ export function createHud(api: HudApi): Hud {
       const el = buttons.get(`u:${kind}`)!;
       const pt = parts.get(`u:${kind}`)!;
       const { progs, lock, badge } = pt;
-      // (Goliaths' training queues count with the Assembly Bays', paused ones too)
+      // (Goliaths' queues count with the HQ's, paused ones too)
       let queued = 0;
       // one progress column per building that makes it, side by side: each one's unit in production (0: busy with
       // something else, or between units); shown while any of them is building one
@@ -1185,7 +1185,7 @@ export const HELP_HTML = `
   <h3>Squads</h3><p>Hold a squad chip (<b>1</b>, <b>2</b>, <b>3</b>) to save the selected units into it. Tap it to select them again, double-tap to fly the camera there. It flashes red when a member is hit. Keys: 1–3 select, Ctrl+1–3 (or Shift+1–3) save.</p>
   <h3>Infantry</h3><p>You start every battle with a <b>Trooper Squad</b> by your HQ. The <b>Assembly Bay</b> trains more: <b>Troopers</b> (cheap rifles that hit air too), <b>Rocket Squads</b> (kill Mastodons and Hornets) and, with a Tech Lab, <b>Sniper Teams</b> (delete other infantry, and stay hidden in woods unless they fire or you come within ${INF.concealRadius} tiles). A squad is one unit of several robots: they fall as it takes damage, and it shoots weaker with each one lost. Squads walk through woods and rough ground at full speed, take half damage in woods and capture Uplinks twice as fast, but Mastodons crush them.</p>
   <h3>Condor</h3><p>The Airpad's dropship carries two squads or Harvesters over water, rock and anything else. Select squads and tap the Condor (or select the Condor and tap a squad) to load them; then <b>long-press</b> the map to fly there and drop them, or tap <b>⇣ Unload</b> (key U) to drop them where it is. Shot down over land, its squads bail out hurt; over water or rock they go down with it.</p>
-  <h3>Gantry and Goliath</h3><p>With a Fab Plant, an Airpad, a Tech Lab and an Assembly Bay standing you can build the <b>Gantry</b> (one per side, and the enemy always sees it). It builds the <b>Goliath</b>: a giant walking mech and a base on legs. Each one costs ${Math.round(GOLIATH.costStep * 100)}% more for every Goliath you already have. Select it and tap <b>⚓ Anchor</b> (key G) to dig in where it stands (${GOLIATH.anchorTime} s): anchored, harvesters unload at it, it trains squads (Infantry tab, no Assembly Bay needed; tap the map to set their rally point) and you can build within ${GOLIATH.buildRing} tiles of it, even far from base. Those <b>outposts</b> keep working after it leaves, but never extend your build range. <b>⇡ Pack up</b> (G again, ${GOLIATH.packTime} s) before it can walk. It fires mortars, an eye laser, arm cannons and machine guns, and loses them as it is hurt: mortars below ${Math.round(GOLIATH.weapons.mortars.lostBelow * 100)}%, the laser below ${Math.round(GOLIATH.weapons.laser.lostBelow * 100)}%, the cannons below ${Math.round(GOLIATH.weapons.cannons.lostBelow * 100)}% (the machine guns never). Only <b>Menders</b> repair it, and brought back up its weapons reboot. The enemy can always see it.</p>
+  <h3>Gantry and Goliath</h3><p>With a Fab Plant, an Airpad, a Tech Lab and an Assembly Bay standing you can build the <b>Gantry</b> (one per side, and the enemy always sees it). It builds the <b>Goliath</b>: a giant walking mech and a base on legs. Each one costs ${Math.round(GOLIATH.costStep * 100)}% more for every Goliath you already have. Select it and tap <b>⚓ Anchor</b> (key G) to dig in where it stands (${GOLIATH.anchorTime} s): anchored, harvesters unload at it, it builds Harvesters (Vehicles tab, no HQ needed; tap the map to set their rally point) and you can build within ${GOLIATH.buildRing} tiles of it, even far from base. Those <b>outposts</b> keep working after it leaves, but never extend your build range. <b>⇡ Pack up</b> (G again, ${GOLIATH.packTime} s) before it can walk. It fires mortars, an eye laser, arm cannons and machine guns, and loses them as it is hurt: mortars below ${Math.round(GOLIATH.weapons.mortars.lostBelow * 100)}%, the laser below ${Math.round(GOLIATH.weapons.laser.lostBelow * 100)}%, the cannons below ${Math.round(GOLIATH.weapons.cannons.lostBelow * 100)}% (the machine guns never). Only <b>Menders</b> repair it, and brought back up its weapons reboot. The enemy can always see it.</p>
   <h3>Lift</h3><p>Two empty Condors can carry a walking Goliath: select both and tap it to hook on, then <b>long-press</b> where to set it down (a tap flies it there and hovers; <b>⇣ Set down</b> or U puts it down where it is). In the air it fires only its machine guns, and if either Condor is shot down it falls: hurt over land, lost over water, sea, lava or rock.</p>
   <h3>Counters</h3><p>Stingers beat Flak · Flak beats aircraft · Wasps beat tanks · Raptors hunt aircraft · Mastodons crush ground armies · Mortars and Hornets smash bases and squads · Rocket Squads beat Mastodons · Snipers beat infantry · Rocket Squads, Wasps, Lancers and Hornets bring down Goliaths. Long-press any build button for details.</p>
   <h3>Terrain</h3><p>Roads are fast, mud and woods are slow, woods give cover. Water blocks tanks — Lancers hover across, aircraft fly over everything; the open sea round the Archipelago's islands stops Lancers too. Infantry walk through woods and mud at full speed but can't cross water or rock.</p>

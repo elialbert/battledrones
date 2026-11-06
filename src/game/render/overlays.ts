@@ -155,7 +155,7 @@ export class OverlayRenderer {
       // the load rides 2 px under the health bar, in the same frame style
       if (harvesterLoad) this.juice.meter(ctx, s.x - bw / 2, s.y - 4, bw, 3, u.cargo / ECONOMY.harvesterCapacity, "#ffd66e");
     }
-    // infantry training under our own anchored Goliaths
+    // Harvesters building under our own anchored Goliaths
     for (const u of w.units.values()) {
       const head = u.goliath?.queue[0];
       if (!head || u.faction !== PLAYER || !this.entities.isShown(u.id)) continue;

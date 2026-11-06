@@ -169,8 +169,8 @@ broad headlands and coves, and which leaves the necks as they are.
   remembers where it stood, so this holds once the HQ has fallen, or under
   Nomads was never built), so no turret, Assembly Bay or pod crew from home
   ever reaches an island. The one exception is a Goliath: two Condors can
-  lift one onto an island, where it anchors like anywhere else, trains
-  squads that step out round its feet, and lets outposts go up in its
+  lift one onto an island, where it anchors like anywhere else, builds
+  Harvesters that step out round its feet, and lets outposts go up in its
   build ring, whose units roll out on the island too (see *The Goliath*).
   Harvesters only count a Goliath or an outpost as a drop-off if they can
   drive up to it.

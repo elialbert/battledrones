@@ -69,7 +69,7 @@ const SELECTION_HINTS: [string, string][] = [
   ["squads", "Squads: hold 1, 2 or 3 to save the selected units. Tap it to select them, double-tap to fly there."],
   ["infantry", "Infantry cross woods at full speed and take half damage there. Keep them clear of Mastodons: they get crushed."],
   ["condor", "Condor: select squads, then tap the Condor to load them. Long-press the map (or tap an island) to fly there and drop them, or tap ⇣ Unload."],
-  ["goliath", `⚓ Anchor (G) to take scrap, train squads and build within ${GOLIATH.buildRing} tiles. Pack up to move.`],
+  ["goliath", `⚓ Anchor (G) to take scrap, build Harvesters and build within ${GOLIATH.buildRing} tiles. Pack up to move.`],
   ["lift", "Two empty Condors lift a Goliath: tap your Goliath to hook on, then long-press where to set it down."]
 ];
 

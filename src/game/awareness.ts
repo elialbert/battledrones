@@ -91,7 +91,7 @@ export const AWARE = {
 
 /**
  * Is this Goliath part of its side's base? An anchored one is (a drop-off,
- * a barracks, a build ring: GOLIATH.md), and once the side's HQ has fallen
+ * a Harvester yard, a build ring: GOLIATH.md), and once the side's HQ has fallen
  * any Goliath is: it is the last life, so the match is lost with it. Hits on
  * a base Goliath raise the same alarms as hits on a building.
  */

@@ -223,25 +223,25 @@ describe("the two-Condor lift from taps", () => {
 describe("training from an anchored Goliath", () => {
   it("queues on a selected anchored Goliath first, else the shortest queue (buildings first on a tie)", () => {
     const w = field();
-    const bay = spawnBuilding(w, "assembly-bay", "blue", 10, 4);
+    const hq = hqOf(w, "blue")!;
     const g = anchored(spawnUnit(w, "goliath", "blue", 20, 20));
     const walker = spawnUnit(w, "goliath", "blue", 25, 20);
     const none = new Set<number>();
-    expect(pickProducer(w, "trooper", none)?.id).toBe(bay.id);
-    expect(pickProducer(w, "trooper", new Set([g.id]))?.id).toBe(g.id);
-    bay.queue.push({ kind: "trooper", remaining: 100 });
-    expect(pickProducer(w, "trooper", none)?.id).toBe(g.id);
-    // a walking Goliath doesn't train
-    expect(pickProducer(w, "trooper", new Set([walker.id]))?.id).toBe(g.id);
+    expect(pickProducer(w, "harvester", none)?.id).toBe(hq.id);
+    expect(pickProducer(w, "harvester", new Set([g.id]))?.id).toBe(g.id);
+    hq.queue.push({ kind: "harvester", remaining: 100 });
+    expect(pickProducer(w, "harvester", none)?.id).toBe(g.id);
+    // a walking Goliath doesn't build
+    expect(pickProducer(w, "harvester", new Set([walker.id]))?.id).toBe(g.id);
     // the selected one full: the others take it
-    while (g.goliath!.queue.length < 6) g.goliath!.queue.push({ kind: "trooper", remaining: 100 });
-    expect(pickProducer(w, "trooper", new Set([g.id]))?.id).toBe(bay.id);
-    while (bay.queue.length < 6) bay.queue.push({ kind: "trooper", remaining: 100 });
-    expect(pickProducer(w, "trooper", new Set([g.id]))).toBeNull();
-    // no Bay at all: the Goliath is the barracks
-    w.buildings.delete(bay.id);
+    while (g.goliath!.queue.length < 6) g.goliath!.queue.push({ kind: "harvester", remaining: 100 });
+    expect(pickProducer(w, "harvester", new Set([g.id]))?.id).toBe(hq.id);
+    while (hq.queue.length < 6) hq.queue.push({ kind: "harvester", remaining: 100 });
+    expect(pickProducer(w, "harvester", new Set([g.id]))).toBeNull();
+    // no HQ at all: the Goliath is the yard
+    w.buildings.delete(hq.id);
     g.goliath!.queue.length = 0;
-    expect(pickProducer(w, "rocket-squad", none)?.id).toBe(g.id);
+    expect(pickProducer(w, "harvester", none)?.id).toBe(g.id);
   });
 
   it("under Nomads, Harvesters queue on the anchored Goliath, and a ground tap gives it a rally point", () => {
@@ -251,7 +251,7 @@ describe("training from an anchored Goliath", () => {
     expect(isRooted(g)).toBe(true);
     expect(unitBlocker(w, "blue", "harvester")).toBeNull();
     expect(pickProducer(w, "harvester", new Set())?.id).toBe(g.id);
-    expect(pickProducer(w, "trooper", new Set())?.id).toBe(g.id);
+    expect(pickProducer(w, "trooper", new Set())).toBeNull(); // (squads need an Assembly Bay, even here)
     const c = new Controller(w);
     c.selectUnits([g.id]);
     c.tapWorld(g.x + 4.5, g.y, { kind: "ground" });

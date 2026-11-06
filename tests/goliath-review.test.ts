@@ -202,24 +202,24 @@ describe("final review regressions", () => {
     expect(c.drainCommands()).toEqual([]);
   });
 
-  it("squads queued on a Goliath that packed up still count, and one can still be cancelled", async () => {
+  it("Harvesters queued on a Goliath that packed up still count, and one can still be cancelled", async () => {
     const { producersOf, queuesOf } = await import("../src/sim/economy");
     const w = field();
     const g = spawnUnit(w, "goliath", "blue", 13, 13);
     g.goliath!.mode = "anchored";
     w.factions.blue.scrap = 1000;
     step(w, [
-      { type: "produce", faction: "blue", buildingId: g.id, unit: "trooper" },
-      { type: "produce", faction: "blue", buildingId: g.id, unit: "trooper" }
+      { type: "produce", faction: "blue", buildingId: g.id, unit: "harvester" },
+      { type: "produce", faction: "blue", buildingId: g.id, unit: "harvester" }
     ]);
-    const count = () => queuesOf(w, "blue", "trooper").reduce((n, p) => n + p.queue.filter((q) => q.kind === "trooper").length, 0);
+    const count = () => queuesOf(w, "blue", "harvester").reduce((n, p) => n + p.queue.filter((q) => q.kind === "harvester").length, 0);
     expect(count()).toBe(2);
     step(w, [{ type: "packUp", faction: "blue", unitIds: [g.id] }]);
-    expect(producersOf(w, "blue", "trooper")).toEqual([]);
+    expect(producersOf(w, "blue", "harvester").filter((p) => p.goliath)).toEqual([]);
     expect(count()).toBe(2);
     const scrap = w.factions.blue.scrap;
-    const p = queuesOf(w, "blue", "trooper").find((p) => p.queue.some((q) => q.kind === "trooper"))!;
-    step(w, [{ type: "cancelProduce", faction: "blue", buildingId: p.id, unit: "trooper" }]);
+    const p = queuesOf(w, "blue", "harvester").find((p) => p.queue.some((q) => q.kind === "harvester"))!;
+    step(w, [{ type: "cancelProduce", faction: "blue", buildingId: p.id, unit: "harvester" }]);
     expect(count()).toBe(1);
     expect(w.factions.blue.scrap).toBeGreaterThan(scrap);
   });

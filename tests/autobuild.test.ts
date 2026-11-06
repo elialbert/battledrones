@@ -117,11 +117,9 @@ describe("unit autobuild", () => {
     const { w, ctrl } = setup();
     const g = spawnUnit(w, "goliath", "blue", 16, 16);
     g.goliath!.mode = "anchored";
-    const bay = spawnBuilding(w, "assembly-bay", "blue", 14, 2);
-    ctrl.toggleAutoBuild("trooper");
+    ctrl.toggleAutoBuild("harvester");
     step(w, ctrl.drainCommands());
     expect(g.goliath!.queue).toHaveLength(1);
-    expect(bay.queue).toHaveLength(1);
     g.goliath!.mode = "walking";
     expect(ctrl.drainCommands()).toEqual([]);
   });

@@ -1,5 +1,5 @@
 import { BUILDINGS, ECONOMY, GOLIATH, TERRAIN, TICK_RATE, UNITS } from "./balance";
-import { anchoredGoliaths, goliathTrainer, goliathsOf, hasGoliath, inGoliathRing, isAnchored, overlapsGoliath, trainableAt, unitCost } from "./goliath";
+import { anchoredGoliaths, goliathTrainer, goliathsOf, hasGoliath, inGoliathRing, isAnchored, overlapsGoliath, trainable, unitCost } from "./goliath";
 import { moveUnitToward } from "./movement";
 import { blocksObjective } from "./objectives";
 import { isStunned } from "./powers";
@@ -64,14 +64,14 @@ export function buildingBlocker(w: World, faction: Faction, kind: BuildingKind):
 /** "A", "A and B", "A, B and C". */
 const andList = (xs: string[]): string => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
-/** Why this unit can't be queued right now (null = it can). An anchored Goliath stands in for an Assembly Bay. */
+/** Why this unit can't be queued right now (null = it can). An anchored Goliath stands in for an HQ. */
 export function unitBlocker(w: World, faction: Faction, kind: UnitKind): string | null {
   const stats = UNITS[kind];
   const banned = bannedBy(w, kind, faction);
   if (banned) return banned;
-  if (!hasBuilding(w, faction, stats.builtAt) && !(trainableAt(w, kind) && anchoredGoliaths(w, faction).length > 0))
+  if (!hasBuilding(w, faction, stats.builtAt) && !(trainable(kind) && anchoredGoliaths(w, faction).length > 0))
     // (with a Goliath on the move and no HQ, which can never be built: say how to get the button back)
-    return trainableAt(w, kind) && hasGoliath(w, faction) && stats.builtAt === "hq"
+    return trainable(kind) && hasGoliath(w, faction)
       ? "Anchor a Goliath"
       : `Needs ${BUILDINGS[stats.builtAt].name}`;
   if (stats.requires && !hasBuilding(w, faction, stats.requires))
@@ -343,12 +343,11 @@ export const paidFor = (q: QueueItem): number => q.paid ?? UNITS[q.kind].cost;
 const queueCap = (kind: UnitKind): number => (kind === "goliath" ? GOLIATH.queueMax : ECONOMY.maxQueue);
 
 /**
- * Why an anchored Goliath can't train `kind` now (null = it can): robot
- * infantry (and under Nomads, Harvesters) only, while anchored, under the
- * usual tech and bans — but no Assembly Bay needed (the Goliath is the barracks).
+ * Why an anchored Goliath can't build `kind` now (null = it can): Harvesters
+ * only, while anchored, under the usual bans — no HQ needed.
  */
 export function trainBlocker(w: World, g: Unit, kind: UnitKind): string | null {
-  if (!g.goliath || !trainableAt(w, kind)) return "Can't train that";
+  if (!g.goliath || !trainable(kind)) return "Can't train that";
   const banned = bannedBy(w, kind, g.faction);
   if (banned) return banned;
   const req = UNITS[kind].requires;
@@ -363,7 +362,7 @@ export function produceUnit(w: World, faction: Faction, buildingId: number, kind
   if (!stats) return;
   const b = w.buildings.get(buildingId);
   if (!b) {
-    // an anchored Goliath trains infantry
+    // an anchored Goliath builds Harvesters
     const g = goliathTrainer(w, buildingId, faction);
     if (!g || trainBlocker(w, g, kind)) return;
     const q = g.goliath!.queue;
@@ -381,7 +380,7 @@ export function produceUnit(w: World, faction: Faction, buildingId: number, kind
   b.queue.push({ kind, remaining: stats.buildTime * TICK_RATE, ...(cost !== stats.cost ? { paid: cost } : {}) });
 }
 
-/** Somewhere `kind` can be queued: a building, or an anchored Goliath (infantry). */
+/** Somewhere `kind` can be queued: a building, or an anchored Goliath (Harvesters). */
 export interface Producer {
   id: number;
   queue: QueueItem[];
@@ -391,25 +390,25 @@ export interface Producer {
 
 /**
  * Every producer of `kind` for `faction`, buildings first (in id order), then
- * anchored Goliaths for robot infantry. The HUD's queue counts, the shortest-
+ * anchored Goliaths for Harvesters. The HUD's queue counts, the shortest-
  * queue pick and "cancel one" all go through this.
  */
 export function producersOf(w: World, faction: Faction, kind: UnitKind): Producer[] {
   const out: Producer[] = [];
   for (const b of w.buildings.values())
     if (b.faction === faction && b.kind === UNITS[kind].builtAt) out.push({ id: b.id, queue: b.queue, goliath: null });
-  if (trainableAt(w, kind)) for (const g of anchoredGoliaths(w, faction)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
+  if (trainable(kind)) for (const g of anchoredGoliaths(w, faction)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
   return out;
 }
 
 /**
  * Every queue holding `kind` for `faction`: producersOf's, plus a Goliath's
- * that packed up with squads still queued (paused till it digs in again, and
+ * that packed up with Harvesters still queued (paused till it digs in again, and
  * paid for, so the HUD still counts them and can cancel one).
  */
 export function queuesOf(w: World, faction: Faction, kind: UnitKind): Producer[] {
   const out = producersOf(w, faction, kind);
-  if (trainableAt(w, kind))
+  if (trainable(kind))
     for (const g of goliathsOf(w, faction))
       if (!isAnchored(g) && g.goliath!.queue.some((q) => q.kind === kind)) out.push({ id: g.id, queue: g.goliath!.queue, goliath: g });
   return out;

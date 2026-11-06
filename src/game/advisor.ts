@@ -149,7 +149,7 @@ export function counterAdvice(
 function ownValue(w: World, faction: Faction, kind: UnitKind | BuildingKind): number {
   let n = 0;
   if (kind in UNITS) {
-    // (squads riding in a Condor are off the field, but still ours; so are those a Goliath is training)
+    // (squads riding in a Condor are off the field, but still ours; so are those a Goliath is building)
     for (const u of w.units.values())
       if (u.faction === faction) {
         if (u.kind === kind) n++;

@@ -192,8 +192,8 @@ describe("a Goliath in the field", () => {
     // harvesters sent to its field unload at it
     const atIt = fx.filter((e) => e.type === "deposit" && e.faction === "red" && Math.hypot(e.x - g.x, e.y - g.y) < 0.5);
     expect(atIt.length).toBeGreaterThanOrEqual(1);
-    // and it trains squads to stand by it
-    expect(cmds.some((c) => c.type === "produce" && c.buildingId === g.id)).toBe(true);
+    // and it trains no squads: only an Assembly Bay does
+    expect(cmds.some((c) => c.type === "produce" && c.buildingId === g.id && c.unit !== "harvester")).toBe(false);
   }, 30000);
 
   it("walks with an escort, some of it anti-air once enemy air has been seen", () => {
@@ -334,14 +334,13 @@ describe("an expander's Goliath backs the army up", () => {
     return { w, ai, g, at, foes };
   }
 
-  it("digs in behind a fight of ours near it, trains squads into it, and packs up once it's over", () => {
+  it("digs in behind a fight of ours near it, and packs up once it's over", () => {
     const { w, ai, g, at, foes } = fight(6);
-    const { cmds } = runRed(w, 40, ai);
+    runRed(w, 40, ai);
     expect(goliathSite(ai, g.id)?.kind).toBe("cover");
     expect(isAnchored(g)).toBe(true);
     // behind the line, toward home, its mortars in reach
     expect(Math.hypot(g.x - at.x, g.y - at.y)).toBeLessThan(GOLIATH.weapons.mortars.range);
-    expect(cmds.some((c) => c.type === "produce" && c.buildingId === g.id)).toBe(true);
     // the fight over: back to what it was doing
     for (const f of foes) w.units.delete(f.id);
     runRed(w, GOLIATH_AI.coverLinger + 15, ai);
@@ -483,10 +482,10 @@ describe("the two-Condor lift", () => {
     const there = regionAt(w, Math.floor(g.x), Math.floor(g.y), "ground");
     expect(there).not.toBe(home);
     expect(there).toBeGreaterThan(0);
-    // …where it digs in and trains the crew
-    const { cmds } = runRed(w, 40, ai);
+    // …where it digs in and puts up an Assembly Bay to train the crew
+    runRed(w, 40, ai);
     expect(isAnchored(g)).toBe(true);
-    expect(cmds.some((cmd) => cmd.type === "produce" && cmd.buildingId === g.id)).toBe(true);
+    expect(buildings(w, "red").some((b) => b.kind === "assembly-bay" && b.outpost)).toBe(true);
   }, 60000);
 });
 

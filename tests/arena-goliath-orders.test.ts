@@ -206,7 +206,7 @@ describe("arena Goliath lifts", () => {
 
 describe("arena Goliath production and placement", () => {
   it.each([
-    ["harvester", true], ["harvester", false], ["trooper", true], ["trooper", false]
+    ["harvester", true], ["harvester", false]
   ] as const)("queues and cancels %s with explicit producer = %s", (kind, explicit) => {
     const { w, g } = anchored();
     const before = w.factions.blue.scrap;
@@ -230,6 +230,13 @@ describe("arena Goliath production and placement", () => {
     expect(w.factions.blue.scrap).toBe(before);
   });
 
+  it("refuses squads at a Goliath", () => {
+    const { w, g } = anchored();
+    const batch = parseOrders(w, "blue", [{ produce: "trooper", at: g.id }], "play");
+    expect(batch.commands).toEqual([]);
+    expect(batch.results[0]).toContain("refused:");
+  });
+
   it("finishes an accepted Goliath production order", () => {
     const { w, g } = anchored();
     const batch = accepted(structuredClone(w), [{ produce: "harvester", at: g.id }]);
@@ -242,10 +249,10 @@ describe("arena Goliath production and placement", () => {
     const { w, g } = anchored();
     const before = w.factions.blue.scrap;
     const batch = parseOrders(w, "blue", [
-      { produce: "trooper", at: g.id },
+      { produce: "harvester", at: g.id },
       { pack_up: [g.id] },
-      { produce: "trooper", at: g.id },
-      { cancel: "trooper" }
+      { produce: "harvester", at: g.id },
+      { cancel: "harvester" }
     ], "play");
     expect(batch.commands.map((c) => c.type)).toEqual(["produce", "packUp", "cancelProduce"]);
     expect(batch.results[2]).toContain("refused:");

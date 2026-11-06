@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { planMenders } from "../src/sim/ai/menders";
 import { BUILDINGS, COMBAT, ECONOMY, GOLIATH, SALVAGE, TERRAIN, TICK_RATE, UNITS } from "../src/sim/balance";
 import { findTarget } from "../src/sim/combat";
-import { buildingBlocker, canPlaceBuilding, unitBlocker } from "../src/sim/economy";
+import { buildingBlocker, canPlaceBuilding, nearestScrapTile, unitBlocker } from "../src/sim/economy";
 import { isVisible, tickFog } from "../src/sim/fog";
 import { anchorBlocker, goliathCost, goliathReach, modeProgress, unitCost } from "../src/sim/goliath";
 import { unitSeenBy } from "../src/sim/infantry";
@@ -624,78 +624,80 @@ describe("getting past a Goliath", () => {
 
 // ------------------------------------------------------------- training ---
 
-describe("training infantry", () => {
-  it("an anchored Goliath trains squads (no Assembly Bay needed); they appear by it; cancel refunds", () => {
+describe("building Harvesters", () => {
+  it("an anchored Goliath builds Harvesters; they appear by it; cancel refunds", () => {
     const w = field();
     const g = anchoredAt(w, "blue", 30, 30);
-    expect([...w.buildings.values()].some((b) => b.kind === "assembly-bay")).toBe(false);
     w.factions.blue.scrap = 1000;
-    step(w, [produce("blue", g.id, "trooper"), produce("blue", g.id, "rocket-squad")]);
-    expect(g.goliath!.queue.map((q) => q.kind)).toEqual(["trooper", "rocket-squad"]);
-    expect(w.factions.blue.scrap).toBe(1000 - UNITS.trooper.cost - UNITS["rocket-squad"].cost);
-    step(w, [cancel("blue", g.id, "rocket-squad")]);
-    expect(g.goliath!.queue.map((q) => q.kind)).toEqual(["trooper"]);
-    expect(w.factions.blue.scrap).toBe(1000 - UNITS.trooper.cost);
+    step(w, [produce("blue", g.id, "harvester"), produce("blue", g.id, "harvester")]);
+    expect(g.goliath!.queue.map((q) => q.kind)).toEqual(["harvester", "harvester"]);
+    expect(w.factions.blue.scrap).toBe(1000 - 2 * UNITS.harvester.cost);
+    step(w, [cancel("blue", g.id, "harvester")]);
+    expect(g.goliath!.queue.map((q) => q.kind)).toEqual(["harvester"]);
+    expect(w.factions.blue.scrap).toBe(1000 - UNITS.harvester.cost);
     const fx: FxEvent[] = [];
-    runUntil(w, () => g.goliath!.queue.length === 0, UNITS.trooper.buildTime * TICK_RATE + 10, fx);
+    runUntil(w, () => g.goliath!.queue.length === 0, UNITS.harvester.buildTime * TICK_RATE + 10, fx);
     const built = evs(fx, "built").map((e) => w.units.get(e.id)).filter((u): u is Unit => !!u);
-    expect(built.map((u) => u.kind)).toEqual(["trooper"]);
+    expect(built.map((u) => u.kind)).toEqual(["harvester"]);
     const t = built[0]!;
     expect(t.faction).toBe("blue");
     expect(Math.hypot(t.x - g.x, t.y - g.y)).toBeLessThanOrEqual(GOLIATH.footprint / 2 + 2.5);
     expect(Math.hypot(t.x - g.x, t.y - g.y)).toBeGreaterThanOrEqual(UNITS.goliath.radius); // not inside it
   });
 
-  it("is refused while walking (and while digging in), and for anything but infantry", () => {
+  it("is refused while walking (and while digging in), and for anything but Harvesters", () => {
     const w = field();
     w.factions.blue.scrap = 5000;
     const g = spawnUnit(w, "goliath", "blue", 30, 30);
-    step(w, [produce("blue", g.id, "trooper")]);
+    step(w, [produce("blue", g.id, "harvester")]);
     expect(g.goliath!.queue).toHaveLength(0);
     step(w, [anchorCmd(g)]);
-    step(w, [produce("blue", g.id, "trooper")]);
+    step(w, [produce("blue", g.id, "harvester")]);
     expect(g.goliath!.mode).toBe("anchoring");
     expect(g.goliath!.queue).toHaveLength(0);
     expect(w.factions.blue.scrap).toBe(5000);
     run(w, ANCHOR_TICKS);
     expect(g.goliath!.mode).toBe("anchored");
-    // give it the whole tech tree: still nothing but robot infantry
+    // give it the whole tech tree: still nothing but Harvesters
     giveTech(w, "blue", PREREQS);
     spawnBuilding(w, "gantry", "blue", 8, 8);
+    spawnBuilding(w, "assembly-bay", "blue", 12, 8);
     for (const k of Object.keys(UNITS) as UnitKind[]) {
-      if (UNITS[k].builtAt === "assembly-bay") continue;
+      if (k === "harvester") continue;
       step(w, [produce("blue", g.id, k)]);
       expect(g.goliath!.queue, k).toHaveLength(0);
     }
     expect(w.factions.blue.scrap).toBe(5000);
     // and another side can't use it
     w.factions.red.scrap = 5000;
-    step(w, [produce("red", g.id, "trooper")]);
+    step(w, [produce("red", g.id, "harvester")]);
     expect(g.goliath!.queue).toHaveLength(0);
     expect(w.factions.red.scrap).toBe(5000);
   });
 
-  it("a Sniper Team needs a Tech Lab", () => {
-    const w = field();
-    const g = anchoredAt(w, "blue", 30, 30);
-    w.factions.blue.scrap = 5000;
-    step(w, [produce("blue", g.id, "sniper")]);
-    expect(g.goliath!.queue).toHaveLength(0);
-    spawnBuilding(w, "tech-lab", "blue", 6, 1);
-    step(w, [produce("blue", g.id, "sniper")]);
-    expect(g.goliath!.queue.map((q) => q.kind)).toEqual(["sniper"]);
-    expect(w.factions.blue.scrap).toBe(5000 - UNITS.sniper.cost);
+  it("a fresh Harvester goes to work on the field nearest the Goliath, in a plain match", () => {
+    const w = createMapWorld("riverlands");
+    const near = nearestScrapTile(w, 40, 20, "blue")!;
+    const g = spawnUnit(w, "goliath", "blue", near.x + 3.5, near.y + 0.5);
+    g.goliath!.mode = "anchored"; // (fields are ringed by wasteland: it couldn't dig in this close by itself)
+    w.factions.blue.scrap = 1000;
+    step(w, [produce("blue", g.id, "harvester")]);
+    const fx: FxEvent[] = [];
+    runUntil(w, () => g.goliath!.queue.length === 0, UNITS.harvester.buildTime * TICK_RATE + 10, fx);
+    const h = evs(fx, "built").map((e) => w.units.get(e.id)).find((u) => u?.kind === "harvester")!;
+    expect(h.order.type).toBe("harvest");
+    if (h.order.type === "harvest") expect(Math.hypot(h.order.fieldX - g.x, h.order.fieldY - g.y)).toBeLessThan(8);
   });
 
   it("the queue pauses while it packs up and walks, and resumes once anchored again", () => {
     const w = field();
     const g = anchoredAt(w, "blue", 30, 30);
     w.factions.blue.scrap = 1000;
-    step(w, [produce("blue", g.id, "trooper")]);
+    step(w, [produce("blue", g.id, "harvester")]);
     run(w, 10);
     const head = g.goliath!.queue[0]!;
     const r0 = head.remaining;
-    expect(r0).toBeLessThan(UNITS.trooper.buildTime * TICK_RATE);
+    expect(r0).toBeLessThan(UNITS.harvester.buildTime * TICK_RATE);
     step(w, [packCmd(g)]);
     const r1 = head.remaining;
     run(w, PACK_TICKS + 20); // packing, then walking
@@ -709,7 +711,7 @@ describe("training infantry", () => {
     const fx: FxEvent[] = [];
     const t = runUntil(w, () => g.goliath!.queue.length === 0, 200, fx);
     expect(t).toBeLessThan(200);
-    expect(evs(fx, "built").map((e) => w.units.get(e.id)?.kind)).toEqual(["trooper"]);
+    expect(evs(fx, "built").map((e) => w.units.get(e.id)?.kind)).toEqual(["harvester"]);
   });
 });
 
@@ -1553,7 +1555,7 @@ describe("no special island rules", () => {
     return spot!;
   }
 
-  it("on the Archipelago, a Goliath lifted onto an island anchors, trains squads and builds outposts there", () => {
+  it("on the Archipelago, a Goliath lifted onto an island anchors, builds Harvesters and outposts there", () => {
     const w = createMapWorld("archipelago");
     expect(w.rules?.islands).toBe(true);
     const spot = islandSpot(w);
@@ -1581,15 +1583,15 @@ describe("no special island rules", () => {
     // anchors
     run(w, ANCHOR_TICKS + 1, [anchorCmd(g)]);
     expect(g.goliath!.mode).toBe("anchored");
-    // trains (the squad appears on the island, beside it)
+    // builds (the Harvester appears on the island, beside it)
     w.factions.blue.scrap = 5000;
-    step(w, [produce("blue", g.id, "trooper")]);
+    step(w, [produce("blue", g.id, "harvester")]);
     const fx: FxEvent[] = [];
-    runUntil(w, () => g.goliath!.queue.length === 0, UNITS.trooper.buildTime * TICK_RATE + 10, fx);
-    const sq = evs(fx, "built").map((e) => w.units.get(e.id)).find((u) => u?.kind === "trooper");
-    expect(sq).toBeDefined();
-    expect(Math.hypot(sq!.x - g.x, sq!.y - g.y)).toBeLessThan(4);
-    expect(passable(w, Math.floor(sq!.x), Math.floor(sq!.y), "foot")).toBe(true);
+    runUntil(w, () => g.goliath!.queue.length === 0, UNITS.harvester.buildTime * TICK_RATE + 10, fx);
+    const h = evs(fx, "built").map((e) => w.units.get(e.id)).find((u) => u?.kind === "harvester");
+    expect(h).toBeDefined();
+    expect(Math.hypot(h!.x - g.x, h!.y - g.y)).toBeLessThan(4);
+    expect(island(w, Math.floor(h!.x), Math.floor(h!.y))).toBe(true);
     // builds an outpost there
     const t = placeNow(w, "blue", "turret", spot.x + 1, spot.y - 3);
     expect(t).not.toBeNull();

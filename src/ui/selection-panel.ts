@@ -2,7 +2,6 @@ import { BUILDINGS, GOLIATH, TICK_RATE, UNITS } from "../sim/balance";
 import { weaponReady } from "../sim/goliath";
 import { isTransport, squadAlive, squadSize } from "../sim/infantry";
 import { liftedBy } from "../sim/lift";
-import { goliathBase } from "../sim/rules";
 import type { Faction, GoliathWeapon, QueueItem, Unit, UnitKind, World } from "../sim/types";
 import { sfx } from "../game/audio";
 import { PLAYER, isProducer, type Controller } from "../game/controller";
@@ -71,14 +70,13 @@ export function createSelectionPanel(selEl: HTMLElement, api: { world: World; ct
     const strip = GOLIATH_STRIP.map(
       ({ k, short }, i) => `<span class="gw ${states[i]}" title="${GOLIATH.weapons[k].name}: ${said[states[i]!]}">${short}</span>`
     ).join("");
-    // ours, anchored: it trains squads, and under Nomads or Goliath Armada Harvesters too (a queue that
-    // stopped when it packed up stays cancellable)
+    // ours, anchored: it builds Harvesters (a queue that stopped when it packed up stays cancellable)
     const train = !own
       ? ""
       : g.queue.length > 0
         ? queueHtml(u.id, g.queue, u.faction)
         : g.mode === "anchored" && !g.lift
-          ? `<span class="hint">${goliathBase(w) ? "Trains Harvesters and squads" : "Trains squads"} · tap the map to rally</span>`
+          ? `<span class="hint">Builds Harvesters · tap the map to rally</span>`
           : "";
     const live: Live = { hp: `${Math.ceil(u.hp)} / ${st.hp}`, head: headShare(g.queue), mode: goliathMode(u) };
     // (short landscape screens put the name and the HP line side by side: style.css)
