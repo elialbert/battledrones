@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GestureRecognizer, STRAND_PX, TAP_SLOP_PX, isHoldRelease, strandedPointers } from "../src/game/gestures";
+import { GestureRecognizer, MOUSE_CLICK_SLOP_PX, STRAND_PX, TAP_SLOP_PX, isHoldRelease, strandedPointers } from "../src/game/gestures";
 
 function makeCallbacks() {
   return {
@@ -258,6 +258,23 @@ describe("mouse gestures", () => {
     g.up(mouse(120, 130), 100);
     expect(cb.onBoxEnd).toHaveBeenCalledWith(120, 130, true, "mouse");
     expect(cb.onPan).not.toHaveBeenCalled();
+  });
+
+  it("a hurried click that wobbles past the slop is still a click, not an empty box (left-click retreat)", () => {
+    g.down(mouse(60, 60), 0);
+    g.move(mouse(72, 66), 30);
+    expect(cb.onBoxStart).toHaveBeenCalled(); // (the box shows as it starts)
+    g.up(mouse(75, 68), 60);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(75, 68, false, "mouse");
+    expect(cb.onTap).toHaveBeenCalledWith(60, 60, "mouse");
+  });
+
+  it("a real drag past MOUSE_CLICK_SLOP_PX is still a box", () => {
+    g.down(mouse(60, 60), 0);
+    g.move(mouse(60 + MOUSE_CLICK_SLOP_PX + 2, 60), 30);
+    g.up(mouse(60 + MOUSE_CLICK_SLOP_PX + 2, 60), 60);
+    expect(cb.onBoxEnd).toHaveBeenCalledWith(60 + MOUSE_CLICK_SLOP_PX + 2, 60, true, "mouse");
+    expect(cb.onTap).not.toHaveBeenCalled();
   });
 
   it("a slow click (held, not dragged) is a hold release that says it was the mouse", () => {

@@ -39,6 +39,13 @@ export const TAP_SLOP_PX = 8;
 export const HOLD_DELAY_MS = 250;
 export const DOUBLE_TAP_MS = 300;
 export const DOUBLE_TAP_SLOP_PX = 24;
+/**
+ * A mouse press released this close (px) to where it went down is a click, though it moved past
+ * TAP_SLOP_PX on the way and drew a box: a hurried click in a fight wobbles, and a box that small
+ * over open ground selected nothing and dropped the move order without a word (the left-click
+ * retreat from the enemy base that "sometimes doesn't work"; a right click has no slop at all).
+ */
+export const MOUSE_CLICK_SLOP_PX = 24;
 /** Finger distance must change this much before a pinch starts zooming —
  * otherwise two-finger pans wobble the zoom from natural finger jitter. */
 export const PINCH_ACTIVATE_PX = 16;
@@ -223,7 +230,14 @@ export class GestureRecognizer {
         break;
       }
       case "box":
-        this.cb.onBoxEnd(p.x, p.y, true, this.downType);
+        if (this.downType === "mouse" && Math.hypot(p.x - this.downX, p.y - this.downY) <= MOUSE_CLICK_SLOP_PX) {
+          // (the box is let go of unreleased: it selects nothing; the click goes where the press did)
+          this.cb.onBoxEnd(p.x, p.y, false, this.downType);
+          this.lastTapTime = now;
+          this.lastTapX = this.downX;
+          this.lastTapY = this.downY;
+          this.cb.onTap(this.downX, this.downY, this.downType);
+        } else this.cb.onBoxEnd(p.x, p.y, true, this.downType);
         this.mode = "idle";
         break;
       case "pan":
