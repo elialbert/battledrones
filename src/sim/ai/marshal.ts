@@ -318,8 +318,9 @@ function fastDepot(buildOrder: Strategy["buildOrder"]): Partial<Strategy> {
 /**
  * The plans each difficulty picks from, at random for each game: every plan,
  * at every level (a player at any level can meet any of them), but for The
- * Wall and The Feint on Brutal (they're there to be weird, not hard; they
- * can still be picked by name). The level is in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
+ * Wall, The Feint and Juggernaut on Brutal (they're there to be weird, not hard; they
+ * can still be picked by name; Juggernaut made Brutal feel easy twice, replays
+ * 2026-10-30 and 2026-11-08). The level is in how Marshal plays the plan (MARSHAL). Easy's five minutes' peace holds
  * Rush's wave till 5:00; Hornet Strike's bombers and Juggernaut's Goliath
  * don't wait for it (they never did on Casual).
  */
@@ -329,7 +330,7 @@ export const MARSHAL_POOL: Record<Difficulty, PlanName[]> = {
   casual: ALL_PLANS,
   normal: ALL_PLANS,
   hard: ALL_PLANS,
-  brutal: ALL_PLANS.filter((p) => p !== "wall" && p !== "feint")
+  brutal: ALL_PLANS.filter((p) => p !== "wall" && p !== "feint" && p !== "juggernaut")
 };
 
 /**

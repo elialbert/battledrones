@@ -726,7 +726,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const anchorFor = (kind: BuildingKind) =>
     s.strategy.wall && hq && (kind === "turret" || kind === "sam-site")
       ? wallAnchor(w, faction, s.strategy, kind, myBuildings, hqC, enemyHome)
-      : creepAt && CREEP_KINDS.has(kind)
+      : creepAt && (CREEP_KINDS.has(kind) || (creepsAll(w) && kind !== "gantry"))
       ? creepAt
       : kind === "turret" || kind === "sam-site"
       ? defencePoint
@@ -743,7 +743,9 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const creepField = hq ? creepTarget(w, faction, s.strategy, hqC, claimable) : null;
   const creepOut = { deferred: false };
   const next = nextBuilding(w, faction, myBuildings, s, gantryWanted, hq ? undefined : fits, false, !!creepField, creepOut);
-  creepAt = creepOut.deferred ? creepField : null;
+  // (early, the whole order goes up toward the field while there's one to build out to, not only while
+  // the Depot is what's next: a Tech Lab started behind a SAM Site went up at home, Frostbite)
+  creepAt = creepOut.deferred || creepsAll(w) ? creepField : null;
   // a Depot past the build zone is deployed by a crew: it goes up alongside the rest of the order, once
   // the crew is trained (ai/expansion.ts)
   const expansionNext = next === "depot" && !!hq && !s.strategy.wall && depotByCrew(w, faction, s, buildingCenter(hq));
@@ -1764,10 +1766,13 @@ function nextBuilding(
     if (expansion) return kind; // (deployed by a crew: ai/expansion.ts)
     if (buildingBlocker(w, faction, kind)) continue;
     if (fits && !fits(kind)) continue; // (no room for it in any ring: the next thing that fits)
-    // (the creep goes on only while production is what comes next: else the crew goes after all)
-    if (deferred && !CREEP_KINDS.has(kind)) return crewAfterAll();
+    // (the creep goes on only while production is what comes next: else the crew goes after all;
+    // early on, whatever comes next goes up toward the field, defences too: CREEP_UNTIL)
+    if (deferred && !CREEP_KINDS.has(kind) && !(creepsAll(w) && kind !== "gantry")) return crewAfterAll();
     return kind;
   }
+  // (early, with the order done: a Turret carries the zone on, its reach the longest)
+  if (deferred && creepsAll(w) && !buildingBlocker(w, faction, "turret")) return "turret";
   return deferred ? crewAfterAll() : null;
 
   function crewAfterAll(): BuildingKind | null {
@@ -1783,8 +1788,17 @@ function nextBuilding(
  * and the factories' new units standing by it (replay 2026-11-03).
  */
 const CREEP_KINDS: ReadonlySet<BuildingKind> = new Set(["fab-plant", "airpad", "assembly-bay", "tech-lab"]);
+/**
+ * Till this tick every plan builds out to its next field, not founding a Depot with a crew, while the
+ * creep can get nearer: four harvesters used up is a big price early on. The player's "build out toward
+ * the first expansion" (replay 2026-11-08, Ashlands: red's crew Depot at 1:43 against blue's built one).
+ */
+const CREEP_UNTIL = 5 * 60 * TICK_RATE;
+const creepsAll = (w: World) => w.tick < CREEP_UNTIL;
 /** The creep's buildings stop this far (tiles) short of the field: the Depot goes up in front of them, by it. */
 const CREEP_SHORT = 5;
+/** …and this far, before CREEP_UNTIL, when the creep has stalled short of the field. */
+const EARLY_CREEP_SHORT = 2;
 /** A field this close (tiles) to one of the base's buildings is built out to, not crewed: two or three buildings' reach. */
 const CREEP_REACH = 16;
 
@@ -1801,7 +1815,8 @@ function creepTarget(
   hqC: { x: number; y: number },
   ourSide: (tx: number, ty: number) => boolean
 ): { x: number; y: number } | null {
-  if (strategy.wall || strategy.holdChoke || w.survival) return null;
+  // (a plan holding its choke builds out too while it's early: CREEP_UNTIL)
+  if (strategy.wall || (strategy.holdChoke && !creepsAll(w)) || w.survival) return null;
   let depots = 0;
   for (const b of w.buildings.values()) if (b.faction === faction && b.kind === "depot") depots++;
   if (depots >= depotCap(w, faction, strategy)) return null;
@@ -1816,17 +1831,29 @@ function creepTarget(
     }
   if (near > CREEP_REACH) return null;
   const d = Math.max(1, dist(field.x, field.y, hqC.x, hqC.y));
-  const by = Math.min(CREEP_SHORT, d);
-  const at = { x: field.x + ((hqC.x - field.x) / d) * by, y: field.y + ((hqC.y - field.y) / d) * by };
   // (only while the next building gets nearer: Frostbite's field past a band of rock and woods drew
   // the factories up to the ridge, where the zone can't cross, and held the crew back till 4:28)
-  const spot = findPlacementSpot(w, faction, "fab-plant", at);
-  const size = BUILDINGS["fab-plant"].size / 2;
-  if (!spot || dist(spot.tx + size, spot.ty + size, field.x, field.y) > near - CREEP_STEP) return null;
-  return at;
+  // (early on a Turret creeps too, past what a factory can reach, and the creep closes in further when
+  // it stalls short of a Depot site: CREEP_UNTIL; Ashlands, a Turret 6.4 tiles off and a crew sent)
+  const early = creepsAll(w);
+  const kinds: BuildingKind[] = early ? ["fab-plant", "turret"] : ["fab-plant"];
+  const step = early ? EARLY_CREEP_STEP : CREEP_STEP;
+  for (const short of early ? [CREEP_SHORT, EARLY_CREEP_SHORT] : [CREEP_SHORT]) {
+    const by = Math.min(short, d);
+    const at = { x: field.x + ((hqC.x - field.x) / d) * by, y: field.y + ((hqC.y - field.y) / d) * by };
+    const gets = kinds.some((kind) => {
+      const spot = findPlacementSpot(w, faction, kind, at);
+      const size = BUILDINGS[kind].size / 2;
+      return !!spot && dist(spot.tx + size, spot.ty + size, field.x, field.y) <= near - step;
+    });
+    if (gets) return at;
+  }
+  return null;
 }
 /** The creep's next building must stand at least this much (tiles) nearer the field than the nearest one does. */
 const CREEP_STEP = 2;
+/** …before CREEP_UNTIL (Ashlands 2026-11-08: red's Fab Plant 1.98 tiles nearer was turned down, and a crew went). */
+const EARLY_CREEP_STEP = 1;
 
 /** Harvesters Land Grab keeps mining for each Depot before another crew goes. */
 const GRAB_MINERS = 3;
