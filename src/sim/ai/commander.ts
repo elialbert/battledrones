@@ -1,7 +1,7 @@
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
-import { SERVED, UNSAFE, UNWALKED, expansionSite, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
+import { DRY_FIELD, SERVED, UNSAFE, UNWALKED, expansionSite, fieldScrapLeft, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
 import { tendFields } from "./fields";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
@@ -827,7 +827,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const busy = new Set([...goliathFields.keep, ...crew, ...staffed.sent]);
   const tended = fieldsLeft
     ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds, staffed.staffed)
-    : { sent: new Set<number>(), held: new Set<number>() };
+    : { sent: new Set<number>(), held: new Set<number>(), unsafeAt: undefined };
   for (const h of harvesters) {
     if (busy.has(h.id) || tended.sent.has(h.id) || tended.held.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one; sent to a field)
     const o = h.order;
@@ -835,6 +835,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const astray = islandMap && o.type === "harvest" && !ourSide(o.fieldX, o.fieldY);
     if (h.order.type !== "idle" && !astray) continue;
     const field = fieldFrom(h.x, h.y);
+    // (not onto a field tendFields calls unsafe: it waits where it is, ai/fields.ts)
+    if (field && !astray && tended.unsafeAt?.(field.x, field.y)) continue;
     if (field) cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
     else if (astray) {
       const [dx, dy] = sideFrame(w, faction).vec(0, 3); // (just behind the HQ, in the side's frame)
@@ -2121,12 +2123,16 @@ function scanDepotSite(
   }
   // (the nearest tile of each field, on foot from our drop-offs, as ai/expansion.ts unservedField)
   const walk = walkFromDrops(w, faction);
+  const left = fieldScrapLeft(w);
   const near = new Map<number, { x: number; y: number; d: number; k: number }>();
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
       const i = tileIndex(w, tx, ty);
       if (!isResource(w, i) || served.has(ids[i]!)) continue;
+      // (nor by a field nearly mined out: the far end of a home field, its near end dry and so no longer
+      // "served" — replay 2026-11-16, Riverlands, a Depot at 3:00 by the last 1.1k)
+      if (left[i]! < DRY_FIELD) continue;
       if (!nearestDropOff(w, faction, tx + 0.5, ty + 0.5)) continue;
       const d = dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y);
       if (d > far) continue;

@@ -2,6 +2,7 @@ import { BUILDINGS, ECONOMY, GOLIATH, TICK_RATE, UNITS } from "../balance";
 import { foundBlocker } from "../economy";
 import { findPath } from "../movement";
 import type { Command, Faction, Unit, World } from "../types";
+import { Terrain } from "../types";
 import { dist, isResource, passable, regionAt, sideFrame, tileIndex } from "../world";
 import { sealsOff } from "../placement";
 import { anchorFootprint } from "../goliath";
@@ -59,15 +60,19 @@ export function unservedField(
 ): { x: number; y: number; d: number } | null {
   const drops = [...w.buildings.values()].filter((b) => b.faction === faction && BUILDINGS[b.kind].dropOff);
   const walk = walkFromDrops(w, faction);
+  const left = fieldScrapLeft(w);
   const fr = sideFrame(w, faction); // scanned in the side's own frame (mirror-fair ties)
   let best: { x: number; y: number; d: number; k: number } | null = null;
   for (let fy = 0; fy < w.height; fy++)
     for (let fx = 0; fx < w.width; fx++) {
       const [tx, ty] = fr.tile(fx, fy, 1);
-      if (!isResource(w, tileIndex(w, tx, ty))) continue;
+      const i = tileIndex(w, tx, ty);
+      if (!isResource(w, i)) continue;
+      // (a field nearly mined out isn't worth a Depot: replay 2026-11-16, Riverlands, a third Depot by the home field's last 1.1k)
+      if (left[i]! < DRY_FIELD) continue;
       const x = tx + 0.5;
       const y = ty + 0.5;
-      const steps = walk[tileIndex(w, tx, ty)]!;
+      const steps = walk[i]!;
       if (drops.some((b) => dist(x, y, b.tx + BUILDINGS[b.kind].size / 2, b.ty + BUILDINGS[b.kind].size / 2) < reach)) {
         // (in reach as the crow flies, but not on foot — a field behind rocks, every load walked round
         // them, past whatever waits out there — isn't served: Riverlands' south field, -marshal-brutal)
@@ -80,6 +85,48 @@ export function unservedField(
       if ((!best || k < best.k || (k === best.k && d < best.d)) && !skip?.(x, y)) best = { x, y, d, k };
     }
   return best ? { x: best.x, y: best.y, d: best.d } : null;
+}
+
+/** A field with less scrap than this left gets no Depot (unservedField, commander.ts depotSite). */
+export const DRY_FIELD = 2000;
+
+/**
+ * For every field tile, the scrap left in its whole field (tiles of scrap or
+ * crystal ground two apart or closer are one field, as commander.ts fieldIds);
+ * 0 off the fields. Once per tick.
+ */
+export function fieldScrapLeft(w: World): Float64Array {
+  return perTick(w, "field scrap left", () => {
+    const W = w.width;
+    const isField = (i: number) => w.terrain[i] === Terrain.Scrap || w.terrain[i] === Terrain.Crystal;
+    const out = new Float64Array(W * w.height);
+    const seen = new Uint8Array(W * w.height);
+    for (let i = 0; i < out.length; i++) {
+      if (seen[i] || !isField(i)) continue;
+      const tiles = [i];
+      seen[i] = 1;
+      let sum = 0;
+      for (let n = 0; n < tiles.length; n++) {
+        const k = tiles[n]!;
+        sum += w.scrap[k]!;
+        const x = k % W;
+        const y = Math.floor(k / W);
+        for (let dy = -2; dy <= 2; dy++)
+          for (let dx = -2; dx <= 2; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= W || ny >= w.height) continue;
+            const j = ny * W + nx;
+            if (!seen[j] && isField(j)) {
+              seen[j] = 1;
+              tiles.push(j);
+            }
+          }
+      }
+      for (const k of tiles) out[k] = sum;
+    }
+    return out;
+  });
 }
 
 /**

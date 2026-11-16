@@ -153,7 +153,7 @@ export function tendFields(
   cmds: Command[],
   /** A Depot's shift (ai/expansion.ts staffExpansions): moved off its field only when that's unsafe. */
   staffed: ReadonlySet<number> = new Set()
-): { sent: Set<number>; held: Set<number> } {
+): { sent: Set<number>; held: Set<number>; unsafeAt?: (tx: number, ty: number) => boolean } {
   const sightings = remember(w, key, seen);
   let last = sentAt.get(key);
   if (!last) sentAt.set(key, (last = new Map()));
@@ -204,6 +204,13 @@ export function tendFields(
   const exposure = fields.map((f) => exposureAt(f.cx, f.cy));
   const fieldOfTile = new Map<number, number>();
   fields.forEach((f, i) => f.tiles.forEach((t) => fieldOfTile.set(t, i)));
+  // (for the commander's own search: a harvester sent lately and idle again is its to send, and the
+  // nearest field was the one this had just called it off — Riverlands, replay 2026-11-16: a dozen
+  // walked mid → home → mid every few seconds for a minute and a half, and mined nothing)
+  const unsafeAt = (tx: number, ty: number) => {
+    const i = fieldOfTile.get(ty * W + tx);
+    return i !== undefined && unsafe[i]!;
+  };
   /** Which field a harvester mines now (its order's), or -1. */
   const onField = (h: Unit): number => {
     const o = h.order;
@@ -273,5 +280,5 @@ export function tendFields(
     cmds.push({ type: "move", faction, unitIds: retreat, x: hqC.x + dx, y: hqC.y + dy });
     for (const id of retreat) sent.add(id);
   }
-  return { sent, held };
+  return { sent, held, unsafeAt };
 }
