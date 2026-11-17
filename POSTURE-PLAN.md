@@ -1,6 +1,7 @@
 # Posture: one army / economy / tech slider for Marshal (plan, 2026-11-17)
 
-Status: **stage 0 built (2026-11-17, uncommitted)**: posture worked out and traced, read by nothing. Baseline: `e84b110`. See §10.
+Status (2026-11-17): stage 0 and 1.1 shipped (`b6c9010`); idle-producer fix shipped (`c8a7583`); stage 1.2, fix 2,
+stage 3's consumers and the Dune Sea SAM move measured and **rejected**. The posture is still traced and read by nothing. See §10–13.
 
 ## 1. Why
 
@@ -405,3 +406,47 @@ at 5:00: the held Depots are the mid-game economy. Same lesson as RIVERLANDS-BOO
 4–34) and the replay's own 13k home field: that field runs out, and the Depot that wasn't built is what's
 missing then. Don't retry a blanket hold; if anything, a Dune Sea–specific look at what the early SAMs and
 turret cost the construction slot.
+
+## 13. Idle producers, stage 3, Dune Sea (2026-11-17)
+
+**Why producers idle.** Brutal mirrors, 20 games, 2:00–8:00, a producer with an empty queue while more than
+600 is banked, by the reason the commander skipped it: **doctrine** (an order off the committed army's
+lines turns into nothing) 15% of Fab Plant time, 11% of Bays, 3% of Airpads; the **flak rule** 12% of
+Airpads; everything else (reserve, Goliath fund, APM drops, the Bays' infantry share) ≤ 2% each.
+
+**Shipped `c8a7583`:** off-doctrine factories build their usual unit from what's banked past
+`unit + DOCTRINE.busyAbove` once the doctrine's own factories are fed; producers sat out by the flak or
+doctrine rule no longer block `extraProduction` ("every producer busy"). Doctrine idling 15% → 6%.
+Panel A (seeds 401–404, 440 games, vs `75cf9a2`): 158-160-122, **0.498**; Panel B (100 APM, 180): **0.492**.
+Win rates even (doctrine starts at 6:00, most games are decided by then), but at 8:00 banked
+**720 vs 2.8k** and army HP **10.4k vs 8.6k** (B: 1.9k vs 4.3k, 9.9k vs 8.5k). Shipped for the spend.
+
+**Stage 3 consumers: rejected.** Reads unchanged (§3.3); what they bought, only off the curve (`nudge` =
+share − curve, so Easy–Normal are untouched): economy nudge ≥ 0.05 → +1 Depot over the cap and +2
+harvesters; army nudge ≥ 0.05 → `extraProduction` at half `expandAt`, ≥ 0.1 → one more past `maxExtra`;
+greed close-out → `assaultAt × 0.6`. vs `c8a7583`:
+
+| Panel | Games | W-L-T | Score |
+| --- | ---: | --- | ---: |
+| A: Brutal 175 APM, seeds 421–424 | 440 | 181-161-98 | 0.523 |
+| B: 100 APM, seeds 431–433 | 180 | 58-65-57 | 0.481 |
+| B again, seeds 434–436 | 180 | 59-67-54 | 0.478 |
+
+Brutal +1 SE, Hard −0.5 SE twice with mined −250 to −400 at 5:00. Not adopted.
+
+**Greed fixture** (`--opponents greed`, `tools/ai/scenarios.ts`): frozen-baseline Boom, 5 Depots, 16 miners,
+two Fab Plants, no extra factories or raids, home until 4:00. 40 games per plan, before / after stage 3:
+Boom 22-11 / 26-9, Rush 22-11 / 24-14, Balanced 24-11 / 23-12; **no kill before 4:00 either way**. It isn't
+greedy against Brutal Marshal: it mines what Marshal mines (16.6k vs 16.8k at 3:00), so the greed rule
+fired in ≤ 18% of samples to 5:00 (`ahead` ~50% and `teching:hit` ~45% dominate). The greed rule needs a
+human out-expanding Brutal to show anything; bot mirrors don't produce one.
+
+**Dune Sea: extra SAMs / turrets after the third factory (Hard/Brutal): rejected.** Panel A seeds 441–444
+vs `c8a7583`: 167-173-100, **0.493**; Dune Sea 0.483 with the 3:00 bank 2.4k vs 3.5k; Air Swarm 0.39,
+Ironclad 0.40, Proving Grounds 0.42. The early anti-air is worth its slot; the bank it frees buys nothing.
+
+**Where that leaves the posture.** Every lever tried off it (factory count, Depot hold, stage 3's buys,
+construction order) has measured even or worse in bot mirrors; queue depth 2 and the idle fix, both plain
+spending fixes, are what held. The trace is still worth keeping for human replays. Next candidates, if
+any: a longer sighting memory for the reads (§10: 6.9k remembered vs 11.2k real at 3:00), and judging the
+greed rule on human records with `tools/ai/posture-trace.ts`, not mirrors.

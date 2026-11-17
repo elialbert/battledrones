@@ -7,10 +7,16 @@ import { buildingCenter, dist, hqOf, sideFrame } from "../../src/sim/world";
 /** Full-loop opponents: commanders pay for all production with real income. Only their
  * military destinations are scripted; these fixtures never spawn units or grant money.
  * Variants 0–2 are exploratory; 3–5 are held out. Positions are side relative. */
-export function pressureOpponent(side: Faction, kind: "pressure" | "raid", variant: number,
+export function pressureOpponent(side: Faction, kind: "pressure" | "raid" | "greed", variant: number,
   /** The frozen baseline's Marshal (tools/ai/adapter.ts createWith): the fixture's macro never changes with the candidate. */
   createWith: (side: Faction, seed: number, overrides: (brutal: any) => any) => Bot): Bot {
   const composition: PlanName = (["boom", "ironclad", "balanced"] as const)[variant % 3]!;
+  // Greed (POSTURE-PLAN.md stage 3): a Boom that out-expands (five Depots, sixteen miners), keeps a token
+  // army (two Fab Plants, no extra factories, no raids) and stays home until 4:00, then plays on as Brutal.
+  if (kind === "greed")
+    return createWith(side, 9100 + variant, brutal => ({ strategy: "boom", sorties: [], holdUntil: 240,
+      tweak: { ...brutal.tweak, harassGroup: Infinity, harvesters: 16, spend: { maxDepots: 5, maxExtra: 0 },
+        buildOrder: ["depot", "fab-plant", "depot", "depot", "fab-plant", "depot", "depot", "tech-lab"] } }));
   const macro = createWith(side, 9100 + variant, brutal => ({ strategy: composition, sorties: [],
     tweak: { ...brutal.tweak, assaultValue: Infinity, harassGroup: Infinity,
       ...(kind === "pressure" ? {

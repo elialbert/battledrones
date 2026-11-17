@@ -139,7 +139,7 @@ if (mode === "trace") {
   for (const map of config.maps) for (const seed of config.seeds) for (const enabled of config.variants.map(v => v === "on"))
     for (const opponent of config.opponents) for (const variant of opponent === "pressure" || opponent === "raid" ? config.scenarioVariants : [0])
       for (const side of ["blue", "red"]) {
-        const scenario = opponent === "pressure" || opponent === "raid" ? opponent : null;
+        const scenario = opponent === "pressure" || opponent === "raid" || opponent === "greed" ? opponent : null;
         const pair = `${map}-${seed}-${opponent}-${variant}`;
         const id = `${pair}-${enabled ? "on" : "off"}-${side}`;
         if (done.has(id)) continue;
