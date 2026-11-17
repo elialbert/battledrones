@@ -124,6 +124,12 @@ export interface Strategy {
    * (ai/marshal.ts), where each order is worth more when it buys more.
    */
   spendDown?: boolean;
+  /**
+   * Spending down, queues go no deeper than this (4 if unset): one building and one waiting, and the
+   * scrap that would sit paid-for in a queue piles up and buys factories instead (POSTURE-PLAN.md §1:
+   * Brutal Air Swarm had 4.9k in its queues at 3:00 to the player's 1.3k, and half the army).
+   */
+  queueDepth?: number;
   /** A field this far from the nearest drop-off gets a depot by it (9 if unset): nearer means shorter hauls. */
   depotReach?: number;
   /** Seconds of peace: no raids or assaults before this (it still defends). */
@@ -947,7 +953,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // floating scrap? keep queues two deep (spending down: deeper, and dearer units)
   const sp = { ...SPEND, ...s.strategy.spend };
   const rich = !!s.strategy.spendDown && f.scrap > sp.rich;
-  const depth = s.strategy.spendDown ? 1 + Math.min(3, Math.floor(f.scrap / sp.perSlot)) : f.scrap > 700 ? 2 : 1;
+  const depth = s.strategy.spendDown ? 1 + Math.min((s.strategy.queueDepth ?? 4) - 1, Math.floor(f.scrap / sp.perSlot)) : f.scrap > 700 ? 2 : 1;
   // --- Assembly Bay: robot infantry, mixed to what we've seen -------------
   // Rockets for armour (and Ironclad's Mastodon escorts), Snipers for enemy squads
   // (never on Easy), and the personality's share of Troopers. Under Infantry

@@ -361,3 +361,27 @@ look), B ≥ 0.5, C not below 0.45. Mined and army at 3:00/5:00 are reported for
 - `wantFactories` (from income × army share / 22) said 4 at 2:10–3:00 and 6 by 3:30; Marshal had 4, then 6–7.
   So the factory count was about what the formula wants; the queue lock (§1 point 1) is the bigger
   lever, matching decision 3: **measure depth cap 2 alone first**.
+
+## 11. Stage 1.1: queue depth cap 2 alone (2026-11-17)
+
+`Strategy.queueDepth` (spending down, queues go no deeper; 4 if unset), 2 for Hard and Brutal. Measured
+vs `bf790d1` (stage 0, equivalent to `e84b110`), `--off-check no`, paired seeds, 12 min cap:
+
+| Panel | Games | W-L-T | Score | Gate |
+| --- | ---: | --- | ---: | --- |
+| A: Brutal 175 APM, 11 plans × 5 maps, seeds 201–212 | 450 | 198-143-109 | **0.561** | ≥ 0.55 ✓ |
+| B: 100 APM, 6 plans, seeds 211–213 | 180 | 73-61-46 | 0.533 | ≥ 0.5 ✓ |
+| C: 30 APM, 4 plans, seeds 221–223 | 120 | 36-37-47 | 0.496 | ≥ 0.45 ✓ |
+
+Balanced first read 0.43 over 60 games (losses on every map), then 0.62 on 60 fresh seeds: 0.52 over 120,
+noise. Panel A means, candidate / baseline: scrap in queues 1.39k / 1.79k at 2:30, 2.36k / 3.29k at 5:00;
+army HP 9.29k / 8.67k at 5:00; mined equal; **producers equal (4/4 at 2:30, 5/5 at 3:00)**.
+
+**Finding: the construction slot is the bottleneck, not scrap.** Dune Sea Air Swarm (seed 201): the one
+building at a time never stops until ~4:20 (Depots at 0:00/0:32/0:58/1:10, turret, Airpad, Bay, two SAMs
+by 2:04, one Fab at 1:52, Tech Lab placed 2:52, Fabs 3:06/3:20/3:32), while the bank sits at **2.5k at 2:00,
+7.5k at 3:00, 11k at 4:00** (the baseline 1.8k / 5.2k / 4.7k). The cap frees scrap, but nothing can turn it
+into factories: `extraProduction` only appends to an order the slot is already busy with for two minutes.
+So stage 1.2's `wantFactories` has to **reorder** the construction (a wanted factory ahead of Depot 3–4,
+the second SAM, the early turret), not add factories to the end. That folds §4.2's ordering rule
+("a Depot can't jump ahead of a factory still wanted") into stage 1.2.

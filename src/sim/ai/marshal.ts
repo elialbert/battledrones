@@ -405,13 +405,14 @@ export const MARSHAL: Record<
   // (Hard before Brutal took its place, at 80 actions a minute, 100 since 2026-10-30: at 120 it beat Normal 99%, and lost only 39% to Brutal)
   // (`weighs`, Hard and Brutal: waves weighed against the enemy army it remembers, no aircraft into
   // massed flak, no Gantry while behind — AiState.weighs)
-  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {} },
+  hard: { think: 1.5, react: 0.5, apm: 100, microApm: 60, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {}, tweak: { queueDepth: 2 } },
   // (a plan every 2 s: under the strict cap, a plan every 1.5 s lost 29% to it)
   brutal: {
     think: 2, react: 0.5, apm: 175, burst: 5, microApm: 180, fast: true, holdUntil: 0, weighs: true, skylift: true, doctrine: {},
     // twelve harvesters (and one per depot), factories as soon as scrap piles up; waves at 2500 unless
     // the plan times its own
-    tweak: { harvesters: 12, expandEarly: true, factoryBeforeLab: true, bayOverflow: true },
+    // (queues two deep: POSTURE-PLAN.md stage 1.1)
+    tweak: { harvesters: 12, expandEarly: true, factoryBeforeLab: true, bayOverflow: true, queueDepth: 2 },
     assaultValue: 2500,
     // a lost fight broken off sooner, and stayed out of longer; the finishing push at 1.5× the enemy army
     // seen; a shooter switches to a target twice as good (not 3×)
