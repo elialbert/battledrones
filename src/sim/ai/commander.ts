@@ -435,6 +435,8 @@ export interface AiState {
   /** When the last counter-attack went (COUNTER_COOLDOWN), and whether this think's wave is one. */
   counterAt?: number;
   counterNow?: boolean;
+  /** When the last all-in went (ALLIN_*): the guard goes with it. */
+  allInAt?: number;
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
   fair?: boolean;
   /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
@@ -552,6 +554,16 @@ const COUNTER_ARMY = 1200;
 const COUNTER_COOLDOWN = 60 * TICK_RATE;
 /** Units idle this far past the staging point, toward the enemy, that outweigh the army remembered press on: they don't walk back. */
 const PRESS_AHEAD = 6;
+/**
+ * The all-in (weighing): from ALLIN_FROM, an army ALLIN_RATIO times the army remembered, worth ALLIN_ARMY,
+ * with that memory fresh (ALLIN_FRESH of it seen in the last ALLIN_RECENT), goes like a counter-attack —
+ * everything, from where it stands, the guard too. Shares COUNTER_COOLDOWN with it.
+ */
+const ALLIN_FROM = 240 * TICK_RATE;
+const ALLIN_RATIO = 2;
+const ALLIN_ARMY = 3000;
+const ALLIN_FRESH = 0.6;
+const ALLIN_RECENT = 30 * TICK_RATE;
 /** How long an enemy unit seen stays in the remembered army (unless its spot is seen empty). */
 const SIGHTING_TTL = 90 * TICK_RATE;
 /** Enemy anti-air (in Flak, AiState.seenAA) past which a weighing commander's Airpads build no Wasps or Hornets… */
@@ -1209,7 +1221,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       w.tick - (s.counterAt ?? -Infinity) >= COUNTER_COOLDOWN) {
     const killed = (s.trades ?? []).reduce((a, t) => a + t.killed, 0);
     const lost = (s.trades ?? []).reduce((a, t) => a + t.lost, 0);
-    if (killed >= COUNTER_KILLS && killed >= COUNTER_RATIO * lost && armyValue >= Math.max(COUNTER_ARMY, WAVE_EDGE * enemyArmy)) {
+    let fresh = 0;
+    for (const e of s.sightings?.values() ?? []) if (w.tick - e.tick <= ALLIN_RECENT && (!focus || e.faction === focus)) fresh += e.value;
+    const allIn = w.tick >= ALLIN_FROM && enemyArmy > 0 && fresh >= ALLIN_FRESH * enemyArmy &&
+      armyValue >= Math.max(ALLIN_ARMY, ALLIN_RATIO * enemyArmy);
+    if (allIn || (killed >= COUNTER_KILLS && killed >= COUNTER_RATIO * lost && armyValue >= Math.max(COUNTER_ARMY, WAVE_EDGE * enemyArmy))) {
+      s.allInAt = allIn ? w.tick : s.allInAt;
       s.counterNow = true;
       s.counterAt = w.tick;
       if (s.mode !== "assault") s.waveValue = armyValue;
@@ -1378,7 +1395,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   else cmds.push(...planCondor(w, faction, s, { army, used, hqC, staging, threatened, skip }));
 
   // --- 2. economy guard: a share of the army holds the mining line --------
-  const guardShare = economyReserved.size ? 0 : s.mode === "assault" ? 0.15 : entrance ? 1 : contest ? CONTEST_SHARE : 0.35;
+  const guardShare = economyReserved.size || (s.counterNow && s.allInAt === w.tick) ? 0 : s.mode === "assault" ? 0.15 : entrance ? 1 : contest ? CONTEST_SHARE : 0.35;
   const guardValue = value(army.filter((u) => dist(u.x, u.y, guardPoint.x, guardPoint.y) <= GUARD_RADIUS));
   if (guardValue < guardShare * armyValue) {
     let need = guardShare * armyValue - guardValue;
