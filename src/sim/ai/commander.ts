@@ -927,9 +927,18 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     const known = [...s.sightings.values()].filter((e) => !focus || e.faction === focus);
     s.doctrine = reviewDoctrine(s.doctrine, s.strategy.doctrine, w.tick, TICK_RATE, known);
   }
+  // producers that sit out this think by rule (no aircraft into flak, off the doctrine): they don't
+  // stop scrap piling up from buying another factory; and the orders a doctrine turned away
+  // (Brutal, 440 games: even, 0.498, but at 8:00 banked 720 not 2.8k and the army 10.4k not 8.6k)
+  const ruleIdle = new Set<number>();
+  const offDoctrine = new Map<number, UnitKind>();
   /** Queue `kind` at a producer (a building, or an anchored Goliath for squads) if we can pay its price now. */
   const produce = (b: { id: number }, wants: UnitKind | null) => {
     const kind = wants && underDoctrine(s.doctrine, w.buildings.get(b.id)?.kind, wants);
+    if (wants && !kind) {
+      ruleIdle.add(b.id);
+      offDoctrine.set(b.id, wants);
+    }
     if (!kind || unitBlocker(w, faction, kind) || spendable < unitCost(w, faction, kind)) return;
     spendable -= unitCost(w, faction, kind);
     cmds.push({ type: "produce", faction, buildingId: b.id, unit: kind });
@@ -1078,7 +1087,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       )
         kind = "mender";
       // (weighing: no Wasps or Hornets fed into massed flak, unless there are plenty of them; the scrap goes to the Fab Plants)
-      else if (s.weighs && !airOnly && s.seenAA >= FLAK_WALL && FLAK_OUTNUMBER * s.seenAA > have("wasp") + have("hornet")) continue;
+      else if (s.weighs && !airOnly && s.seenAA >= FLAK_WALL && FLAK_OUTNUMBER * s.seenAA > have("wasp") + have("hornet")) {
+        ruleIdle.add(pad.id);
+        continue;
+      }
       else if (tech && (airOnly ? rand(s) < (airWar && enemyDefenses > 0 ? 0.55 : 0.4) : rand(s) < (rich ? 0.6 : 0.25) + s.seenHeavy * 0.08))
         kind = "hornet";
       else if (s.strategy.heavy && !airlifts && s.seenHeavy < 2 && fabCount(myBuildings) > 0 && rand(s) < 0.5) continue; // save for tanks (not with islands to clear)
@@ -1107,6 +1119,15 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       const kind = doctrineUnit(s.doctrine, b.kind);
       if (kind && spendable >= unitCost(w, faction, kind) + DOCTRINE.busyAbove) produce(b, kind);
     }
+  // (…and once its own factories are busy, what's still banked past that buys what the others would
+  // have built: the old factories stand by for the switch, not idle with the scrap piling up)
+  if (s.doctrine && !armyFull)
+    for (const [id, kind] of offDoctrine) {
+      const cost = unitCost(w, faction, kind);
+      if (spendable < cost + DOCTRINE.busyAbove || unitBlocker(w, faction, kind)) continue;
+      spendable -= cost;
+      cmds.push({ type: "produce", faction, buildingId: id, unit: kind });
+    }
 
   // --- scouting -----------------------------------------------------------
   for (const scout of mine.filter((u) => u.kind === "scout"))
@@ -1126,7 +1147,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     (wanted === null || s.strategy.expandEarly) &&
     s.extraProduction < (s.strategy.spendDown ? sp.maxExtra : 3) &&
     producers.length > 0 &&
-    producers.every((b) => b.queue.length > 0)
+    producers.every((b) => b.queue.length > 0 || ruleIdle.has(b.id))
   )
     s.extraProduction++;
 

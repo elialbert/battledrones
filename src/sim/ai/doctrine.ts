@@ -6,8 +6,9 @@
  * Strategy.doctrine.from on, what the enemy has shown (AiState.sightings) picks
  * one of the armies below, each order for anything else becomes one for it, and
  * the base gets the factories it needs. A later read can change it, no sooner
- * than `hold` seconds after the last change: the old factories stand idle, and
- * the new ones have to be paid for, which is what makes a switch a decision.
+ * than `hold` seconds after the last change: the new factories have to be paid
+ * for, which is what makes a switch a decision, and the old ones build their
+ * usual units only from what's banked past keeping the doctrine's busy.
  *
  * The three are the focused armies that held up against a mix with ground-only
  * Lancers, and they answer each other (Hard, 24 games a pairing): Air beat
