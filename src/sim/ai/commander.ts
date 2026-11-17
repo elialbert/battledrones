@@ -1,3 +1,4 @@
+import { updatePosture, type Posture, type PostureMemory } from "./posture";
 import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
@@ -413,6 +414,9 @@ export interface AiState {
   sightings?: Map<number, { kind: UnitKind; value: number; tick: number; x: number; y: number; faction: Faction }>;
   /** The army it has committed to (ai/doctrine.ts), once Strategy.doctrine has one. */
   doctrine?: DoctrineState;
+  /** Army / economy / tech shares (ai/posture.ts), Marshal's only. Stage 0: traced, read by nothing. */
+  posture?: Posture;
+  postureMemo?: PostureMemory;
   waveReady?: number | null;
   /** When WAVE_EDGE first held a wave back that was otherwise ready (null: it isn't). */
   waveStall?: number | null;
@@ -749,6 +753,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   }
   const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq" && (!focus || b.faction === focus));
   const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : enemyHome;
+  if (s.posture)
+    updatePosture(w, faction, s, {
+      seen, armyValue, enemyArmy, threatened, home: hqC, enemyHome, enemyHq: enemyHqPos, focus, fieldsLow: fieldsRunningLow(w, faction)
+    });
 
   // --- construction: place a ready building, or start the next one -------
   // (late in a match, rich and with an army: a Gantry and whatever it needs first, ai/goliath.ts)

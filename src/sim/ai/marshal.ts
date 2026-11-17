@@ -37,6 +37,7 @@
  * It reads what the commander reads: its own side, and the enemy only
  * through seenEnemies, knownBuildings and visible tiles. No income handicap.
  */
+import { newPosture } from "./posture";
 import { ferryCondors } from "./skylift";
 import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
 import { isVisible, knownBuildings } from "../fog";
@@ -614,6 +615,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
   s.goliathStyle = plan.goliath ?? "expand";
   s.hornetStyle = plan.hornets;
+  // its army / economy / tech shares (ai/posture.ts): its plan's curve, nudged by scouting where it weighs the enemy
+  ({ posture: s.posture, memo: s.postureMemo } = newPosture(opts.strategy, !!opts.weighs));
   // its plan's sorties, each but the first poke left out of one game in four (ai/harass.ts)
   s.sorties = opts.sorties ?? plan.sorties.filter((k, i) => k === "poke" || hash32(seed, 0x6861 + i) % 4 !== 0);
   const reactTicks = Math.max(1, Math.round(opts.react * TICK_RATE));
@@ -690,6 +693,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   return {
     opener: AI_OPENER,
     plan: plan.label,
+    posture: () => s.posture,
     actionBudget(apm) {
       // When the physical cap is substantially below the micro budget, keep
       // productive fights/queues ahead of discretionary escort repositioning.

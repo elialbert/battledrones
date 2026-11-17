@@ -14,6 +14,7 @@
  * (tests/fmath.test.ts). Records keep the commands, not the bot, so replays
  * never re-run it.
  */
+import type { Posture } from "./posture";
 import { createAiState, tickAi, STRATEGIES, type Difficulty, type StrategyName } from "./commander";
 import { MARSHAL, marshal, marshalPlan } from "./marshal";
 import { PROFILES, scriptedPlayer, type ProfileName } from "./player";
@@ -36,6 +37,8 @@ export interface Bot {
   opener?: OpenerId;
   /** The plan it drew for this game ("Turtle"), when it draws one. */
   plan?: string;
+  /** Marshal's army / economy / tech shares (ai/posture.ts), for traces and the spectator HUD; never fed back into a decision. */
+  posture?(): Readonly<Posture> | undefined;
 }
 
 export interface BotDef {

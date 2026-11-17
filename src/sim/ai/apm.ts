@@ -26,6 +26,7 @@ export function capApm(bot: Bot, apm: number, burst = APM_BURST): Bot {
   return {
     opener: bot.opener,
     plan: bot.plan,
+    ...(bot.posture ? { posture: () => bot.posture!() } : {}),
     actionBudget(outerApm, outerBurst) {
       enclosed = true;
       bot.actionBudget?.(Math.min(apm, outerApm), Math.min(burst, outerBurst));

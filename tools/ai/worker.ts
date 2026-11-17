@@ -24,6 +24,8 @@ const proposed = { blue: 0, red: 0 }, sent = { blue: 0, red: 0 };
 let diagnostic: any = null;
 let phase = "";
 let planningTick = -1;
+/** The candidate's posture (ai/posture.ts), when it has one: traced every sample. */
+let candidatePosture: (() => unknown) | undefined;
 const performanceBySide = { blue: { total: 0, max: 0, plans: [] as number[] }, red: { total: 0, max: 0, plans: [] as number[] } };
 const bots = sides.map(side => {
   const candidate = side === job.side;
@@ -40,6 +42,7 @@ const bots = sides.map(side => {
     bot: { seed: botSeed, plan: candidate ? job.plan : job.scenario ? ["boom", "ironclad", "balanced"][job.variant % 3] : job.opponentPlan },
     settings: { apm: job.apm, burst: job.burst, think: job.think, react: job.react, microApm: job.microApm, variant: job.variant,
       secureEconomy: candidate ? job.enabled : !!job.baselineEnabled, experimentSource: job.signature } };
+  if (candidate) candidatePosture = bot.posture?.bind(bot);
   const tick = bot.tick.bind(bot);
   bot.tick = (world: typeof w) => {
     const start = performance.now();
@@ -70,7 +73,8 @@ while (!w.winner && w.tick < record.maxTicks) {
   observer.afterStep();
   if (w.tick % HASH_EVERY === 0) record.hashes.push([w.tick, worldHash(w)]);
   if (w.tick % (5 * TICK_RATE) === 0) for (const side of sides) {
-    const sample = { type: "sample", ...observer.sample(side, sent[side]), proposed: proposed[side], sent: sent[side], diagnostic: side === job.side ? diagnostic : null };
+    const sample = { type: "sample", ...observer.sample(side, sent[side]), proposed: proposed[side], sent: sent[side], diagnostic: side === job.side ? diagnostic : null,
+      posture: side === job.side ? candidatePosture?.() ?? null : null };
     samples.push(sample);
     appendFileSync(job.trace, JSON.stringify(sample) + "\n");
   }
