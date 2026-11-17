@@ -428,6 +428,13 @@ export interface AiState {
   waveStall?: number | null;
   /** The last wave sent: its units and where it marches (ai/marshal.ts keeps it together on the way). */
   wave?: { ids: number[]; x: number; y: number; tick: number };
+  /** Weighing: enemy army seen die, and our own army lost, by think (COUNTER_WINDOW), for the counter-attack. */
+  trades?: { tick: number; killed: number; lost: number }[];
+  /** Our army last think (id → cost): what's gone from it since was lost. */
+  armyIds?: Map<number, number>;
+  /** When the last counter-attack went (COUNTER_COOLDOWN), and whether this think's wave is one. */
+  counterAt?: number;
+  counterNow?: boolean;
   /** No income handicap: the difficulty changes only how it plays (ai/bots.ts seats are all fair). */
   fair?: boolean;
   /** Seconds between decision passes, instead of the difficulty's (ai/marshal.ts thinks at its own pace). */
@@ -532,6 +539,19 @@ const WAVE_GATHER = 15 * TICK_RATE;
  */
 const WAVE_STALL = 120 * TICK_RATE;
 const WAVE_STALL_EDGE = 0.75;
+/**
+ * The counter-attack (weighing): a fight in the last COUNTER_WINDOW that killed at least COUNTER_KILLS
+ * of their army, COUNTER_RATIO times what it cost us, with ours now outweighing what's left of theirs
+ * (WAVE_EDGE): everything goes, at once, from where it stands — their army is dead and their
+ * factories are refilling it. Not again for COUNTER_COOLDOWN.
+ */
+const COUNTER_WINDOW = 25 * TICK_RATE;
+const COUNTER_KILLS = 1000;
+const COUNTER_RATIO = 2;
+const COUNTER_ARMY = 1200;
+const COUNTER_COOLDOWN = 60 * TICK_RATE;
+/** Units idle this far past the staging point, toward the enemy, that outweigh the army remembered press on: they don't walk back. */
+const PRESS_AHEAD = 6;
 /** How long an enemy unit seen stays in the remembered army (unless its spot is seen empty). */
 const SIGHTING_TTL = 90 * TICK_RATE;
 /** Enemy anti-air (in Flak, AiState.seenAA) past which a weighing commander's Airpads build no Wasps or Hornets… */
@@ -697,7 +717,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // a free-for-all: who we're out to beat this pass (a raid on our base turns us on the raider)
   const focus = multi ? pickFocus(w, faction, s, origin, raidersAt(w, threats, home0)) : null;
   const enemyHome = focus ? homeOf(w, faction, focus, origin) : mirror(w, origin.x, origin.y);
-  const enemyArmy = s.weighs ? rememberEnemyArmy(w, faction, s, seen, focus) : 0;
+  const enemyArmy = s.weighs ? rememberEnemyArmy(w, faction, s, seen, focus, army) : 0;
   noteHotSpots(w, faction, s, seen);
   const ourSide = (tx: number, ty: number) =>
     dist(tx + 0.5, ty + 0.5, hqC.x, hqC.y) <= dist(tx + 0.5, ty + 0.5, enemyHome.x, enemyHome.y);
@@ -1183,6 +1203,19 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     s.waveValue = armyValue;
   }
   if (s.mode === "assault" && armyValue < Math.max(RETREAT_ARMY_VALUE, s.waveValue * 0.25)) s.mode = "buildup";
+  // the counter-attack: a fight just won big, and theirs is what's left
+  s.counterNow = false;
+  if (s.weighs && !w.survival && !threatened && w.tick >= Math.max(OPENING_GRACE, (s.strategy.holdUntil ?? 0) * TICK_RATE) &&
+      w.tick - (s.counterAt ?? -Infinity) >= COUNTER_COOLDOWN) {
+    const killed = (s.trades ?? []).reduce((a, t) => a + t.killed, 0);
+    const lost = (s.trades ?? []).reduce((a, t) => a + t.lost, 0);
+    if (killed >= COUNTER_KILLS && killed >= COUNTER_RATIO * lost && armyValue >= Math.max(COUNTER_ARMY, WAVE_EDGE * enemyArmy)) {
+      s.counterNow = true;
+      s.counterAt = w.tick;
+      if (s.mode !== "assault") s.waveValue = armyValue;
+      s.mode = "assault";
+    }
+  }
   // Last Stand: there is no enemy base to raid or assault — defend
   if (w.survival) s.mode = "buildup";
 
@@ -1426,6 +1459,12 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
       }
     }
     if (go) s.waveReady = s.waveStall = null;
+    // (a counter-attack doesn't gather: all of it, from where it stands)
+    const counter = s.counterNow === true;
+    if (counter) {
+      go = true;
+      s.waveReady = s.waveStall = null;
+    }
 
     if (go) {
       const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
@@ -1436,10 +1475,20 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
           dist(u.order.x, u.order.y, staging.x, staging.y) < 1 && dist(u.x, u.y, staging.x, staging.y) <= 2 * stageRadius &&
           !staged.includes(u)
       );
-      const wave = [...staged, ...marching];
+      const wave = counter
+        ? army.filter((u) => !used.has(u.id) && (u.order.type === "idle" || u.order.type === "attackMove"))
+        : [...staged, ...marching];
       launchWave(w, cmds, faction, wave, target, used);
       s.wave = { ids: wave.map((u) => u.id), x: target.x, y: target.y, tick: w.tick };
     } else {
+      // (a wave that won where it was sent stands idle out past the staging point: if it still
+      // outweighs the army remembered, it presses on, not back to gather for the next one)
+      const stageToEnemy = dist(staging.x, staging.y, enemyHqPos.x, enemyHqPos.y);
+      const ahead = idleArmy().filter((u) => dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < stageToEnemy - PRESS_AHEAD);
+      if (s.weighs && ahead.length && value(ahead) >= enemyArmy) {
+        const target = pickPriorityTarget(w, faction, seen, enemyHqPos, focus);
+        launchWave(w, cmds, faction, ahead, target, used);
+      }
       for (const u of idleArmy()) {
         if (dist(u.x, u.y, enemyHqPos.x, enemyHqPos.y) < 14) {
           // already deep in enemy territory: keep fighting, don't yo-yo home
@@ -1728,9 +1777,13 @@ function observeEnemy(s: AiState, seen: Unit[], gantryBuilds = 0): void {
  * as gone, and the base sent its army out into it. In a free-for-all, the
  * focus rival's only. Goliaths count for what they can still fire.
  */
-function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[], focus: Faction | null): number {
+function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[], focus: Faction | null, mine: Unit[]): number {
   const memo = (s.sightings ??= new Map());
   const now = new Set<number>();
+  let killed = 0;
+  let lost = 0;
+  for (const [id, cost] of s.armyIds ?? []) if (!w.units.has(id)) lost += cost;
+  s.armyIds = new Map(mine.map((u) => [u.id, UNITS[u.kind].cost]));
   for (const u of seen) {
     if (u.kind === "harvester" || (UNITS[u.kind].dps <= 0 && !UNITS[u.kind].heal)) continue;
     now.add(u.id);
@@ -1739,9 +1792,14 @@ function rememberEnemyArmy(w: World, faction: Faction, s: AiState, seen: Unit[],
   let v = 0;
   for (const [id, e] of memo) {
     // (an army that steps back out of sight is still out there: only one seen gone and dead is forgotten early)
-    if (w.tick - e.tick > SIGHTING_TTL || (!now.has(id) && !w.units.has(id) && isVisible(w, faction, Math.floor(e.x), Math.floor(e.y)))) memo.delete(id);
-    else if (!focus || e.faction === focus) v += e.value;
+    if (w.tick - e.tick > SIGHTING_TTL) memo.delete(id);
+    else if (!now.has(id) && !w.units.has(id) && isVisible(w, faction, Math.floor(e.x), Math.floor(e.y))) {
+      memo.delete(id);
+      if (!focus || e.faction === focus) killed += e.value;
+    } else if (!focus || e.faction === focus) v += e.value;
   }
+  s.trades = (s.trades ?? []).filter((t) => w.tick - t.tick <= COUNTER_WINDOW);
+  s.trades.push({ tick: w.tick, killed, lost });
   return v;
 }
 
