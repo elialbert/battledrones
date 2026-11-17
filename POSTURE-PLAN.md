@@ -385,3 +385,23 @@ into factories: `extraProduction` only appends to an order the slot is already b
 So stage 1.2's `wantFactories` has to **reorder** the construction (a wanted factory ahead of Depot 3–4,
 the second SAM, the early turret), not add factories to the end. That folds §4.2's ordering rule
 ("a Depot can't jump ahead of a factory still wanted") into stage 1.2.
+
+## 12. Stage 1.2 / 2: what the measurements changed (2026-11-17)
+
+**Stage 1.2 as written is a no-op.** Panel A traces (stage 1.1), means over all plans: income ~125 scrap/s
+from 2:00, army spend 75–115/s, a busy producer ~25–30/s. `ceil(army × income / 22)` = 3 at Balanced 2:00;
+Marshal already has 4. And about a quarter of the producers stand idle with scrap banked, by rule: Airpads
+under the flak rule (Air Swarm 3:00–4:00, 16 of 30 samples), Assembly Bays at their plan's infantry share.
+More factories don't help while those idle. If 1.2 is picked up again, `wantFactories` needs calibrating to
+measured spend (army spend ≈ 0.65–0.9 × income), and the idle-producer rules are the likelier lever.
+
+**The big bank is Dune Sea's.** Bank at 3:00, median / p75 (stage 1.1 candidate): Dune Sea 2.2k / 6.3k, the
+other four maps 0.5–1.1k / 0.8–1.9k. Dune Sea's close rich fields let `depotReach` chain 4 Depots by 1:10.
+
+**Fix 2 (rich-fields hold) alone: rejected.** No `depotReach` "one more" Depot while the served fields hold
+> 900 per harvester, unless economy share > 0.55. vs `b6c9010`, Panel A, seeds 301–303: **105-149-76,
+0.433** (Ironclad 3-25, Balanced 0.35, Air Swarm 0.37). Army +420 at 2:30, but mined −1.2k and army −800
+at 5:00: the held Depots are the mid-game economy. Same lesson as RIVERLANDS-BOOM.md (cautious expansion
+4–34) and the replay's own 13k home field: that field runs out, and the Depot that wasn't built is what's
+missing then. Don't retry a blanket hold; if anything, a Dune Sea–specific look at what the early SAMs and
+turret cost the construction slot.
