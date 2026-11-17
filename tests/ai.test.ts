@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STRATEGIES, createAiState, tickAi } from "../src/sim/ai/commander";
+import { STRATEGIES, createAiState, forwardStage, tickAi, type AiState } from "../src/sim/ai/commander";
 import { CONDOR_AI } from "../src/sim/ai/condor";
 import { planMenders } from "../src/sim/ai/menders";
 import { AA_COVER, aaWeight } from "../src/sim/ai/intel";
@@ -310,12 +310,13 @@ describe("AI and robot infantry", () => {
     const ai = createAiState("balanced", "normal", 1);
     const hq = buildingCenter(hqOf(w, "red")!);
     const far = { x: w.width - hq.x, y: w.height - hq.y }; // the enemy HQ, as red guesses it
-    const len = Math.hypot(far.x - hq.x, far.y - hq.y);
-    const stage = { x: hq.x + ((far.x - hq.x) / len) * 9, y: hq.y + ((far.y - hq.y) / len) * 9 };
+    const stage = forwardStage(w, "red", {} as AiState, hq, far)!;
     // a wave's worth gathered at the staging point…
     for (let i = 0; i < 12; i++) spawnUnit(w, "stinger", "red", stage.x - 1 + (i % 4) * 0.7, stage.y - 1 + Math.floor(i / 4) * 0.7);
     // …and a Trooper Squad still on its way there (slow: 1.8 tiles/s)
-    const late = spawnUnit(w, "trooper", "red", hq.x + ((far.x - hq.x) / len) * 2, hq.y + ((far.y - hq.y) / len) * 2);
+    // (7 tiles short of it, back toward home)
+    const back = Math.hypot(stage.x - hq.x, stage.y - hq.y);
+    const late = spawnUnit(w, "trooper", "red", stage.x + ((hq.x - stage.x) / back) * 7, stage.y + ((hq.y - stage.y) / back) * 7);
     late.order = { type: "attackMove", x: stage.x, y: stage.y };
     step(w, []);
     const cmds = tickAi(w, "red", ai);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STRATEGIES, createAiState, tickAi } from "../src/sim/ai/commander";
+import { STRATEGIES, createAiState, forwardStage, tickAi, type AiState } from "../src/sim/ai/commander";
 import { planCalldowns } from "../src/sim/ai/powers";
 import { OBJECTIVES, POWERS, TICK_RATE, UNITS } from "../src/sim/balance";
 import { tickFog } from "../src/sim/fog";
@@ -13,7 +13,7 @@ import { playMatch } from "../tools/pacing-match";
  * calldowns are rare big moments, and objectives pay but don't decide.
  */
 
-/** Open ground, two HQs, no fields: red's economy guard holds at its HQ, 9 tiles behind its staging point. */
+/** Open ground, two HQs, no fields: red's economy guard holds at its HQ, behind its staging point (forwardStage). */
 function field(): World {
   const w = createWorld(48, 48);
   spawnBuilding(w, "hq", "blue", 2, 43);
@@ -25,8 +25,7 @@ function field(): World {
 function armyAt(w: World, staged: number, guards: number) {
   const c = buildingCenter(hqOf(w, "red")!);
   const far = { x: w.width - c.x, y: w.height - c.y };
-  const len = Math.hypot(far.x - c.x, far.y - c.y);
-  const stage = { x: c.x + ((far.x - c.x) / len) * 9, y: c.y + ((far.y - c.y) / len) * 9 };
+  const stage = forwardStage(w, "red", {} as AiState, c, far)!;
   const ids: number[] = [];
   for (let i = 0; i < staged; i++)
     ids.push(spawnUnit(w, "stinger", "red", stage.x + (i % 3) * 0.7 - 0.7, stage.y + Math.floor(i / 3) * 0.7 - 0.7).id);

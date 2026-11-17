@@ -208,6 +208,13 @@ function scanExpansionSite(
 ): { tx: number; ty: number } | null {
   const field = unservedField(w, faction, hqC, Math.max(reach, SERVED), skip);
   if (!field) return null;
+  return expansionSiteForField(w, faction, hqC, field);
+}
+
+/** Placement for one already selected ground field; the front can compare safe alternatives
+ * without creating an independent expansion target. Legacy selection above is unchanged. */
+export function expansionSiteForField(w: World, faction: Faction, hqC: { x: number; y: number }, field: { x: number; y: number }): { tx: number; ty: number } | null {
+  if (dist(field.x, field.y, hqC.x, hqC.y) > MAX_FIELD) return null;
   const size = BUILDINGS.depot.size;
   const fr = sideFrame(w, faction);
   const f = fr.toFrame(field);
@@ -316,7 +323,8 @@ export function staffExpansions(
   harvesters: Unit[],
   skip: Set<number>,
   enemies: Unit[],
-  cmds: Command[]
+  cmds: Command[],
+  access?: { unsafeAt(tx: number, ty: number): boolean; routeSafe(from: Unit, to: { x: number; y: number }): boolean }
 ): { sent: Set<number>; staffed: Set<number>; extra: number } {
   const sent = new Set<number>();
   const staffed = new Set<number>();
@@ -351,15 +359,17 @@ export function staffExpansions(
     // (by the field too: an army camped on it, past the Depot's reach, ate the harvesters fed in)
     const fx = s.field.x + 0.5;
     const fy = s.field.y + 0.5;
-    if (enemies.some((e) => UNITS[e.kind].dps > 0 && (dist(e.x, e.y, s.cx, s.cy) <= UNSAFE || dist(e.x, e.y, fx, fy) <= UNSAFE)))
+    if (access?.unsafeAt(s.field.x, s.field.y)) continue;
+    if (!access && enemies.some((e) => UNITS[e.kind].dps > 0 && (dist(e.x, e.y, s.cx, s.cy) <= UNSAFE || dist(e.x, e.y, fx, fy) <= UNSAFE)))
       continue;
     const take = Math.min(EXPANSION_MINERS - have, home.length - HOME_MINERS);
     if (take <= 0) continue;
-    const picks = home
+    const picks = home.filter(h => !access || access.routeSafe(h, { x: fx, y: fy }))
       .map((h) => ({ h, d: dist(h.x, h.y, s.cx, s.cy) }))
       .sort((a, b) => a.d - b.d || a.h.id - b.h.id)
       .slice(0, take)
       .map((p) => p.h);
+    if (!picks.length) continue;
     for (const h of picks) sent.add(h.id);
     home = home.filter((h) => !sent.has(h.id));
     cmds.push({ type: "harvest", faction, unitIds: picks.map((h) => h.id), x: s.field.x + 0.5, y: s.field.y + 0.5 });
@@ -391,14 +401,16 @@ export function tendExpansion(
   /** Land Grab (Strategy.landGrab): may the army fight for a site with enemies by it? Left out: it never does. */
   contestable?: (x: number, y: number) => boolean,
   /** Ground to stay off besides what's in sight (commander.ts noteHotSpots). */
-  hotSpots: readonly { x: number; y: number }[] = []
+  hotSpots: readonly { x: number; y: number }[] = [],
+  coordination?: { site?: { tx: number; ty: number } | null; permitted(x: number, y: number): boolean }
 ): Set<number> {
   const E = ECONOMY.expansion;
   // (replay 2026-11-03: a forward Depot was killed, and a fresh crew founded it again on the spot,
   // into the army that had killed it, 2 s later)
   const hot = (tx: number, ty: number) =>
+    (coordination ? !coordination.permitted(tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) :
     enemies.some((e) => UNITS[e.kind].dps > 0 && dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE) ||
-    hotSpots.some((e) => dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE);
+    hotSpots.some((e) => dist(e.x, e.y, tx + BUILDINGS.depot.size / 2, ty + BUILDINGS.depot.size / 2) <= UNSAFE));
   const f = w.factions[faction];
   const plan = s.expansion;
   const size = BUILDINGS.depot.size;
@@ -427,11 +439,16 @@ export function tendExpansion(
     // (a beat for the order to land: an APM cap may hold it back)
     // (an army across the way: replay 2026-11-05, a crew of four walked into it, and the site was quiet)
     const ambushed = hotSpots.length > 0 && crew.some((u) => enemies.filter((e) => UNITS[e.kind].dps > 0 && e.kind !== "harvester" && dist(e.x, e.y, u.x, u.y) <= CREW_DANGER).length >= CREW_AMBUSH);
-    const lost = (w.tick - plan.since > TICK_RATE * 2 && crew.length < E.crew) || w.tick - plan.since > STALE || hot(plan.tx, plan.ty) || ambushed;
+    const alive = plan.crew.map(id => w.units.get(id)).filter((u): u is Unit => !!u && u.faction === faction);
+    const lost = (w.tick - plan.since > TICK_RATE * 2 && (coordination ? alive : crew).length < E.crew) || w.tick - plan.since > STALE || hot(plan.tx, plan.ty) || ambushed;
     if (lost) {
       s.expansion = null;
       if (crew.length) cmds.push({ type: "stop", faction, unitIds: crew.map((u) => u.id) });
       return new Set();
+    }
+    if (coordination && crew.length < E.crew && alive.length >= E.crew) {
+      cmds.push({ type: "found", faction, unitIds: alive.map(u => u.id), tx: plan.tx, ty: plan.ty });
+      return new Set(plan.crew);
     }
     if (crew.length < E.crew && w.tick - plan.since <= TICK_RATE * 2) return new Set(plan.crew);
     // our own units standing on the site step off it (the crew may stay: they're used up)
@@ -449,10 +466,11 @@ export function tendExpansion(
   if (f.scrap < E.cost * 0.7) return new Set();
   const free = harvesters.filter((h) => !skip.has(h.id));
   if (free.length < E.crew + keep) return new Set();
-  let site = expansionSite(w, faction, hqC, reach);
+  let site = coordination?.site !== undefined ? coordination.site : expansionSite(w, faction, hqC, reach);
   // (the nearest on foot is often the contested one in the middle: with an enemy by it, the next
   // field with none by it, not a crew kept waiting — Frostbite, 1:00 to 3:30)
   if (site && hot(site.tx, site.ty)) {
+    if (coordination) return new Set();
     // (Land Grab: a fight it can win is fought, and the crew goes once the site is clear)
     const at = { x: site.tx + size / 2, y: site.ty + size / 2 };
     if (contestable?.(at.x, at.y)) {

@@ -1,7 +1,11 @@
 import { BUILDINGS, TICK_RATE, UNITS } from "../balance";
-import type { Command, Faction, Unit, World } from "../types";
-import { dist, isResource, sideFrame } from "../world";
+import type { Command, Faction, Unit, UnitKind, World } from "../types";
+import { buildingCenter, dist, hqOf, isResource, passable, sideFrame } from "../world";
 import { perTick, walkFromDrops } from "./expansion";
+import { knownBuildings } from "../fog";
+import { findPath } from "../movement";
+import { effectivenessVs } from "./intel";
+import { readyFirepower } from "../goliath";
 
 /**
  * Which field the AI's harvesters mine. Left alone, a harvester whose field
@@ -57,9 +61,11 @@ const MARGIN = 6;
 const TRAVEL_COST = 0.5;
 
 interface Sighting {
+  kind: UnitKind;
   x: number;
   y: number;
   value: number;
+  hp: number;
   tick: number;
 }
 /** Where each enemy was last seen, per AI (keyed by its AiState). */
@@ -77,7 +83,7 @@ function remember(w: World, key: object, seen: Unit[]): Map<number, Sighting> {
   let m = memory.get(key);
   if (!m) memory.set(key, (m = new Map()));
   for (const e of seen)
-    if (UNITS[e.kind].dps > 0 && e.kind !== "harvester") m.set(e.id, { x: e.x, y: e.y, value: UNITS[e.kind].cost, tick: w.tick });
+    if (UNITS[e.kind].dps > 0 && e.kind !== "harvester") m.set(e.id, { kind: e.kind, x: e.x, y: e.y, value: UNITS[e.kind].cost, hp: e.hp, tick: w.tick });
   for (const [id, s] of m) if (w.tick - s.tick > MEMORY) m.delete(id);
   return m;
 }
@@ -132,6 +138,99 @@ function stamp(w: World, grid: Float64Array, x: number, y: number, value: number
       if (dist(tx + 0.5, ty + 0.5, x, y) <= r) grid[ty * w.width + tx]! += value;
 }
 
+export interface MiningAccess {
+  walk: Int32Array;
+  avoid: Uint8Array;
+  unsafeAt(tx: number, ty: number): boolean;
+  routeSafe(from: { x: number; y: number }, to: { x: number; y: number }): boolean;
+}
+
+/** Path from a friendly drop-off's usable perimeter, rather than its occupied centre. */
+export function miningRoute(w: World, faction: Faction, from: { x: number; y: number }, to: { x: number; y: number }) {
+  return perTick(w, `mining route ${faction} ${from.x} ${from.y} ${to.x} ${to.y}`, () => {
+    const b = w.buildings.get(w.occupancy[Math.floor(from.y) * w.width + Math.floor(from.x)]!);
+    if (!b || b.faction !== faction) return findPath(w, from.x, from.y, to.x, to.y, "ground", faction);
+    const size = BUILDINGS[b.kind].size;
+    const fr = sideFrame(w, faction);
+    const exits: { x: number; y: number }[] = [];
+    for (let y = b.ty - 1; y <= b.ty + size; y++) for (let x = b.tx - 1; x <= b.tx + size; x++)
+      if (passable(w, x, y, "ground")) exits.push({ x: x + 0.5, y: y + 0.5 });
+    const tie = (p: { x: number; y: number }) => { const f = fr.toFrame(p); return f.y * w.width + f.x; };
+    exits.sort((a, b) => dist(a.x, a.y, to.x, to.y) - dist(b.x, b.y, to.x, to.y) || tie(a) - tie(b));
+    for (const exit of exits) { const route = findPath(w, exit.x, exit.y, to.x, to.y, "ground", faction); if (route) return route; }
+    return null;
+  });
+}
+
+/** Shared by the experimental front, staffing, crews and field selection. Only observed
+ * enemies enter memory. Friendly cover counts where it actually stands, at its current HP.
+ * A forward drop-off does not make the transfer route from home safe. */
+export function miningAccess(
+  w: World, faction: Faction, key: object, seen: Unit[], own: Unit[],
+  lost: readonly { x: number; y: number }[] = []
+): MiningAccess {
+  return perTick(w, `economy access ${faction}`, () => {
+    const sightings = remember(w, key, seen);
+    const theirs = new Float64Array(w.width * w.height);
+    const enemyValue = new Float64Array(theirs.length);
+    const ours = new Float64Array(theirs.length);
+    const ground = new Float64Array(theirs.length), air = new Float64Array(theirs.length);
+    const groundCover = new Float64Array(theirs.length), airCover = new Float64Array(theirs.length);
+    const relevant = [...sightings.values()].filter(s => UNITS[s.kind].targets === "ground" || UNITS[s.kind].targets === "both");
+    for (const s of relevant) {
+      stamp(w, theirs, s.x, s.y, s.value);
+      const value = s.value * s.hp / UNITS[s.kind].hp;
+      stamp(w, enemyValue, s.x, s.y, value);
+      stamp(w, UNITS[s.kind].domain === "air" ? air : ground, s.x, s.y, value);
+    }
+    for (const b of knownBuildings(w, faction)) if (BUILDINGS[b.kind].dps > 0 && BUILDINGS[b.kind].targets !== "air") {
+      const x = b.tx + BUILDINGS[b.kind].size / 2, y = b.ty + BUILDINGS[b.kind].size / 2;
+      stamp(w, theirs, x, y, BUILDINGS[b.kind].cost || 500);
+      stamp(w, enemyValue, x, y, BUILDINGS[b.kind].cost || 500);
+      stamp(w, ground, x, y, BUILDINGS[b.kind].cost || 500);
+    }
+    for (const u of own) if (u.kind !== "harvester" && UNITS[u.kind].dps > 0) {
+      const value = UNITS[u.kind].cost * u.hp / UNITS[u.kind].hp * (u.goliath ? readyFirepower(u) : 1);
+      stamp(w, ours, u.x, u.y, value);
+      for (const domain of ["ground", "air"] as const) {
+        const local = relevant.filter(e => UNITS[e.kind].domain === domain && dist(e.x, e.y, u.x, u.y) <= 14);
+        const eff = local.length ? Math.min(...local.map(e => effectivenessVs(u.kind, UNITS[e.kind].armor, domain))) : effectivenessVs(u.kind, domain === "air" ? "light" : "medium", domain);
+        stamp(w, domain === "air" ? airCover : groundCover, u.x, u.y, value * Math.min(1, eff));
+      }
+    }
+    for (const b of w.buildings.values()) if (b.faction === faction && BUILDINGS[b.kind].dps > 0) {
+      const st = BUILDINGS[b.kind], x = b.tx + st.size / 2, y = b.ty + st.size / 2;
+      const value = st.cost * b.hp / st.hp;
+      stamp(w, ours, x, y, value);
+      if (st.targets === "ground" || st.targets === "both") stamp(w, groundCover, x, y, value);
+      if (st.targets === "air" || st.targets === "both") stamp(w, airCover, x, y, value);
+    }
+    // A lost Depot is evidence of danger, not an invented enemy force. Hold the site until
+    // real cover arrives or the commander's loss memory expires.
+    for (const p of lost) { stamp(w, theirs, p.x, p.y, DANGER_VALUE); stamp(w, enemyValue, p.x, p.y, DANGER_VALUE); }
+    const avoid = new Uint8Array(theirs.length);
+    const hq = hqOf(w, faction), home = hq ? buildingCenter(hq) : null;
+    for (let i = 0; i < avoid.length; i++)
+      if (theirs[i]! >= DANGER_VALUE && (enemyValue[i]! > ours[i]! || ground[i]! > groundCover[i]! || air[i]! > airCover[i]!)) {
+        // Preserve tendFields' home policy: defence and the miners' own flee
+        // reflex handle raids there. Strategic routing must not evacuate the
+        // entire home shift before the defending army has fought the raid.
+        const x = i % w.width + 0.5, y = Math.floor(i / w.width) + 0.5;
+        const fromHome = home ? dist(x, y, home.x, home.y) : 1;
+        const fromEnemy = home ? dist(x, y, w.width - home.x, w.height - home.y) : 0;
+        if (!home || fromHome / (fromHome + fromEnemy) >= EXPOSED) avoid[i] = 1;
+      }
+    const walk = walkFromDrops(w, faction, avoid);
+    return { walk, avoid, routeSafe(from, to) {
+      const route = miningRoute(w, faction, from, to);
+      return !!route && route.every(p => !avoid[Math.floor(p.y) * w.width + Math.floor(p.x)]);
+    }, unsafeAt(tx, ty) {
+      const i = ty * w.width + tx;
+      return tx < 0 || ty < 0 || tx >= w.width || ty >= w.height || !!avoid[i] || walk[i]! < 0;
+    } };
+  });
+}
+
 /**
  * Send the harvesters to the fields worth mining (call once per think, after
  * the expansion crews and shifts have taken theirs: `skip`). `accept`: fields
@@ -152,7 +251,8 @@ export function tendFields(
   accept: ((tx: number, ty: number) => boolean) | null,
   cmds: Command[],
   /** A Depot's shift (ai/expansion.ts staffExpansions): moved off its field only when that's unsafe. */
-  staffed: ReadonlySet<number> = new Set()
+  staffed: ReadonlySet<number> = new Set(),
+  access?: MiningAccess
 ): { sent: Set<number>; held: Set<number>; unsafeAt?: (tx: number, ty: number) => boolean } {
   const sightings = remember(w, key, seen);
   let last = sentAt.get(key);
@@ -182,7 +282,7 @@ export function tendFields(
       if (theirs[i]! >= DANGER_VALUE && theirs[i]! > ours[i]! * DANGER_OVER_OURS && exposureAt((i % W) + 0.5, Math.floor(i / W) + 0.5) >= EXPOSED)
         (avoid ??= new Uint8Array(W * w.height))[i] = 1;
   }
-  const walk = walkFromDrops(w, faction, avoid);
+  const walk = access?.walk ?? walkFromDrops(w, faction, avoid);
   const fields = fieldsOf(w, faction).filter((f) => !accept || accept(f.tiles[0]! % W, Math.floor(f.tiles[0]! / W)));
   // each field's way in: its tile nearest (on a safe walk) one of our drop-offs; none, it's unsafe
   // (a tie goes to the first in the side's own frame, so red picks blue's mirror image)
@@ -198,7 +298,7 @@ export function tendFields(
     return best;
   });
   // (nowhere we can walk to at all, danger or none — no drop-off, or none by a field: the commander's own search)
-  if (entry.every((e) => e < 0) && (!avoid || fields.every((f) => f.tiles.every((t) => walkFromDrops(w, faction)[t]! < 0))))
+  if (entry.every((e) => e < 0) && ((!access && !avoid) || fields.every((f) => f.tiles.every((t) => walkFromDrops(w, faction)[t]! < 0))))
     return { sent, held };
   const unsafe = entry.map((e) => e < 0);
   const exposure = fields.map((f) => exposureAt(f.cx, f.cy));
@@ -226,6 +326,16 @@ export function tendFields(
   const travel = (h: Unit, i: number) => dist(h.x, h.y, fields[i]!.cx, fields[i]!.cy);
   /** The best safe field for `h` to go to (with the way there), or -1. */
   const best = (h: Unit): number => {
+    if (access) {
+      // Rank cheaply first, then search routes until the best usable field is found.
+      // Checking every harvester against every field dominated large-map planning.
+      const ranked = fields.map((_, i) => i).filter(i => !unsafe[i])
+        .map(i => ({ i, score: score(i) + TRAVEL_COST * travel(h, i) }))
+        .sort((a, b) => a.score - b.score || a.i - b.i);
+      for (const { i } of ranked)
+        if (access.routeSafe(h, { x: entry[i]! % W + 0.5, y: Math.floor(entry[i]! / W) + 0.5 })) return i;
+      return -1;
+    }
     let pick = -1;
     let bestScore = Infinity;
     for (let i = 0; i < fields.length; i++) {
@@ -251,9 +361,11 @@ export function tendFields(
     if (cur >= 0) crowd[cur]!--;
     const to = best(h);
     // (cur < 0 on a harvest order: its tile just ran dry, and the sim picks the next; we see where next think)
+    const routeUnsafe = cur >= 0 && access && o.type === "harvest" && o.phase === "toField" &&
+      !access.routeSafe(h, { x: o.fieldX + 0.5, y: o.fieldY + 0.5 });
     const stay =
       o.type === "harvest" &&
-      (cur < 0 || (!unsafe[cur] && (staffed.has(h.id) || to < 0 || to === cur || exposure[cur]! < EXPOSED || score(cur) - score(to) <= MARGIN)));
+      (cur < 0 || (!unsafe[cur] && !routeUnsafe && (staffed.has(h.id) || to < 0 || to === cur || exposure[cur]! < EXPOSED || score(cur) - score(to) <= MARGIN)));
     if (stay) {
       if (cur >= 0) crowd[cur]!++;
       continue;

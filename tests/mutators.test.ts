@@ -350,8 +350,10 @@ describe("infantry mutators", () => {
     // harvesters have a right of way, movement.ts harvesterRank, seeds 1–6 give 23, Air Swarm none on seed 3;
     // since defences go up in front of the HQ, seeds 1–3 and 5–8 give 23, Air Swarm none on seeds 1 and 2;
     // since every plan builds out to its first field early, commander.ts CREEP_UNTIL, seeds 1–10 give 30
-    // (29 before), Air Swarm none on seeds 1, 2 and 5)
-    for (const seed of [4, 8]) {
+    // (29 before), Air Swarm none on seeds 1, 2 and 5; since waves gather a third of the way over,
+    // commander.ts forwardStage, and squads waiting there board too, seeds 1–10 give 31, one side
+    // none on seeds 1, 7 and 10)
+    for (const seed of [4, 5]) {
       const w = createMapWorld("frostbite", { seed, mutators: ["airborne"] });
       const ai = { blue: createAiState("skyforce", "normal", 2 * seed - 1), red: createAiState("airswarm", "normal", 2 * seed) };
       const bays = { blue: 0, red: 0 } as Record<Faction, number>;

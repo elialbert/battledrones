@@ -18,21 +18,33 @@ export const APM_BURST = 10;
 const PER_ACTION = 60 * TICK_RATE;
 
 export function capApm(bot: Bot, apm: number, burst = APM_BURST): Bot {
+  bot.actionBudget?.(apm, burst);
   const cap = burst * PER_ACTION;
   let tokens = cap;
   let last: number | null = null;
+  let enclosed = false;
   return {
     opener: bot.opener,
     plan: bot.plan,
+    actionBudget(outerApm, outerBurst) {
+      enclosed = true;
+      bot.actionBudget?.(Math.min(apm, outerApm), Math.min(burst, outerBurst));
+    },
+    sent(cmds) { bot.sent?.(cmds); },
     tick(w: World): Command[] {
       if (last !== null) tokens = Math.min(cap, tokens + (w.tick - last) * apm);
       last = w.tick;
       const want = bot.tick(w);
-      if (!want.length) return want;
+      if (!want.length) {
+        if (!enclosed) bot.sent?.(want);
+        return want;
+      }
       const n = Math.min(want.length, Math.floor(tokens / PER_ACTION));
       tokens -= n * PER_ACTION;
       const sent = n === want.length ? want : want.slice(0, n);
-      bot.sent?.(sent);
+      // An enclosing cap supplies the final dispatch receipt. Reporting the
+      // inner slice early would make the bot believe dropped orders landed.
+      if (!enclosed) bot.sent?.(sent);
       return sent;
     }
   };

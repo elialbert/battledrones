@@ -188,6 +188,8 @@ export interface CondorContext {
   /** Units already given orders this pass (updated in place). */
   used: Set<number>;
   hqC: { x: number; y: number };
+  /** Where waves gather (commander.ts forwardStage): squads waiting there are called aboard too. */
+  staging?: { x: number; y: number };
   /** A real attack on the base is under way: no drops, and a loaded Condor sets its squads down at home. */
   threatened: boolean;
   /** Condors on (or held for) a Goliath's lift (ai/goliath.ts liftCondors): never ours to fly. */
@@ -434,7 +436,8 @@ export function planCondor(w: World, faction: Faction, s: AiState, ctx: CondorCo
 /**
  * Up to `n` squads free to fly: idle or just walking somewhere (to a guard
  * post, a staging point: not in a fight), healthy, not spoken for, within
- * CONDOR_AI.reach of the Condor and of home, nearest the Condor first.
+ * CONDOR_AI.reach of the Condor and of home (or waiting at the staging
+ * point), nearest the Condor first.
  * (Not Sniper Teams: they're no use against a harvester.)
  */
 function recruits(condor: Unit, ctx: CondorContext, n: number): Unit[] {
@@ -444,7 +447,10 @@ function recruits(condor: Unit, ctx: CondorContext, n: number): Unit[] {
         isInfantry(u.kind) && u.kind !== "sniper" && (u.order.type === "idle" || u.order.type === "attackMove") &&
         !ctx.used.has(u.id) &&
         u.hp >= UNITS[u.kind].hp * CONDOR_AI.minHp &&
-        dist(u.x, u.y, condor.x, condor.y) <= CONDOR_AI.reach && dist(u.x, u.y, ctx.hqC.x, ctx.hqC.y) <= CONDOR_AI.reach
+        ((dist(u.x, u.y, condor.x, condor.y) <= CONDOR_AI.reach && dist(u.x, u.y, ctx.hqC.x, ctx.hqC.y) <= CONDOR_AI.reach) ||
+          // (waves gather a third of the way over, out past the reach on bigger maps: Frostbite, Airborne,
+          // Skyforce flew no drop in 3 of 10 seeds once they did)
+          (!!ctx.staging && dist(u.x, u.y, ctx.staging.x, ctx.staging.y) <= CONDOR_AI.reach / 2))
     )
     .sort((a, b) => dist(a.x, a.y, condor.x, condor.y) - dist(b.x, b.y, condor.x, condor.y))
     .slice(0, n);

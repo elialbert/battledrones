@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STRATEGIES, createAiState, tickAi, type AiState, type Difficulty, type StrategyName } from "../src/sim/ai/commander";
+import { STRATEGIES, createAiState, forwardStage, tickAi, type AiState, type Difficulty, type StrategyName } from "../src/sim/ai/commander";
 import { canPlaceBuilding } from "../src/sim/economy";
 import { GOLIATH_AI, goliathPhases, goliathSite, liftCondors } from "../src/sim/ai/goliath";
 import { MARSHAL, marshal } from "../src/sim/ai/marshal";
@@ -604,8 +604,7 @@ describe("hunting enemy Goliaths", () => {
     const gantry = spawnBuilding(w, "gantry", "blue", blue.tx + 5, blue.ty - 4);
     gantry.queue.push({ kind: "goliath", remaining: UNITS.goliath.buildTime * TICK_RATE * 0.5 });
     const far = { x: w.width - red.x, y: w.height - red.y };
-    const len = Math.hypot(far.x - red.x, far.y - red.y);
-    const stage = { x: red.x + ((far.x - red.x) / len) * 9, y: red.y + ((far.y - red.y) / len) * 9 };
+    const stage = forwardStage(w, "red", {} as AiState, red, far)!;
     for (let i = 0; i < 12; i++) spawnUnit(w, "stinger", "red", stage.x - 1 + (i % 4) * 0.7, stage.y - 1 + Math.floor(i / 4) * 0.7);
     step(w, []);
     const cmds = tickAi(w, "red", ai);

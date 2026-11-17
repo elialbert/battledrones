@@ -30,6 +30,8 @@ export interface Bot {
    * is sent and this isn't called.
    */
   sent?(cmds: Command[]): void;
+  /** Effective configured action cap, including enclosing caps; does not grant actions. */
+  actionBudget?(apm: number, burst: number): void;
   /** Its quick-start opener, when it picks one for itself (Marshal's comes with the plan it drew); else its BotDef's. */
   opener?: OpenerId;
   /** The plan it drew for this game ("Turtle"), when it draws one. */

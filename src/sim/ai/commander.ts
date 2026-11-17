@@ -2,7 +2,8 @@ import { BUILDINGS, ECONOMY, GOLIATH, OBJECTIVES, UNITS } from "../balance";
 import { TICK_RATE } from "../balance";
 import { buildRadiusOf, buildingBlocker, canPlaceBuilding, nearestReachableResource, nearestScrapTile, unitBlocker } from "../economy";
 import { DRY_FIELD, SERVED, UNSAFE, UNWALKED, expansionSite, fieldScrapLeft, expansionSites, perTick, staffExpansions, tendExpansion, unservedField, walkFromDrops, type ExpansionPlan } from "./expansion";
-import { tendFields } from "./fields";
+import { miningAccess, tendFields } from "./fields";
+import { economyEligible, newEconomyFront, planEconomyFront, type EconomyFrontState } from "./economy-front";
 import { baseEntrances } from "./choke";
 import { isVisible, knownBuildings, type KnownBuilding } from "../fog";
 import { isOut } from "../combat";
@@ -347,6 +348,17 @@ export const DIFFICULTY: Record<
 };
 
 export interface AiState {
+  /** Where waves gather (forwardStage), and when that was worked out. */
+  stageCache?: { key: string; tick: number; at: { x: number; y: number } | null };
+  /** Experimental, deliberately absent from difficulty presets pending evaluation. */
+  secureEconomy?: boolean;
+  economyFront?: EconomyFrontState;
+  /** Wrapper micro/retreat holds, exposed before planning; never inferred as available force. */
+  economyUnavailable?: ReadonlySet<number>;
+  /** This pass's ordinary front orders, for wrapper provenance and ranking. */
+  economyCommands?: ReadonlySet<Command>;
+  /** Configured cap leaves less room than the wrapper's micro budget. */
+  economyConstrained?: boolean;
   mode: AiMode;
   strategy: Strategy;
   difficulty: Difficulty;
@@ -688,7 +700,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const claimable = s.strategy.landGrab ? () => true : ourSide;
   const outGuard = entrance || !hq ? null : expansionGuard(w, faction, hqC, enemyHome, claimable);
   const contest = !entrance && hq ? s.contest ?? null : null;
-  const guardPoint = entrance
+  let guardPoint = entrance
     ? entrance.hold
     : contest
     ? contest
@@ -706,6 +718,35 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const atHome = threats.filter((t) => dist(t.x, t.y, hqC.x, hqC.y) <= DEFENSE_RADIUS);
   const raidValue = atHome.reduce((v, t) => v + t.value, 0);
   const threatened = raidValue >= HOME_ALARM_VALUE;
+  const economyOn = economyEligible(w, faction, s);
+  const withdrawn = new Set([...dodgingUnits(w, s), ...(s.economyUnavailable ?? [])]);
+  const access = economyOn ? miningAccess(w, faction, s, seen, mine.filter(u => !withdrawn.has(u.id)), s.depotsLost) : undefined;
+  let economyReserved = new Set<number>();
+  if (economyOn && access) {
+    const unavailable = new Set([
+      ...wing, ...condorHolds(w, s), ...airliftHolds(w, s), ...feintHolds(s), ...siegeHolds(s),
+      ...goliathHolds(w, s), ...objectiveHolds(w, faction, s), ...dodgingUnits(w, s),
+      ...(s.economyUnavailable ?? [])
+    ]);
+    // A launched wave is an active attack, not obsolete staging. Let it carry
+    // out that commitment; newly produced units can form the next escort.
+    if (s.wave && s.wave.tick > 0 && w.tick - s.wave.tick < 60 * TICK_RATE)
+      for (const id of s.wave.ids) unavailable.add(id);
+    const orders: Command[] = [];
+    s.economyFront ??= newEconomyFront();
+    economyReserved = planEconomyFront(w, faction, s.economyFront, {
+      home: hqC, enemyHome, seen, miners: harvesters, army, unavailable, access, threatened, lost: s.depotsLost ?? [],
+      constrained: s.economyConstrained, assault: s.mode === "assault", withdrawn
+    }, orders);
+    s.economyCommands = new Set(orders);
+    cmds.push(...orders);
+    s.contest = null; // one source of truth for economic military access
+    if (s.economyFront.plan && s.economyFront.plan.phase !== "recover") guardPoint = s.economyFront.plan.hold;
+    if (s.wave) s.wave.ids = s.wave.ids.filter(id => !economyReserved.has(id));
+  } else {
+    s.economyFront = undefined;
+    s.economyCommands = undefined;
+  }
   const enemyHqKnown = knownBuildings(w, faction).find((b) => b.kind === "hq" && (!focus || b.faction === focus));
   const enemyHqPos = enemyHqKnown ? { x: enemyHqKnown.tx + 1.5, y: enemyHqKnown.ty + 1.5 } : enemyHome;
 
@@ -805,17 +846,27 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   const mining = Math.max(1, s.strategy.harvesters + diff.extraHarvesters + depots + goliathFields.extra);
   // (an expansion is next: its crew is trained on top of the miners, and it's never started under attack)
   // (bold: a raid at home doesn't put it off, and half the miners stay on while the crew goes: the rest are trained after)
+  const front = economyOn ? s.economyFront : undefined;
+  const target = front?.sites.find(site => site.fieldId === front.plan?.fieldId);
   const expanding = !!s.expansion || (expansionNext && (!threatened || !!diff.boldExpand));
   const boldKeep = diff.boldExpand ? Math.min(mining, Math.max(BOLD_KEEP, Math.ceil(mining / 2))) : mining;
   // (Land Grab: each crew is four harvesters gone, and a Depot with nobody to work it earns nothing)
   const crewKeep = s.strategy.landGrab ? Math.max(boldKeep, GRAB_MINERS * depots) : boldKeep;
   // (the fields running low: the next one is worth a fight, when it's one the army can win)
-  const contestable = s.strategy.landGrab || (s.weighs && hq && fieldsRunningLow(w, faction))
+  const contestable = !economyOn && (s.strategy.landGrab || (s.weighs && hq && fieldsRunningLow(w, faction)))
     ? (x: number, y: number) => contestWinnable(seen, x, y, armyValue, s.weighs ? enemyArmy : 0)
     : undefined;
-  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen, contestable, s.hotSpots);
+  const routeSafe = (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    return access ? access.routeSafe(from, to) : true;
+  };
+  const coordination = access ? {
+    site: front?.urgent && front.plan?.phase !== "recover" ? target?.construction : undefined,
+    permitted: (x: number, y: number) => !threatened && !access.unsafeAt(Math.floor(x), Math.floor(y)) && routeSafe(hqC, { x, y })
+  } : undefined;
+  const crew = tendExpansion(w, faction, s, expanding, hq ? hqC : null, harvesters, goliathFields.keep, crewKeep, s.strategy.depotReach ?? 9, cmds, seen, contestable, s.hotSpots, coordination);
   // a finished Depot by a field of its own is worked by a full shift, sent from the home field (ai/expansion.ts)
-  const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds);
+  const staffed = staffExpansions(w, faction, hqC, harvesters, new Set([...goliathFields.keep, ...crew]), seen, cmds,
+    access ? { unsafeAt: access.unsafeAt, routeSafe } : undefined);
   const wantHarvesters = mining + staffed.extra + (expanding && !s.expansion ? ECONOMY.expansion.crew : 0);
   // (a Goliath short of its shift builds it on the spot; with no HQ, as under Nomads, the dug-in Goliath builds them all)
   const yard = goliathYard(w, s) ?? (hq ? { id: hq.id, queue: hq.queue } : baseGoliath ? { id: baseGoliath.id, queue: baseGoliath.goliath!.queue } : null);
@@ -826,7 +877,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // the rest mine the best field going: near a drop-off, on our side, none with an enemy army by it (ai/fields.ts)
   const busy = new Set([...goliathFields.keep, ...crew, ...staffed.sent]);
   const tended = fieldsLeft
-    ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds, staffed.staffed)
+    ? tendFields(w, faction, s, hqC, enemyHome, harvesters, busy, seen, mine, islandMap ? ourSide : null, cmds, staffed.staffed, access)
     : { sent: new Set<number>(), held: new Set<number>(), unsafeAt: undefined };
   for (const h of harvesters) {
     if (busy.has(h.id) || tended.sent.has(h.id) || tended.held.has(h.id)) continue; // (working a Goliath's field, founding a Depot, or off to one; sent to a field)
@@ -836,7 +887,7 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     if (h.order.type !== "idle" && !astray) continue;
     const field = fieldFrom(h.x, h.y);
     // (not onto a field tendFields calls unsafe: it waits where it is, ai/fields.ts)
-    if (field && !astray && tended.unsafeAt?.(field.x, field.y)) continue;
+    if (field && !astray && (tended.unsafeAt?.(field.x, field.y) || access?.unsafeAt(field.x, field.y) || !routeSafe(h, { x: field.x + 0.5, y: field.y + 0.5 }))) continue;
     if (field) cmds.push({ type: "harvest", faction, unitIds: [h.id], x: field.x + 0.5, y: field.y + 0.5 });
     else if (astray) {
       const [dx, dy] = sideFrame(w, faction).vec(0, 3); // (just behind the HQ, in the side's frame)
@@ -1102,6 +1153,8 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
 
   // ======================= tactics =========================================
   const used = new Set<number>(dodgingUnits(w, s)); // units running from a reticle stay put
+  for (const id of economyReserved) used.add(id);
+  if (economyOn) for (const id of s.economyUnavailable ?? []) used.add(id);
   // squads walking up a Condor's ramp, or dropped on a raid, follow the drop plan (ai/condor.ts)
   for (const id of condorHolds(w, s)) used.add(id);
   for (const id of airliftHolds(w, s)) used.add(id);
@@ -1139,7 +1192,6 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
     }
     if (squad.length > 0) cmds.push({ type: "attack", faction, unitIds: squad, targetId: t.id });
   }
-
   // --- 1b. home defence: a real attack on the base recalls the army -------
   // (with quick-start openers an 8-unit push can land at 1:00; an army out
   // raiding must not leave the HQ to die)
@@ -1199,7 +1251,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   // --- 1c. Goliaths: ours dig in, hold, move on, lift, walk with a wave; theirs are hunted (ai/goliath.ts)
   // (escorts and strikes already under way stay on task)
   for (const id of goliathHolds(w, s)) used.add(id);
-  const staging = towardEnemy(w, hqC, 9, enemyHqPos);
+  const staging = economyOn && s.economyFront?.plan && s.economyFront.plan.phase !== "recover" &&
+    (s.economyFront.urgent || s.economyFront.plan.phase !== "hold") && !threatened
+    ? s.economyFront.plan.approach
+    : forwardStage(w, faction, s, hqC, enemyHqPos) ?? towardEnemy(w, hqC, 9, enemyHqPos);
   cmds.push(
     ...planGoliaths(w, faction, s, {
       army, used, hqC, enemyHqPos, seen, mode: s.mode, threatened, staging, guardPoint, hasHq: !!hq,
@@ -1252,10 +1307,10 @@ export function tickAi(w: World, faction: Faction, s: AiState): Command[] {
   cmds.push(...skylift.cmds);
   for (const id of skylift.condors) skip.add(id);
   if (airlifts) cmds.push(...planAirlift(w, faction, s, { mine, army, used, hqC, seen, threatened, skip }));
-  else cmds.push(...planCondor(w, faction, s, { army, used, hqC, threatened, skip }));
+  else cmds.push(...planCondor(w, faction, s, { army, used, hqC, staging, threatened, skip }));
 
   // --- 2. economy guard: a share of the army holds the mining line --------
-  const guardShare = s.mode === "assault" ? 0.15 : entrance ? 1 : contest ? CONTEST_SHARE : 0.35;
+  const guardShare = economyReserved.size ? 0 : s.mode === "assault" ? 0.15 : entrance ? 1 : contest ? CONTEST_SHARE : 0.35;
   const guardValue = value(army.filter((u) => dist(u.x, u.y, guardPoint.x, guardPoint.y) <= GUARD_RADIUS));
   if (guardValue < guardShare * armyValue) {
     let need = guardShare * armyValue - guardValue;
@@ -1408,6 +1463,51 @@ function ownFieldLeft(w: World, hqC: { x: number; y: number }, ourSide: (tx: num
 function inFrontBy(from: { x: number; y: number }, p: { x: number; y: number }, to: { x: number; y: number }): number {
   const len = Math.max(1, dist(from.x, from.y, to.x, to.y));
   return ((p.x - from.x) * (to.x - from.x) + (p.y - from.y) * (to.y - from.y)) / len;
+}
+
+/** Waves gather this far along the walk to the enemy HQ (a share of the whole walk). */
+const STAGE_FORWARD = 0.33;
+/** …never nearer home than this (tiles), and the walk is looked up again this often. */
+const STAGE_MIN = 9;
+const STAGE_REFRESH = 30 * TICK_RATE;
+/**
+ * Where an assault gathers: a third of the way along the walk to the enemy HQ, on our side, where
+ * it covers the fields out in front of the base (a straight line can end in a river). Null when
+ * there's no walk.
+ */
+export function forwardStage(w: World, faction: Faction, s: AiState, hqC: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } | null {
+  const key = `${Math.round(hqC.x)},${Math.round(hqC.y)}>${Math.round(to.x)},${Math.round(to.y)}`;
+  const c = s.stageCache;
+  if (c && c.key === key && w.tick - c.tick < STAGE_REFRESH) return c.at;
+  // (from the first open ground out of each HQ toward the other: a path from inside a building is none)
+  const out = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+    for (let d = 0; d <= 6; d += 0.5) {
+      const p = towardEnemy(w, a, d, b);
+      if (passable(w, Math.floor(p.x), Math.floor(p.y), "ground")) return p;
+    }
+    return a;
+  };
+  const from = out(hqC, to);
+  const path = findPath(w, from.x, from.y, out(to, hqC).x, out(to, hqC).y, "ground", faction);
+  let at: { x: number; y: number } | null = null;
+  if (path && path.length) {
+    const pts = [from, ...path];
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += dist(pts[i - 1]!.x, pts[i - 1]!.y, pts[i]!.x, pts[i]!.y);
+    const want = Math.max(STAGE_MIN, total * STAGE_FORWARD);
+    let run = 0;
+    for (let i = 1; i < pts.length && !at; i++) {
+      const a = pts[i - 1]!, b = pts[i]!;
+      const step = dist(a.x, a.y, b.x, b.y);
+      if (run + step >= want) {
+        const f = (want - run) / Math.max(1e-6, step);
+        at = { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+      }
+      run += step;
+    }
+  }
+  s.stageCache = { key, tick: w.tick, at };
+  return at;
 }
 
 function towardEnemy(w: World, from: { x: number; y: number }, d: number, to?: { x: number; y: number }) {

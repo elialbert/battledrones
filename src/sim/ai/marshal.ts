@@ -43,9 +43,10 @@ import { isVisible, knownBuildings } from "../fog";
 import type { Command, Faction, Unit, World } from "../types";
 import { buildingCenter, dist, domainOf, hqOf } from "../world";
 import { STRATEGIES, createAiState, tickAi, type Difficulty, type Strategy, type StrategyName } from "./commander";
+import { economyDiagnostic, economyEligible } from "./economy-front";
 import { DOCTRINE, type DoctrinePlan } from "./doctrine";
 import { USELESS, effectivenessVs, seenEnemies } from "./intel";
-import { dodgingUnits } from "./powers";
+import { dodgingUnits, recheckDodge } from "./powers";
 import type { Bot } from "./bots";
 import { goliathsOf, isLifted } from "../goliath";
 import { strikeHolds } from "./hornets";
@@ -57,8 +58,16 @@ import { hash32 } from "../rand";
 import { AI_OPENER } from "../openers";
 import { capApm } from "./apm";
 import { kiteStep } from "./kite";
+import { goliathHolds } from "./goliath";
+import { condorHolds } from "./condor";
+import { airliftHolds } from "./airlift";
+import { objectiveHolds } from "./objectives";
 
 export interface MarshalOptions {
+  /** Experimental ground economy assignment. Defaults off, including Hard/Brutal presets. */
+  secureEconomy?: boolean;
+  /** Read-only detached observer snapshot, once per planning pass. */
+  onEconomyDiagnostic?: (snapshot: unknown) => void;
   /** Seconds between the commander's planning passes. */
   think: number;
   /** Seconds between looks at the fights (0: no fight micro). */
@@ -438,6 +447,7 @@ const enum Rank {
 }
 
 interface Want {
+  economy?: { fieldId: number; phase: string };
   rank: Rank;
   cmd: Command;
   /** From the commander's plan (kept until sent or replanned); else the fight micro's (kept till the next look). */
@@ -598,6 +608,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   const s = createAiState(plan.base, difficulty, seed, marshalStrategy(opts));
   s.fair = true;
   s.weighs = opts.weighs;
+  s.secureEconomy = opts.secureEconomy;
   s.skylift = opts.skylift;
   s.interval = opts.think;
   // (a Goliath alone is a target: it expands the economy and backs the army up, unless the plan rushes one)
@@ -611,6 +622,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   let backlog: Want[] = [];
   /** The fight micro's orders not yet sent: they wait until the next look at the fights. */
   let microLog: Want[] = [];
+  /** Reflex moves can outlast the current cap burst; retain them until sent or expired. */
+  let pendingDodges: Want[] = [];
   /** The finishing push's order, until it's sent. */
   let push: Want | null = null;
   let lastPush = -1e9;
@@ -619,6 +632,9 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   let pushedAt = -1e9;
   /** Units the fight micro holds, until a tick: the plan's attack orders don't pull them away. */
   const held = new Map<number, number>();
+  /** Actual combat retreats, separate from short kite/focus/march holds. */
+  const retreating = new Map<number, number>();
+  let retreatBefore = new Map<number, number | undefined>();
   /** Enemy units seen lately: what each is worth and when it was last seen. */
   const sighted = new Map<number, { value: number; tick: number }>();
   let finishing = false;
@@ -646,7 +662,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     for (const id of ids) {
       const u = w.units.get(id);
       if (!u || u.faction !== side) continue;
-      if (planned && (c.type === "attackMove" || c.type === "attack") && (held.get(id) ?? -1) > w.tick) continue;
+      if (planned && (c.type === "attackMove" || c.type === "attack" || (s.economyCommands?.has(c) && c.type === "move")) && (held.get(id) ?? -1) > w.tick) continue;
       if (!alreadyDoing(u, c)) keep.push(id);
     }
     if (!keep.length) return null;
@@ -655,6 +671,18 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
 
   const cut = (w: World, wants: Want[], planned: boolean) =>
     wants.flatMap((want) => {
+      if ((want.push || want.rank === Rank.March) && economyEligible(w, side, s) && "unitIds" in want.cmd) {
+        const reserved = new Set(s.economyFront?.plan?.assigned ?? []);
+        const ids = want.cmd.unitIds.filter(id => !reserved.has(id) && !(s.economyUnavailable?.has(id)));
+        if (!ids.length) return [];
+        want = { ...want, cmd: { ...want.cmd, unitIds: ids } as Command };
+      }
+      if (want.economy && (want.economy.fieldId !== s.economyFront?.plan?.fieldId || want.economy.phase !== s.economyFront?.plan?.phase)) return [];
+      if (want.economy && "unitIds" in want.cmd) {
+        const ids = want.cmd.unitIds.filter(id => s.economyFront?.plan?.assigned.includes(id) && (held.get(id) ?? -1) <= w.tick);
+        if (!ids.length) return [];
+        want = { ...want, cmd: { ...want.cmd, unitIds: ids } as Command };
+      }
       const cmd = trim(w, want.cmd, planned);
       return cmd ? [{ ...want, cmd }] : [];
     });
@@ -662,15 +690,37 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
   return {
     opener: AI_OPENER,
     plan: plan.label,
+    actionBudget(apm) {
+      // When the physical cap is substantially below the micro budget, keep
+      // productive fights/queues ahead of discretionary escort repositioning.
+      s.economyConstrained = apm < (opts.microApm ?? 0) * 0.75;
+    },
     tick(w: World): Command[] {
       for (const [id, until] of held) if (until <= w.tick) held.delete(id);
+      for (const [id, until] of retreating) if (until <= w.tick || !w.units.has(id)) retreating.delete(id);
+      if (economyEligible(w, side, s)) s.economyUnavailable = new Set(retreating.keys());
       const plan = tickAi(w, side, s); // the dodge reflex every tick, the plan every `think`
       const dodging = new Set(dodgingUnits(w, s));
       const reflex: Want[] = [];
       if (s.lastDecisionTick === w.tick) {
         const goliaths = new Set(goliathsOf(w, side).map((g) => g.id));
         const ferry = ferryCondors(s);
-        backlog = plan.map((cmd) => ({ rank: rankOf(cmd, dodging, goliaths, ferry), cmd, planned: true }));
+        backlog = plan.map((cmd) => {
+          const assignment = s.economyFront?.plan;
+          const front = assignment && s.economyCommands?.has(cmd) && "unitIds" in cmd &&
+            cmd.unitIds.some(id => assignment.assigned.includes(id)) ? assignment : undefined;
+          const frontRank = !front ? Rank.Army : front.phase === "recover" ? Rank.Retreat : s.economyConstrained
+            ? s.economyFront!.urgent && s.economyFront!.runwaySeconds <= 15 ? Rank.Push : Rank.Army
+            : front?.phase === "hold" ? Rank.Army : Rank.Push;
+          return { rank: front ? frontRank : rankOf(cmd, dodging, goliaths, ferry),
+            cmd, planned: true, ...(front ? { economy: { fieldId: front.fieldId, phase: front.phase } } : {}) };
+        });
+        for (const id of s.economyFront?.plan?.assigned ?? []) if (waiting.has(id)) {
+          waiting.delete(id);
+          if ((held.get(id) ?? -1) <= w.tick + 2 * reactTicks + TICK_RATE) held.delete(id);
+        }
+        // Observer failures must not change the bot's command stream.
+        try { opts.onEconomyDiagnostic?.(economyDiagnostic(s.economyFront)); } catch { /* read-only observer */ }
       } else for (const cmd of plan) reflex.push({ rank: Rank.Dodge, cmd, planned: false });
       if (opts.microApm !== undefined) {
         microTokens = Math.min(microCap, microTokens + (w.tick - microTick) * opts.microApm);
@@ -689,24 +739,65 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
         }
         microLog = micro;
       }
-      const all = merge([...cut(w, [...reflex, ...(push ? [push] : []), ...(look ? [look] : []), ...microLog], false), ...cut(w, backlog, true)]);
+      const retries = pendingDodges.flatMap(want => (unitsOf(want.cmd) ?? []).flatMap(id => {
+        const cmd = recheckDodge(w, side, s, id);
+        return cmd ? [{ ...want, cmd }] : [];
+      }));
+      let all = merge([...cut(w, [...reflex, ...(push ? [push] : []), ...(look ? [look] : []), ...microLog], false),
+        ...cut(w, backlog, true), ...cut(w, retries, false)]);
+      if (economyEligible(w, side, s)) {
+        const dodgingNow = new Set(dodgingUnits(w, s));
+        const withdrawing = new Set(all.filter(want => !want.planned && want.rank === Rank.Retreat).flatMap(want => unitsOf(want.cmd) ?? []));
+        const offeredDodge = new Set<number>();
+        all = all.flatMap(want => {
+          const ids = unitsOf(want.cmd);
+          if (!ids) return [want];
+          const keep = ids.filter(id => {
+            if (want.rank === Rank.Dodge) {
+              if (!dodgingNow.has(id) || offeredDodge.has(id)) return false;
+              offeredDodge.add(id); return true;
+            }
+            return !dodgingNow.has(id) && (want.rank <= Rank.Retreat || !withdrawing.has(id));
+          });
+          return !keep.length ? [] : [{ ...want, cmd: keep.length === ids.length ? want.cmd : { ...want.cmd, unitIds: keep } as Command }];
+        });
+      }
       look = null;
       all.sort((a, b) => a.rank - b.rank); // (stable: the plan's own order within a rank)
       // (all of it sent, unless sent() says otherwise)
       out = all;
       backlog = [];
       microLog = [];
+      pendingDodges = [];
       if (push) {
         push = null;
         pushedAt = lastPush;
         lastPush = w.tick;
+      }
+      // Uncapped callers dispatch everything. sent() rolls back any retreats
+      // that the outer cap actually withholds, so proposals cannot reserve units.
+      retreatBefore = new Map();
+      if (economyEligible(w, side, s)) for (const want of all) if (!want.planned && want.rank === Rank.Retreat) {
+        for (const id of unitsOf(want.cmd) ?? []) {
+          if (!retreatBefore.has(id)) retreatBefore.set(id, retreating.get(id));
+          retreating.set(id, held.get(id) ?? w.tick);
+        }
       }
       return all.map((x) => x.cmd);
     },
     sent(cmds: Command[]) {
       const went = new Set(cmds);
       const left = out.filter((x) => !went.has(x.cmd));
-      backlog = left.filter((x) => x.planned);
+      const sentRetreats = new Set(out.filter(x => went.has(x.cmd) && !x.planned && x.rank === Rank.Retreat).flatMap(x => unitsOf(x.cmd) ?? []));
+      for (const want of left) if (!want.planned && want.rank === Rank.Retreat) for (const id of unitsOf(want.cmd) ?? []) {
+        if (sentRetreats.has(id) || !retreatBefore.has(id)) continue;
+        const prior = retreatBefore.get(id);
+        if (prior === undefined) retreating.delete(id); else retreating.set(id, prior);
+      }
+      retreatBefore.clear();
+      const preserveDodge = !!s.secureEconomy && !!s.economyFront;
+      pendingDodges = preserveDodge ? left.filter(x => x.rank === Rank.Dodge).map(x => ({ ...x, planned: false })) : [];
+      backlog = left.filter((x) => x.planned && (!preserveDodge || x.rank !== Rank.Dodge));
       microLog = left.filter((x) => !x.planned && !x.push && x.rank !== Rank.Dodge);
       const p = left.find((x) => x.push);
       if (p) {
@@ -725,7 +816,8 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
       if (c.type === "attackMove" || c.type === "move" || c.type === "attack") {
         const twin = res.find((o) => {
           const d = o.cmd;
-          if (o.rank !== want.rank || o.planned !== want.planned || o.push !== want.push || d.type !== c.type) return false;
+          if (o.rank !== want.rank || o.planned !== want.planned || o.push !== want.push || d.type !== c.type ||
+            o.economy?.fieldId !== want.economy?.fieldId || o.economy?.phase !== want.economy?.phase) return false;
           if (d.type === "attack" && c.type === "attack") return d.targetId === c.targetId;
           return d.type !== "attack" && c.type !== "attack" && dist(d.x, d.y, c.x, c.y) <= 0.5;
         });
@@ -747,6 +839,7 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
 
   /** The finishing push, once the game is won: everything at the nearest enemy building it knows of. */
   function finish(w: World): Want | null {
+    if (economyEligible(w, side, s) && s.economyFront?.reason.includes("home emergency")) { finishing = false; return null; }
     for (const e of seenEnemies(w, side)) if (e.kind !== "harvester") sighted.set(e.id, { value: UNITS[e.kind].cost, tick: w.tick });
     let enemy = 0;
     for (const [id, x] of sighted) {
@@ -755,6 +848,10 @@ export function marshal(side: Faction, seed: number, difficulty: Difficulty, opt
     }
     // (a Hornet strike's wing, and a sortie out harassing, fly their own plans: ai/hornets.ts, ai/harass.ts)
     const wing = new Set([...strikeHolds(w, side, s), ...sortieHolds(s), ...feintHolds(s), ...siegeHolds(s)]);
+    if (economyEligible(w, side, s)) {
+      for (const id of s.economyFront?.plan?.assigned ?? []) wing.add(id);
+      for (const id of [...goliathHolds(w, s), ...condorHolds(w, s), ...airliftHolds(w, s), ...objectiveHolds(w, side, s), ...retreating.keys()]) wing.add(id);
+    }
     const army = [...w.units.values()].filter(
       (u) =>
         u.faction === side && !u.goliath && UNITS[u.kind].dps > 0 && u.kind !== "harvester" && !wing.has(u.id) &&

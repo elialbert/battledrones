@@ -93,6 +93,27 @@ export function dodgeCalldowns(w: World, faction: Faction, s: AiState): Command[
   return cmds;
 }
 
+/** Revalidate a delayed reflex against notices already received, never a new
+ * reticle before the configured reaction delay. A unit may have crossed the
+ * circle or escaped while its order waited for the action cap. */
+export function recheckDodge(w: World, faction: Faction, s: AiState, id: number): Command | null {
+  const u = w.units.get(id);
+  if (!u || u.faction !== faction || !canWalk(u) || u.order.type === "lift") return null;
+  const seen = memo(s).seen;
+  const c = w.powers.active.filter(c => c.faction !== faction && seen.has(c.id) && endTick(c) - w.tick >= 3 &&
+    hypot(u.x - c.x, u.y - c.y) <= c.radius + 0.7).sort((a, b) => endTick(a) - endTick(b) || a.id - b.id)[0];
+  if (!c) return null;
+  let dx = u.x - c.x, dy = u.y - c.y;
+  if (hypot(dx, dy) < 0.3) {
+    const hq = hqOf(w, faction);
+    dx = (hq ? hq.tx + 1.5 : w.width / 2) - c.x;
+    dy = (hq ? hq.ty + 1.5 : w.height / 2) - c.y;
+  }
+  const length = hypot(dx, dy) || 1;
+  const to = dodgeSpot(w, u, dx / length, dy / length);
+  return { type: "move", faction, unitIds: [id], ...to };
+}
+
 /**
  * Where a unit runs to, DODGE_DIST along (ux, uy). On an island map a squad
  * on a small island would run into the sea (and stop at the shore, still
